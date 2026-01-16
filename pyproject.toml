@@ -159,7 +159,9 @@ precision = 2
 
   disallow_incomplete_defs = false
   disallow_untyped_defs = false
-  enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+  enable_error_code = [
+    "ignore-without-code", "redundant-expr", "truthy-bool"
+]
   files = ["src", "tests"]
   python_version = "3.12"
   strict = true
@@ -238,6 +240,7 @@ ignore = [
     "N803",    # Argument name should be lowercase
     "FBT001",  # Some boolean function thing
     "FBT002",  # Some boolean function thing
+    "UP037",   # Remove quote from type annotation  <- jaxtyping
 ]
 exclude = [
     "src/epochalypse/_version.py",
