@@ -1,10 +1,10 @@
 """Data classes for representing time series data."""
 
 __all__ = [
-    "AbstractAstrometry",
-    "GaiaAstrometry",
-    "AbsoluteAstrometry",
-    "RadialVelocity",
+    "AbstractAstrometryData",
+    "GaiaAstrometryData",
+    # "AbsoluteAstrometryData",
+    "RadialVelocityData",
     "SourceData",
     "DatasetType",
 ]
@@ -32,65 +32,83 @@ class AbstractData(eqx.Module):  # type: ignore[misc]
         return len(self.time)
 
 
-class AbstractAstrometry(AbstractData):
+class AbstractAstrometryData(AbstractData):
     """Abstract base class for astrometric data."""
 
 
-class GaiaAstrometry(AbstractAstrometry):
+class GaiaAstrometryData(AbstractAstrometryData):
     """Gaia epoch astrometry (along-scan measurements)."""
 
-    time: NTime  # Barycentric TCB times
-    al_position: NAngle  # Along-scan position
-    al_position_err: NAngle  # AL uncertainty
-    scan_angle: NAngle  # Per-CCD scan angle θ
-    parallax_factor: NFloatArray  # AL parallax factors
-    t_ref: NTime  # Reference epoch for proper motion
-    transit_index: NIntArray | None = None  # Optional transit grouping
+    time: NTime
+    """Barycentric TCB times."""
+
+    al_position: NAngle
+    """Along-scan position."""
+
+    al_position_err: NAngle
+    """Along-scan uncertainty."""
+
+    scan_angle: NAngle
+    """Per-CCD scan angle θ."""
+
+    parallax_factor: NFloatArray
+    """AL parallax factors."""
+
+    t_ref: NTime
+    """Reference epoch for proper motion."""
+
+    transit_index: NIntArray | None = None
+    """Optional transit grouping (may be ``None``)."""
 
 
-class AbsoluteAstrometry(AbstractAstrometry):
-    """Traditional absolute astrometry (RA/Dec measurements)."""
+# TODO: currently not supported, so commenting out
+# class AbsoluteAstrometryData(AbstractAstrometryData):
+#     """Traditional absolute astrometry (RA/Dec measurements)."""
 
-    time: NTime  # Observation times
-    ra: NAngle  # Right ascension
-    dec: NAngle  # Declination
-    ra_err: NAngle  # RA uncertainty
-    dec_err: NAngle  # Dec uncertainty
-    t_ref: NTime  # Reference epoch for proper motion
-    correlation: NFloatArray | None = None  # RA-Dec correlation coefficient
-    parallax_factor: NFloatArray | None = None  # Optional parallax factors
+#     time: NTime
+#     """Observation times."""
+
+#     ra: NAngle
+#     """Right ascension."""
+
+#     dec: NAngle
+#     """Declination."""
+
+#     ra_err: NAngle
+#     """RA uncertainty."""
+
+#     dec_err: NAngle
+#     """Dec uncertainty."""
+
+#     t_ref: NTime
+#     """Reference epoch for proper motion."""
+
+#     correlation: NFloatArray | None = None
+#     """RA-Dec correlation coefficient (optional)."""
+
+#     parallax_factor: NFloatArray | None = None
+#     """Optional parallax factors."""
 
 
-# TODO: Future implementation - RelativeAstrometry for imaging data
-# class RelativeAstrometry(AbstractAstrometry):
-#     """Relative astrometry (companion position relative to star).
-#
-#     For direct imaging, interferometry, etc. where companion position
-#     is measured relative to the host star.
-#     """
-#     time: NTime                           # Observation times
-#     x: NAngle                             # x offset (e.g., RA direction)
-#     y: NAngle                             # y offset (e.g., Dec direction)
-#     x_error: NAngle                       # x uncertainty
-#     y_error: NAngle                       # y uncertainty
-#     correlation: NFloatArray | None = None  # x-y correlation coefficient
-#
-
-
-class AbstractRadialVelocity(AbstractData):
+class AbstractRadialVelocityData(AbstractData):
     """Abstract base class for radial velocity data."""
 
 
-class RadialVelocity(AbstractRadialVelocity):
+class RadialVelocityData(AbstractRadialVelocityData):
     """Radial velocity measurements."""
 
-    time: NTime  # Observation times
-    rv: NVelocity  # Radial velocities
-    rv_err: NVelocity  # RV uncertainty
+    time: NTime
+    """Observation times."""
+
+    rv: NVelocity
+    """Radial velocities."""
+
+    rv_err: NVelocity
+    """Radial velocity uncertainties."""
 
 
 # Type alias for all supported data types
-DatasetType = AbstractAstrometry | AbstractRadialVelocity
+DatasetType = AbstractAstrometryData | AbstractRadialVelocityData
 
 
 class SourceData(AbstractData):
@@ -108,8 +126,8 @@ class SourceData(AbstractData):
         for name, ds in datasets.items():
             if not isinstance(ds, AbstractData):
                 raise TypeError(
-                    f"Dataset '{name}' must be AbstractAstrometry or RadialVelocity, "
-                    f"got {type(ds).__name__}"
+                    f"Dataset '{name}' must be AbstractAstrometryData or "
+                    f"RadialVelocityData, got {type(ds).__name__}"
                 )
         object.__setattr__(self, "_datasets", datasets)
 
@@ -142,8 +160,8 @@ class SourceData(AbstractData):
 
     def n_astrometry(self) -> int:
         """Number of astrometric datasets."""
-        return len(self.get_datasets_by_type(AbstractAstrometry))
+        return len(self.get_datasets_by_type(AbstractAstrometryData))
 
     def n_rv(self) -> int:
         """Number of radial velocity datasets."""
-        return len(self.get_datasets_by_type(RadialVelocity))
+        return len(self.get_datasets_by_type(RadialVelocityData))
