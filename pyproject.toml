@@ -22,7 +22,7 @@ classifiers = [
 # TODO: add keywords
 keywords = []
 dependencies = [
-    "jax[cuda12]==0.8.1",
+    "jax==0.8.1",
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
     "quaxed>=0.10.2",
@@ -34,6 +34,7 @@ dependencies = [
     "h5py>=3.15.1",
     "coordinax>=0.23.1",
     "numpyro-ext>=0.0.4",
+    "arviz>=0.22.0",
     "jedi==0.19.1"  # TODO: pinned because I had kernel issues
 ]
 
@@ -50,53 +51,6 @@ Homepage = "https://github.com/adrn/epochalypse"
 "Bug Tracker" = "https://github.com/adrn/epochalypse/issues"
 Documentation = "https://epochalypse.readthedocs.io"
 Download = "https://pypi.org/project/epochalypse/#files"
-
-[project.optional-dependencies]
-# The groups below should be in the [development-groups] table
-# They are here now because hatch hasn't released support for them but plans to
-# in Mid November 2025.
-extra = [
-    "arviz>=0.22.0",
-    "corner",
-    "matplotlib>=3.5.0",
-    "pandas>=2.3.3",
-    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
-    "setuptools",  # needed for gaiaunlimited for pkg_resources...
-]
-
-dev = [
-    "hatch",
-    "ipykernel",
-    "ipywidgets",
-    "pre-commit"
-]
-
-docs = [
-    "sphinx~=8.0",
-    "myst-parser>=4.0",
-    "pydata-sphinx-theme~=0.16",
-    "sphinx-autobuild>=2024.10.3",
-    "sphinx-autoapi>=3.6.0",
-    "sphinx_design>=0.6.1",
-    "sphinx-copybutton>=0.5.2",
-]
-
-build = [
-    "pip-audit",
-    "twine",
-]
-tests = [
-    "pytest",
-    "pytest-cov",
-    "pytest-raises",
-    "pytest-randomly",
-    "pytest-xdist",
-]
-style = [
-    "pydoclint",
-    "ruff",
-]
-
 
 ################################################################################
 # Tool Configuration
@@ -271,6 +225,42 @@ arg-type-hints-in-docstring = true
 check-return-types = false
 check-yield-types = false
 exclude = ["_version.py", "scripts/*"]
+
+[dependency-groups]
+extra = [
+    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
+    "setuptools",  # needed for gaiaunlimited for pkg_resources...
+]
+dev = [
+    {include-group = "extra"},
+    {include-group = "test"},
+    {include-group = "docs"},
+    "hatch",
+    "ipykernel",
+    "ipywidgets",
+    "pre-commit",
+    "twine",
+    "ruff",
+]
+docs = [
+    "sphinx~=8.0",
+    "myst-parser>=4.0",
+    "pydata-sphinx-theme~=0.16",
+    "sphinx-autobuild>=2024.10.3",
+    "sphinx-autoapi>=3.6.0",
+    "sphinx_design>=0.6.1",
+    "sphinx-copybutton>=0.5.2",
+    "corner>=2.2.3",
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.7",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-raises",
+    "pytest-randomly",
+    "pytest-xdist",
+]
 
 # Use UV to create Hatch environments
 [tool.hatch.envs.default]

@@ -1,13 +1,13 @@
 """Simulation tools."""
 
-from epochalypse.simulate.astrometry import simulate_gaia_al
-from epochalypse.simulate.scanlaw import GaiaReducedCommandedScanLaw
-from epochalypse.simulate.source import KeplerianSource, LinearMotionSource, Source
+from epochalypse.simulate.astrometry import (
+    fake_parallax_factor,
+    simulate_gaia_epoch_astrometry,
+)
+from epochalypse.simulate.rv import simulate_rv_data
 
 __all__ = [
-    "GaiaReducedCommandedScanLaw",
-    "LinearMotionSource",
-    "KeplerianSource",
-    "Source",
-    "simulate_gaia_al",
+    "simulate_gaia_epoch_astrometry",
+    "fake_parallax_factor",
+    "simulate_rv_data",
 ]

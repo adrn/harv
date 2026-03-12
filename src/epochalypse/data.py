@@ -9,7 +9,6 @@ __all__ = [
     "DatasetType",
 ]
 
-from abc import abstractmethod
 from collections.abc import Iterator
 
 import equinox as eqx
@@ -20,16 +19,13 @@ from .custom_types import NAngle, NFloatArray, NIntArray, NTime, NVelocity
 class AbstractData(eqx.Module):  # type: ignore[misc]
     """Abstract base class for observational data time series."""
 
-    @property
-    @abstractmethod
-    def time(self) -> NTime:
-        """Observation times."""
-        ...
+    # Note: time is defined in subclasses as a field, not as an abstract property
+    # to avoid dataclass field ordering issues with equinox
 
     @property
     def n_times(self) -> int:
         """Number of times / epochs / observations."""
-        return len(self.time)
+        return len(self.time)  # type: ignore[attr-defined]
 
 
 class AbstractAstrometryData(AbstractData):
@@ -105,6 +101,18 @@ class RadialVelocityData(AbstractRadialVelocityData):
 
     rv_err: NVelocity
     """Radial velocity uncertainties."""
+
+    t_ref: NTime | None = None
+    """Reference epoch. If None, uses mean observation time."""
+
+    def __check_init__(self) -> None:
+        """Compute t_ref from mean time if not provided."""
+        if self.t_ref is None:
+            import jax.numpy as jnp
+            from unxt import Quantity
+
+            mean_time = Quantity(jnp.mean(self.time.value), self.time.unit)
+            object.__setattr__(self, "t_ref", mean_time)
 
 
 # Type alias for all supported data types
