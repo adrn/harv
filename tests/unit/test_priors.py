@@ -4,7 +4,7 @@ import jax.random as jr
 import numpyro.distributions as dist
 import pytest
 
-from epochalypse.priors.rejection import RejectionPrior
+from harv.priors.rejection import RejectionPrior
 
 
 class TestRejectionPriorAstrometry:

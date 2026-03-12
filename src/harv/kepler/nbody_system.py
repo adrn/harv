@@ -4,7 +4,7 @@ import equinox as eqx
 from astropy.constants import G as G_astropy  # noqa: N811
 from unxt import Quantity
 
-from epochalypse.kepler.body import KeplerianBody
+from harv.kepler.body import KeplerianBody
 
 G = Quantity.from_(G_astropy)
 

@@ -7,9 +7,9 @@ from data creation through sampling to analysis.
 import numpy as np
 from unxt import Quantity
 
-from epochalypse.data import GaiaAstrometryData
-from epochalypse.priors.rejection import RejectionPrior
-from epochalypse.samplers.rejection import RejectionSampler
+from harv.data import GaiaAstrometryData
+from harv.priors.rejection import RejectionPrior
+from harv.samplers.rejection import RejectionSampler
 
 
 def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometryData:

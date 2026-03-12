@@ -10,7 +10,7 @@ import quaxed.numpy as jnp
 from unxt import Quantity
 
 if TYPE_CHECKING:
-    from epochalypse.kepler import TwoBodySystem
+    from harv.kepler import TwoBodySystem
 
 
 class AbstractSource(eqx.Module):

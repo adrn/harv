@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`epochalypse.kepler.orientation`."""
+"""Unit tests for :mod:`harv.kepler.orientation`."""
 
 import dataclasses
 
@@ -8,7 +8,7 @@ import quaxed.numpy as jnp
 from jax import config as jax_config
 from unxt import Quantity, ustrip
 
-from epochalypse.kepler.orientation import KeplerianOrientation
+from harv.kepler.orientation import KeplerianOrientation
 
 
 def _check_thiele_innes_round_trip(

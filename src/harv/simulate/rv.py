@@ -11,7 +11,7 @@ import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
 from unxt import Quantity, ustrip
 
-from epochalypse.data import RadialVelocityData
+from harv.data import RadialVelocityData
 
 __all__ = ["simulate_rv_data"]
 
@@ -80,7 +80,7 @@ def simulate_rv_data(
     Examples
     --------
     >>> from unxt import Quantity
-    >>> from epochalypse.simulate import simulate_rv_data
+    >>> from harv.simulate import simulate_rv_data
     >>> data, true_params = simulate_rv_data(
     ...     seed=42,
     ...     n_obs=30,

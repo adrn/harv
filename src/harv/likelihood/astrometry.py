@@ -16,7 +16,7 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
 
-from epochalypse.custom_types import DimlessOrArray
+from harv.custom_types import DimlessOrArray
 
 __all__ = [
     "get_astrometry_design_matrix",

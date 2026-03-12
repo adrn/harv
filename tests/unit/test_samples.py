@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import pytest
 from unxt import Quantity
 
-from epochalypse.samplers.samples import Samples
+from harv.samplers.samples import Samples
 
 
 class TestSamplesCreation:

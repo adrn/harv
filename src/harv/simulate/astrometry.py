@@ -18,8 +18,8 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import Quantity, uconvert, ustrip
 
-from epochalypse.data import GaiaAstrometryData
-from epochalypse.kepler import KeplerianOrientation, compute_true_anomaly_components
+from harv.data import GaiaAstrometryData
+from harv.kepler import KeplerianOrientation, compute_true_anomaly_components
 
 __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
 
@@ -148,7 +148,7 @@ def simulate_gaia_epoch_astrometry(
     Examples
     --------
     >>> from unxt import Quantity
-    >>> from epochalypse.simulate import simulate_gaia_epoch_astrometry
+    >>> from harv.simulate import simulate_gaia_epoch_astrometry
     >>> data, true_params = simulate_gaia_epoch_astrometry(
     ...     seed=42,
     ...     n_obs=50,

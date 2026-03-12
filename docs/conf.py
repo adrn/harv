@@ -1,5 +1,5 @@
 #
-# epochalypse documentation build configuration file
+# harv documentation build configuration file
 #
 import os
 import sys
@@ -14,7 +14,7 @@ current_year = datetime.now().year
 
 # -- General project information -----------------------------
 # General information about the project.
-project = "epochalypse"
+project = "harv"
 copyright = "Copyright © 2025 adrn"
 html_show_sphinx = False
 
@@ -22,7 +22,7 @@ html_show_sphinx = False
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 try:
-    version = importlib.metadata.version("epochalypse")
+    version = importlib.metadata.version("harv")
 except importlib.metadata.PackageNotFoundError:
     version = "0.0.0"
 
@@ -37,7 +37,7 @@ extensions = [
     "sphinx_design",
     "sphinx_copybutton",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.napoleon", # Support numpy style docstrings
+    "sphinx.ext.napoleon",  # Support numpy style docstrings
     # This allows you to create :::{todo} sections that will not be rendered
     # in the live docs if you want to leave notes for future work in the docs
     "sphinx.ext.todo",
@@ -78,7 +78,7 @@ myst_footnote_transition = False
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
-#--------- setup autoapi defaults for your api docs ---------------
+# --------- setup autoapi defaults for your api docs ---------------
 
 # AutoAPI configuration
 autoapi_type = "python"
@@ -133,7 +133,7 @@ html_theme = "pydata_sphinx_theme"
 # html_file_suffix = ''
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = "epochalypse_doc"
+htmlhelp_basename = "harv_doc"
 
 
 intersphinx_mapping = {

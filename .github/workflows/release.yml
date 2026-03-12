@@ -60,7 +60,7 @@ jobs:
     environment:
       name: pypi
       # Modify the url to be the name of your package
-      url: https://pypi.org/p/epochalypse
+      url: https://pypi.org/p/harv
     permissions:
       id-token: write  # this permission is mandatory for PyPI publishing
     steps:

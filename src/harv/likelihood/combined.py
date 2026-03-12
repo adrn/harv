@@ -11,9 +11,9 @@ import jax
 import numpyro.distributions as dist
 from unxt import Quantity
 
-from epochalypse.custom_types import DimlessOrArray
-from epochalypse.likelihood.astrometry import compute_marginal_log_likelihood_astrometry
-from epochalypse.likelihood.rv import compute_marginal_log_likelihood_rv
+from harv.custom_types import DimlessOrArray
+from harv.likelihood.astrometry import compute_marginal_log_likelihood_astrometry
+from harv.likelihood.rv import compute_marginal_log_likelihood_rv
 
 __all__ = [
     "compute_marginal_log_likelihood_combined",

@@ -24,7 +24,7 @@ from jaxoplanet.core.kepler import kepler
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity, ustrip
 
-from epochalypse.custom_types import DimlessOrArray
+from harv.custom_types import DimlessOrArray
 
 __all__ = [
     "get_rv_design_matrix",

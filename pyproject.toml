@@ -3,9 +3,9 @@ build-backend = "hatchling.build"
 requires = ["hatchling", "hatch-vcs"]
 
 [project]
-name = "epochalypse"
+name = "harv"
 dynamic = ["version"]
-description = "Tools for Gaia epoch data"
+description = "Tools for modeling Keplerian systems in astrometric and/or radial velocity data."
 authors = [
     { name = "adrn", email = "583379+adrn@users.noreply.github.com" },
 ]
@@ -45,12 +45,48 @@ override-dependencies = [
     "numpyro-ext @ git+https://github.com/dfm/numpyro-ext.git"
 ]
 
+[dependency-groups]
+extra = [
+    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
+    "setuptools",  # needed for gaiaunlimited for pkg_resources...
+]
+dev = [
+    {include-group = "extra"},
+    {include-group = "test"},
+    {include-group = "docs"},
+    "hatch",
+    "ipykernel",
+    "ipywidgets",
+    "pre-commit",
+    "twine",
+    "ruff",
+]
+docs = [
+    "sphinx~=8.0",
+    "myst-parser>=4.0",
+    "pydata-sphinx-theme~=0.16",
+    "sphinx-autobuild>=2024.10.3",
+    "sphinx-autoapi>=3.6.0",
+    "sphinx_design>=0.6.1",
+    "sphinx-copybutton>=0.5.2",
+    "corner>=2.2.3",
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.7",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-raises",
+    "pytest-randomly",
+    "pytest-xdist",
+]
+
 [project.urls]
-Homepage = "https://github.com/adrn/epochalypse"
-"Source Code" = "https://github.com/adrn/epochalypse"
-"Bug Tracker" = "https://github.com/adrn/epochalypse/issues"
-Documentation = "https://epochalypse.readthedocs.io"
-Download = "https://pypi.org/project/epochalypse/#files"
+Homepage = "https://github.com/adrn/harv"
+"Source Code" = "https://github.com/adrn/harv"
+"Bug Tracker" = "https://github.com/adrn/harv/issues"
+Documentation = "https://harv.readthedocs.io"
+Download = "https://pypi.org/project/harv/#files"
 
 ################################################################################
 # Tool Configuration
@@ -66,11 +102,11 @@ only-packages = true
 # This tells Hatch to build the package from the src/ directory.
 # Read more about src layouts here: https://www.pyopensci.org/python-package-guide/package-structure-code/python-package-structure.html
 [tool.hatch.build.targets.wheel]
-packages = ["src/epochalypse"]
+packages = ["src/harv"]
 
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/epochalypse/_version.py"
+version-file = "src/harv/_version.py"
 
 [tool.hatch.version]
 source = "vcs"
@@ -85,8 +121,8 @@ markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.ma
 
 [tool.coverage.paths]
 source = [
-    "src/epochalypse",
-    "*/site-packages/epochalypse",
+    "src/harv",
+    "*/site-packages/harv",
 ]
 
 [tool.coverage.run]
@@ -94,7 +130,7 @@ source = [
 branch = true
 parallel = true
 omit = [
-    "src/epochalypse/_version.py",
+    "src/harv/_version.py",
 ]
 
 [tool.coverage.report]
@@ -127,7 +163,7 @@ precision = 2
     disable_error_code = ["name-defined", "no-redef", "type-arg"]
     disallow_incomplete_defs = true
     disallow_untyped_defs = true
-    module = "epochalypse.*"
+    module = "harv.*"
 
   [[tool.mypy.overrides]]
     ignore_missing_imports = true
@@ -197,7 +233,7 @@ ignore = [
     "UP037",   # Remove quote from type annotation  <- jaxtyping
 ]
 exclude = [
-    "src/epochalypse/_version.py",
+    "src/harv/_version.py",
     "docs/conf.py",
 ]
 
@@ -216,7 +252,7 @@ exclude = [
 
 [tool.ruff.lint.isort]
 case-sensitive = true
-known-first-party = ["src", "epochalypse"]
+known-first-party = ["src", "harv"]
 
 [tool.pydoclint]
 style = "numpy"
@@ -225,42 +261,6 @@ arg-type-hints-in-docstring = true
 check-return-types = false
 check-yield-types = false
 exclude = ["_version.py", "scripts/*"]
-
-[dependency-groups]
-extra = [
-    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
-    "setuptools",  # needed for gaiaunlimited for pkg_resources...
-]
-dev = [
-    {include-group = "extra"},
-    {include-group = "test"},
-    {include-group = "docs"},
-    "hatch",
-    "ipykernel",
-    "ipywidgets",
-    "pre-commit",
-    "twine",
-    "ruff",
-]
-docs = [
-    "sphinx~=8.0",
-    "myst-parser>=4.0",
-    "pydata-sphinx-theme~=0.16",
-    "sphinx-autobuild>=2024.10.3",
-    "sphinx-autoapi>=3.6.0",
-    "sphinx_design>=0.6.1",
-    "sphinx-copybutton>=0.5.2",
-    "corner>=2.2.3",
-    "ipykernel>=7.1.0",
-    "matplotlib>=3.10.7",
-]
-test = [
-    "pytest",
-    "pytest-cov",
-    "pytest-raises",
-    "pytest-randomly",
-    "pytest-xdist",
-]
 
 # Use UV to create Hatch environments
 [tool.hatch.envs.default]

@@ -1,4 +1,4 @@
-# Welcome to epochalypse's Documentation '
+# Welcome to harv's Documentation '
 
 ## Overview
 
@@ -12,7 +12,6 @@ Home <self>
 
 This is the landing page of your docs. you can update it as you'd like to.
 This documentation example uses myst markdown as the primary documentation syntax.
-
 
 :::{button-link} <https://www.pyopensci.org/python-package-guide/documentation/hosting-tools/myst-markdown-rst-doc-syntax.html>
 :color: primary
@@ -45,4 +44,3 @@ If you see syntax like the syntax below, you are looking at rst.
 
 - Copyright © 2025 adrn.
 - Free software distributed under the MIT License.
-

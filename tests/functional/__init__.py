@@ -1,1 +1,1 @@
-"""Functional tests for epochalypse package."""
+"""Functional tests for harv package."""

@@ -1,4 +1,4 @@
-"""Custom types used in epochalypse."""
+"""Custom types used in harv."""
 
 import jax
 from jaxtyping import Float, Int, Real

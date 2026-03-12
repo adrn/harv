@@ -1,4 +1,4 @@
 # Support
 
-* Start a [discussion topic](https://github.com/adrn/epochalypse/discussions)
-* Email the authors or maintainers
+- Start a [discussion topic](https://github.com/adrn/harv/discussions)
+- Email the authors or maintainers

@@ -48,7 +48,7 @@ body:
     attributes:
       label: Environment
       description: >
-        Please paste the output of running `depinfo --markdown epochalypse`
+        Please paste the output of running `depinfo --markdown harv`
         in your environment between the `details` tags below.
       value: |
         <details>

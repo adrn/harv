@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 from unxt import Quantity
 
-from epochalypse.likelihood.rv import (
+from harv.likelihood.rv import (
     compute_marginal_log_likelihood_rv,
     compute_marginal_log_likelihood_rv_batch,
     get_rv_design_matrix,

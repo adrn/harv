@@ -10,11 +10,11 @@ body:
         To help keep this issue tracker clean and focused, please make sure that you have
          tried **all** of the following resources before submitting your question.
       options:
-        - label: I searched the [documentation](https://epochalypse.readthedocs.io).
+        - label: I searched the [documentation](https://harv.readthedocs.io).
           required: true
-        - label: I looked through existing [discussion topics](https://github.com/adrn/epochalypse/discussions).
+        - label: I looked through existing [discussion topics](https://github.com/adrn/harv/discussions).
           required: true
-        - label: I looked for [similar issues](https://github.com/adrn/epochalypse/issues).
+        - label: I looked for [similar issues](https://github.com/adrn/harv/issues).
           required: true
         - label: I looked up my question/problem in a search engine.
           required: true

@@ -16,22 +16,22 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 
-from epochalypse.data import (
+from harv.data import (
     AbstractAstrometryData,
     AbstractRadialVelocityData,
     SourceData,
 )
-from epochalypse.likelihood.astrometry import (
+from harv.likelihood.astrometry import (
     compute_marginal_log_likelihood_astrometry_batch,
 )
-from epochalypse.likelihood.rv import (
+from harv.likelihood.rv import (
     compute_marginal_log_likelihood_rv_batch,
 )
 
 if TYPE_CHECKING:
-    from epochalypse.data import GaiaAstrometryData, RadialVelocityData
-    from epochalypse.priors.rejection import RejectionPrior
-    from epochalypse.samplers.samples import Samples
+    from harv.data import GaiaAstrometryData, RadialVelocityData
+    from harv.priors.rejection import RejectionPrior
+    from harv.samplers.samples import Samples
 
 __all__ = ["RejectionSampler"]
 
@@ -180,7 +180,7 @@ class RejectionSampler(eqx.Module):
         data_type = self._infer_and_validate_data_type(data)
 
         # Import here to avoid circular dependency
-        from epochalypse.samplers.samples import Samples
+        from harv.samplers.samples import Samples
 
         key = jr.PRNGKey(seed)
         sample_key, rej_key = jr.split(key)
@@ -416,8 +416,8 @@ class RejectionSampler(eqx.Module):
         from numpyro_ext.distributions import MarginalizedLinear
         from unxt import ustrip
 
-        from epochalypse.likelihood.astrometry import get_astrometry_design_matrix
-        from epochalypse.likelihood.rv import get_rv_design_matrix
+        from harv.likelihood.astrometry import get_astrometry_design_matrix
+        from harv.likelihood.rv import get_rv_design_matrix
 
         n_samples = len(nonlinear_samples["log_period"])
 

@@ -198,7 +198,7 @@ def main(scan_law_file: Path, output_path: Path, nside: int) -> None:
             h5f.attrs.update(
                 {
                     "created_utc": Time.now().iso,
-                    "creator": "epochalypse/scripts/process_gaia_scanning_law.py",
+                    "creator": "harv/scripts/process_gaia_scanning_law.py",
                     "source_file": str(scan_law_file.resolve().absolute()),
                     "description": "Gaia unique scans grouped by HEALPix pixel.",
                     "dr": dr_name,

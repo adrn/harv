@@ -8,7 +8,7 @@ from astropy.constants import G as G_astropy  # noqa: N811
 from jaxoplanet.core.kepler import kepler
 from unxt import Quantity, ustrip
 
-from epochalypse.kepler.orientation import KeplerianOrientation
+from harv.kepler.orientation import KeplerianOrientation
 
 G = Quantity.from_(G_astropy)
 

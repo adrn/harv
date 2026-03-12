@@ -11,7 +11,7 @@ from unxt import Quantity, ustrip
 
 SCANLAW_DATA_DOI = "10.5281/zenodo.17729248"
 SCANLAW_DATA_POOCH = pooch.create(
-    path=pooch.os_cache("epochalypse"),
+    path=pooch.os_cache("harv"),
     base_url=f"doi:{SCANLAW_DATA_DOI}/",
     registry={
         "scanlaw_nside64_dr3.h5": "md5:0e41f3c0b3fb98d927b0b62944b3953c",

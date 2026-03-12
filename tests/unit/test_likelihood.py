@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 from unxt import Quantity
 
-from epochalypse.likelihood.astrometry import (
+from harv.likelihood.astrometry import (
     compute_marginal_log_likelihood_astrometry,
     compute_marginal_log_likelihood_astrometry_batch,
     get_astrometry_design_matrix,
