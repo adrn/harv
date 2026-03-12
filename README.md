@@ -8,6 +8,8 @@ Tools for modeling Keplerian systems in astrometric and/or radial velocity data.
 on [JAX](https://github.com/google/jax) and
 [NumPyro](https://github.com/pyro-ppl/numpyro).
 
+It's pronounced _harvey_.
+
 ## Get started
 
 You can install this package into your preferred Python environment using pip:
