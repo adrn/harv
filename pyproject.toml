@@ -61,6 +61,7 @@ dev = [
     "twine",
     "ruff",
     "mypy>=1.19.1",
+    "ty>=0.0.22",
 ]
 docs = [
     "sphinx~=8.0",
@@ -257,8 +258,11 @@ case-sensitive = true
 known-first-party = ["src", "harv"]
 
 [tool.ty.rules]
+# TODO: these are currently ty bugs that can't handle some of the parametric Quantity
+# type annotations. Hopefully these can eventually be removed?
 unused-type-ignore-comment = "ignore"
 unresolved-import = "ignore"
+unresolved-reference = "ignore"
 
 [tool.pydoclint]
 style = "numpy"
