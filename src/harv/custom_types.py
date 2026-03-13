@@ -1,13 +1,22 @@
 """Custom types used in harv."""
 
+from typing import Literal
+
 import jax
 from jaxtyping import Float, Int, Real
 from unxt import Quantity
 
-NAngle = Real[Quantity["angle"], "n"]  # type: ignore[type-arg]
-NTime = Real[Quantity["time"], "n"]  # type: ignore[type-arg]
-NVelocity = Real[Quantity["speed"], "n"]  # type: ignore[type-arg]
+Angle = Literal["angle"]
+Length = Literal["length"]
+Mass = Literal["mass"]
+Speed = Literal["speed"]
+Time = Literal["time"]
+Dimless = Literal["dimensionless"]
+
+NAngle = Real[Angle, "n"]
+NTime = Real[Time, "n"]
+NVelocity = Real[Speed, "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
 
-DimlessOrArray = Quantity["dimensionless"] | jax.Array
+DimlessValue = Quantity[Dimless] | jax.Array | float

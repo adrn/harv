@@ -181,6 +181,8 @@ precision = 2
       "jaxoplanet.*",
       "jaxtyping.*",
       "numpy.*",
+      "numpyro.*",
+      "numpyro_ext.*",
       "pandas.*",
       "plum.*",
       "pooch.*",
@@ -252,6 +254,11 @@ exclude = [
     "INP001",  # 'Insecure input' ignored because we are testing.
     "ANN201",  # 'Missing type annotation for {return}' ignored because all tests return `None`.
 ]
+"src/harv/likelihood/*.py" = [
+    "RUF001",  # ambiguous unicode
+    "RUF002",  # ambiguous unicode
+    "RUF003",  # ambiguous unicode
+]
 
 [tool.ruff.lint.isort]
 case-sensitive = true
@@ -262,7 +269,7 @@ known-first-party = ["src", "harv"]
 # type annotations. Hopefully these can eventually be removed?
 unused-type-ignore-comment = "ignore"
 unresolved-import = "ignore"
-unresolved-reference = "ignore"
+# unresolved-reference = "ignore"
 
 [tool.pydoclint]
 style = "numpy"

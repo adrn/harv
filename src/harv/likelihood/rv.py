@@ -17,14 +17,19 @@ where f(t) is the true anomaly computed via Kepler's equation.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax
-import jax.numpy as jnp
 import numpyro.distributions as dist
+import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
 from numpyro_ext.distributions import MarginalizedLinear
+from quaxed import vmap
 from unxt import Quantity, ustrip
+from unxt.quantity import AllowValue
 
-from harv.custom_types import DimlessOrArray
+if TYPE_CHECKING:
+    from harv.custom_types import DimlessValue, Speed, Time
 
 __all__ = [
     "get_rv_design_matrix",
@@ -35,10 +40,10 @@ __all__ = [
 
 
 def get_rv_design_matrix(
-    sin_f: DimlessOrArray,
-    cos_f: DimlessOrArray,
-    eccentricity: DimlessOrArray,
-    arg_peri: DimlessOrArray,
+    sin_f: DimlessValue,
+    cos_f: DimlessValue,
+    eccentricity: DimlessValue,
+    arg_peri: DimlessValue,
 ) -> jax.Array:
     """Build design matrix for single-lined RV observations (SB1).
 
@@ -75,14 +80,14 @@ def get_rv_design_matrix(
     # Design matrix: [K, v₀]
     # Column 0: coefficient for K
     # Column 1: coefficient for v₀ (constant 1)
-    return jnp.column_stack([rv_amplitude, jnp.ones_like(rv_amplitude)])
+    return jnp.column_stack([rv_amplitude, jnp.ones_like(rv_amplitude)])  # type: ignore[list-item]
 
 
 def get_rv_design_matrix_sb2(
-    sin_f: DimlessOrArray,
-    cos_f: DimlessOrArray,
-    eccentricity: DimlessOrArray,
-    arg_peri: DimlessOrArray,
+    sin_f: DimlessValue,
+    cos_f: DimlessValue,
+    eccentricity: DimlessValue,
+    arg_peri: DimlessValue,
     primary: bool = True,
 ) -> jax.Array:
     """Build design matrix for double-lined RV observations (SB2).
@@ -116,10 +121,14 @@ def get_rv_design_matrix_sb2(
         For secondary: [0, -X(t), 1]
     """
     # Compute cos(ω + f)
-    cos_omega_plus_f = jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
+    cos_omega_plus_f: jax.Array = ustrip(
+        AllowValue, "", jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
+    )
 
     # RV amplitude term
-    rv_amplitude = cos_omega_plus_f + eccentricity * jnp.cos(arg_peri)
+    rv_amplitude: jax.Array = ustrip(
+        AllowValue, "", cos_omega_plus_f + eccentricity * jnp.cos(arg_peri)
+    )
 
     if primary:
         # Primary: [K₁·X, 0, v₀]
@@ -141,16 +150,16 @@ def get_rv_design_matrix_sb2(
 
 
 def compute_marginal_log_likelihood_rv(
-    log_period: float,
-    eccentricity: float,
-    phase_peri: float,
-    arg_peri: float,
-    times: Quantity["time"],
-    rv: Quantity["speed"],
-    rv_err: Quantity["speed"],
-    t_ref: Quantity["time"],
+    log_period: DimlessValue,
+    eccentricity: DimlessValue,
+    phase_peri: DimlessValue,
+    arg_peri: DimlessValue,
+    times: Quantity[Time],
+    rv: Quantity[Speed],
+    rv_err: Quantity[Speed],
+    t_ref: Quantity[Time],
     linear_prior: dist.Distribution,
-) -> float:
+) -> DimlessValue:
     """Compute marginalized log-likelihood for single RV sample.
 
     This function analytically marginalizes over linear parameters (K, v₀)
@@ -235,16 +244,16 @@ def compute_marginal_log_likelihood_rv(
 
 @jax.jit
 def compute_marginal_log_likelihood_rv_batch(
-    log_period: jax.Array,
-    eccentricity: jax.Array,
-    phase_peri: jax.Array,
-    arg_peri: jax.Array,
-    times: Quantity["time"],
-    rv: Quantity["speed"],
-    rv_err: Quantity["speed"],
-    t_ref: Quantity["time"],
+    log_period: DimlessValue,
+    eccentricity: DimlessValue,
+    phase_peri: DimlessValue,
+    arg_peri: DimlessValue,
+    times: Quantity[Time],
+    rv: Quantity[Speed],
+    rv_err: Quantity[Speed],
+    t_ref: Quantity[Time],
     linear_prior: dist.Distribution,
-) -> jax.Array:
+) -> DimlessValue:
     """Compute marginalized log-likelihood for batch of RV samples.
 
     This is a vectorized version of `compute_marginal_log_likelihood_rv` that
@@ -277,7 +286,7 @@ def compute_marginal_log_likelihood_rv_batch(
         Marginalized log-likelihood values, shape (n_samples,).
     """
     # Vectorize over first 4 arguments (nonlinear parameters)
-    batched_likelihood = jax.vmap(
+    batched_likelihood = vmap(
         compute_marginal_log_likelihood_rv,
         in_axes=(0, 0, 0, 0, None, None, None, None, None),
     )

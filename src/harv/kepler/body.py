@@ -7,13 +7,12 @@ import astropy.units as apyu
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from astropy.constants import G as G_astropy  # noqa: N811
 from jaxoplanet.core.kepler import kepler
 from unxt import Quantity, ustrip
 
+from harv.custom_types import Length, Mass, Speed, Time
+from harv.kepler.constants import G
 from harv.kepler.orientation import KeplerianOrientation
-
-G: Quantity = Quantity.from_(G_astropy)
 
 
 class KeplerianBody(eqx.Module):
@@ -46,10 +45,10 @@ class KeplerianBody(eqx.Module):
 
     """
 
-    period: Quantity["time"] = eqx.field(converter=Quantity["time"].from_)
+    period: Quantity[Time] = eqx.field(converter=Quantity[Time].from_)
     eccentricity: float
-    semi_major_axis: Quantity["length"] = eqx.field(converter=Quantity["length"].from_)
-    t_peri: Quantity["time"] = eqx.field(converter=Quantity["time"].from_)
+    semi_major_axis: Quantity[Length] = eqx.field(converter=Quantity[Length].from_)
+    t_peri: Quantity[Time] = eqx.field(converter=Quantity[Time].from_)
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
     ecc_zero_tol: float = 1e-12  # TODO: or should this be minimum float?
@@ -79,11 +78,11 @@ class KeplerianBody(eqx.Module):
     @classmethod
     def from_masses(
         cls,
-        period: Quantity["time"],
+        period: Quantity[Time],
         eccentricity: float,
-        m_companion: Quantity["mass"],
-        m_primary: Quantity["mass"],
-        t_peri: Quantity["time"],
+        m_companion: Quantity[Mass],
+        m_primary: Quantity[Mass],
+        t_peri: Quantity[Time],
         **kwargs: Any,
     ) -> "KeplerianBody":
         r"""Construct companion's barycentric orbit from masses and period.
@@ -114,7 +113,7 @@ class KeplerianBody(eqx.Module):
         orbit: KeplerianBody
             The companion's orbit about the barycenter
         """
-        period = Quantity["time"].from_(period)
+        period = Quantity[Time].from_(period)
         m_tot = m_primary + m_companion
         a_rel = jnp.cbrt((G * m_tot * period**2) / (4 * jnp.pi**2))
         a_body = a_rel * (m_primary / m_tot)
@@ -122,7 +121,7 @@ class KeplerianBody(eqx.Module):
         return cls(
             period=period,
             eccentricity=eccentricity,
-            semi_major_axis=cast("Quantity[length]", a_body),
+            semi_major_axis=cast("Quantity[Length]", a_body),
             t_peri=t_peri,
             **kwargs,
         )
@@ -130,16 +129,16 @@ class KeplerianBody(eqx.Module):
     # ========================================================================
     # Other methods
     #
-    def get_mass(self, m_primary: Quantity["mass"]) -> Quantity["mass"]:
+    def get_mass(self, m_primary: Quantity[Mass]) -> Quantity[Mass]:
         """Compute companion mass given primary mass and barycentric semi-major axis."""
         num = G * m_primary**3 * self.period**2
         den = 4 * jnp.pi**2 * self.semi_major_axis**3
         m_tot = jnp.sqrt(num / den)
-        return cast("Quantity[mass]", m_tot - m_primary)
+        return cast("Quantity[Mass]", m_tot - m_primary)
 
     def get_position(
-        self, time: Quantity["time"], orientation: KeplerianOrientation | None = None
-    ) -> Quantity["length"]:
+        self, time: Quantity[Time], orientation: KeplerianOrientation | None = None
+    ) -> Quantity[Length]:
         """Get 3D position of the body in its orbit at given time(s).
 
         By definition and convention of this class, this is the position of the body
@@ -172,13 +171,13 @@ class KeplerianBody(eqx.Module):
         # Rotate to observer frame
         # TODO: identify if rotation is close to identity and skip, for performance
         return cast(
-            "Quantity[length]",
+            "Quantity[Length]",
             jnp.einsum("ij,j...->i...", orientation.rotation_matrix, xyz_orb),
         )
 
     def get_velocity(
-        self, time: Quantity["time"], orientation: KeplerianOrientation | None = None
-    ) -> Quantity["speed"]:
+        self, time: Quantity[Time], orientation: KeplerianOrientation | None = None
+    ) -> Quantity[Speed]:
         """Get 3D velocity of the body relative to the system barycenter."""
         # Mean anomaly (dimensionless)
         M = ustrip("", 2 * jnp.pi * (time - self.t_peri) / self.period)
@@ -217,6 +216,6 @@ class KeplerianBody(eqx.Module):
 
         orientation = self.orientation if orientation is None else orientation
         return cast(
-            "Quantity[speed]",
+            "Quantity[Speed]",
             jnp.einsum("ij,j...->i...", orientation.rotation_matrix, vel_orb),
         )

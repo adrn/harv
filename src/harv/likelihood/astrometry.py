@@ -8,6 +8,8 @@ over while evaluating the likelihood for nonlinear parameters (P, e, phase_peri,
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -16,7 +18,8 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
 
-from harv.custom_types import DimlessOrArray
+if TYPE_CHECKING:
+    from harv.custom_types import Angle, DimlessValue, Time
 
 __all__ = [
     "get_astrometry_design_matrix",
@@ -26,15 +29,15 @@ __all__ = [
 
 
 def get_astrometry_design_matrix(
-    times: Quantity["time"],
-    scan_angle: Quantity["angle"],
-    parallax_factor: DimlessOrArray,
-    sin_f: DimlessOrArray,
-    cos_f: DimlessOrArray,
-    t_ref: Quantity["time"],
-    cos_i: DimlessOrArray,
-    arg_peri: DimlessOrArray,
-    lon_asc_node: DimlessOrArray,
+    times: Quantity[Time],
+    scan_angle: Quantity[Angle],
+    parallax_factor: DimlessValue,
+    sin_f: DimlessValue,
+    cos_f: DimlessValue,
+    t_ref: Quantity[Time],
+    cos_i: DimlessValue,
+    arg_peri: DimlessValue,
+    lon_asc_node: DimlessValue,
 ) -> jax.Array:
     """Build design matrix for Gaia along-scan astrometry.
 
@@ -53,19 +56,19 @@ def get_astrometry_design_matrix(
         Observation times.
     scan_angle : Quantity["angle"]
         Gaia scan angle ψ for each observation.
-    parallax_factor : DimlessOrArray
+    parallax_factor : DimlessValue
         Along-scan parallax factor H_ϖ(t) for each observation.
-    sin_f : DimlessOrArray
+    sin_f : DimlessValue
         sin(true anomaly) at each observation time.
-    cos_f : DimlessOrArray
+    cos_f : DimlessValue
         cos(true anomaly) at each observation time.
     t_ref : Quantity["time"]
         Reference epoch for proper motion.
-    cos_i : DimlessOrArray
+    cos_i : DimlessValue
         cos(inclination) of the orbit.
-    arg_peri : DimlessOrArray
+    arg_peri : DimlessValue
         Argument of pericenter ω (radians).
-    lon_asc_node : DimlessOrArray
+    lon_asc_node : DimlessValue
         Longitude of ascending node Ω (radians).
 
     Returns
@@ -115,10 +118,10 @@ def get_astrometry_design_matrix(
 
     # Stack into design matrix
     # Columns: [α₀, δ₀, μ_α, μ_δ, ϖ, a]
-    design_matrix = jnp.stack(
+    return jnp.stack(
         [
-            cos_psi,  # α₀
-            sin_psi,  # δ₀
+            cos_psi,  # α0
+            sin_psi,  # δ0
             cos_psi * dt_yr,  # μ_α
             sin_psi * dt_yr,  # μ_δ
             _parallax_factor,  # ϖ
@@ -126,8 +129,6 @@ def get_astrometry_design_matrix(
         ],
         axis=-1,
     )
-
-    return design_matrix
 
 
 @jax.jit
@@ -138,12 +139,12 @@ def compute_marginal_log_likelihood_astrometry(
     cos_i: float,
     arg_peri: float,
     lon_asc_node: float,
-    times: Quantity["time"],
-    scan_angle: Quantity["angle"],
-    parallax_factor: DimlessOrArray,
-    y_al: Quantity["angle"],
-    y_al_error: Quantity["angle"],
-    t_ref: Quantity["time"],
+    times: Quantity[Time],
+    scan_angle: Quantity[Angle],
+    parallax_factor: DimlessValue,
+    y_al: Quantity[Angle],
+    y_al_error: Quantity[Angle],
+    t_ref: Quantity[Time],
     linear_prior: dist.Distribution,
 ) -> float:
     """Compute marginalized log-likelihood for Gaia astrometry.
@@ -170,7 +171,7 @@ def compute_marginal_log_likelihood_astrometry(
         Observation times.
     scan_angle : Quantity["angle"]
         Gaia scan angle ψ for each observation.
-    parallax_factor : DimlessOrArray
+    parallax_factor : DimlessValue
         Along-scan parallax factor H_ϖ(t) for each observation.
     y_al : Quantity["angle"]
         Observed along-scan positions (mas).
@@ -179,7 +180,7 @@ def compute_marginal_log_likelihood_astrometry(
     t_ref : Quantity["time"]
         Reference epoch for proper motion.
     linear_prior : dist.Distribution
-        Prior distribution for linear parameters. Typically Normal(0, σ).
+        Prior distribution for linear parameters. Typically Normal(0, std).
 
     Returns
     -------

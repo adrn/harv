@@ -1,3 +1,5 @@
+"""Keplerian orbit mechanics and related utilities."""
+
 from .body import KeplerianBody
 from .helpers import compute_true_anomaly_components
 from .nbody_system import AbstractNBodySystem, TwoBodySystem

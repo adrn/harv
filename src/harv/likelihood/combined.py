@@ -7,13 +7,19 @@ log space.
 
 from __future__ import annotations
 
-import jax
-import numpyro.distributions as dist
-from unxt import Quantity
+from typing import TYPE_CHECKING
 
-from harv.custom_types import DimlessOrArray
+import jax
+from quaxed import vmap
+
 from harv.likelihood.astrometry import compute_marginal_log_likelihood_astrometry
 from harv.likelihood.rv import compute_marginal_log_likelihood_rv
+
+if TYPE_CHECKING:
+    import numpyro.distributions as dist
+    from unxt import Quantity
+
+    from harv.custom_types import Angle, DimlessValue, Speed, Time
 
 __all__ = [
     "compute_marginal_log_likelihood_combined",
@@ -22,27 +28,27 @@ __all__ = [
 
 
 def compute_marginal_log_likelihood_combined(
-    log_period: float,
-    eccentricity: float,
-    phase_peri: float,
-    cos_i: float,
-    arg_peri: float,
-    lon_asc_node: float,
+    log_period: DimlessValue,
+    eccentricity: DimlessValue,
+    phase_peri: DimlessValue,
+    cos_i: DimlessValue,
+    arg_peri: DimlessValue,
+    lon_asc_node: DimlessValue,
     # Astrometry data
-    astro_times: Quantity["time"],
-    scan_angle: Quantity["angle"],
-    parallax_factor: DimlessOrArray,
-    al_position: Quantity["angle"],
-    al_position_err: Quantity["angle"],
-    astro_t_ref: Quantity["time"],
+    astro_times: Quantity[Time],
+    scan_angle: Quantity[Angle],
+    parallax_factor: DimlessValue,
+    al_position: Quantity[Angle],
+    al_position_err: Quantity[Angle],
+    astro_t_ref: Quantity[Time],
     astro_linear_prior: dist.Distribution,
     # RV data
-    rv_times: Quantity["time"],
-    rv: Quantity["speed"],
-    rv_err: Quantity["speed"],
-    rv_t_ref: Quantity["time"],
+    rv_times: Quantity[Time],
+    rv: Quantity[Speed],
+    rv_err: Quantity[Speed],
+    rv_t_ref: Quantity[Time],
     rv_linear_prior: dist.Distribution,
-) -> float:
+) -> DimlessValue:
     """Compute marginalized log-likelihood for combined astrometry + RV data.
 
     The combined likelihood is simply the sum of independent log-likelihoods:
@@ -52,14 +58,16 @@ def compute_marginal_log_likelihood_combined(
     ----------
     log_period, eccentricity, phase_peri, cos_i, arg_peri, lon_asc_node
         Nonlinear orbital parameters (shared between astrometry and RV).
-    astro_times, scan_angle, parallax_factor, al_position, al_position_err, astro_t_ref, astro_linear_prior
+    astro_times, scan_angle, parallax_factor
+        Astrometry metadata.
+    al_position, al_position_err, astro_t_ref,astro_linear_prior
         Astrometry data and prior.
     rv_times, rv, rv_err, rv_t_ref, rv_linear_prior
         RV data and prior.
 
     Returns
     -------
-    log_likelihood : float
+    log_likelihood
         Combined marginalized log-likelihood.
     """
     log_lik_astro = compute_marginal_log_likelihood_astrometry(
@@ -95,27 +103,27 @@ def compute_marginal_log_likelihood_combined(
 
 @jax.jit
 def compute_marginal_log_likelihood_combined_batch(
-    log_period: jax.Array,
-    eccentricity: jax.Array,
-    phase_peri: jax.Array,
-    cos_i: jax.Array,
-    arg_peri: jax.Array,
-    lon_asc_node: jax.Array,
-    astro_times: Quantity["time"],
-    scan_angle: Quantity["angle"],
-    parallax_factor: DimlessOrArray,
-    al_position: Quantity["angle"],
-    al_position_err: Quantity["angle"],
-    astro_t_ref: Quantity["time"],
+    log_period: DimlessValue,
+    eccentricity: DimlessValue,
+    phase_peri: DimlessValue,
+    cos_i: DimlessValue,
+    arg_peri: DimlessValue,
+    lon_asc_node: DimlessValue,
+    astro_times: Quantity[Time],
+    scan_angle: Quantity[Angle],
+    parallax_factor: DimlessValue,
+    al_position: Quantity[Angle],
+    al_position_err: Quantity[Angle],
+    astro_t_ref: Quantity[Time],
     astro_linear_prior: dist.Distribution,
-    rv_times: Quantity["time"],
-    rv: Quantity["speed"],
-    rv_err: Quantity["speed"],
-    rv_t_ref: Quantity["time"],
+    rv_times: Quantity[Time],
+    rv: Quantity[Speed],
+    rv_err: Quantity[Speed],
+    rv_t_ref: Quantity[Time],
     rv_linear_prior: dist.Distribution,
-) -> jax.Array:
+) -> DimlessValue:
     """Vectorized combined likelihood for batch of samples."""
-    batched_likelihood = jax.vmap(
+    batched_likelihood = vmap(
         compute_marginal_log_likelihood_combined,
         in_axes=(
             0,
