@@ -1,7 +1,7 @@
 """Keplerian orbit implementation with units support and JAX compatibility."""
 
 from dataclasses import KW_ONLY
-from typing import Any
+from typing import Any, cast
 
 import astropy.units as apyu
 import equinox as eqx
@@ -117,12 +117,12 @@ class KeplerianBody(eqx.Module):
         period = Quantity["time"].from_(period)
         m_tot = m_primary + m_companion
         a_rel = jnp.cbrt((G * m_tot * period**2) / (4 * jnp.pi**2))
-        a_body: Quantity["length"] = a_rel * (m_primary / m_tot)
+        a_body = a_rel * (m_primary / m_tot)
 
         return cls(
             period=period,
             eccentricity=eccentricity,
-            semi_major_axis=a_body,
+            semi_major_axis=cast("Quantity[length]", a_body),
             t_peri=t_peri,
             **kwargs,
         )
@@ -134,8 +134,8 @@ class KeplerianBody(eqx.Module):
         """Compute companion mass given primary mass and barycentric semi-major axis."""
         num = G * m_primary**3 * self.period**2
         den = 4 * jnp.pi**2 * self.semi_major_axis**3
-        m_tot: Quantity["mass"] = jnp.sqrt(num / den)
-        return m_tot - m_primary
+        m_tot = jnp.sqrt(num / den)
+        return cast("Quantity[mass]", m_tot - m_primary)
 
     def get_position(
         self, time: Quantity["time"], orientation: KeplerianOrientation | None = None
@@ -171,7 +171,10 @@ class KeplerianBody(eqx.Module):
 
         # Rotate to observer frame
         # TODO: identify if rotation is close to identity and skip, for performance
-        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, xyz_orb)  # type: ignore[return-value]
+        return cast(
+            "Quantity[length]",
+            jnp.einsum("ij,j...->i...", orientation.rotation_matrix, xyz_orb),
+        )
 
     def get_velocity(
         self, time: Quantity["time"], orientation: KeplerianOrientation | None = None
@@ -213,4 +216,7 @@ class KeplerianBody(eqx.Module):
         vel_orb = jnp.stack([vx_orb, vy_orb, vz_orb], axis=0)
 
         orientation = self.orientation if orientation is None else orientation
-        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, vel_orb)  # type: ignore[return-value]
+        return cast(
+            "Quantity[speed]",
+            jnp.einsum("ij,j...->i...", orientation.rotation_matrix, vel_orb),
+        )
