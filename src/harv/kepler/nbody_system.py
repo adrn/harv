@@ -1,12 +1,16 @@
 """Keplerian orbit implementation with units support and JAX compatibility."""
 
-from typing import cast
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, cast
 
 import equinox as eqx
-from unxt import Quantity
 
-from harv.custom_types import Length, Mass, Speed, Time
-from harv.kepler.body import KeplerianBody
+if TYPE_CHECKING:
+    from unxt import Quantity
+
+    from harv.custom_types import Length, Mass, Speed, Time
+    from harv.kepler.body import KeplerianBody
 
 
 class AbstractNBodySystem(eqx.Module):

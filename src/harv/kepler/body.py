@@ -1,7 +1,8 @@
 """Keplerian orbit implementation with units support and JAX compatibility."""
 
-from dataclasses import KW_ONLY
-from typing import Any, cast
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, cast
 
 import astropy.units as apyu
 import equinox as eqx
@@ -13,6 +14,9 @@ from unxt import Quantity, ustrip
 from harv.custom_types import Length, Mass, Speed, Time
 from harv.kepler.constants import G
 from harv.kepler.orientation import KeplerianOrientation
+
+if TYPE_CHECKING:
+    from dataclasses import KW_ONLY
 
 
 class KeplerianBody(eqx.Module):
@@ -45,10 +49,16 @@ class KeplerianBody(eqx.Module):
 
     """
 
-    period: Quantity[Time] = eqx.field(converter=Quantity[Time].from_)
+    period: Quantity[Time] = eqx.field(
+        converter=Quantity["time"].from_
+    )  # ty: ignore[unresolved-reference]
     eccentricity: float
-    semi_major_axis: Quantity[Length] = eqx.field(converter=Quantity[Length].from_)
-    t_peri: Quantity[Time] = eqx.field(converter=Quantity[Time].from_)
+    semi_major_axis: Quantity[Length] = eqx.field(
+        converter=Quantity["length"].from_
+    )  # ty: ignore[unresolved-reference]
+    t_peri: Quantity[Time] = eqx.field(
+        converter=Quantity["time"].from_
+    )  # ty: ignore[unresolved-reference]
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
     ecc_zero_tol: float = 1e-12  # TODO: or should this be minimum float?

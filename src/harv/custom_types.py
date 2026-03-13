@@ -1,5 +1,7 @@
 """Custom types used in harv."""
 
+from __future__ import annotations
+
 from typing import Literal
 
 import jax
@@ -13,10 +15,10 @@ Speed = Literal["speed"]
 Time = Literal["time"]
 Dimless = Literal["dimensionless"]
 
-NAngle = Real[Angle, "n"]
-NTime = Real[Time, "n"]
-NVelocity = Real[Speed, "n"]
+NAngle = Real[Quantity["angle"], "n"]
+NTime = Real[Quantity["time"], "n"]
+NVelocity = Real[Quantity["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
 
-DimlessValue = Quantity[Dimless] | jax.Array | float
+DimlessValue = Quantity["dimensionless"] | jax.Array | float
