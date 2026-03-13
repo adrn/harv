@@ -1,5 +1,8 @@
 """Keplerian orbit implementation with units support and JAX compatibility."""
 
+from dataclasses import KW_ONLY
+from typing import Any
+
 import astropy.units as apyu
 import equinox as eqx
 import jax
@@ -10,18 +13,15 @@ from unxt import Quantity, ustrip
 
 from harv.kepler.orientation import KeplerianOrientation
 
-G = Quantity.from_(G_astropy)
-
-# TODO: make this a configurable thing
-ECC_ZERO_TOL = 1e-10
+G: Quantity = Quantity.from_(G_astropy)
 
 
 class KeplerianBody(eqx.Module):
     """Orbital parameters of a Keplerian body (companion).
 
     This class represents the orbital parameters of a companion or second body (relative
-    to some barycenter) with support for units via unxt. So, all parameters represent
-    the orbital elements of a specific body relative to the barycenter.
+    to some barycenter). So, all parameters represent the orbital elements of a specific
+    body relative to the barycenter.
 
     The primary parameterization uses:
     - Period (P)
@@ -46,12 +46,13 @@ class KeplerianBody(eqx.Module):
 
     """
 
-    # TODO: decide on API here - use eqx.field(converter=Quantity["time"].from_)?
-    period: Quantity["time"]
-    eccentricity: Quantity["dimensionless"]
-    semi_major_axis: Quantity["length"]
-    t_peri: Quantity["time"]
+    period: Quantity["time"] = eqx.field(converter=Quantity["time"].from_)
+    eccentricity: float
+    semi_major_axis: Quantity["length"] = eqx.field(converter=Quantity["length"].from_)
+    t_peri: Quantity["time"] = eqx.field(converter=Quantity["time"].from_)
     orientation: KeplerianOrientation = KeplerianOrientation()
+    _: KW_ONLY
+    ecc_zero_tol: float = 1e-12  # TODO: or should this be minimum float?
 
     def __check_init__(self) -> None:
         if not (0.0 <= self.eccentricity < 1.0):
@@ -79,11 +80,11 @@ class KeplerianBody(eqx.Module):
     def from_masses(
         cls,
         period: Quantity["time"],
-        eccentricity: Quantity["dimensionless"],
+        eccentricity: float,
         m_companion: Quantity["mass"],
         m_primary: Quantity["mass"],
         t_peri: Quantity["time"],
-        orientation: KeplerianOrientation | None = None,
+        **kwargs: Any,
     ) -> "KeplerianBody":
         r"""Construct companion's barycentric orbit from masses and period.
 
@@ -105,26 +106,25 @@ class KeplerianBody(eqx.Module):
             Time of pericenter passage.
         orientation
             Optional: Orientation of the orbit.
+        kwargs
+            Additional keyword arguments to pass to the main constructor.
 
         Returns
         -------
         orbit: KeplerianBody
             The companion's orbit about the barycenter
         """
+        period = Quantity["time"].from_(period)
         m_tot = m_primary + m_companion
         a_rel = jnp.cbrt((G * m_tot * period**2) / (4 * jnp.pi**2))
-        a_body = a_rel * (m_primary / m_tot)
-
-        kw = {}
-        if orientation is not None:
-            kw["orientation"] = orientation
+        a_body: Quantity["length"] = a_rel * (m_primary / m_tot)
 
         return cls(
             period=period,
             eccentricity=eccentricity,
             semi_major_axis=a_body,
             t_peri=t_peri,
-            **kw,
+            **kwargs,
         )
 
     # ========================================================================
@@ -134,7 +134,7 @@ class KeplerianBody(eqx.Module):
         """Compute companion mass given primary mass and barycentric semi-major axis."""
         num = G * m_primary**3 * self.period**2
         den = 4 * jnp.pi**2 * self.semi_major_axis**3
-        m_tot = jnp.sqrt(num / den)
+        m_tot: Quantity["mass"] = jnp.sqrt(num / den)
         return m_tot - m_primary
 
     def get_position(
@@ -150,7 +150,7 @@ class KeplerianBody(eqx.Module):
 
         # Eccentric anomaly using jaxoplanet kepler solver
         sin_cos_f = jax.lax.cond(
-            jnp.isclose(self.eccentricity, 0.0, atol=ECC_ZERO_TOL),
+            jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M), jnp.cos(M)),
             lambda: kepler(M, self.eccentricity),
         )
@@ -171,7 +171,7 @@ class KeplerianBody(eqx.Module):
 
         # Rotate to observer frame
         # TODO: identify if rotation is close to identity and skip, for performance
-        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, xyz_orb)
+        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, xyz_orb)  # type: ignore[return-value]
 
     def get_velocity(
         self, time: Quantity["time"], orientation: KeplerianOrientation | None = None
@@ -182,7 +182,7 @@ class KeplerianBody(eqx.Module):
 
         # True anomaly (sin f, cos f); circular shortcut consistent with get_position
         sin_f, cos_f = jax.lax.cond(
-            jnp.isclose(self.eccentricity, 0.0, atol=ECC_ZERO_TOL),
+            jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M), jnp.cos(M)),
             lambda: kepler(M, self.eccentricity),
         )
@@ -207,10 +207,10 @@ class KeplerianBody(eqx.Module):
             return vx, vy
 
         vx_orb, vy_orb = jax.lax.cond(
-            jnp.isclose(e, 0.0, atol=ECC_ZERO_TOL), _vel_circular, _vel_eccentric
+            jnp.isclose(e, 0.0, atol=self.ecc_zero_tol), _vel_circular, _vel_eccentric
         )
         vz_orb = jnp.zeros_like(vx_orb)
         vel_orb = jnp.stack([vx_orb, vy_orb, vz_orb], axis=0)
 
         orientation = self.orientation if orientation is None else orientation
-        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, vel_orb)
+        return jnp.einsum("ij,j...->i...", orientation.rotation_matrix, vel_orb)  # type: ignore[return-value]

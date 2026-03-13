@@ -25,7 +25,7 @@ dependencies = [
     "jax==0.8.1",
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
-    "quaxed>=0.10.2",
+    "quaxed>=0.10.4",
     "unxt>=1.7.2",
     "numpyro>=0.15.0",
     "equinox>=0.13.2",
@@ -60,6 +60,7 @@ dev = [
     "pre-commit",
     "twine",
     "ruff",
+    "mypy>=1.19.1",
 ]
 docs = [
     "sphinx~=8.0",
@@ -148,6 +149,7 @@ precision = 2
   ]
 
   disallow_incomplete_defs = false
+  disallow_subclassing_any = false
   disallow_untyped_defs = false
   enable_error_code = [
     "ignore-without-code", "redundant-expr", "truthy-bool"
@@ -253,6 +255,10 @@ exclude = [
 [tool.ruff.lint.isort]
 case-sensitive = true
 known-first-party = ["src", "harv"]
+
+[tool.ty.rules]
+unused-type-ignore-comment = "ignore"
+unresolved-import = "ignore"
 
 [tool.pydoclint]
 style = "numpy"
