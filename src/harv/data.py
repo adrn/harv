@@ -22,6 +22,9 @@ class AbstractData(eqx.Module):  # type: ignore[misc]
     # Note: time is defined in subclasses as a field, not as an abstract property
     # to avoid dataclass field ordering issues with equinox
 
+    time: NTime
+    """Barycentric TCB times."""
+
     @property
     def n_times(self) -> int:
         """Number of times / epochs / observations."""
@@ -34,9 +37,6 @@ class AbstractAstrometryData(AbstractData):
 
 class GaiaAstrometryData(AbstractAstrometryData):
     """Gaia epoch astrometry (along-scan measurements)."""
-
-    time: NTime
-    """Barycentric TCB times."""
 
     al_position: NAngle
     """Along-scan position."""
@@ -92,9 +92,6 @@ class AbstractRadialVelocityData(AbstractData):
 
 class RadialVelocityData(AbstractRadialVelocityData):
     """Radial velocity measurements."""
-
-    time: NTime
-    """Observation times."""
 
     rv: NVelocity
     """Radial velocities."""

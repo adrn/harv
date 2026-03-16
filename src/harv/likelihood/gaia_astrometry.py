@@ -27,19 +27,20 @@ from typing import TYPE_CHECKING
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from jaxoplanet.core.kepler import kepler
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import ustrip
 from unxt.quantity import AllowValue
 
+from harv.likelihood._params import (
+    AbstractGaiaAstrometryParameters,
+    GaiaAstrometryOrbitParameters,
+    GaiaAstrometryParameters,
+)
 from harv.likelihood.base import AbstractLikelihood
+from harv.likelihood.helpers import _solve_kepler
 
 if TYPE_CHECKING:
     from harv.data import GaiaAstrometryData
-    from harv.likelihood._params import (
-        GaiaAstrometryOrbitParameters,
-        GaiaAstrometryParameters,
-    )
 
 __all__ = [
     "MarginalizedGaiaAstrometryLikelihood",
@@ -52,21 +53,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _solve_kepler(
-    data: GaiaAstrometryData,
-    params: GaiaAstrometryOrbitParameters,
-) -> tuple[jax.Array, jax.Array]:
-    """Solve Kepler's equation; return (sin_f, cos_f)."""
-    period = 10.0**params.log_period  # days
-    t_peri = params.phase_peri * period  # days
-    dt = ustrip("day", data.time) - t_peri
-    M = 2 * jnp.pi * dt / period
-    return kepler(M, params.eccentricity)
-
-
 def _get_design_matrix(
     data: GaiaAstrometryData,
-    params: GaiaAstrometryOrbitParameters,
+    params: AbstractGaiaAstrometryParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -125,7 +114,9 @@ def _get_design_matrix(
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedGaiaAstrometryLikelihood(AbstractLikelihood):
+class MarginalizedGaiaAstrometryLikelihood(
+    AbstractLikelihood[GaiaAstrometryOrbitParameters]
+):
     """Gaia astrometry likelihood with linear parameters analytically marginalized.
 
     Analytically integrates over the 6 linear astrometric parameters
@@ -187,7 +178,7 @@ class MarginalizedGaiaAstrometryLikelihood(AbstractLikelihood):
 # ---------------------------------------------------------------------------
 
 
-class GaiaAstrometryLikelihood(AbstractLikelihood):
+class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
     """Full Gaia astrometry likelihood with all parameters specified explicitly.
 
     Parameters

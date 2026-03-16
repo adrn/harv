@@ -24,16 +24,20 @@ from typing import TYPE_CHECKING
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from jaxoplanet.core.kepler import kepler
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import ustrip
 from unxt.quantity import AllowValue
 
+from harv.likelihood._params import (
+    AbstractRVParameters,
+    RVOrbitParameters,
+    RVParameters,
+)
 from harv.likelihood.base import AbstractLikelihood
+from harv.likelihood.helpers import _solve_kepler
 
 if TYPE_CHECKING:
     from harv.data import RadialVelocityData
-    from harv.likelihood._params import RVOrbitParameters, RVParameters
 
 __all__ = [
     "MarginalizedRVLikelihood",
@@ -46,20 +50,8 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _solve_kepler(
-    data: RadialVelocityData,
-    params: RVOrbitParameters,
-) -> tuple[jax.Array, jax.Array]:
-    """Solve Kepler's equation; return (sin_f, cos_f)."""
-    period = 10.0**params.log_period  # days
-    t_peri = params.phase_peri * period  # days
-    dt = ustrip("day", data.time) - t_peri
-    M = 2 * jnp.pi * dt / period
-    return kepler(M, params.eccentricity)
-
-
 def _get_design_matrix(
-    params: RVOrbitParameters,
+    params: AbstractRVParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -71,7 +63,7 @@ def _get_design_matrix(
 
 
 def _get_design_matrix_sb2(
-    params: RVOrbitParameters,
+    params: AbstractRVParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
     primary: bool,
@@ -98,7 +90,7 @@ def _get_design_matrix_sb2(
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedRVLikelihood(AbstractLikelihood):
+class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
     """RV likelihood with linear parameters (K, v₀) analytically marginalized.
 
     Analytically integrates over K and v₀ given a Gaussian prior, using the
@@ -150,7 +142,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood):
 # ---------------------------------------------------------------------------
 
 
-class RVLikelihood(AbstractLikelihood):
+class RVLikelihood(AbstractLikelihood[RVParameters]):
     """Full RV likelihood with all parameters (including K and v₀) specified.
 
     Parameters

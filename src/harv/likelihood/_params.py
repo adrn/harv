@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import equinox as eqx
 
-# ---------------------------------------------------------------------------
-# Radial velocity
-# ---------------------------------------------------------------------------
 
+class AbstractBaseKeplerParameters(eqx.Module):
+    """Base class for Keplerian orbital parameters shared across data types.
 
-class RVOrbitParameters(eqx.Module):
-    """Nonlinear orbital parameters for the marginalized RV likelihood.
-
-    The linear parameters (K, v₀) are analytically marginalized out.
+    This includes the 4 nonlinear orbital parameters common to both RV and
+    astrometry: log_period, eccentricity, phase of periastron, and argument of
+    periastron.
     """
 
     log_period: float
@@ -34,17 +32,29 @@ class RVOrbitParameters(eqx.Module):
     arg_peri: float
 
 
-class RVParameters(eqx.Module):
+# ---------------------------------------------------------------------------
+# Radial velocity
+# ---------------------------------------------------------------------------
+
+
+class AbstractRVParameters(AbstractBaseKeplerParameters):
+    """Abstract base class for RV parameter structs."""
+
+
+class RVOrbitParameters(AbstractRVParameters):
+    """Nonlinear orbital parameters for the marginalized RV likelihood.
+
+    The linear parameters (K, v₀) are analytically marginalized out.
+    """
+
+
+class RVParameters(AbstractRVParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters and the linear RV parameters
     (semi-amplitude K and systemic velocity v₀).
     """
 
-    log_period: float
-    eccentricity: float
-    phase_peri: float
-    arg_peri: float
     K: float  # RV semi-amplitude
     v0: float  # systemic velocity
 
@@ -54,34 +64,28 @@ class RVParameters(eqx.Module):
 # ---------------------------------------------------------------------------
 
 
-class GaiaAstrometryOrbitParameters(eqx.Module):
+class AbstractGaiaAstrometryParameters(AbstractBaseKeplerParameters):
+    """Abstract base class for Gaia astrometry parameter structs."""
+
+    cos_i: float
+    lon_asc_node: float
+
+
+class GaiaAstrometryOrbitParameters(AbstractGaiaAstrometryParameters):
     """Nonlinear orbital parameters for the marginalized Gaia astrometry likelihood.
 
     The 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) are
     analytically marginalized out.
     """
 
-    log_period: float
-    eccentricity: float
-    phase_peri: float
-    cos_i: float
-    arg_peri: float
-    lon_asc_node: float
 
-
-class GaiaAstrometryParameters(eqx.Module):
+class GaiaAstrometryParameters(AbstractGaiaAstrometryParameters):
     """Full parameter set for the Gaia astrometry likelihood.
 
     Includes both nonlinear orbital parameters and the 6 linear astrometric
     parameters (reference position, proper motion, parallax, semi-major axis).
     """
 
-    log_period: float
-    eccentricity: float
-    phase_peri: float
-    cos_i: float
-    arg_peri: float
-    lon_asc_node: float
     ra0: float  # α₀: reference RA offset [mas]
     dec0: float  # δ₀: reference Dec offset [mas]
     pmra: float  # μ_α: proper motion in RA [mas/yr]

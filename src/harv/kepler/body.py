@@ -50,15 +50,15 @@ class KeplerianBody(eqx.Module):
     """
 
     period: Quantity[Time] = eqx.field(
-        converter=Quantity["time"].from_
-    )  # ty: ignore[unresolved-reference]
+        converter=Quantity["time"].from_  # ty: ignore[unresolved-reference]
+    )
     eccentricity: float
     semi_major_axis: Quantity[Length] = eqx.field(
-        converter=Quantity["length"].from_
-    )  # ty: ignore[unresolved-reference]
+        converter=Quantity["length"].from_  # ty: ignore[unresolved-reference]
+    )
     t_peri: Quantity[Time] = eqx.field(
-        converter=Quantity["time"].from_
-    )  # ty: ignore[unresolved-reference]
+        converter=Quantity["time"].from_  # ty: ignore[unresolved-reference]
+    )
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
     ecc_zero_tol: float = 1e-12  # TODO: or should this be minimum float?
