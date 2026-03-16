@@ -1,27 +1,18 @@
-"""Likelihood functions for rejection sampling."""
+"""Likelihood classes for astrometry and radial velocity data."""
 
-from .astrometry import (
-    compute_marginal_log_likelihood_astrometry,
-    compute_marginal_log_likelihood_astrometry_batch,
+from harv.likelihood.base import AbstractLikelihood
+from harv.likelihood.combined import CompositeLikelihood
+from harv.likelihood.gaia_astrometry import (
+    GaiaAstrometryLikelihood,
+    MarginalizedGaiaAstrometryLikelihood,
 )
-from .combined import (
-    compute_marginal_log_likelihood_combined,
-    compute_marginal_log_likelihood_combined_batch,
-)
-from .rv import (
-    compute_marginal_log_likelihood_rv,
-    compute_marginal_log_likelihood_rv_batch,
-    get_rv_design_matrix,
-    get_rv_design_matrix_sb2,
-)
+from harv.likelihood.rv import MarginalizedRVLikelihood, RVLikelihood
 
 __all__ = [
-    "compute_marginal_log_likelihood_astrometry",
-    "compute_marginal_log_likelihood_astrometry_batch",
-    "compute_marginal_log_likelihood_rv",
-    "compute_marginal_log_likelihood_rv_batch",
-    "compute_marginal_log_likelihood_combined",
-    "compute_marginal_log_likelihood_combined_batch",
-    "get_rv_design_matrix",
-    "get_rv_design_matrix_sb2",
+    "AbstractLikelihood",
+    "CompositeLikelihood",
+    "GaiaAstrometryLikelihood",
+    "MarginalizedGaiaAstrometryLikelihood",
+    "MarginalizedRVLikelihood",
+    "RVLikelihood",
 ]

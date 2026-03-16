@@ -1,169 +1,92 @@
-"""Likelihood functions for combined astrometry + RV data.
-
-This module implements marginalized likelihood computation for joint astrometry
-and radial velocity data. The likelihoods are independent and simply added in
-log space.
-"""
+"""Composite likelihood for combining heterogeneous data sources."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import jax
-from quaxed import vmap
-
-from harv.likelihood.astrometry import compute_marginal_log_likelihood_astrometry
-from harv.likelihood.rv import compute_marginal_log_likelihood_rv
+import equinox as eqx
 
 if TYPE_CHECKING:
-    import numpyro.distributions as dist
-    from unxt import Quantity
+    import jax
 
-    from harv.custom_types import Angle, DimlessValue, Speed, Time
+    from harv.likelihood.base import AbstractLikelihood
 
-__all__ = [
-    "compute_marginal_log_likelihood_combined",
-    "compute_marginal_log_likelihood_combined_batch",
-]
+__all__ = ["CompositeLikelihood"]
 
 
-def compute_marginal_log_likelihood_combined(
-    log_period: DimlessValue,
-    eccentricity: DimlessValue,
-    phase_peri: DimlessValue,
-    cos_i: DimlessValue,
-    arg_peri: DimlessValue,
-    lon_asc_node: DimlessValue,
-    # Astrometry data
-    astro_times: Quantity[Time],
-    scan_angle: Quantity[Angle],
-    parallax_factor: DimlessValue,
-    al_position: Quantity[Angle],
-    al_position_err: Quantity[Angle],
-    astro_t_ref: Quantity[Time],
-    astro_linear_prior: dist.Distribution,
-    # RV data
-    rv_times: Quantity[Time],
-    rv: Quantity[Speed],
-    rv_err: Quantity[Speed],
-    rv_t_ref: Quantity[Time],
-    rv_linear_prior: dist.Distribution,
-) -> DimlessValue:
-    """Compute marginalized log-likelihood for combined astrometry + RV data.
+class CompositeLikelihood(eqx.Module):
+    """Sum of heterogeneous likelihood components.
 
-    The combined likelihood is simply the sum of independent log-likelihoods:
-        log L_combined = log L_astrometry + log L_rv
+    Parameters with the same name across components are automatically shared:
+    each component reads only the fields it needs from the combined params struct,
+    so shared parameters (e.g. ``log_period``) are passed once and used by all.
+
+    The required parameter names and their count are inferred from the union of
+    each component's ``param_names``.
 
     Parameters
     ----------
-    log_period, eccentricity, phase_peri, cos_i, arg_peri, lon_asc_node
-        Nonlinear orbital parameters (shared between astrometry and RV).
-    astro_times, scan_angle, parallax_factor
-        Astrometry metadata.
-    al_position, al_position_err, astro_t_ref,astro_linear_prior
-        Astrometry data and prior.
-    rv_times, rv, rv_err, rv_t_ref, rv_linear_prior
-        RV data and prior.
+    **components : AbstractLikelihood
+        Named likelihood components. Names are arbitrary labels (e.g. ``rv``,
+        ``astro``) used to identify each component.
 
-    Returns
-    -------
-    log_likelihood
-        Combined marginalized log-likelihood.
+    Examples
+    --------
+    >>> composite = CompositeLikelihood(
+    ...     rv=RVLikelihood(data=rv_data, linear_prior=rv_prior),
+    ...     astro=GaiaAstrometryLikelihood(data=gaia_data, linear_prior=astro_prior),
+    ... )
+    >>> composite.param_names
+    ('log_period', 'eccentricity', 'phase_peri', 'arg_peri', 'cos_i', 'lon_asc_node')
+    >>> composite.n_params
+    6
+    >>> log_lik = composite.log_prob(params)
+    >>> log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
     """
-    log_lik_astro = compute_marginal_log_likelihood_astrometry(
-        log_period,
-        eccentricity,
-        phase_peri,
-        cos_i,
-        arg_peri,
-        lon_asc_node,
-        astro_times,
-        scan_angle,
-        parallax_factor,
-        al_position,
-        al_position_err,
-        astro_t_ref,
-        astro_linear_prior,
-    )
 
-    log_lik_rv = compute_marginal_log_likelihood_rv(
-        log_period,
-        eccentricity,
-        phase_peri,
-        arg_peri,
-        rv_times,
-        rv,
-        rv_err,
-        rv_t_ref,
-        rv_linear_prior,
-    )
+    _components: dict[str, AbstractLikelihood]
 
-    return log_lik_astro + log_lik_rv
+    def __init__(self, **components: AbstractLikelihood) -> None:
+        self._components = components
 
+    @property
+    def param_names(self) -> tuple[str, ...]:
+        """Union of component param_names, preserving first-seen order."""
+        seen: dict[str, None] = {}
+        for comp in self._components.values():
+            for name in comp.param_names:
+                seen[name] = None
+        return tuple(seen)
 
-@jax.jit
-def compute_marginal_log_likelihood_combined_batch(
-    log_period: DimlessValue,
-    eccentricity: DimlessValue,
-    phase_peri: DimlessValue,
-    cos_i: DimlessValue,
-    arg_peri: DimlessValue,
-    lon_asc_node: DimlessValue,
-    astro_times: Quantity[Time],
-    scan_angle: Quantity[Angle],
-    parallax_factor: DimlessValue,
-    al_position: Quantity[Angle],
-    al_position_err: Quantity[Angle],
-    astro_t_ref: Quantity[Time],
-    astro_linear_prior: dist.Distribution,
-    rv_times: Quantity[Time],
-    rv: Quantity[Speed],
-    rv_err: Quantity[Speed],
-    rv_t_ref: Quantity[Time],
-    rv_linear_prior: dist.Distribution,
-) -> DimlessValue:
-    """Vectorized combined likelihood for batch of samples."""
-    batched_likelihood = vmap(
-        compute_marginal_log_likelihood_combined,
-        in_axes=(
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ),
-    )
+    @property
+    def n_params(self) -> int:
+        """Total number of unique nonlinear parameters."""
+        return len(self.param_names)
 
-    return batched_likelihood(
-        log_period,
-        eccentricity,
-        phase_peri,
-        cos_i,
-        arg_peri,
-        lon_asc_node,
-        astro_times,
-        scan_angle,
-        parallax_factor,
-        al_position,
-        al_position_err,
-        astro_t_ref,
-        astro_linear_prior,
-        rv_times,
-        rv,
-        rv_err,
-        rv_t_ref,
-        rv_linear_prior,
-    )
+    def __getitem__(self, key: str) -> AbstractLikelihood:
+        return self._components[key]
+
+    def __len__(self) -> int:
+        return len(self._components)
+
+    def keys(self) -> Any:
+        """Return component names."""
+        return self._components.keys()
+
+    def values(self) -> Any:
+        """Return likelihood components."""
+        return self._components.values()
+
+    def items(self) -> Any:
+        """Return (name, component) pairs."""
+        return self._components.items()
+
+    def log_prob(self, params: eqx.Module) -> jax.Array:
+        """Sum log-likelihoods from all components.
+
+        Each component reads only the fields it needs from ``params``. The
+        params struct must have at least the fields listed in ``param_names``.
+        """
+        return sum(  # type: ignore[return-value]
+            comp.log_prob(params) for comp in self._components.values()
+        )

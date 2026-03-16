@@ -1,11 +1,23 @@
-"""Likelihood functions for epoch astrometry data.
+"""Likelihood functions for Gaia epoch astrometry data.
 
-This module implements likelihood evaluations for astrometric data. For the marginal
-likelihood functions, we have adopted a model such that the linear parameters of the
-astrometric problem (ra, dec, pmra, pmdec, plx) are analytically marginalized out (given
-priors), and the marginal likelihood is computed for a given setting of the nonlinear
-parameters (period, eccentricity, phase at pericenter, cos(inclination), argument of
-pericenter, longitude of ascending node).
+This module implements likelihood evaluations for Gaia along-scan astrometry.
+Two variants are provided:
+
+- :class:`MarginalizedGaiaAstrometryLikelihood`: analytically marginalizes over
+  the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a
+  Gaussian prior. Requires a ``dist.MultivariateNormal`` prior.
+
+- :class:`GaiaAstrometryLikelihood`: full likelihood with all parameters
+  specified explicitly.
+
+For the marginalized model, the astrometric model is:
+
+    y_AL = α₀·cos(ψ) + δ₀·sin(ψ)
+         + (μ_α·cos(ψ) + μ_δ·sin(ψ))·dt
+         + ϖ·H_ϖ(t)
+         + a·[(A·sin(ψ) + B·cos(ψ))·cos(f) + (F·sin(ψ) + G·cos(ψ))·sin(f)]
+
+where A, B, F, G are Thiele-Innes constants and f is the true anomaly.
 """
 
 from __future__ import annotations
@@ -17,84 +29,63 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 from jaxoplanet.core.kepler import kepler
 from numpyro_ext.distributions import MarginalizedLinear
-from unxt import Quantity, ustrip
+from unxt import ustrip
 from unxt.quantity import AllowValue
 
+from harv.likelihood.base import AbstractLikelihood
+
 if TYPE_CHECKING:
-    from harv.custom_types import Angle, DimlessValue, Time
+    from harv.data import GaiaAstrometryData
+    from harv.likelihood._params import (
+        GaiaAstrometryOrbitParameters,
+        GaiaAstrometryParameters,
+    )
 
 __all__ = [
-    "get_astrometry_design_matrix",
-    "compute_marginal_log_likelihood_astrometry",
-    "compute_marginal_log_likelihood_astrometry_batch",
+    "MarginalizedGaiaAstrometryLikelihood",
+    "GaiaAstrometryLikelihood",
 ]
 
 
-def get_astrometry_design_matrix(
-    times: Quantity[Time],
-    scan_angle: Quantity[Angle],
-    parallax_factor: DimlessValue,
-    sin_f: DimlessValue,
-    cos_f: DimlessValue,
-    t_ref: Quantity[Time],
-    cos_i: DimlessValue,
-    arg_peri: DimlessValue,
-    lon_asc_node: DimlessValue,
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _solve_kepler(
+    data: GaiaAstrometryData,
+    params: GaiaAstrometryOrbitParameters,
+) -> tuple[jax.Array, jax.Array]:
+    """Solve Kepler's equation; return (sin_f, cos_f)."""
+    period = 10.0**params.log_period  # days
+    t_peri = params.phase_peri * period  # days
+    dt = ustrip("day", data.time) - t_peri
+    M = 2 * jnp.pi * dt / period
+    return kepler(M, params.eccentricity)
+
+
+def _get_design_matrix(
+    data: GaiaAstrometryData,
+    params: GaiaAstrometryOrbitParameters,
+    sin_f: jax.Array,
+    cos_f: jax.Array,
 ) -> jax.Array:
-    """Build design matrix for Gaia along-scan astrometry.
+    """Build the (n_obs, 6) Gaia along-scan design matrix.
 
-    The astrometric model is:
-        y_AL = α₀·cos(ψ) + δ₀·sin(ψ)
-             + (μ_α·cos(ψ) + μ_δ·sin(ψ))·dt
-             + ϖ·H_ϖ(t)
-             + a·[(A·sin(ψ) + B·cos(ψ))·cos(f) + (F·sin(ψ) + G·cos(ψ))·sin(f)]
-
-    where A, B, F, G are Thiele-Innes constants computed from the orbital
-    orientation angles (ω, Ω, i).
-
-    Parameters
-    ----------
-    times : Quantity["time"]
-        Observation times.
-    scan_angle : Quantity["angle"]
-        Gaia scan angle ψ for each observation.
-    parallax_factor : DimlessValue
-        Along-scan parallax factor H_ϖ(t) for each observation.
-    sin_f : DimlessValue
-        sin(true anomaly) at each observation time.
-    cos_f : DimlessValue
-        cos(true anomaly) at each observation time.
-    t_ref : Quantity["time"]
-        Reference epoch for proper motion.
-    cos_i : DimlessValue
-        cos(inclination) of the orbit.
-    arg_peri : DimlessValue
-        Argument of pericenter ω (radians).
-    lon_asc_node : DimlessValue
-        Longitude of ascending node Ω (radians).
-
-    Returns
-    -------
-    design_matrix : jax.Array
-        Design matrix of shape (n_obs, 6) for linear parameters:
-        [α₀, δ₀, μ_α, μ_δ, ϖ, a]
+    Columns: [α₀, δ₀, μ_α, μ_δ, ϖ, a].
+    See Appendix A of https://arxiv.org/abs/2206.05726.
     """
-    # Convert to dimensionless for computation
-    dt_yr = ustrip("yr", times - t_ref)
-    scan_angle_rad = ustrip("rad", scan_angle)
+    dt_yr = ustrip("yr", data.time - data.t_ref)
+    scan_angle_rad = ustrip("rad", data.scan_angle)
     cos_psi = jnp.cos(scan_angle_rad)
     sin_psi = jnp.sin(scan_angle_rad)
 
-    _sin_f = ustrip(AllowValue, "", sin_f)
-    _cos_f = ustrip(AllowValue, "", cos_f)
-    _parallax_factor = ustrip(AllowValue, "", parallax_factor)
+    _parallax_factor = ustrip(AllowValue, "", data.parallax_factor)
+    _cos_i = ustrip(AllowValue, "", params.cos_i)
+    _arg_peri = ustrip(AllowValue, "", params.arg_peri)
+    _lon_asc_node = ustrip(AllowValue, "", params.lon_asc_node)
 
-    _cos_i = ustrip(AllowValue, "", cos_i)
-    _arg_peri = ustrip(AllowValue, "", arg_peri)
-    _lon_asc_node = ustrip(AllowValue, "", lon_asc_node)
-
-    # Compute Thiele-Innes constants from orientation angles
-    # See Appendix A of https://arxiv.org/abs/2206.05726
+    # Thiele-Innes constants
     A = (
         jnp.cos(_arg_peri) * jnp.cos(_lon_asc_node)
         - jnp.sin(_arg_peri) * jnp.sin(_lon_asc_node) * _cos_i
@@ -112,128 +103,138 @@ def get_astrometry_design_matrix(
         + jnp.cos(_arg_peri) * jnp.cos(_lon_asc_node) * _cos_i
     )
 
-    # Compute semi-major axis term (not scaled by a yet)
-    # This is the column that will be multiplied by the semi-major axis
-    semimaj_term = (A * sin_psi + B * cos_psi) * _cos_f + (
+    semimaj_term = (A * sin_psi + B * cos_psi) * cos_f + (
         F * sin_psi + G * cos_psi
-    ) * _sin_f
+    ) * sin_f
 
-    # Stack into design matrix
-    # Columns: [α₀, δ₀, μ_α, μ_δ, ϖ, a]
     return jnp.stack(
         [
-            cos_psi,  # α0
-            sin_psi,  # δ0
-            cos_psi * dt_yr,  # μ_α
-            sin_psi * dt_yr,  # μ_δ
-            _parallax_factor,  # ϖ
-            semimaj_term,  # a (semi-major axis)
+            cos_psi,
+            sin_psi,
+            cos_psi * dt_yr,
+            sin_psi * dt_yr,
+            _parallax_factor,
+            semimaj_term,
         ],
         axis=-1,
     )
 
 
-def compute_marginal_log_likelihood_astrometry(
-    # The parameters:
-    log_period: float,
-    eccentricity: float,
-    phase_peri: float,
-    cos_i: float,
-    arg_peri: float,
-    lon_asc_node: float,
-    # The data:
-    times: Quantity[Time],
-    scan_angle: Quantity[Angle],
-    parallax_factor: DimlessValue,
-    y_al: Quantity[Angle],
-    y_al_error: Quantity[Angle],
-    t_ref: Quantity[Time],
-    linear_prior: dist.Distribution,
-) -> float:
-    """Compute marginalized log-likelihood for Gaia astrometry.
+# ---------------------------------------------------------------------------
+# Marginalized likelihood
+# ---------------------------------------------------------------------------
 
-    This function analytically marginalizes over the 6 linear parameters
-    (α₀, δ₀, μ_α, μ_δ, ϖ, a) while evaluating the likelihood for the
-    6 nonlinear parameters (log(P), e, phase_peri, cos(i), ω, Ω).
+
+class MarginalizedGaiaAstrometryLikelihood(AbstractLikelihood):
+    """Gaia astrometry likelihood with linear parameters analytically marginalized.
+
+    Analytically integrates over the 6 linear astrometric parameters
+    (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a Gaussian prior, using the
+    ``MarginalizedLinear`` distribution from numpyro-ext.
 
     Parameters
     ----------
-    log_period : float
-        log₁₀(period/day).
-    eccentricity : float
-        Orbital eccentricity (0 ≤ e < 1).
-    phase_peri : float
-        Phase at pericenter (t_peri / period), range [0, 1).
-    cos_i : float
-        cos(inclination), range [-1, 1].
-    arg_peri : float
-        Argument of pericenter ω (radians), range [0, 2π].
-    lon_asc_node : float
-        Longitude of ascending node Ω (radians), range [0, 2π].
-    times : Quantity["time"]
-        Observation times.
-    scan_angle : Quantity["angle"]
-        Gaia scan angle ψ for each observation.
-    parallax_factor : DimlessValue
-        Along-scan parallax factor H_ϖ(t) for each observation.
-    y_al : Quantity["angle"]
-        Observed along-scan positions (mas).
-    y_al_error : Quantity["angle"]
-        Along-scan position uncertainties (mas).
-    t_ref : Quantity["time"]
-        Reference epoch for proper motion.
-    linear_prior : dist.Distribution
-        Prior distribution for linear parameters. Typically Normal(0, std).
+    data : GaiaAstrometryData
+        Gaia epoch astrometry observations.
+    linear_prior : dist.MultivariateNormal
+        Gaussian prior over the 6 linear parameters. Must be multivariate
+        normal — this is required for analytic marginalization.
 
-    Returns
-    -------
-    log_likelihood : float
-        Marginalized log-likelihood value.
-
-    Notes
-    -----
-    Uses the MarginalizedLinear distribution from numpyro-ext to analytically
-    integrate over linear parameters, avoiding expensive MCMC or numerical
-    integration.
+    Examples
+    --------
+    >>> lik = MarginalizedGaiaAstrometryLikelihood(data=gaia_data, linear_prior=prior)
+    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
     """
-    # Convert period and compute time of pericenter
-    period = 10.0**log_period  # days
-    t_peri = phase_peri * period  # days
 
-    # Compute mean anomaly
-    dt = ustrip("day", times) - t_peri
-    M = 2 * jnp.pi * dt / period
+    data: GaiaAstrometryData
+    linear_prior: dist.MultivariateNormal
 
-    # Solve Kepler's equation for true anomaly
-    sin_f, cos_f = kepler(M, eccentricity)
-
-    # Build design matrix
-    design_matrix = get_astrometry_design_matrix(
-        times,
-        scan_angle,
-        parallax_factor,
-        sin_f,
-        cos_f,
-        t_ref,
-        cos_i,
-        arg_peri,
-        lon_asc_node,
+    param_names = (
+        "log_period",
+        "eccentricity",
+        "phase_peri",
+        "cos_i",
+        "arg_peri",
+        "lon_asc_node",
     )
 
-    # Compute marginalized likelihood using MarginalizedLinear
-    marg_dist = MarginalizedLinear(
-        design_matrix=design_matrix,
-        prior_distribution=linear_prior,
-        data_distribution=dist.Normal(0.0, ustrip("mas", y_al_error)),
+    def __check_init__(self) -> None:
+        if not isinstance(self.linear_prior, dist.MultivariateNormal):
+            msg = (
+                "MarginalizedGaiaAstrometryLikelihood requires a "
+                "dist.MultivariateNormal prior for analytic marginalization; "
+                f"got {type(self.linear_prior)}"
+            )
+            raise TypeError(msg)
+
+    def log_prob(self, params: GaiaAstrometryOrbitParameters) -> jax.Array:
+        """Compute the marginalized log-likelihood for a single parameter sample."""
+        sin_f, cos_f = _solve_kepler(self.data, params)
+        design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
+
+        marg_dist = MarginalizedLinear(
+            design_matrix=design_matrix,
+            prior_distribution=self.linear_prior,
+            data_distribution=dist.Normal(
+                0.0, ustrip("mas", self.data.al_position_err)
+            ),
+        )
+        return marg_dist.log_prob(ustrip("mas", self.data.al_position))
+
+
+# ---------------------------------------------------------------------------
+# Full likelihood
+# ---------------------------------------------------------------------------
+
+
+class GaiaAstrometryLikelihood(AbstractLikelihood):
+    """Full Gaia astrometry likelihood with all parameters specified explicitly.
+
+    Parameters
+    ----------
+    data : GaiaAstrometryData
+        Gaia epoch astrometry observations.
+
+    Examples
+    --------
+    >>> lik = GaiaAstrometryLikelihood(data=gaia_data)
+    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+    """
+
+    data: GaiaAstrometryData
+
+    param_names = (
+        "log_period",
+        "eccentricity",
+        "phase_peri",
+        "cos_i",
+        "arg_peri",
+        "lon_asc_node",
+        "ra0",
+        "dec0",
+        "pmra",
+        "pmdec",
+        "parallax",
+        "semi_major_axis",
     )
 
-    return marg_dist.log_prob(ustrip("mas", y_al))
+    def log_prob(self, params: GaiaAstrometryParameters) -> jax.Array:
+        """Compute the log-likelihood for a single parameter sample."""
+        sin_f, cos_f = _solve_kepler(self.data, params)
+        design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
 
+        linear_params = jnp.array(
+            [
+                params.ra0,
+                params.dec0,
+                params.pmra,
+                params.pmdec,
+                params.parallax,
+                params.semi_major_axis,
+            ]
+        )
+        y_pred = design_matrix @ linear_params
+        y_obs = ustrip("mas", self.data.al_position)
+        y_err = ustrip("mas", self.data.al_position_err)
 
-# Vectorized version for batch processing
-compute_marginal_log_likelihood_astrometry_batch = jax.jit(
-    jax.vmap(
-        compute_marginal_log_likelihood_astrometry,
-        in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None),
-    )
-)
+        return dist.Normal(y_pred, y_err).log_prob(y_obs).sum()
