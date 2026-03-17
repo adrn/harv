@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING
 
 import equinox as eqx
 
 if TYPE_CHECKING:
     import jax
 
-_ParamT = TypeVar("_ParamT", bound=eqx.Module)
 
-
-class AbstractLikelihood(eqx.Module, Generic[_ParamT]):
+class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
     """Abstract base class for likelihood components.
 
     Generic over the parameter struct type ``_ParamT``. Subclasses declare
@@ -33,6 +31,6 @@ class AbstractLikelihood(eqx.Module, Generic[_ParamT]):
         """Names of the nonlinear parameters this likelihood requires."""
         raise NotImplementedError  # pragma: no cover
 
-    def log_prob(self, params: _ParamT) -> jax.Array:
+    def log_prob(self, params: ParamT) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""
         raise NotImplementedError  # pragma: no cover

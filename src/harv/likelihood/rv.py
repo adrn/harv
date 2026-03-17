@@ -57,9 +57,9 @@ def _get_design_matrix(
 ) -> jax.Array:
     """Build (n_obs, 2) design matrix for SB1: columns [K, v₀]."""
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
-    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f  # type: ignore[arg-type]
-    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)  # type: ignore[arg-type]
-    return jnp.column_stack([rv_amplitude, jnp.ones_like(rv_amplitude)])  # type: ignore[list-item]
+    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f
+    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)
+    return jnp.column_stack([rv_amplitude, jnp.ones_like(rv_amplitude)])
 
 
 def _get_design_matrix_sb2(
@@ -73,14 +73,14 @@ def _get_design_matrix_sb2(
     For primary: [X(t), 0, 1].  For secondary: [0, -X(t), 1].
     """
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
-    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f  # type: ignore[arg-type]
-    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)  # type: ignore[arg-type]
+    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f
+    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)
 
     if primary:
-        return jnp.column_stack(  # type: ignore[list-item]
+        return jnp.column_stack(
             [rv_amplitude, jnp.zeros_like(rv_amplitude), jnp.ones_like(rv_amplitude)]
         )
-    return jnp.column_stack(  # type: ignore[list-item]
+    return jnp.column_stack(
         [jnp.zeros_like(rv_amplitude), -rv_amplitude, jnp.ones_like(rv_amplitude)]
     )
 
