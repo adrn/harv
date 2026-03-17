@@ -21,7 +21,7 @@ def _solve_kepler(
     params: AbstractBaseKeplerParameters,
 ) -> tuple[jax.Array, jax.Array]:
     """Solve Kepler's equation; return (sin_f, cos_f)."""
-    period = 10.0**params.log_period  # days
+    period = params.period  # days
     t_peri = params.phase_peri * period  # days
     dt = ustrip("day", data.time) - t_peri
     M = 2 * jnp.pi * dt / period

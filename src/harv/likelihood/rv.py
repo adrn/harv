@@ -113,7 +113,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
     data: RadialVelocityData
     linear_prior: dist.MultivariateNormal
 
-    param_names = ("log_period", "eccentricity", "phase_peri", "arg_peri")
+    param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
 
     def __check_init__(self) -> None:
         if not isinstance(self.linear_prior, dist.MultivariateNormal):
@@ -158,7 +158,7 @@ class RVLikelihood(AbstractLikelihood[RVParameters]):
 
     data: RadialVelocityData
 
-    param_names = ("log_period", "eccentricity", "phase_peri", "arg_peri", "K", "v0")
+    param_names = ("period", "eccentricity", "phase_peri", "arg_peri", "K", "v0")
 
     def log_prob(self, params: RVParameters) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""

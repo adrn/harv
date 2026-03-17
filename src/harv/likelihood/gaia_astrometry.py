@@ -141,7 +141,7 @@ class MarginalizedGaiaAstrometryLikelihood(
     linear_prior: dist.MultivariateNormal
 
     param_names = (
-        "log_period",
+        "period",
         "eccentricity",
         "phase_peri",
         "cos_i",
@@ -195,7 +195,7 @@ class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
     data: GaiaAstrometryData
 
     param_names = (
-        "log_period",
+        "period",
         "eccentricity",
         "phase_peri",
         "cos_i",

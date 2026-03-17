@@ -22,11 +22,11 @@ class AbstractBaseKeplerParameters(eqx.Module):
     """Base class for Keplerian orbital parameters shared across data types.
 
     This includes the 4 nonlinear orbital parameters common to both RV and
-    astrometry: log_period, eccentricity, phase of periastron, and argument of
+    astrometry: period, eccentricity, phase of periastron, and argument of
     periastron.
     """
 
-    log_period: float
+    period: float
     eccentricity: float
     phase_peri: float
     arg_peri: float
