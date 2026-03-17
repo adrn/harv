@@ -9,6 +9,7 @@ from jaxtyping import Float, Int, Real
 from unxt import Quantity
 
 Angle = Literal["angle"]
+AngularSpeed = Literal["angular speed"]
 Length = Literal["length"]
 Mass = Literal["mass"]
 Speed = Literal["speed"]

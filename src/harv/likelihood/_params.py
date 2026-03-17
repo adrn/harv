@@ -15,7 +15,15 @@ Two levels of parameterization exist for each data type:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import equinox as eqx
+
+if TYPE_CHECKING:
+    import jax
+    from unxt import Quantity
+
+    from harv.custom_types import Angle, AngularSpeed, Length, Speed, Time
 
 
 class AbstractBaseKeplerParameters(eqx.Module):
@@ -26,10 +34,10 @@ class AbstractBaseKeplerParameters(eqx.Module):
     periastron.
     """
 
-    period: float
-    eccentricity: float
-    phase_peri: float
-    arg_peri: float
+    period: Quantity[Time]
+    eccentricity: float | jax.Array
+    phase_peri: float | jax.Array
+    arg_peri: float | jax.Array
 
 
 # ---------------------------------------------------------------------------
@@ -55,8 +63,8 @@ class RVParameters(AbstractRVParameters):
     (semi-amplitude K and systemic velocity v₀).
     """
 
-    K: float  # RV semi-amplitude
-    v0: float  # systemic velocity
+    K: Quantity[Speed]  # RV semi-amplitude
+    v0: Quantity[Speed]  # systemic velocity
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +75,8 @@ class RVParameters(AbstractRVParameters):
 class AbstractGaiaAstrometryParameters(AbstractBaseKeplerParameters):
     """Abstract base class for Gaia astrometry parameter structs."""
 
-    cos_i: float
-    lon_asc_node: float
+    cos_i: float | jax.Array
+    lon_asc_node: float | jax.Array
 
 
 class GaiaAstrometryOrbitParameters(AbstractGaiaAstrometryParameters):
@@ -86,9 +94,9 @@ class GaiaAstrometryParameters(AbstractGaiaAstrometryParameters):
     parameters (reference position, proper motion, parallax, semi-major axis).
     """
 
-    ra0: float  # α₀: reference RA offset [mas]
-    dec0: float  # δ₀: reference Dec offset [mas]
-    pmra: float  # μ_α: proper motion in RA [mas/yr]
-    pmdec: float  # μ_δ: proper motion in Dec [mas/yr]
-    parallax: float  # ϖ: parallax [mas]
-    semi_major_axis: float  # a: photocentric semi-major axis [mas]
+    ra0: Quantity[Angle]  # α₀: reference RA offset [mas]
+    dec0: Quantity[Angle]  # δ₀: reference Dec offset [mas]
+    pmra: Quantity[AngularSpeed]  # μ_α: proper motion in RA [mas/yr]
+    pmdec: Quantity[AngularSpeed]  # μ_δ: proper motion in Dec [mas/yr]
+    parallax: Quantity[Angle]  # ϖ: parallax [mas]
+    semi_major_axis: Quantity[Length]  # a: photocentric semi-major axis [mas]
