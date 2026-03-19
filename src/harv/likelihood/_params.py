@@ -15,7 +15,7 @@ Two levels of parameterization exist for each data type:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import equinox as eqx
 
@@ -63,6 +63,8 @@ class RVParameters(AbstractRVParameters):
     (semi-amplitude K and systemic velocity v₀).
     """
 
+    linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
+
     K: Quantity[Speed]  # RV semi-amplitude
     v0: Quantity[Speed]  # systemic velocity
 
@@ -92,7 +94,21 @@ class GaiaAstrometryParameters(AbstractGaiaAstrometryParameters):
 
     Includes both nonlinear orbital parameters and the 6 linear astrometric
     parameters (reference position, proper motion, parallax, semi-major axis).
+
+    ``linear_param_names`` enumerates all linear parameters in this class, in
+    the order expected by the design matrix.  Marginalized likelihood classes
+    may marginalize over a subset of these; the rejection sampler reads this
+    attribute to name the sampled columns consistently.
     """
+
+    linear_param_names: ClassVar[tuple[str, ...]] = (
+        "ra0",
+        "dec0",
+        "pmra",
+        "pmdec",
+        "parallax",
+        "semi_major_axis",
+    )
 
     ra0: Quantity[Angle]  # α₀: reference RA offset [mas]
     dec0: Quantity[Angle]  # δ₀: reference Dec offset [mas]
