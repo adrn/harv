@@ -7,9 +7,12 @@ __all__ = [
     "RadialVelocityData",
     "SourceData",
     "DatasetType",
+    "InputData",
 ]
 
 from collections.abc import Iterator
+from dataclasses import KW_ONLY
+from typing import TypeVar
 
 import equinox as eqx
 import quaxed.numpy as jnp
@@ -25,6 +28,11 @@ class AbstractData(eqx.Module):
 
     time: NTime
     """Barycentric TCB times."""
+
+    _: KW_ONLY
+
+    t_ref: NTime | None = None
+    """Reference epoch. If None, uses mean observation time."""
 
     @property
     def n_times(self) -> int:
@@ -51,11 +59,13 @@ class GaiaAstrometryData(AbstractAstrometryData):
     parallax_factor: NFloatArray
     """AL parallax factors."""
 
-    t_ref: NTime
-    """Reference epoch for proper motion."""
-
     transit_index: NIntArray | None = None
     """Optional transit grouping (may be ``None``)."""
+
+    def __check_init__(self) -> None:
+        """Compute t_ref from mean time if not provided."""
+        if self.t_ref is None:
+            object.__setattr__(self, "t_ref", jnp.mean(self.time))
 
 
 # TODO: currently not supported, so commenting out
@@ -100,9 +110,6 @@ class RadialVelocityData(AbstractRadialVelocityData):
     rv_err: NVelocity
     """Radial velocity uncertainties."""
 
-    t_ref: NTime | None = None
-    """Reference epoch. If None, uses mean observation time."""
-
     def __check_init__(self) -> None:
         """Compute t_ref from mean time if not provided."""
         if self.t_ref is None:
@@ -111,9 +118,10 @@ class RadialVelocityData(AbstractRadialVelocityData):
 
 # Type alias for all supported data types
 DatasetType = AbstractAstrometryData | AbstractRadialVelocityData
+_DT = TypeVar("_DT", bound=DatasetType)
 
 
-class SourceData(AbstractData):
+class SourceData(eqx.Module):
     """Container for multiple named datasets for a single source.
 
     Accepts arbitrary named datasets via keyword arguments. Names are
@@ -156,9 +164,9 @@ class SourceData(AbstractData):
         return iter(self._datasets.items())
 
     # Other methods:
-    def get_datasets_by_type(self, dtype: type) -> dict[str, DatasetType]:
+    def get_datasets_by_type(self, dtype: type[_DT]) -> dict[str, _DT]:
         """Get all datasets of a specific type."""
-        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}
+        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}  # type: ignore[misc]
 
     def n_astrometry(self) -> int:
         """Number of astrometric datasets."""
@@ -167,3 +175,8 @@ class SourceData(AbstractData):
     def n_rv(self) -> int:
         """Number of radial velocity datasets."""
         return len(self.get_datasets_by_type(RadialVelocityData))
+
+
+# Type alias for any top-level input accepted by the sampler and likelihoods.
+# Use this instead of AbstractData in signatures that also accept SourceData.
+InputData = AbstractData | SourceData
