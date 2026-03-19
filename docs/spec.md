@@ -1,0 +1,930 @@
+# harv — Design Specification
+
+**harv** is a JAX-native Python package for inferring Keplerian orbital parameters of
+binary star or star-exoplanet systems from Gaia epoch astrometry and/or radial velocity
+data.
+In the future, harv will also support absolute and relative astrometry from other
+instruments.
+It is designed to be the computational backbone for binary-star and exoplanet population
+science with Gaia DR4.
+
+______________________________________________________________________
+
+## Scientific context
+
+A star with a companion --- a two-body system --- produces two observable signals
+layered on top of ordinary stellar astrophysical astrometry and spectroscopy:
+
+- **Astrometric wobble** — the photocenter of the system traces an ellipse on the sky
+  as the companion orbits. Gaia's epoch astrometry measures the along-scan projection
+  of this motion in units of milliarcseconds (mas), together with the 5-parameter
+  astrometric solution (reference position, proper motion, parallax).
+
+- **Radial velocity (RV) variation** — the line-of-sight velocity of the star (or its
+  photocenter) oscillates with the orbital period. Spectrographs measure this directly
+  in km/s.
+
+Combining both datasets jointly constrains the orbit much more than either alone and
+breaks degeneracies between inclination, parallax, and semi-major axis.
+
+The target use case is **photocentric SB1 systems**: single-lined spectroscopic binaries
+or stars with non-luminous companions whose combined light centroid traces the
+photocenter orbit. The package also supports analysis of Gaia-only astrometry or RV-only
+datasets.
+
+______________________________________________________________________
+
+## Core design principles
+
+1. **JAX throughout.** All computation inside the likelihood and sampler is JAX code
+   so that it JIT-compiles, vmaps, and can run on GPU/TPU. External boundaries (data
+   loading, Numpy simulation helpers) may use NumPy.
+
+1. **equinox Modules as pytrees.** All state-bearing objects (`KeplerianBody`,
+   likelihood classes, parameter structs, the sampler itself) are `eqx.Module`
+   subclasses, which makes them valid JAX pytrees. This allows `jax.vmap` and
+   `jax.jit` to work on batches of parameters without any extra bookkeeping.
+
+1. **Units via unxt.** Physical quantities carry units using the `unxt.Quantity` type,
+   which is itself a JAX pytree. Units are stripped at the innermost computation
+   boundary with `ustrip`, keeping all array math JAX-compatible. Type aliases like
+   `Time = Literal["time"]` and `Speed = Literal["speed"]` make unit constraints
+   readable at the type-annotation level.
+
+1. **Two-level parameterization.** Every observable model has a clean split between
+   *nonlinear* orbital parameters (which are awkward to marginalize over because they
+   appear nonlinearly in the forward model) and *linear* parameters (which appear only
+   in a linear design matrix and can be analytically marginalized out). The rejection
+   sampler exploits this split directly.
+
+1. **No global state.** Likelihoods close over data; samplers close over priors. All
+   random state passes explicitly as JAX PRNGKey values.
+
+______________________________________________________________________
+
+## Package structure
+
+```
+src/harv/
+├── custom_types.py          # Unit-dimension Literal aliases
+├── data.py                  # Observation data classes
+├── kepler/                  # Orbit mechanics (JAX)
+│   ├── body.py              # KeplerianBody
+│   ├── orientation.py       # KeplerianOrientation + Thiele-Innes
+│   ├── helpers.py           # compute_true_anomaly_components
+│   └── constants.py         # G
+├── likelihood/              # Log-likelihood evaluators
+│   ├── base.py              # AbstractLikelihood[ParamT]
+│   ├── _params.py           # Parameter structs (eqx.Module pytrees)
+│   ├── helpers.py           # _solve_kepler
+│   ├── rv.py                # RVLikelihood, MarginalizedRVLikelihood
+│   ├── gaia_astrometry.py   # GaiaAstrometryLikelihood, Marginalized…
+│   ├── combined.py          # CompositeLikelihood
+│   └── astrometry.py        # Stub: future absolute/relative astrometry
+├── priors/
+│   └── rejection.py         # RejectionPrior
+├── samplers/
+│   ├── rejection.py         # RejectionSampler
+│   └── samples.py           # Samples container
+└── simulate/                # Synthetic data generators
+    ├── rv.py                # simulate_rv_data
+    ├── astrometry.py        # simulate_gaia_epoch_astrometry
+    └── scanlaw.py           # Gaia scanning law utilities
+```
+
+______________________________________________________________________
+
+## Data layer (`harv.data`)
+
+### `AbstractData`
+
+The root base class for all observational datasets. Carries a `time: Quantity["time"]`
+array (barycentric TCB) and an optional `t_ref` reference epoch. Subclasses add the
+observed quantities and their uncertainties.
+
+### `AbstractAstrometryData` / `GaiaAstrometryData`
+
+`GaiaAstrometryData` stores the Gaia epoch astrometry for a single source:
+
+| Field             | Units         | Description                                                      |
+| ----------------- | ------------- | ---------------------------------------------------------------- |
+| `time`            | time          | Barycentric observation times                                    |
+| `al_position`     | angle (mas)   | Along-scan position residuals                                    |
+| `al_position_err` | angle (mas)   | Per-observation 1σ uncertainties                                 |
+| `scan_angle`      | angle (rad)   | Scan angle ψ of Gaia's field of view                             |
+| `parallax_factor` | dimensionless | AL parallax factor H_ϖ(t)                                        |
+| `t_ref`           | time          | Reference epoch for proper motion (required; see §discrepancy 3) |
+| `transit_index`   | int           | Optional grouping of CCDs into transits                          |
+
+The along-scan model is (see §Gaia astrometry likelihood):
+
+```
+y_AL(t) = α₀ cos(ψ) + δ₀ sin(ψ)
+         + (μ_α cos(ψ) + μ_δ sin(ψ)) · (t − t_ref)
+         + ϖ · H_ϖ(t)
+         + a · [(A sin(ψ) + B cos(ψ)) cos(f) + (F sin(ψ) + G cos(ψ)) sin(f)]
+```
+
+where A, B, F, G are Thiele-Innes constants that encode the orbit orientation, and f
+is the true anomaly.
+
+### `AbstractRadialVelocityData` / `RadialVelocityData`
+
+`RadialVelocityData` stores RV observations from a single instrument:
+
+| Field    | Units        | Description                                         |
+| -------- | ------------ | --------------------------------------------------- |
+| `time`   | time         | Barycentric observation times                       |
+| `rv`     | speed (km/s) | Measured radial velocities                          |
+| `rv_err` | speed (km/s) | Per-observation 1σ uncertainties                    |
+| `t_ref`  | time         | Reference epoch (defaults to mean observation time) |
+
+The RV model is:
+
+```
+RV(t) = K · [cos(ω + f(t)) + e · cos(ω)] + v₀
+```
+
+where K is the semi-amplitude, ω is the argument of pericenter, and v₀ is the
+systemic velocity.
+
+### `SourceData`
+
+`SourceData` is a named dictionary of datasets for a single source. It is the natural
+container for multi-instrument observations and for combined astrometry + RV analyses:
+
+```python
+data = SourceData(
+    gaia=GaiaAstrometryData(...),
+    keck=RadialVelocityData(...),
+    espresso=RadialVelocityData(...),
+)
+```
+
+Each dataset is accessed by name. `SourceData` provides `get_datasets_by_type`,
+`keys()`, `values()`, and `items()` for iteration.
+
+**Important:** `SourceData` is for heterogeneous or multi-instrument data for a
+*single stellar photocenter*. It is *not* the right container for SB2 systems (see
+§Planned: `SystemData`).
+
+**Known inconsistency (see §discrepancy 4):** `SourceData` currently inherits from
+`AbstractData`, which requires a `time` field, but `SourceData.__init__` never sets
+it. The inheritance relationship needs to be resolved.
+
+### Planned: `SystemData`
+
+The intended container for double-lined spectroscopic binaries (SB2), where separate
+RV time series are measured for two distinct stellar components. The design sketch
+from `api.py`:
+
+```python
+sb2_data = SystemData(
+    RadialVelocityData(time1, rv1, rv_err1),  # primary (SB1 convention)
+    RadialVelocityData(time2, rv2, rv_err2),  # secondary
+)
+# Optionally with astrometry:
+sb2_data = SystemData(
+    RadialVelocityData(...),    # primary
+    RadialVelocityData(...),    # secondary
+    photocenter=GaiaAstrometryData(...),
+)
+```
+
+`SystemData` is explicitly *not* a `SourceData` — the two components measure different
+stars' velocities (which move in anti-phase), not the same star through different
+instruments. The SB2 model requires two separate semi-amplitudes K₁ and K₂ with
+opposite signs in the design matrix.
+
+In the future, we may want `SystemData` to also support hierarchical systems with more
+than two components, but the immediate priority is SB2s.
+
+**Until `SystemData` exists, SB2 support is not available.**  The previous heuristic
+of detecting SB2 by `len(rv_datasets) > 1` inside `SourceData` was wrong: multiple
+RV datasets in `SourceData` means multi-survey single-star RV, not SB2.
+
+______________________________________________________________________
+
+## Kepler mechanics (`harv.kepler`)
+
+### `KeplerianOrientation`
+
+Stores the three Euler angles (ω, Ω, i) that orient the orbital plane relative to the
+observer, stored as sin/cos pairs for numerical stability under `jax.grad`. Provides:
+
+- `from_angles(arg_peri, lon_asc_node, inclination)` — construct from angle Quantities
+- `from_thiele_innes(A, B, F, G)` — invert Thiele-Innes constants to recover
+  orientation + semi-major axis
+- `rotation_matrix` — 3×3 rotation matrix (ZXZ Euler: R_z(Ω) @ R_x(i) @ R_z(ω))
+- `thiele_innes_constants(semi_major_axis)` — compute (A, B, F, G)
+
+The Thiele-Innes linearization is central to the astrometric model: by factoring out
+the semi-major axis `a`, the orbital contribution to the sky plane is a linear
+combination of `a · (A sin ψ + B cos ψ)` and `a · (F sin ψ + G cos ψ)`. This makes
+`a` a linear parameter that can be analytically marginalized.
+
+### `KeplerianBody`
+
+A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `t_peri`, and an
+optional `KeplerianOrientation`. Provides `get_position(time)` and `get_velocity(time)`
+in 3D, accounting for the orbit orientation. Alternative constructor:
+`from_masses(period, e, m_companion, m_primary, t_peri)` — uses Kepler's 3rd law to
+derive the barycentric semi-major axis from the component masses.
+
+`KeplerianBody` is the *physical* orbit model. The likelihood layer uses its own
+lighter-weight parameter structs (see §Parameter structs) that are shaped to the
+specific inference problem.
+
+______________________________________________________________________
+
+## Parameter structs (`harv.likelihood._params`)
+
+These are the objects passed to `likelihood.log_prob(params)`. Each struct is an
+`eqx.Module` and therefore a JAX pytree, which is what makes
+`jax.vmap(lik.log_prob)(params_batch)` work with zero extra machinery — JAX
+automatically vectorizes over all leaves simultaneously.
+
+### Two-level hierarchy
+
+There are two levels for each data type: an **orbit-parameters-only** struct (used
+with marginalized likelihoods during the rejection-sampling hot path) and a
+**full-parameters** struct (used when all parameters are specified explicitly, e.g.
+for forward modeling, MCMC, or plotting).
+
+The naming convention appends `Full` to distinguish the superset:
+
+**Orbit-only structs** (nonlinear parameters, no linear parameters):
+
+| Struct                          | Fields                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| `RVOrbitParameters`             | `period`, `eccentricity`, `phase_peri`, `arg_peri`                          |
+| `GaiaAstrometryOrbitParameters` | `period`, `eccentricity`, `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node` |
+
+**Full structs** (orbit parameters + all linear/observational parameters):
+
+| Struct                         | Additional fields                                                              | `linear_param_names`                                              |
+| ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `RVFullParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`                                | `("K", "v0")`                                                     |
+| `GaiaAstrometryFullParameters` | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis` (all `Quantity`) | `("ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis")` |
+
+**Planned:** The current code uses `RVParameters` and `GaiaAstrometryParameters` as
+names for the full structs. These should be renamed to `RVFullParameters` and
+`GaiaAstrometryFullParameters` to make the superset relationship immediately obvious.
+
+`linear_param_names` is a `ClassVar[tuple[str, ...]]` on the full structs. It names
+every linear parameter the struct holds, in design-matrix column order. It is *not* a
+pytree leaf (ClassVar is excluded by equinox). The rejection sampler reads these
+class attributes to name the output `Samples` columns, avoiding hardcoded strings.
+
+### The `period` convention
+
+Parameter structs store `period: Quantity["time"]`. The prior and sampler internally
+work in log-space:
+
+```
+log_period = log₁₀(period / data_time_unit)
+```
+
+where `data_time_unit` is derived from `data.time.unit`. The sampler converts back
+before constructing param structs:
+
+```python
+period = Quantity(10.0 ** log_period_sample, data.time.unit)
+```
+
+This keeps the sampler unit-agnostic: if the data is in days the period will be in
+days; if it is in years it will be in years. The likelihood is also unit-agnostic
+because `_solve_kepler` computes the mean anomaly as:
+
+```
+M = 2π · ustrip("", dt / params.period)
+```
+
+The ratio `dt / params.period` is dimensionless regardless of units.
+
+### `phase_peri` vs `t_peri`
+
+The nonlinear structs use `phase_peri = t_peri / period` (dimensionless, range 0–1)
+rather than an absolute `t_peri`. This decouples the phase from the period scale,
+which simplifies the prior (uniform on \[0, 1\]) and avoids the need to specify a
+reference epoch in the prior.
+
+______________________________________________________________________
+
+## Likelihood layer (`harv.likelihood`)
+
+### `AbstractLikelihood[ParamT]`
+
+The generic base class. Uses PEP 695 syntax (`class AbstractLikelihood[ParamT: eqx.Module]`) to satisfy static type checkers. Declares two abstract members:
+
+- `param_names: tuple[str, ...]` — names of the nonlinear parameters this likelihood
+  consumes (class attribute, not an instance field, so not a pytree leaf).
+- `log_prob(params: ParamT) -> jax.Array` — scalar log-likelihood for a single
+  parameter sample.
+
+The design guarantees that `jax.vmap(lik.log_prob)(params_batch)` works out-of-the-box
+when `params_batch` is a pytree of stacked JAX arrays (i.e. a batch of param structs
+with leading batch dimension).
+
+### `MarginalizedRVLikelihood` / `RVLikelihood`
+
+`MarginalizedRVLikelihood` closes over a `RadialVelocityData` object and a linear
+prior (over \[K, v₀\]). For each nonlinear parameter sample it:
+
+1. Solves Kepler's equation for (sin f, cos f) via `_solve_kepler`.
+1. Builds the (n_obs, 2) design matrix `[rv_amplitude, 1]`.
+1. Constructs a `MarginalizedLinear` distribution (numpyro-ext) and calls `.log_prob()`.
+
+`RVLikelihood` takes `RVFullParameters` (includes K and v₀) and evaluates the Gaussian
+log-likelihood explicitly without marginalization.
+
+#### Linear prior as a function of nonlinear parameters
+
+The current implementation stores `linear_prior: dist.MultivariateNormal` as a fixed
+distribution. This means the prior on K cannot depend on the nonlinear parameters.
+
+However, there is a physically well-motivated prior on K that *does* depend on period
+and eccentricity: the Joker-style prior that is uniform in companion mass. Because K
+is related to mass by
+
+```
+K = (2πG/P)^(1/3) · m₂ sin i / (m₁ + m₂)^(2/3) / √(1 − e²)
+```
+
+a uniform prior on m₂ induces a period- and eccentricity-dependent prior on K. This
+cannot be captured by a fixed `dist.MultivariateNormal`.
+
+**Planned design:** The `linear_prior` field should accept either a fixed
+`dist.MultivariateNormal` **or** a callable `eqx.Module` with signature
+`__call__(params) -> dist.MultivariateNormal`. Inside `log_prob`, the implementation
+calls `linear_prior(params)` if the field is callable, otherwise uses it directly.
+Because equinox Modules are valid JAX pytrees and can hold parameters (e.g. the
+reference mass m₁), this works cleanly under `jax.vmap` and `jax.jit`. Until this
+is implemented, users who need a mass-based K prior should pre-transform their K
+samples after the fact using the posterior period and eccentricity.
+
+### `MarginalizedGaiaAstrometryLikelihood` / `GaiaAstrometryLikelihood`
+
+Same structure as the RV pair, but for astrometry. The (n_obs, 6) design matrix
+columns are \[α₀, δ₀, μ_α, μ_δ, ϖ, a\], following Appendix A of
+[Holl et al. 2022](https://arxiv.org/abs/2206.05726). The Thiele-Innes constants
+are computed on-the-fly from the nonlinear orientation parameters.
+
+### `CompositeLikelihood`
+
+Combines multiple `AbstractLikelihood` components by summing their log-likelihoods.
+Shared nonlinear parameters (e.g. `period` appears in both the RV and astrometry
+models) are automatically de-duplicated in `param_names` by order of first appearance.
+Each component's `log_prob` reads only the fields it needs from the shared params
+struct:
+
+```python
+composite = CompositeLikelihood(
+    rv=MarginalizedRVLikelihood(data=rv_data, linear_prior=rv_prior),
+    astro=MarginalizedGaiaAstrometryLikelihood(data=gaia_data, linear_prior=astro_prior),
+)
+log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
+```
+
+______________________________________________________________________
+
+## Prior (`harv.priors.rejection.RejectionPrior`)
+
+`RejectionPrior` holds numpyro distributions over all nonlinear parameters and a
+linear prior for the linear/observational parameters. It is an `eqx.Module`.
+
+### Constructing a prior
+
+The preferred API is the `default_*` class methods, which cover the common
+configurations with sensible defaults:
+
+```python
+RejectionPrior.default_rv()
+RejectionPrior.default_astrometry()
+RejectionPrior.default_combined()
+```
+
+Direct `__init__` construction is supported for custom configurations — all fields are
+keyword arguments. The `default_*` methods exist purely as convenience wrappers around
+`__init__`, not as alternative constructors that expose different internals. This
+pattern keeps the class simple and avoids a proliferation of factory methods.
+
+### Nonlinear parameter priors
+
+| Field          | Description                                                  |
+| -------------- | ------------------------------------------------------------ |
+| `log_period`   | Prior on log₁₀(period / data_time_unit), typically `Uniform` |
+| `eccentricity` | Typically `Beta(0.867, 3.03)` following Kipping (2013)       |
+| `phase_peri`   | Typically `Uniform(0, 1)`                                    |
+| `cos_i`        | Astrometry/combined only; `None` for RV-only                 |
+| `arg_peri`     | RV or combined; `None` if not needed                         |
+| `lon_asc_node` | Astrometry or combined; `None` if not needed                 |
+
+### Linear parameter prior
+
+The linear prior must be a `dist.MultivariateNormal` (or a callable `eqx.Module` that
+takes the nonlinear param struct and returns one — see §Linear prior as a function of
+nonlinear parameters). It is stored directly as `linear_prior` and passed through to
+the likelihood during the sampler's likelihood evaluation step.
+
+The current implementation stores a `linear_prior_scale: float` convenience scalar
+and constructs `dist.MultivariateNormal(0, scale² I)` internally. This is
+**an isotropic Gaussian with shared scale across all linear parameters**, which is a
+reasonable first approximation but not appropriate in general: astrometric parameters
+(mas) and RV parameters (km/s) live on completely different scales and do not warrant
+the same prior width.
+
+**Planned:** The `linear_prior_scale` scalar should be replaced by a pre-built
+`dist.MultivariateNormal` (or a callable) passed in directly, with `linear_prior_scale`
+demoted to a convenience argument of the `default_*` constructors only.
+
+### Multi-survey RV offsets
+
+When multiple instruments observe the same star, their zero-points may differ by an
+additive offset. The intended design: an `offsets` dict maps instrument names to
+optional distributions over the per-instrument offset:
+
+```python
+prior = RejectionPrior.default_rv(
+    offsets={"espresso": dist.Normal(0, 5.0)}
+    # "keck" absent → reference instrument, offset = 0
+)
+```
+
+The offsets are additional linear parameters appended to the design matrix, one column
+per non-reference instrument.
+
+**Planned:** This is partially designed but **not yet fully wired into the rejection
+sampler** — the batched evaluation and linear sampling steps still need to detect and
+incorporate the offset columns. The `offsets` field also currently has a leading
+underscore (`_offsets`) in the code, which is a naming artefact. It should be renamed
+to `offsets` (no underscore) since it is a standard public configuration field, not a
+private implementation detail.
+
+### SB2 and hierarchical systems
+
+For SB2 systems the linear parameters expand to \[K₁, K₂, v₀\]: two semi-amplitudes
+(with opposite sign in the design matrix) plus a shared systemic velocity. The
+`default_sb2()` constructor covers this case with a 3-dimensional linear prior.
+
+For hierarchical systems beyond SB2 (e.g. triple stars) a separate prior class may
+be more maintainable than overloading `RejectionPrior` further. The design sketch in
+`api.py` suggests `RejectionSB2Prior` as a dedicated class. This is a placeholder for
+future work — the immediate priority is getting the single-star multi-survey and basic
+SB2 cases working correctly.
+
+______________________________________________________________________
+
+## Rejection sampler (`harv.samplers.rejection.RejectionSampler`)
+
+Implements the rejection sampling algorithm from
+[Price-Whelan et al. 2017](https://arxiv.org/abs/1701.08160) (The Joker). The core
+idea: because the likelihood is analytically marginalized over linear parameters, it
+can be evaluated cheaply for millions of nonlinear prior samples, making rejection
+sampling efficient.
+
+**Algorithm:**
+
+1. **Prior sampling.** Draw `n_prior_samples` from the nonlinear prior (in log-space
+   and angles — all dimensionless).
+
+1. **Likelihood evaluation** (batched). For each batch of `batch_size` samples,
+   construct param structs, build `Marginalized*Likelihood` objects, and evaluate
+   `jax.vmap(lik.log_prob)(params_batch)` using `jax.lax.fori_loop` to control
+   memory usage.
+
+1. **Rejection.** Normalize weights to `max` and accept samples where
+   `Uniform() < weight`.
+
+1. **Linear parameter sampling.** For each accepted nonlinear sample, call
+   `MarginalizedLinear.conditional()` to sample the linear parameters from their
+   conditional posterior given the data.
+
+1. **Return** a `Samples` object.
+
+### Data type inference
+
+`_infer_and_validate_data_type` inspects the concrete type of `data`:
+
+- `GaiaAstrometryData` or any `AbstractAstrometryData` → `"astrometry"`
+- `RadialVelocityData` or any `AbstractRadialVelocityData` → `"rv"`
+- `SourceData` with astrometry and RV → `"combined"`
+- `SourceData` with multiple RV datasets → **currently treated as multi-survey RV**
+  (not SB2 — see §Planned: `SystemData`)
+- `SystemData` (planned) → `"sb2"`
+
+### `batch_size` and GPU support
+
+The `batch_size` field (default 100,000) is a static equinox field that controls how
+many samples are stacked and vmapped at once. The likelihood evaluation is pure JAX
+and runs on any device (CPU, GPU, TPU) without code changes.
+
+**CPU:** `fori_loop` serialises the batches, which keeps peak memory bounded at
+`batch_size × n_obs × (parameter footprint)`. The default of 100,000 is suitable for
+typical laptops and workstations.
+
+**GPU:** `fori_loop` also serialises on GPU, preventing the device from saturating all
+its cores across batches. On GPU, it is almost always better to use a single large
+`vmap` over all samples (i.e. set `batch_size = n_prior_samples`) and let JAX/XLA
+schedule the work across the device's streaming multiprocessors. A future enhancement
+would auto-select `batch_size` based on `jax.devices()[0].device_kind` — using
+`n_prior_samples` on GPU and 100,000 on CPU — but for now callers should set it
+manually when running on GPU:
+
+```python
+sampler = RejectionSampler(prior, batch_size=n_prior_samples)  # GPU-friendly
+```
+
+______________________________________________________________________
+
+## `Samples` container (`harv.samplers.samples.Samples`)
+
+Stores the posterior samples returned by `RejectionSampler.run()`.
+
+### Current design
+
+| Internal field        | Content                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples         |
+| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                    |
+| `_linear_param_names` | Static tuple of column names for `_linear`                   |
+| `_data_type`          | Static string: `"rv"`, `"astrometry"`, `"combined"`, `"sb2"` |
+| `_metadata`           | Static dict with `t_ref` and any extra info                  |
+
+Dict-style access (`samples["period"]`) dispatches to appropriate unit restoration:
+
+- `"log_period"` → raw dimensionless array
+- `"period"` → `Quantity` in data time units (derived as `10**log_period`)
+- `"t_peri"` → `Quantity` (derived from `phase_peri * period + t_ref`)
+- `"inclination"` → `Quantity` in radians (derived from `arccos(cos_i)`)
+- Linear params (`"K"`, `"v0"`, `"ra0"`, etc.) → `Quantity` with appropriate units
+
+`Samples` supports `median()`, `percentile()`, `summary()`, HDF5 serialization
+(`to_hdf5` / `from_hdf5`), and a corner plot via arviz (`plot_corner`).
+
+### Known issue: parameter name coupling
+
+The `_data_type` string and the hardcoded unit dispatch inside `_get_linear_with_units`
+duplicate information already encoded in the parameter classes. Adding a new system
+type (SB2, hierarchical) currently requires changes in at least three places: the param
+class, the sampler, and `Samples._get_linear_with_units`.
+
+### Planned: class-driven `Samples`
+
+The `_data_type` string and `_linear_param_names` tuple should be replaced by static
+references to the **orbit param class** and **full param class**:
+
+```python
+class Samples(eqx.Module):
+    _orbit_cls: type[AbstractBaseKeplerParameters]   # static
+    _full_cls: type[eqx.Module]                       # static, or None
+    _nonlinear: dict[str, jax.Array]
+    _linear: jax.Array
+    _metadata: dict[str, Any]                         # static
+```
+
+With these class references available:
+
+- `_linear_param_names` is derived from `_full_cls.linear_param_names` rather than
+  stored separately.
+- Unit restoration for linear parameters is driven by a class method on `_full_cls`
+  (e.g. `_full_cls.linear_param_units`) rather than hardcoded if-else branches in
+  `Samples`.
+- Any new system type that defines the right class attributes automatically works with
+  `Samples` without changes to the container itself.
+- The `_data_type` string is replaced by `isinstance` checks against the class
+  hierarchy, which are more robust and extensible.
+
+This redesign requires the full param classes (`RVFullParameters`,
+`GaiaAstrometryFullParameters`) to carry a `linear_param_units` class variable in
+addition to `linear_param_names`, e.g.:
+
+```python
+class RVFullParameters(AbstractRVParameters):
+    linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
+    linear_param_units: ClassVar[tuple[str, ...]] = ("km/s", "km/s")
+    ...
+```
+
+**Known inconsistency to fix in current code:** `samples.py` dispatches units using
+old parameter names (`"alpha_0"`, `"delta_0"`, `"semimajor_axis"`) that do not match
+the `GaiaAstrometryParameters.linear_param_names` convention (`"ra0"`, `"dec0"`,
+`"semi_major_axis"`). This must be corrected as part of adopting the new naming
+(§Parameter structs).
+
+______________________________________________________________________
+
+## Simulation utilities (`harv.simulate`)
+
+### `simulate_rv_sb1_data` (currently `simulate_rv_data`)
+
+Generates a synthetic `RadialVelocityData` object for a single-lined spectroscopic
+binary (SB1). Parameters default to random draws if not specified. Returns
+`(data, true_params)`. Uses NumPy random number generation (not JAX) because this is a
+one-off setup step, not on the hot path.
+
+**Planned:** The current name `simulate_rv_data` should be renamed to
+`simulate_rv_sb1_data` to leave a clear namespace for sibling functions:
+
+- `simulate_rv_sb2_data` — generates primary + secondary `RadialVelocityData` for a
+  double-lined binary (planned, requires `SystemData`)
+- `simulate_rv_multisurv_data` — generates a `SourceData` with multiple instruments
+  and per-instrument zero-point offsets (planned)
+
+### `simulate_gaia_epoch_astrometry`
+
+Generates a synthetic `GaiaAstrometryData` object with 5-parameter astrometry plus
+Keplerian orbital motion. Includes a simplified (sinusoidal) parallax factor model via
+`fake_parallax_factor`. For real Gaia data, the parallax factors come from the Gaia
+epoch astrometry tables directly.
+
+______________________________________________________________________
+
+## Key design decisions and trade-offs
+
+### Why `cos_i` instead of `i`?
+
+Inclination `i` has a prior that is uniform in `cos(i)` for an isotropically
+distributed orbit population. Sampling `cos_i ~ Uniform(-1, 1)` is therefore the
+natural prior, and it avoids the singularity at `i = 0` or `i = π`. The raw `cos_i`
+value is stored throughout; inclination in radians is only a derived quantity exposed
+via `Samples["inclination"]`.
+
+### Why Thiele-Innes rather than (ω, Ω, i, a) directly?
+
+The Thiele-Innes constants (A, B, F, G) appear linearly in the astrometric model. This
+means `a` (the semi-major axis in angular units) is a *linear* parameter and can be
+marginalized analytically. Fitting for (ω, Ω, i, a) directly would make `a` a
+nonlinear parameter. The price is that the Thiele-Innes constants mix orientation with
+amplitude, but since we marginalize them out, that is acceptable.
+
+### Why `MarginalizedLinear` from numpyro-ext?
+
+Analytic marginalization over Gaussian linear parameters given a Gaussian prior is a
+standard result, but implementing it carefully (handling the Woodbury identity,
+numerics, gradients) is non-trivial. numpyro-ext provides a tested implementation that
+also gives us `.conditional()` to draw from the posterior conditional — which is
+exactly what the rejection sampler needs for the linear parameter sampling step.
+
+### Why `eqx.field(static=True)` for `batch_size`, `_linear_param_names`, etc.?
+
+Fields marked `static=True` in equinox are not treated as pytree leaves — they are
+compared structurally (by value) when JAX traces a new JIT-compiled function. This is
+appropriate for metadata that controls the computation graph (like `batch_size`) or
+for strings that have no gradient. Concretely, if `batch_size` changes, JAX re-traces;
+if it stays the same, the cached compilation is reused.
+
+______________________________________________________________________
+
+## Planned features and known gaps
+
+### `SystemData` for SB2
+
+A dedicated two-component data container (see §Planned: `SystemData` above). The SB2
+model requires two design matrices with columns \[K₁, 0, 1\] and \[0, -K₂, 1\] for the
+primary and secondary respectively, sharing a common systemic velocity v₀.
+
+### Multi-survey RV with offsets
+
+When `SourceData` contains multiple `RadialVelocityData` datasets, the sampler should:
+
+1. Pick one as the reference instrument (no offset).
+1. Add one offset column per non-reference instrument to the design matrix.
+1. The offsets become additional linear parameters, sampled jointly with K and v₀.
+
+This is designed in `RejectionPrior._offsets` but not yet wired into the sampler's
+batched evaluation or linear parameter sampling.
+
+### Iterative rejection sampling
+
+The Joker's iterative scheme grows the sample batch exponentially until enough
+posterior samples are accepted. Useful when the likelihood is very constraining (few
+or highly precise observations):
+
+```python
+samples = sampler.run_iterative(
+    data,
+    n_prior_samples=1_000_000,
+    n_requested_samples=1024,
+    growth_factor=128,
+)
+```
+
+### Adaptive / importance sampling
+
+For sources with many accepted samples (multi-modal or broad posterior), a standard
+rejection step wastes most prior draws. An adaptive or importance-weighted scheme
+would recycle the rejected samples.
+
+### MAP refinement
+
+After rejection sampling, optimize from each posterior sample to find the nearest
+posterior mode. Useful for getting precise parameter estimates before handing off to
+MCMC.
+
+### MCMC initialization
+
+The rejection-sampler posterior provides a good set of starting points for MCMC. The
+intended interface wraps numpyro's `MCMC` class directly, using numpyro's parameter
+names and kernel API:
+
+```python
+import numpyro.infer as infer
+
+mcmc = samples.init_mcmc(
+    kernel=infer.NUTS,           # or HMC, SA, etc. — any numpyro kernel
+    num_samples=10_000,
+    num_warmup=2_000,
+    num_chains=4,                # independent chains (parallel with pmap)
+    thinning=10,
+)
+mcmc.run(jr.PRNGKey(0))
+```
+
+`samples.init_mcmc` constructs a numpyro `MCMC` object initialised at the rejection
+sampler's posterior samples (one per chain). The keyword arguments are passed through
+unchanged to `numpyro.infer.MCMC`, so the full numpyro API is available. The role of
+`samples.init_mcmc` is solely to handle the warm-start initialisation; the returned
+object is a standard `numpyro.infer.MCMC` instance that users interact with directly.
+
+### Absolute and relative astrometry
+
+`AbstractAstrometryData` exists as a base for future data types:
+
+- **Absolute astrometry** (RA/Dec timeseries from ground-based or HST observations) —
+  stub exists in `data.py`, commented out.
+- **Relative astrometry** (separation and position angle from direct imaging) — not
+  yet started.
+
+### Visualization
+
+`Samples.plot_corner()` exists using arviz. Planned: a `samples.plot(data=source_data)`
+interface that automatically selects the right panels (RV curve overlay, astrometric
+orbit on sky, etc.) based on the data type.
+
+______________________________________________________________________
+
+## Code vs SPEC discrepancies
+
+The following items are places where the current code diverges from the design described
+in this SPEC. Each entry notes whether the code or the SPEC should be updated to
+resolve the disagreement.
+
+### 1. SB2 detection heuristic — code is wrong
+
+**Location:** `src/harv/samplers/rejection.py`, `_infer_and_validate_data_type`
+
+**Current code:**
+
+```python
+if len(rv_datasets) > 1:
+    data_type: DataType = "sb2"
+```
+
+**Problem:** `SourceData` with multiple `RadialVelocityData` entries means
+multi-survey single-star RV, *not* SB2. An SB2 will require a dedicated `SystemData`
+container (see §Planned: `SystemData`). The heuristic produces the wrong `data_type`
+and would trigger the (unimplemented) SB2 likelihood path.
+
+**Resolution:** The `DataType` Literal and any `"sb2"` branch should be removed from
+`rejection.py` until `SystemData` is implemented. The multi-survey RV path (which is
+`"rv"` with multiple instruments) should be wired in separately.
+
+______________________________________________________________________
+
+### 2. `Samples` unit dispatch uses stale parameter names — code is wrong
+
+**Location:** `src/harv/samplers/samples.py`, `_get_linear_with_units` (around line
+156–161)
+
+**Current code uses:**
+
+- `"alpha_0"`, `"delta_0"` — old names for the astrometric reference position offsets
+- `"mu_alpha"`, `"mu_delta"` — old names for proper motion
+- `"semimajor_axis"` — old name for the angular semi-major axis
+
+**SPEC / `GaiaAstrometryParameters.linear_param_names` defines:**
+
+- `"ra0"`, `"dec0"` — new canonical names
+- `"pmra"`, `"pmdec"` — new canonical names
+- `"semi_major_axis"` — new canonical name (with underscore between `semi` and `major`)
+
+**Resolution:** Update `_get_linear_with_units` to use the new names. This must be done
+in tandem with the `RVFullParameters` / `GaiaAstrometryFullParameters` rename, and any
+existing `Samples` HDF5 files will need re-generation.
+
+______________________________________________________________________
+
+### 3. `GaiaAstrometryData.t_ref` is optional but SPEC says required
+
+**Location:** `src/harv/data.py`
+
+**Current code:** `t_ref` is inherited from `AbstractData` as `NTime | None = None`,
+making it optional with default `None`.
+
+**SPEC says (§AbstractAstrometryData / GaiaAstrometryData table):** `t_ref` is listed
+as "required".
+
+**Resolution — two options:**
+
+- **Tighten the code:** Give `GaiaAstrometryData` its own `t_ref: NTime` field
+  (required, non-optional), overriding the parent's optional one. If `AbstractData`
+  needs `t_ref` to remain optional for `RadialVelocityData`, then `t_ref` should be
+  required in the subclass but optional in the base.
+- **Relax the SPEC:** If allowing `t_ref=None` is genuinely fine (e.g. it could
+  default to the mean observation time at likelihood evaluation time), update the table
+  to mark `t_ref` as optional and document the default behaviour.
+
+Needs a decision before the data-layer design is considered stable.
+
+______________________________________________________________________
+
+### 4. `SourceData` inherits `AbstractData.time` but never sets it — code is inconsistent
+
+**Location:** `src/harv/data.py`, `SourceData.__init__`
+
+**Current code:** `SourceData` inherits from `AbstractData`, which declares
+`time: NTime` as a required field. But `SourceData.__init__` only sets `_datasets`;
+the `time` field is never assigned. This means `SourceData().time` will raise an
+`AttributeError` (or contain uninitialized state).
+
+**Resolution — two options:**
+
+- **Remove the inheritance:** `SourceData` does not have a single natural `time` array
+  (it contains many datasets with different observation times). It should not inherit
+  from `AbstractData`. A shared `AbstractDataContainer` interface for things that hold
+  data objects but are not themselves a single-array data class would be more accurate.
+- **Synthesize a composite `time`:** Concatenate all dataset `time` arrays and store
+  the result in `self.time` at construction time. This is arguably useful (e.g. for
+  computing a prior period range from the full baseline), but the meaning of
+  `SourceData.time` would need to be documented carefully.
+
+______________________________________________________________________
+
+### 5. `DataType` Literal includes `"sb2"` but SB2 is unimplemented
+
+**Location:** `src/harv/samplers/rejection.py`
+
+**Current code:**
+
+```python
+DataType = Literal["astrometry", "rv", "combined", "sb2"]
+```
+
+**Problem:** `"sb2"` is present but the SB2 code paths are unfinished stubs.
+Including it in the `Literal` implies it is a supported value, which misleads users
+and type checkers.
+
+**Resolution:** Remove `"sb2"` from the `DataType` Literal until `SystemData` and the
+SB2 likelihood path are fully implemented. Re-add it at that point.
+
+______________________________________________________________________
+
+## API sketch (from `api.py`)
+
+The intended user-facing interface for common use cases:
+
+```python
+# Minimal RV-only case:
+data = RadialVelocityData(time, rv, rv_err)
+prior = RejectionPrior.default_rv()
+sampler = RejectionSampler(prior)
+samples = sampler.run(data, n_prior_samples=100_000)
+
+# With max posterior samples:
+samples = sampler.run(data, n_prior_samples=100_000, max_posterior_samples=128)
+
+# Multi-instrument RV with zero-point offsets:
+data = SourceData(
+    keck=RadialVelocityData(time1, rv1, rv_err1),
+    espresso=RadialVelocityData(time2, rv2, rv_err2),
+)
+prior = RejectionPrior.default_rv(
+    offsets={"espresso": dist.Normal(0, 5.0)}
+    # keck is the reference instrument; its offset is fixed to 0
+)
+
+# Combined astrometry + RV:
+data = SourceData(
+    keck=RadialVelocityData(time, rv, rv_err),
+    gaia=GaiaAstrometryData(...),
+)
+prior = RejectionPrior.default_combined()
+samples = sampler.run(data, n_prior_samples=1_000_000)
+
+# SB2 (not yet implemented):
+sb2_data = SystemData(
+    RadialVelocityData(time, rv1, rv_err1),  # primary
+    RadialVelocityData(time, rv2, rv_err2),  # secondary
+)
+prior = RejectionPrior.default_sb2()
+
+# Post-sampling analysis:
+samples["period"]          # Quantity in data time units
+samples["eccentricity"]    # dimensionless array
+samples.median("K")        # median semi-amplitude
+samples.summary()          # dict of all statistics
+samples.plot_corner()      # arviz corner plot
+samples.plot(data=data)    # phase-folded RV/astrometry overlay (planned)
+samples.to_hdf5("out.h5")  # persistence
+```
