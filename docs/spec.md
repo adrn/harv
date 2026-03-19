@@ -87,7 +87,7 @@ src/harv/
 │   ├── rejection.py         # RejectionSampler
 │   └── samples.py           # Samples container
 └── simulate/                # Synthetic data generators
-    ├── rv.py                # simulate_rv_data
+    ├── rv.py                # simulate_rv_sb1_data
     ├── astrometry.py        # simulate_gaia_epoch_astrometry
     └── scanlaw.py           # Gaia scanning law utilities
 ```
@@ -266,10 +266,6 @@ The naming convention appends `Full` to distinguish the superset:
 | ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
 | `RVFullParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`                                | `("K", "v0")`                                                     |
 | `GaiaAstrometryFullParameters` | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis` (all `Quantity`) | `("ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis")` |
-
-**Planned:** The current code uses `RVParameters` and `GaiaAstrometryParameters` as
-names for the full structs. These should be renamed to `RVFullParameters` and
-`GaiaAstrometryFullParameters` to make the superset relationship immediately obvious.
 
 `linear_param_names` is a `ClassVar[tuple[str, ...]]` on the full structs. It names
 every linear parameter the struct holds, in design-matrix column order. It is *not* a
@@ -456,10 +452,7 @@ per non-reference instrument.
 
 **Planned:** This is partially designed but **not yet fully wired into the rejection
 sampler** — the batched evaluation and linear sampling steps still need to detect and
-incorporate the offset columns. The `offsets` field also currently has a leading
-underscore (`_offsets`) in the code, which is a naming artefact. It should be renamed
-to `offsets` (no underscore) since it is a standard public configuration field, not a
-private implementation detail.
+incorporate the offset columns.
 
 ### SB2 and hierarchical systems
 
@@ -623,8 +616,7 @@ binary (SB1). Parameters default to random draws if not specified. Returns
 `(data, true_params)`. Uses NumPy random number generation (not JAX) because this is a
 one-off setup step, not on the hot path.
 
-**Planned:** The current name `simulate_rv_data` should be renamed to
-`simulate_rv_sb1_data` to leave a clear namespace for sibling functions:
+The `simulate_rv_sb1_data` name leaves a clear namespace for sibling functions:
 
 - `simulate_rv_sb2_data` — generates primary + secondary `RadialVelocityData` for a
   double-lined binary (planned, requires `SystemData`)
@@ -761,122 +753,6 @@ object is a standard `numpyro.infer.MCMC` instance that users interact with dire
 `Samples.plot_corner()` exists using arviz. Planned: a `samples.plot(data=source_data)`
 interface that automatically selects the right panels (RV curve overlay, astrometric
 orbit on sky, etc.) based on the data type.
-
-______________________________________________________________________
-
-## Code vs SPEC discrepancies
-
-The following items are places where the current code diverges from the design described
-in this SPEC. Each entry notes whether the code or the SPEC should be updated to
-resolve the disagreement.
-
-### 1. SB2 detection heuristic — code is wrong
-
-**Location:** `src/harv/samplers/rejection.py`, `_infer_and_validate_data_type`
-
-**Current code:**
-
-```python
-if len(rv_datasets) > 1:
-    data_type: DataType = "sb2"
-```
-
-**Problem:** `SourceData` with multiple `RadialVelocityData` entries means
-multi-survey single-star RV, *not* SB2. An SB2 will require a dedicated `SystemData`
-container (see §Planned: `SystemData`). The heuristic produces the wrong `data_type`
-and would trigger the (unimplemented) SB2 likelihood path.
-
-**Resolution:** The `DataType` Literal and any `"sb2"` branch should be removed from
-`rejection.py` until `SystemData` is implemented. The multi-survey RV path (which is
-`"rv"` with multiple instruments) should be wired in separately.
-
-______________________________________________________________________
-
-### 2. `Samples` unit dispatch uses stale parameter names — code is wrong
-
-**Location:** `src/harv/samplers/samples.py`, `_get_linear_with_units` (around line
-156–161)
-
-**Current code uses:**
-
-- `"alpha_0"`, `"delta_0"` — old names for the astrometric reference position offsets
-- `"mu_alpha"`, `"mu_delta"` — old names for proper motion
-- `"semimajor_axis"` — old name for the angular semi-major axis
-
-**SPEC / `GaiaAstrometryParameters.linear_param_names` defines:**
-
-- `"ra0"`, `"dec0"` — new canonical names
-- `"pmra"`, `"pmdec"` — new canonical names
-- `"semi_major_axis"` — new canonical name (with underscore between `semi` and `major`)
-
-**Resolution:** Update `_get_linear_with_units` to use the new names. This must be done
-in tandem with the `RVFullParameters` / `GaiaAstrometryFullParameters` rename, and any
-existing `Samples` HDF5 files will need re-generation.
-
-______________________________________________________________________
-
-### 3. `GaiaAstrometryData.t_ref` is optional but SPEC says required
-
-**Location:** `src/harv/data.py`
-
-**Current code:** `t_ref` is inherited from `AbstractData` as `NTime | None = None`,
-making it optional with default `None`.
-
-**SPEC says (§AbstractAstrometryData / GaiaAstrometryData table):** `t_ref` is listed
-as "required".
-
-**Resolution — two options:**
-
-- **Tighten the code:** Give `GaiaAstrometryData` its own `t_ref: NTime` field
-  (required, non-optional), overriding the parent's optional one. If `AbstractData`
-  needs `t_ref` to remain optional for `RadialVelocityData`, then `t_ref` should be
-  required in the subclass but optional in the base.
-- **Relax the SPEC:** If allowing `t_ref=None` is genuinely fine (e.g. it could
-  default to the mean observation time at likelihood evaluation time), update the table
-  to mark `t_ref` as optional and document the default behaviour.
-
-Needs a decision before the data-layer design is considered stable.
-
-______________________________________________________________________
-
-### 4. `SourceData` inherits `AbstractData.time` but never sets it — code is inconsistent
-
-**Location:** `src/harv/data.py`, `SourceData.__init__`
-
-**Current code:** `SourceData` inherits from `AbstractData`, which declares
-`time: NTime` as a required field. But `SourceData.__init__` only sets `_datasets`;
-the `time` field is never assigned. This means `SourceData().time` will raise an
-`AttributeError` (or contain uninitialized state).
-
-**Resolution — two options:**
-
-- **Remove the inheritance:** `SourceData` does not have a single natural `time` array
-  (it contains many datasets with different observation times). It should not inherit
-  from `AbstractData`. A shared `AbstractDataContainer` interface for things that hold
-  data objects but are not themselves a single-array data class would be more accurate.
-- **Synthesize a composite `time`:** Concatenate all dataset `time` arrays and store
-  the result in `self.time` at construction time. This is arguably useful (e.g. for
-  computing a prior period range from the full baseline), but the meaning of
-  `SourceData.time` would need to be documented carefully.
-
-______________________________________________________________________
-
-### 5. `DataType` Literal includes `"sb2"` but SB2 is unimplemented
-
-**Location:** `src/harv/samplers/rejection.py`
-
-**Current code:**
-
-```python
-DataType = Literal["astrometry", "rv", "combined", "sb2"]
-```
-
-**Problem:** `"sb2"` is present but the SB2 code paths are unfinished stubs.
-Including it in the `Literal` implies it is a supported value, which misleads users
-and type checkers.
-
-**Resolution:** Remove `"sb2"` from the `DataType` Literal until `SystemData` and the
-SB2 likelihood path are fully implemented. Re-add it at that point.
 
 ______________________________________________________________________
 

@@ -13,10 +13,10 @@ from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData
 
-__all__ = ["simulate_rv_data"]
+__all__ = ["simulate_rv_sb1_data"]
 
 
-def simulate_rv_data(
+def simulate_rv_sb1_data(
     seed: int = 42,
     n_obs: int = 50,
     baseline: Quantity["time"] | None = None,
@@ -63,7 +63,7 @@ def simulate_rv_data(
     v0 : Quantity["speed"], optional
         Systemic velocity. If None, randomly drawn ~ N(0, 20) km/s.
     rv_err : Quantity["speed"], optional
-        RV measurement uncertainties (1σ). If None, randomly drawn from
+        RV measurement uncertainties (1-sigma). If None, randomly drawn from
         U(0.01, 0.5) km/s for each observation.
     t_ref : Quantity["time"], optional
         Reference time. If None, randomly chosen.
@@ -80,8 +80,8 @@ def simulate_rv_data(
     Examples
     --------
     >>> from unxt import Quantity
-    >>> from harv.simulate import simulate_rv_data
-    >>> data, true_params = simulate_rv_data(
+    >>> from harv.simulate import simulate_rv_sb1_data
+    >>> data, true_params = simulate_rv_sb1_data(
     ...     seed=42,
     ...     n_obs=30,
     ...     period=Quantity(100.0, "day"),

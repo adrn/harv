@@ -29,9 +29,9 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.likelihood._params import (
-    AbstractRVParameters,
+    AbstractRVFullParameters,
+    RVFullParameters,
     RVOrbitParameters,
-    RVParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _solve_kepler
@@ -51,7 +51,7 @@ __all__ = [
 
 
 def _get_design_matrix(
-    params: AbstractRVParameters,
+    params: AbstractRVFullParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -63,7 +63,7 @@ def _get_design_matrix(
 
 
 def _get_design_matrix_sb2(
-    params: AbstractRVParameters,
+    params: AbstractRVFullParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
     primary: bool,
@@ -142,7 +142,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
 # ---------------------------------------------------------------------------
 
 
-class RVLikelihood(AbstractLikelihood[RVParameters]):
+class RVLikelihood(AbstractLikelihood[RVFullParameters]):
     """Full RV likelihood with all parameters (including K and v₀) specified.
 
     Parameters
@@ -160,7 +160,7 @@ class RVLikelihood(AbstractLikelihood[RVParameters]):
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri", "K", "v0")
 
-    def log_prob(self, params: RVParameters) -> jax.Array:
+    def log_prob(self, params: RVFullParameters) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)

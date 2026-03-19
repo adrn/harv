@@ -145,19 +145,14 @@ class Samples(eqx.Module):
         """Get linear parameter with appropriate units."""
         # _linear should always be 2D (n_samples, n_linear_params)
         # but handle edge cases
-        if self._linear.ndim == 1:
-            # Edge case: single parameter vector (shouldn't normally happen)
-            value = self._linear[idx]
-        else:
-            # Normal case: (n_samples, n_linear_params)
-            value = self._linear[:, idx]
+        value = self._linear[idx] if self._linear.ndim == 1 else self._linear[:, idx]
 
         # Astrometric parameters
-        if key in ["alpha_0", "delta_0"]:
+        if key in ["ra0", "dec0"]:
             return Quantity(value, "deg")
-        if key in ["mu_alpha", "mu_delta"]:
+        if key in ["pmra", "pmdec"]:
             return Quantity(value, "mas/yr")
-        if key in ["parallax", "semimajor_axis"]:
+        if key in ["parallax", "semi_major_axis"]:
             return Quantity(value, "mas")
 
         # RV parameters
@@ -230,7 +225,7 @@ class Samples(eqx.Module):
             Parameter name.
         percentiles : list or tuple of float, optional
             Percentile values to compute (0-100). Default: (16, 50, 84)
-            which corresponds to -1σ, median, +1σ for Gaussian.
+            which corresponds to the 16th, 50th, 84th percentiles for Gaussian.
 
         Returns
         -------
@@ -257,7 +252,7 @@ class Samples(eqx.Module):
         - median
         - mean
         - std (standard deviation)
-        - percentiles (16th, 84th) for ±1σ equivalent
+        - percentiles (16th, 84th) for ±1-sigma equivalent
 
         Parameters
         ----------
@@ -330,7 +325,10 @@ class Samples(eqx.Module):
         try:
             import h5py
         except ImportError as e:
-            msg = "h5py is required for HDF5 serialization. Install with: pip install h5py"
+            msg = (
+                "h5py is required for HDF5 serialization. "
+                "Install with: pip install h5py"
+            )
             raise ImportError(msg) from e
 
         filename = Path(filename)
@@ -352,7 +350,7 @@ class Samples(eqx.Module):
 
             # Store custom metadata
             for key, value in self._metadata.items():
-                if isinstance(value, (int, float, str)):
+                if isinstance(value, int | float | str):
                     meta_group.attrs[key] = value
                 elif hasattr(value, "value"):  # Quantity
                     meta_group.attrs[f"{key}_value"] = float(value.value)
@@ -379,7 +377,10 @@ class Samples(eqx.Module):
         try:
             import h5py
         except ImportError as e:
-            msg = "h5py is required for HDF5 serialization. Install with: pip install h5py"
+            msg = (
+                "h5py is required for HDF5 serialization. "
+                "Install with: pip install h5py"
+            )
             raise ImportError(msg) from e
 
         filename = Path(filename)
@@ -387,7 +388,7 @@ class Samples(eqx.Module):
         with h5py.File(filename, "r") as f:
             # Load nonlinear parameters
             nonlinear = {}
-            for key in f["nonlinear"].keys():
+            for key in f["nonlinear"]:
                 nonlinear[key] = jnp.array(f["nonlinear"][key][:])
 
             # Load linear parameters
@@ -400,7 +401,7 @@ class Samples(eqx.Module):
 
             # Load custom metadata
             metadata = {}
-            for key in meta.attrs.keys():
+            for key in meta.attrs:
                 if key in ["data_type", "n_samples", "linear_param_names"]:
                     continue
                 if key.endswith("_value"):
@@ -423,11 +424,11 @@ class Samples(eqx.Module):
             _metadata=metadata,
         )
 
-    def plot_corner(
+    def plot_corner(  # noqa: C901
         self,
         params: list[str] | None = None,
         truths: dict[str, Any] | None = None,
-        **plot_kwargs,
+        **plot_kwargs: Any,
     ):
         """Create corner plot of posterior samples using arviz.
 
@@ -454,9 +455,11 @@ class Samples(eqx.Module):
         """
         try:
             import arviz as az
-            import matplotlib.pyplot as plt
         except ImportError as e:
-            msg = "arviz and matplotlib required for plotting. Install with: pip install arviz matplotlib"
+            msg = (
+                "arviz and matplotlib required for plotting. "
+                "Install with: pip install arviz matplotlib"
+            )
             raise ImportError(msg) from e
 
         # Select default parameters based on data type
@@ -528,6 +531,4 @@ class Samples(eqx.Module):
         default_kwargs.update(plot_kwargs)
 
         # Create corner plot
-        axes = az.plot_pair(idata, **default_kwargs)
-
-        return axes
+        return az.plot_pair(idata, **default_kwargs)

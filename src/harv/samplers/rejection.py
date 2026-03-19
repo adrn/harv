@@ -25,10 +25,10 @@ from harv.data import (
     SourceData,
 )
 from harv.likelihood._params import (
+    GaiaAstrometryFullParameters,
     GaiaAstrometryOrbitParameters,
-    GaiaAstrometryParameters,
+    RVFullParameters,
     RVOrbitParameters,
-    RVParameters,
 )
 from harv.likelihood.gaia_astrometry import (
     MarginalizedGaiaAstrometryLikelihood,
@@ -208,15 +208,15 @@ class RejectionSampler(eqx.Module):
         # Derive linear parameter names from the full parameter classes.
         # For SB2 there is no dedicated class yet, so names are listed here.
         if data_type == "astrometry":
-            linear_param_names = GaiaAstrometryParameters.linear_param_names
+            linear_param_names = GaiaAstrometryFullParameters.linear_param_names
         elif data_type == "rv":
-            linear_param_names = RVParameters.linear_param_names
+            linear_param_names = RVFullParameters.linear_param_names
         elif data_type == "sb2":
             linear_param_names = ("K1", "K2", "v0")
         else:  # combined
             linear_param_names = (
-                GaiaAstrometryParameters.linear_param_names
-                + RVParameters.linear_param_names
+                GaiaAstrometryFullParameters.linear_param_names
+                + RVFullParameters.linear_param_names
             )
 
         if max_posterior_samples is not None:

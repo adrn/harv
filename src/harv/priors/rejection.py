@@ -28,7 +28,7 @@ class RejectionPrior(eqx.Module):
 
     **Astrometry:**
         - Nonlinear (6): log(P), e, phase_peri, cos(i), arg_peri, lon_asc_node
-        - Linear (6): α₀, δ₀, μ_α, μ_δ, ϖ, a
+        - Linear (6): ra0, dec0, pmra, pmdec, parallax, a
 
     **Radial Velocity:**
         - Nonlinear (4): log(P), e, arg_peri, phase_peri
@@ -36,7 +36,7 @@ class RejectionPrior(eqx.Module):
 
     **Combined (astrometry + RV):**
         - Nonlinear (6): log(P), e, phase_peri, cos(i), arg_peri, lon_asc_node
-        - Linear (8): α₀, δ₀, μ_α, μ_δ, ϖ, a, K, v₀
+        - Linear (8): ra0, dec0, pmra, pmdec, parallax, a, K, v0
 
     **SB2 (double-lined spectroscopic binary):**
         - Nonlinear (4): log(P), e, arg_peri, phase_peri
@@ -81,7 +81,7 @@ class RejectionPrior(eqx.Module):
     lon_asc_node: dist.Distribution | None = None
 
     # Multi-instrument offsets (RV only, optional)
-    _offsets: dict[str, dist.Distribution | None] | None = None
+    offsets: dict[str, dist.Distribution | None] | None = None
 
     def __check_init__(self) -> None:
         """Validate prior configuration."""
@@ -168,7 +168,7 @@ class RejectionPrior(eqx.Module):
             phase_peri=dist.Uniform(0.0, 1.0),
             arg_peri=dist.Uniform(0.0, 2.0 * jnp.pi),
             linear_prior_scale=linear_prior_scale,
-            _offsets=offsets,
+            offsets=offsets,
         )
 
     @classmethod
@@ -179,13 +179,9 @@ class RejectionPrior(eqx.Module):
         ecc_alpha: float = 0.867,
         ecc_beta: float = 3.03,
         linear_prior_scale_astro: float = 1000.0,
-        linear_prior_scale_rv: float = 100.0,
         offsets: dict[str, dist.Distribution | None] | None = None,
     ) -> "RejectionPrior":
         """Create default prior for combined astrometry + RV data.
-
-        For combined data, we use a single linear_prior_scale. The user should
-        ensure data are properly normalized or provide separate scales if needed.
 
         Parameters
         ----------
@@ -198,9 +194,7 @@ class RejectionPrior(eqx.Module):
         ecc_beta : float
             Beta parameter for Beta eccentricity prior. Default: 3.03 (Kipping 2013).
         linear_prior_scale_astro : float
-            Scale for astrometric linear parameters (mas). Default: 1000.0.
-        linear_prior_scale_rv : float
-            Scale for RV linear parameters (km/s). Default: 100.0.
+            Scale for linear parameters. Default: 1000.0.
         offsets : dict[str, dist.Distribution | None], optional
             Multi-instrument offset priors for RV data.
 
@@ -208,14 +202,7 @@ class RejectionPrior(eqx.Module):
         -------
         prior : RejectionPrior
             Prior configured for combined data.
-
-        Notes
-        -----
-        For now, we use a single linear_prior_scale. Future versions may support
-        separate scales for different data types.
         """
-        # For now, use the astrometry scale (larger)
-        # TODO: Support separate scales for different data types
         return cls(
             log_period=dist.Uniform(log_period_min, log_period_max),
             eccentricity=dist.Beta(ecc_alpha, ecc_beta),
@@ -224,7 +211,7 @@ class RejectionPrior(eqx.Module):
             arg_peri=dist.Uniform(0.0, 2.0 * jnp.pi),
             lon_asc_node=dist.Uniform(0.0, 2.0 * jnp.pi),
             linear_prior_scale=linear_prior_scale_astro,
-            _offsets=offsets,
+            offsets=offsets,
         )
 
     @classmethod
@@ -269,7 +256,7 @@ class RejectionPrior(eqx.Module):
             phase_peri=dist.Uniform(0.0, 1.0),
             arg_peri=dist.Uniform(0.0, 2.0 * jnp.pi),
             linear_prior_scale=linear_prior_scale,
-            _offsets=offsets,
+            offsets=offsets,
         )
 
     def sample_nonlinear(
@@ -354,8 +341,3 @@ class RejectionPrior(eqx.Module):
         if self.lon_asc_node is not None:
             n += 1
         return n
-
-    @property
-    def offsets(self) -> dict[str, dist.Distribution | None] | None:
-        """Multi-instrument offset priors (RV only)."""
-        return self._offsets

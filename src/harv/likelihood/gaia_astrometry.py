@@ -32,9 +32,9 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.likelihood._params import (
-    AbstractGaiaAstrometryParameters,
+    AbstractGaiaAstrometryFullParameters,
+    GaiaAstrometryFullParameters,
     GaiaAstrometryOrbitParameters,
-    GaiaAstrometryParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _solve_kepler
@@ -55,7 +55,7 @@ __all__ = [
 
 def _get_design_matrix(
     data: GaiaAstrometryData,
-    params: AbstractGaiaAstrometryParameters,
+    params: AbstractGaiaAstrometryFullParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -178,7 +178,7 @@ class MarginalizedGaiaAstrometryLikelihood(
 # ---------------------------------------------------------------------------
 
 
-class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
+class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryFullParameters]):
     """Full Gaia astrometry likelihood with all parameters specified explicitly.
 
     Parameters
@@ -209,7 +209,7 @@ class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
         "semi_major_axis",
     )
 
-    def log_prob(self, params: GaiaAstrometryParameters) -> jax.Array:
+    def log_prob(self, params: GaiaAstrometryFullParameters) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)

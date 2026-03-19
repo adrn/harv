@@ -56,7 +56,7 @@ class RVOrbitParameters(AbstractRVParameters):
     """
 
 
-class RVParameters(AbstractRVParameters):
+class RVFullParameters(AbstractRVParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters and the linear RV parameters
@@ -89,7 +89,7 @@ class GaiaAstrometryOrbitParameters(AbstractGaiaAstrometryParameters):
     """
 
 
-class GaiaAstrometryParameters(AbstractGaiaAstrometryParameters):
+class GaiaAstrometryFullParameters(AbstractGaiaAstrometryParameters):
     """Full parameter set for the Gaia astrometry likelihood.
 
     Includes both nonlinear orbital parameters and the 6 linear astrometric
