@@ -127,7 +127,7 @@ class KeplerianOrientation(eqx.Module):
         semi_major_axis
             Recovered semi-major axis
         """
-        # A_: Quantity[Any] = Quantity.from_(A)
+        # A: Quantity[Any] = Quantity.from_(A)
         # B: Quantity[Any] = Quantity.from_(B)
         # F: Quantity[Any] = Quantity.from_(F)
         # G: Quantity[Any] = Quantity.from_(G)
