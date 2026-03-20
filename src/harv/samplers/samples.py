@@ -10,11 +10,30 @@ from pathlib import Path
 from typing import Any
 
 import equinox as eqx
-import jax.numpy as jnp
 import numpy as np
-from unxt import Quantity
+import quaxed.numpy as jnp
+from unxt import Quantity, ustrip
+
+from harv.likelihood._params import (
+    CombinedOrbitParameters,
+    GaiaAstrometryFullParameters,
+    GaiaAstrometryOrbitParameters,
+    RVFullParameters,
+    RVOrbitParameters,
+)
 
 __all__ = ["Samples"]
+
+# Maps stored class-name strings back to classes for HDF5 round-trips.
+_ORBIT_CLS_BY_NAME: dict[str, type] = {
+    "RVOrbitParameters": RVOrbitParameters,
+    "GaiaAstrometryOrbitParameters": GaiaAstrometryOrbitParameters,
+    "CombinedOrbitParameters": CombinedOrbitParameters,
+}
+_FULL_CLS_BY_NAME: dict[str, type] = {
+    "RVFullParameters": RVFullParameters,
+    "GaiaAstrometryFullParameters": GaiaAstrometryFullParameters,
+}
 
 
 class Samples(eqx.Module):
@@ -32,10 +51,18 @@ class Samples(eqx.Module):
         "cos_i", "arg_peri", "lon_asc_node" depending on data type.
     _linear : jnp.ndarray
         Linear parameter samples, shape (n_samples, n_linear_params).
-    _linear_param_names : tuple[str, ...]
-        Names of linear parameters in order.
-    _data_type : {"astrometry", "rv", "combined", "sb2"}
-        Type of data these samples correspond to.
+    _orbit_cls : type
+        Orbit-only parameter class (e.g. RVOrbitParameters). Its
+        ``data_type`` class variable gives the data type string.
+    _full_cls : tuple[type, ...]
+        Ordered tuple of full parameter classes (e.g. ``(RVFullParameters,)``
+        or ``(GaiaAstrometryFullParameters, RVFullParameters)`` for combined).
+        Linear parameter names are concatenated from each class's
+        ``linear_param_names`` class variable.
+    _linear_param_units : tuple[str, ...]
+        Units of each linear parameter column, derived from the actual data
+        at sampling time (e.g. ``rv_data.rv.unit`` for K and v0). Order
+        matches the concatenated ``linear_param_names``.
     _metadata : dict[str, Any], optional
         Additional metadata (t_ref, acceptance rate, etc.).
 
@@ -50,9 +77,10 @@ class Samples(eqx.Module):
     _nonlinear: dict[str, jnp.ndarray]
     _linear: jnp.ndarray
 
-    # Metadata (static fields for efficiency)
-    _linear_param_names: tuple[str, ...] = eqx.field(static=True)
-    _data_type: str = eqx.field(static=True)
+    # Class-driven metadata (static fields)
+    _orbit_cls: type = eqx.field(static=True)
+    _full_cls: tuple[type, ...] = eqx.field(static=True)
+    _linear_param_units: tuple[str, ...] = eqx.field(static=True)
     _metadata: dict[str, Any] = eqx.field(static=True)
 
     @property
@@ -63,7 +91,15 @@ class Samples(eqx.Module):
     @property
     def data_type(self) -> str:
         """Data type these samples correspond to."""
-        return self._data_type
+        return self._orbit_cls.data_type  # type: ignore[attr-defined]
+
+    @property
+    def _linear_param_names(self) -> tuple[str, ...]:
+        """Linear parameter names, derived from _full_cls."""
+        return sum(
+            (cls.linear_param_names for cls in self._full_cls),  # type: ignore[attr-defined]
+            (),
+        )
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
@@ -77,7 +113,7 @@ class Samples(eqx.Module):
 
         return base_keys + derived_keys
 
-    def __getitem__(self, key: str) -> Quantity | jnp.ndarray:
+    def __getitem__(self, key: str) -> Quantity[Any] | jnp.ndarray:
         """Get parameter samples with units restored.
 
         Parameters
@@ -100,9 +136,10 @@ class Samples(eqx.Module):
             return self._get_nonlinear_with_units(key)
 
         # Check linear parameters
-        if key in self._linear_param_names:
-            idx = self._linear_param_names.index(key)
-            return self._get_linear_with_units(key, idx)
+        names = self._linear_param_names
+        if key in names:
+            idx = names.index(key)
+            return self._get_linear_with_units(idx)
 
         # Check derived quantities
         if key == "period":
@@ -123,7 +160,7 @@ class Samples(eqx.Module):
         msg = f"Parameter '{key}' not found"
         raise KeyError(msg)
 
-    def _get_nonlinear_with_units(self, key: str) -> Quantity | jnp.ndarray:
+    def _get_nonlinear_with_units(self, key: str) -> Quantity[Any] | jnp.ndarray:
         """Get nonlinear parameter with appropriate units."""
         value = self._nonlinear[key]
 
@@ -141,26 +178,11 @@ class Samples(eqx.Module):
 
         return value
 
-    def _get_linear_with_units(self, key: str, idx: int) -> Quantity:
-        """Get linear parameter with appropriate units."""
-        # _linear should always be 2D (n_samples, n_linear_params)
-        # but handle edge cases
+    def _get_linear_with_units(self, idx: int) -> Quantity[Any]:
+        """Get linear parameter by column index with appropriate units."""
         value = self._linear[idx] if self._linear.ndim == 1 else self._linear[:, idx]
-
-        # Astrometric parameters
-        if key in ["ra0", "dec0"]:
-            return Quantity(value, "deg")
-        if key in ["pmra", "pmdec"]:
-            return Quantity(value, "mas/yr")
-        if key in ["parallax", "semi_major_axis"]:
-            return Quantity(value, "mas")
-
-        # RV parameters
-        if key in ["K", "K1", "K2", "v0"]:
-            return Quantity(value, "km/s")
-
-        # If unknown, return dimensionless
-        return value
+        unit = self._linear_param_units[idx]
+        return Quantity(value, unit)
 
     def __len__(self) -> int:
         """Number of samples."""
@@ -176,7 +198,7 @@ class Samples(eqx.Module):
 
     def median(
         self, key: str | None = None
-    ) -> dict[str, Quantity | float] | Quantity | float:
+    ) -> dict[str, Quantity[Any] | jnp.ndarray] | Quantity[Any] | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
@@ -187,7 +209,7 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        median : dict or Quantity or float
+        median : dict or Quantity or Array
             Median value(s).
 
         Examples
@@ -196,27 +218,19 @@ class Samples(eqx.Module):
         >>> samples.median()  # Dict of all medians
         """
         if key is not None:
-            values = self[key]
-            if isinstance(values, Quantity):
-                return Quantity(jnp.median(values.value), values.unit)
-            return float(jnp.median(values))
+            return jnp.median(self[key])
 
-        # Compute medians for all parameters
-        result = {}
+        result: dict[str, Quantity[Any] | jnp.ndarray] = {}
         for param_key in self.keys():
             try:
-                values = self[param_key]
-                if isinstance(values, Quantity):
-                    result[param_key] = Quantity(jnp.median(values.value), values.unit)
-                else:
-                    result[param_key] = float(jnp.median(values))
+                result[param_key] = jnp.median(self[param_key])
             except (KeyError, ValueError):
                 continue
         return result
 
     def percentile(
         self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
-    ) -> list[Quantity | float]:
+    ) -> list[Quantity[Any] | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters
@@ -238,12 +252,7 @@ class Samples(eqx.Module):
         >>> p5, p50, p95 = samples.percentile("period", [5, 50, 95])
         """
         values = self[key]
-        perc_array = jnp.array(percentiles)
-        if isinstance(values, Quantity):
-            percs = jnp.percentile(values.value, perc_array)
-            return [Quantity(p, values.unit) for p in percs]
-        percs = jnp.percentile(values, perc_array)
-        return [float(p) for p in percs]
+        return [jnp.percentile(values, p) for p in percentiles]
 
     def summary(self, params: list[str] | None = None) -> dict[str, dict[str, Any]]:
         """Compute summary statistics for parameters.
@@ -275,40 +284,21 @@ class Samples(eqx.Module):
         if params is None:
             params = self.keys()
 
-        summary = {}
+        result: dict[str, dict[str, Any]] = {}
         for key in params:
             try:
                 values = self[key]
-
-                # Extract numerical values
-                if isinstance(values, Quantity):
-                    vals = values.value
-                    unit = values.unit
-                else:
-                    vals = values
-                    unit = None
-
-                # Compute statistics
-                stats = {
-                    "median": jnp.median(vals),
-                    "mean": jnp.mean(vals),
-                    "std": jnp.std(vals),
-                    "p16": jnp.percentile(vals, 16),
-                    "p84": jnp.percentile(vals, 84),
+                result[key] = {
+                    "median": jnp.median(values),
+                    "mean": jnp.mean(values),
+                    "std": jnp.std(values),
+                    "p16": jnp.percentile(values, 16),
+                    "p84": jnp.percentile(values, 84),
                 }
-
-                # Restore units if applicable
-                if unit is not None:
-                    stats = {k: Quantity(v, unit) for k, v in stats.items()}
-                else:
-                    stats = {k: float(v) for k, v in stats.items()}
-
-                summary[key] = stats
-
             except (KeyError, ValueError):
                 continue
 
-        return summary
+        return result
 
     def to_hdf5(self, filename: str | Path) -> None:
         """Save samples to HDF5 file.
@@ -342,11 +332,14 @@ class Samples(eqx.Module):
             # Store linear parameters
             f.create_dataset("linear", data=np.asarray(self._linear))
 
-            # Store metadata
+            # Store class references and metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["data_type"] = self._data_type
+            meta_group.attrs["orbit_cls"] = self._orbit_cls.__name__
+            meta_group.attrs["full_cls"] = ",".join(
+                cls.__name__ for cls in self._full_cls
+            )
+            meta_group.attrs["linear_param_units"] = ",".join(self._linear_param_units)
             meta_group.attrs["n_samples"] = self.n_samples
-            meta_group.attrs["linear_param_names"] = ",".join(self._linear_param_names)
 
             # Store custom metadata
             for key, value in self._metadata.items():
@@ -394,15 +387,19 @@ class Samples(eqx.Module):
             # Load linear parameters
             linear = jnp.array(f["linear"][:])
 
-            # Load metadata
+            # Load class references
             meta = f["metadata"]
-            data_type = meta.attrs["data_type"]
-            linear_param_names = tuple(meta.attrs["linear_param_names"].split(","))
+            orbit_cls_name = meta.attrs["orbit_cls"]
+            full_cls_names = meta.attrs["full_cls"].split(",")
+
+            orbit_cls = _ORBIT_CLS_BY_NAME[orbit_cls_name]
+            full_cls = tuple(_FULL_CLS_BY_NAME[n] for n in full_cls_names)
+            linear_param_units = tuple(meta.attrs["linear_param_units"].split(","))
 
             # Load custom metadata
-            metadata = {}
+            metadata: dict[str, Any] = {}
             for key in meta.attrs:
-                if key in ["data_type", "n_samples", "linear_param_names"]:
+                if key in ["orbit_cls", "full_cls", "linear_param_units", "n_samples"]:
                     continue
                 if key.endswith("_value"):
                     # Skip, will be reconstructed with unit
@@ -419,8 +416,9 @@ class Samples(eqx.Module):
         return cls(
             _nonlinear=nonlinear,
             _linear=linear,
-            _linear_param_names=linear_param_names,
-            _data_type=data_type,
+            _orbit_cls=orbit_cls,
+            _full_cls=full_cls,
+            _linear_param_units=linear_param_units,
             _metadata=metadata,
         )
 
@@ -429,7 +427,7 @@ class Samples(eqx.Module):
         params: list[str] | None = None,
         truths: dict[str, Any] | None = None,
         **plot_kwargs: Any,
-    ):
+    ) -> Any:
         """Create corner plot of posterior samples using arviz.
 
         Parameters
@@ -465,13 +463,11 @@ class Samples(eqx.Module):
         # Select default parameters based on data type
         if params is None:
             if self.data_type == "astrometry":
-                params = ["period", "eccentricity", "parallax", "semimajor_axis"]
+                params = ["period", "eccentricity", "parallax", "semi_major_axis"]
             elif self.data_type == "rv":
                 params = ["period", "eccentricity", "K", "v0"]
             elif self.data_type == "combined":
-                params = ["period", "eccentricity", "parallax", "semimajor_axis", "K"]
-            elif self.data_type == "sb2":
-                params = ["period", "eccentricity", "K1", "K2", "v0"]
+                params = ["period", "eccentricity", "parallax", "semi_major_axis", "K"]
             else:
                 # Fallback: use first 4 available parameters
                 params = self.keys()[:4]
@@ -493,9 +489,7 @@ class Samples(eqx.Module):
                     if truths is not None and param in truths:
                         truth_val = truths[param]
                         if isinstance(truth_val, Quantity):
-                            reference_values[var_name] = float(
-                                truth_val.to_value(values.unit)
-                            )
+                            reference_values[var_name] = ustrip(values.unit, truth_val)
                         else:
                             reference_values[var_name] = float(truth_val)
                 else:
@@ -515,7 +509,7 @@ class Samples(eqx.Module):
         idata = az.from_dict(posterior=data_dict)
 
         # Set default plot kwargs
-        default_kwargs = {
+        default_kwargs: dict[str, Any] = {
             "var_names": var_names,
             "kind": "kde",
             "marginals": True,

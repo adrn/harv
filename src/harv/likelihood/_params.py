@@ -48,11 +48,13 @@ class AbstractBaseKeplerParameters(eqx.Module):
 class AbstractRVParameters(AbstractBaseKeplerParameters):
     """Abstract base class for RV parameter structs."""
 
+    data_type: ClassVar[str] = "rv"
+
 
 class RVOrbitParameters(AbstractRVParameters):
     """Nonlinear orbital parameters for the marginalized RV likelihood.
 
-    The linear parameters (K, v₀) are analytically marginalized out.
+    The linear parameters (K, v0) are analytically marginalized out.
     """
 
 
@@ -60,7 +62,7 @@ class RVFullParameters(AbstractRVParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters and the linear RV parameters
-    (semi-amplitude K and systemic velocity v₀).
+    (semi-amplitude K and systemic velocity v0).
     """
 
     linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
@@ -77,6 +79,8 @@ class RVFullParameters(AbstractRVParameters):
 class AbstractGaiaAstrometryParameters(AbstractBaseKeplerParameters):
     """Abstract base class for Gaia astrometry parameter structs."""
 
+    data_type: ClassVar[str] = "astrometry"
+
     cos_i: float | jax.Array
     lon_asc_node: float | jax.Array
 
@@ -84,9 +88,20 @@ class AbstractGaiaAstrometryParameters(AbstractBaseKeplerParameters):
 class GaiaAstrometryOrbitParameters(AbstractGaiaAstrometryParameters):
     """Nonlinear orbital parameters for the marginalized Gaia astrometry likelihood.
 
-    The 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) are
+    The 6 linear astrometric parameters (ra0, dec0, pmra, pmdec, parallax, a) are
     analytically marginalized out.
     """
+
+
+class CombinedOrbitParameters(AbstractGaiaAstrometryParameters):
+    """Nonlinear orbital parameters for combined astrometry + RV data.
+
+    Identical structure to GaiaAstrometryOrbitParameters but tagged with
+    data_type = "combined" so that Samples can distinguish combined from
+    pure-astrometry posteriors.
+    """
+
+    data_type: ClassVar[str] = "combined"
 
 
 class GaiaAstrometryFullParameters(AbstractGaiaAstrometryParameters):
@@ -110,9 +125,9 @@ class GaiaAstrometryFullParameters(AbstractGaiaAstrometryParameters):
         "semi_major_axis",
     )
 
-    ra0: Quantity[Angle]  # α₀: reference RA offset [mas]
-    dec0: Quantity[Angle]  # δ₀: reference Dec offset [mas]
-    pmra: Quantity[AngularSpeed]  # μ_α: proper motion in RA [mas/yr]
-    pmdec: Quantity[AngularSpeed]  # μ_δ: proper motion in Dec [mas/yr]
-    parallax: Quantity[Angle]  # ϖ: parallax [mas]
-    semi_major_axis: Quantity[Length]  # a: photocentric semi-major axis [mas]
+    ra0: Quantity[Angle]  # reference RA offset
+    dec0: Quantity[Angle]  # reference Dec offset
+    pmra: Quantity[AngularSpeed]  # proper motion in RA
+    pmdec: Quantity[AngularSpeed]  # proper motion in Dec
+    parallax: Quantity[Angle]  # parallax
+    semi_major_axis: Quantity[Length]  # photocentric semi-major axis

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import equinox as eqx
+import quaxed.numpy as jnp
 
 if TYPE_CHECKING:
     import jax
@@ -44,9 +45,9 @@ class CompositeLikelihood(eqx.Module):
     >>> log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
     """
 
-    _components: dict[str, AbstractLikelihood]
+    _components: dict[str, AbstractLikelihood[Any]]
 
-    def __init__(self, **components: AbstractLikelihood) -> None:
+    def __init__(self, **components: AbstractLikelihood[Any]) -> None:
         self._components = components
 
     @property
@@ -63,7 +64,7 @@ class CompositeLikelihood(eqx.Module):
         """Total number of unique nonlinear parameters."""
         return len(self.param_names)
 
-    def __getitem__(self, key: str) -> AbstractLikelihood:
+    def __getitem__(self, key: str) -> AbstractLikelihood[Any]:
         return self._components[key]
 
     def __len__(self) -> int:
@@ -87,6 +88,5 @@ class CompositeLikelihood(eqx.Module):
         Each component reads only the fields it needs from ``params``. The
         params struct must have at least the fields listed in ``param_names``.
         """
-        return sum(  # type: ignore[return-value]
-            comp.log_prob(params) for comp in self._components.values()
-        )
+        log_probs = [comp.log_prob(params) for comp in self._components.values()]
+        return jnp.sum(jnp.stack(log_probs))

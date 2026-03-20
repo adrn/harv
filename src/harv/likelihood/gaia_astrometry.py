@@ -32,7 +32,7 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.likelihood._params import (
-    AbstractGaiaAstrometryFullParameters,
+    AbstractGaiaAstrometryParameters,
     GaiaAstrometryFullParameters,
     GaiaAstrometryOrbitParameters,
 )
@@ -55,7 +55,7 @@ __all__ = [
 
 def _get_design_matrix(
     data: GaiaAstrometryData,
-    params: AbstractGaiaAstrometryFullParameters,
+    params: AbstractGaiaAstrometryParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:

@@ -10,6 +10,7 @@ parameters. The sampler validates which parameters are needed based on the data.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.random as jr
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
@@ -260,7 +261,7 @@ class RejectionPrior(eqx.Module):
         )
 
     def sample_nonlinear(
-        self, key: jr.PRNGKey, n_samples: int
+        self, key: jax.Array, n_samples: int
     ) -> dict[str, jnp.ndarray]:
         """Sample nonlinear parameters from priors.
 

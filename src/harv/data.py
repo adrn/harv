@@ -34,6 +34,15 @@ class AbstractData(eqx.Module):
     t_ref: NTime | None = None
     """Reference epoch. If None, uses mean observation time."""
 
+    def __check_init__(self) -> None:
+        """Compute t_ref from mean time if not provided."""
+        if self.t_ref is None:
+            object.__setattr__(
+                self,
+                "t_ref",
+                jnp.mean(self.time),
+            )
+
     @property
     def n_times(self) -> int:
         """Number of times / epochs / observations."""
@@ -61,11 +70,6 @@ class GaiaAstrometryData(AbstractAstrometryData):
 
     transit_index: NIntArray | None = None
     """Optional transit grouping (may be ``None``)."""
-
-    def __check_init__(self) -> None:
-        """Compute t_ref from mean time if not provided."""
-        if self.t_ref is None:
-            object.__setattr__(self, "t_ref", jnp.mean(self.time))
 
 
 # TODO: currently not supported, so commenting out
@@ -97,11 +101,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
 #     """Optional parallax factors."""
 
 
-class AbstractRadialVelocityData(AbstractData):
-    """Abstract base class for radial velocity data."""
-
-
-class RadialVelocityData(AbstractRadialVelocityData):
+class RadialVelocityData(AbstractData):
     """Radial velocity measurements."""
 
     rv: NVelocity
@@ -110,14 +110,9 @@ class RadialVelocityData(AbstractRadialVelocityData):
     rv_err: NVelocity
     """Radial velocity uncertainties."""
 
-    def __check_init__(self) -> None:
-        """Compute t_ref from mean time if not provided."""
-        if self.t_ref is None:
-            object.__setattr__(self, "t_ref", jnp.mean(self.time))
-
 
 # Type alias for all supported data types
-DatasetType = AbstractAstrometryData | AbstractRadialVelocityData
+DatasetType = AbstractAstrometryData | RadialVelocityData
 _DT = TypeVar("_DT", bound=DatasetType)
 
 
@@ -166,7 +161,7 @@ class SourceData(eqx.Module):
     # Other methods:
     def get_datasets_by_type(self, dtype: type[_DT]) -> dict[str, _DT]:
         """Get all datasets of a specific type."""
-        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}  # type: ignore[misc]
+        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}
 
     def n_astrometry(self) -> int:
         """Number of astrometric datasets."""

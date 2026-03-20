@@ -127,17 +127,19 @@ class KeplerianOrientation(eqx.Module):
         semi_major_axis
             Recovered semi-major axis
         """
-        A = Quantity.from_(A)
-        B = Quantity.from_(B)
-        F = Quantity.from_(F)
-        G = Quantity.from_(G)
+        # A_: Quantity[Any] = Quantity.from_(A)
+        # B: Quantity[Any] = Quantity.from_(B)
+        # F: Quantity[Any] = Quantity.from_(F)
+        # G: Quantity[Any] = Quantity.from_(G)
 
         u_ = (A**2 + B**2 + F**2 + G**2) / 2.0
         v_ = A * G - B * F
 
-        inner = (u_ + v_) * (u_ - v_)
+        inner_tmp = (u_ + v_) * (u_ - v_)
         # Guard against small negative from roundoff
-        inner = jnp.where(inner < 0.0, Quantity.from_(0.0, inner.unit), inner)  # type: ignore[call-overload]
+        inner = jnp.where(
+            inner_tmp < 0.0, Quantity.from_(0.0, inner_tmp.unit), inner_tmp
+        )
         a = jnp.sqrt(u_ + jnp.sqrt(inner))
 
         # From algebraic manipulation of T-I
@@ -172,7 +174,7 @@ class KeplerianOrientation(eqx.Module):
                 lon_asc_node=Quantity.from_(Omega, "rad"),
                 inclination=Quantity.from_(i, "rad"),
             ),
-            a,
+            cast("Quantity[Length] | Quantity[Angle]", a),
         )
 
     @property

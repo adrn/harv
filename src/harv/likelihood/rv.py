@@ -29,7 +29,7 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.likelihood._params import (
-    AbstractRVFullParameters,
+    AbstractRVParameters,
     RVFullParameters,
     RVOrbitParameters,
 )
@@ -51,7 +51,7 @@ __all__ = [
 
 
 def _get_design_matrix(
-    params: AbstractRVFullParameters,
+    params: AbstractRVParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -63,7 +63,7 @@ def _get_design_matrix(
 
 
 def _get_design_matrix_sb2(
-    params: AbstractRVFullParameters,
+    params: AbstractRVParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
     primary: bool,
