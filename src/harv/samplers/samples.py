@@ -82,6 +82,9 @@ class Samples(eqx.Module):
     _full_cls: tuple[type, ...] = eqx.field(static=True)
     _linear_param_units: tuple[str, ...] = eqx.field(static=True)
     _metadata: dict[str, Any] = eqx.field(static=True)
+    # Extra linear parameter names beyond those in _full_cls (e.g. per-instrument
+    # RV offsets for multi-survey data).  Empty by default.
+    _extra_linear_names: tuple[str, ...] = eqx.field(static=True, default=())
 
     @property
     def n_samples(self) -> int:
@@ -95,11 +98,12 @@ class Samples(eqx.Module):
 
     @property
     def _linear_param_names(self) -> tuple[str, ...]:
-        """Linear parameter names, derived from _full_cls."""
-        return sum(
+        """Linear parameter names, derived from _full_cls plus any extras."""
+        base: tuple[str, ...] = sum(
             (cls.linear_param_names for cls in self._full_cls),  # type: ignore[attr-defined]
             (),
         )
+        return base + self._extra_linear_names
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""

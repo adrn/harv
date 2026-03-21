@@ -418,21 +418,18 @@ pattern keeps the class simple and avoids a proliferation of factory methods.
 
 ### Linear parameter prior
 
-The linear prior must be a `dist.MultivariateNormal` (or a callable `eqx.Module` that
-takes the nonlinear param struct and returns one — see §Linear prior as a function of
-nonlinear parameters). It is stored directly as `linear_prior` and passed through to
-the likelihood during the sampler's likelihood evaluation step.
+The linear prior is stored directly as `linear_prior: dist.MultivariateNormal` and
+passed through to the likelihood during the sampler's likelihood evaluation step.
+It may also be a callable `eqx.Module` that takes the nonlinear param struct and
+returns a `dist.MultivariateNormal` — see §Linear prior as a function of nonlinear
+parameters.
 
-The current implementation stores a `linear_prior_scale: float` convenience scalar
-and constructs `dist.MultivariateNormal(0, scale² I)` internally. This is
-**an isotropic Gaussian with shared scale across all linear parameters**, which is a
-reasonable first approximation but not appropriate in general: astrometric parameters
-(mas) and RV parameters (km/s) live on completely different scales and do not warrant
-the same prior width.
-
-**Planned:** The `linear_prior_scale` scalar should be replaced by a pre-built
-`dist.MultivariateNormal` (or a callable) passed in directly, with `linear_prior_scale`
-demoted to a convenience argument of the `default_*` constructors only.
+The `default_*` constructors accept `linear_prior_scale` convenience arguments (floats)
+and build the appropriate `dist.MultivariateNormal` internally. For combined data,
+`default_combined` takes separate `linear_prior_scale_astro` (for the 6 astrometric
+parameters, in mas) and `linear_prior_scale_rv` (for the 2 RV parameters, in km/s),
+constructing a block-diagonal 8×8 covariance matrix. Direct `__init__` construction
+accepts any pre-built `dist.MultivariateNormal` for full control.
 
 ### Multi-survey RV offsets
 
@@ -448,11 +445,19 @@ prior = RejectionPrior.default_rv(
 ```
 
 The offsets are additional linear parameters appended to the design matrix, one column
-per non-reference instrument.
+per non-reference instrument. The linear parameters for a two-instrument (keck + espresso)
+case are `[K, v₀, δ_espresso]`.
 
-**Planned:** This is partially designed but **not yet fully wired into the rejection
-sampler** — the batched evaluation and linear sampling steps still need to detect and
-incorporate the offset columns.
+`default_rv` automatically extends the joint `linear_prior` MVN to include the offset
+dimensions when `offsets` is provided. Each non-reference offset prior must be a
+`dist.Normal`; its `loc` and `scale` are incorporated as additional diagonal blocks.
+
+In `SourceData` with multiple RV datasets, the sampler stacks all observations in dict
+order and builds an indicator matrix (constant across parameter samples) that selects
+which rows belong to each non-reference instrument. The indicator matrix is closed over
+by `MarginalizedMultiSurveyRVLikelihood` and appended to the base `[K, v₀]` design matrix
+at `log_prob` time. Named access to offset samples works via `samples["espresso"]`
+(the instrument name becomes a linear parameter key).
 
 ### SB2 and hierarchical systems
 
@@ -534,15 +539,21 @@ ______________________________________________________________________
 
 Stores the posterior samples returned by `RejectionSampler.run()`.
 
-### Current design
+### Design
 
-| Internal field        | Content                                                      |
-| --------------------- | ------------------------------------------------------------ |
-| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples         |
-| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                    |
-| `_linear_param_names` | Static tuple of column names for `_linear`                   |
-| `_data_type`          | Static string: `"rv"`, `"astrometry"`, `"combined"`, `"sb2"` |
-| `_metadata`           | Static dict with `t_ref` and any extra info                  |
+| Internal field        | Content                                                                   |
+| --------------------- | ------------------------------------------------------------------------- |
+| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                      |
+| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                                 |
+| `_orbit_cls`          | Static reference to the orbit-only param class (e.g. `RVOrbitParameters`) |
+| `_full_cls`           | Static tuple of full param classes (e.g. `(RVFullParameters,)`)           |
+| `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler    |
+| `_metadata`           | Static dict with `t_ref` and any extra info                               |
+
+`_linear_param_names` is derived on demand from `_full_cls[i].linear_param_names`
+(concatenated across all full classes). Unit restoration for each linear parameter uses
+`_linear_param_units`, which the sampler populates from the actual data units (e.g.
+`rv_data.rv.unit` for K and v₀, `astro_data.al_position.unit` for astrometric params).
 
 Dict-style access (`samples["period"]`) dispatches to appropriate unit restoration:
 
@@ -550,60 +561,10 @@ Dict-style access (`samples["period"]`) dispatches to appropriate unit restorati
 - `"period"` → `Quantity` in data time units (derived as `10**log_period`)
 - `"t_peri"` → `Quantity` (derived from `phase_peri * period + t_ref`)
 - `"inclination"` → `Quantity` in radians (derived from `arccos(cos_i)`)
-- Linear params (`"K"`, `"v0"`, `"ra0"`, etc.) → `Quantity` with appropriate units
+- Linear params (`"K"`, `"v0"`, `"ra0"`, etc.) → `Quantity` with units from `_linear_param_units`
 
 `Samples` supports `median()`, `percentile()`, `summary()`, HDF5 serialization
 (`to_hdf5` / `from_hdf5`), and a corner plot via arviz (`plot_corner`).
-
-### Known issue: parameter name coupling
-
-The `_data_type` string and the hardcoded unit dispatch inside `_get_linear_with_units`
-duplicate information already encoded in the parameter classes. Adding a new system
-type (SB2, hierarchical) currently requires changes in at least three places: the param
-class, the sampler, and `Samples._get_linear_with_units`.
-
-### Planned: class-driven `Samples`
-
-The `_data_type` string and `_linear_param_names` tuple should be replaced by static
-references to the **orbit param class** and **full param class**:
-
-```python
-class Samples(eqx.Module):
-    _orbit_cls: type[AbstractBaseKeplerParameters]   # static
-    _full_cls: type[eqx.Module]                       # static, or None
-    _nonlinear: dict[str, jax.Array]
-    _linear: jax.Array
-    _metadata: dict[str, Any]                         # static
-```
-
-With these class references available:
-
-- `_linear_param_names` is derived from `_full_cls.linear_param_names` rather than
-  stored separately.
-- Unit restoration for linear parameters is driven by a class method on `_full_cls`
-  (e.g. `_full_cls.linear_param_units`) rather than hardcoded if-else branches in
-  `Samples`.
-- Any new system type that defines the right class attributes automatically works with
-  `Samples` without changes to the container itself.
-- The `_data_type` string is replaced by `isinstance` checks against the class
-  hierarchy, which are more robust and extensible.
-
-This redesign requires the full param classes (`RVFullParameters`,
-`GaiaAstrometryFullParameters`) to carry a `linear_param_units` class variable in
-addition to `linear_param_names`, e.g.:
-
-```python
-class RVFullParameters(AbstractRVParameters):
-    linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
-    linear_param_units: ClassVar[tuple[str, ...]] = ("km/s", "km/s")
-    ...
-```
-
-**Known inconsistency to fix in current code:** `samples.py` dispatches units using
-old parameter names (`"alpha_0"`, `"delta_0"`, `"semimajor_axis"`) that do not match
-the `GaiaAstrometryParameters.linear_param_names` convention (`"ra0"`, `"dec0"`,
-`"semi_major_axis"`). This must be corrected as part of adopting the new naming
-(§Parameter structs).
 
 ______________________________________________________________________
 

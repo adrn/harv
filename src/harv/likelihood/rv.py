@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from harv.data import RadialVelocityData
 
 __all__ = [
+    "MarginalizedMultiSurveyRVLikelihood",
     "MarginalizedRVLikelihood",
     "RVLikelihood",
 ]
@@ -131,6 +132,61 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
 
         marg_dist = MarginalizedLinear(
             design_matrix=design_matrix,
+            prior_distribution=self.linear_prior,
+            data_distribution=dist.Normal(0.0, ustrip("km/s", self.data.rv_err)),
+        )
+        return marg_dist.log_prob(ustrip("km/s", self.data.rv))
+
+
+# ---------------------------------------------------------------------------
+# Multi-survey marginalized likelihood
+# ---------------------------------------------------------------------------
+
+
+class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
+    """RV likelihood for multiple instruments with offset parameters marginalized.
+
+    Linear parameters are ``[K, v₀, δ₁, …, δₖ]`` where δᵢ is the zero-point
+    offset for the i-th non-reference instrument.  The ``indicator_matrix``
+    (shape ``n_obs_total × n_non_ref``) selects which observations belong to
+    each non-reference instrument; it is constant across parameter samples and
+    is closed over at construction time.
+
+    Parameters
+    ----------
+    data : RadialVelocityData
+        All RV observations stacked in instrument dict order.
+    indicator_matrix : jax.Array
+        Boolean/float indicator matrix, shape ``(n_obs_total, n_non_ref)``.
+        ``indicator_matrix[i, j] == 1`` when observation *i* comes from
+        non-reference instrument *j*.
+    linear_prior : dist.MultivariateNormal
+        Joint Gaussian prior over ``[K, v₀, δ₁, …, δₖ]``.
+    """
+
+    data: RadialVelocityData
+    indicator_matrix: jax.Array
+    linear_prior: dist.MultivariateNormal
+
+    param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
+
+    def __check_init__(self) -> None:
+        if not isinstance(self.linear_prior, dist.MultivariateNormal):
+            msg = (
+                "MarginalizedMultiSurveyRVLikelihood requires a "
+                "dist.MultivariateNormal prior; "
+                f"got {type(self.linear_prior)}"
+            )
+            raise TypeError(msg)
+
+    def log_prob(self, params: RVOrbitParameters) -> jax.Array:
+        """Compute the marginalized log-likelihood for a single parameter sample."""
+        sin_f, cos_f = _solve_kepler(self.data, params)
+        dm_base = _get_design_matrix(params, sin_f, cos_f)  # (n_obs, 2)
+        dm = jnp.concatenate([dm_base, self.indicator_matrix], axis=-1)
+
+        marg_dist = MarginalizedLinear(
+            design_matrix=dm,
             prior_distribution=self.linear_prior,
             data_distribution=dist.Normal(0.0, ustrip("km/s", self.data.rv_err)),
         )

@@ -152,22 +152,40 @@ class RejectionPrior(eqx.Module):
             Isotropic 1-sigma scale for the RV linear parameters (km/s). Default: 100.0.
         offsets : dict[str, dist.Distribution | None], optional
             Multi-instrument offset priors. Keys are instrument names, values are
-            offset priors (or None for reference instrument).
+            offset priors (or None for reference instrument). Non-reference
+            instruments must supply a ``dist.Normal`` prior; its ``loc`` and
+            ``scale`` are incorporated into the joint linear prior as additional
+            dimensions ``[K, v₀, δ₁, …, δₖ]``.
 
         Returns
         -------
         prior : RejectionPrior
             Prior configured for RV data.
         """
+        # Non-reference instruments are those with a non-None prior.
+        non_ref = (
+            [(k, v) for k, v in offsets.items() if v is not None] if offsets else []
+        )
+        if non_ref:
+            # Build joint prior: [K, v0, δ_1, ..., δ_k]
+            offset_locs = jnp.array([v.loc for _, v in non_ref])
+            offset_scales = jnp.array([v.scale for _, v in non_ref])
+            loc = jnp.concatenate([jnp.zeros(2), offset_locs])
+            scales = jnp.concatenate([jnp.full(2, linear_prior_scale), offset_scales])
+            linear_prior: dist.MultivariateNormal = dist.MultivariateNormal(
+                loc=loc, covariance_matrix=jnp.diag(scales**2)
+            )
+        else:
+            linear_prior = dist.MultivariateNormal(
+                loc=jnp.zeros(2),
+                covariance_matrix=linear_prior_scale**2 * jnp.eye(2),
+            )
         return cls(
             log_period=dist.Uniform(log_period_min, log_period_max),
             eccentricity=dist.Beta(ecc_alpha, ecc_beta),
             phase_peri=dist.Uniform(0.0, 1.0),
             arg_peri=dist.Uniform(0.0, 2.0 * jnp.pi),
-            linear_prior=dist.MultivariateNormal(
-                loc=jnp.zeros(2),
-                covariance_matrix=linear_prior_scale**2 * jnp.eye(2),
-            ),
+            linear_prior=linear_prior,
             offsets=offsets,
         )
 

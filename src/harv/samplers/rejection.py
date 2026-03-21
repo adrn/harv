@@ -47,6 +47,7 @@ from harv.likelihood.gaia_astrometry import (
 )
 from harv.likelihood.helpers import _solve_kepler
 from harv.likelihood.rv import (
+    MarginalizedMultiSurveyRVLikelihood,
     MarginalizedRVLikelihood,
 )
 from harv.likelihood.rv import (
@@ -61,6 +62,58 @@ if TYPE_CHECKING:
 __all__ = ["RejectionSampler"]
 
 DataType = Literal["astrometry", "rv", "combined"]
+
+
+# ---------------------------------------------------------------------------
+# Multi-survey RV helpers (private)
+# ---------------------------------------------------------------------------
+
+
+def _stack_rv_datasets(
+    rv_datasets: dict[str, RadialVelocityData],
+) -> RadialVelocityData:
+    """Concatenate multiple RV datasets in dict order into a single one."""
+    ref = next(iter(rv_datasets.values()))
+    time_unit = str(ref.time.unit)
+    rv_unit = str(ref.rv.unit)
+
+    all_time = jnp.concatenate(
+        [ustrip(time_unit, ds.time) for ds in rv_datasets.values()]
+    )
+    all_rv = jnp.concatenate([ustrip(rv_unit, ds.rv) for ds in rv_datasets.values()])
+    all_err = jnp.concatenate(
+        [ustrip(rv_unit, ds.rv_err) for ds in rv_datasets.values()]
+    )
+
+    return RadialVelocityData(
+        time=Quantity(all_time, time_unit),
+        rv=Quantity(all_rv, rv_unit),
+        rv_err=Quantity(all_err, rv_unit),
+    )
+
+
+def _build_indicator_matrix(
+    rv_datasets: dict[str, RadialVelocityData],
+    offsets: dict[str, Any],
+) -> jax.Array:
+    """Build indicator matrix (n_obs_total, n_non_ref) for multi-survey RV.
+
+    ``indicator[i, j] == 1`` when observation *i* belongs to non-reference
+    instrument *j* (i.e. the j-th non-None entry in ``offsets``).
+    Datasets are iterated in ``rv_datasets`` dict order, which must match the
+    order used by ``_stack_rv_datasets``.
+    """
+    non_ref_names = [k for k, v in offsets.items() if v is not None]
+    n_non_ref = len(non_ref_names)
+    rows: list[jax.Array] = []
+    for name, ds in rv_datasets.items():
+        n_obs = len(ds.time)
+        row = jnp.zeros((n_obs, n_non_ref))
+        if name in non_ref_names:
+            j = non_ref_names.index(name)
+            row = row.at[:, j].set(1.0)
+        rows.append(row)
+    return jnp.concatenate(rows, axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +183,7 @@ class _DataTypeStrategy(ABC):
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
+        data: InputData,
     ) -> Any:
         """Build the marginalized likelihood for batched evaluation."""
         ...
@@ -139,6 +193,7 @@ class _DataTypeStrategy(ABC):
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
     ) -> tuple[str, ...]:
         """Derive linear parameter unit strings from the data."""
         ...
@@ -152,6 +207,7 @@ class _DataTypeStrategy(ABC):
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
         time_unit: Any,
+        data: InputData,
     ) -> jax.Array:
         """Sample linear parameters for one accepted nonlinear sample."""
         ...
@@ -192,8 +248,11 @@ class _RVStrategy(_DataTypeStrategy):
         if isinstance(data, RadialVelocityData):
             return None, data
         if isinstance(data, SourceData):
-            rv = next(iter(data.get_datasets_by_type(RadialVelocityData).values()))
-            return None, rv
+            rv_datasets = data.get_datasets_by_type(RadialVelocityData)
+            if len(rv_datasets) == 1:
+                return None, next(iter(rv_datasets.values()))
+            # Multi-survey: stack all datasets in dict order.
+            return None, _stack_rv_datasets(rv_datasets)
         msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
@@ -202,22 +261,38 @@ class _RVStrategy(_DataTypeStrategy):
         astro_data: GaiaAstrometryData | None,  # noqa: ARG002
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
+        data: InputData,
     ) -> Any:
         if rv_data is None:
             msg = "_RVStrategy requires rv_data"
             raise TypeError(msg)
+        if (
+            prior.offsets is not None
+            and isinstance(data, SourceData)
+            and data.n_rv() > 1
+        ):
+            indicator = _build_indicator_matrix(
+                data.get_datasets_by_type(RadialVelocityData), prior.offsets
+            )
+            return MarginalizedMultiSurveyRVLikelihood(
+                data=rv_data,
+                indicator_matrix=indicator,
+                linear_prior=prior.linear_prior,
+            )
         return MarginalizedRVLikelihood(data=rv_data, linear_prior=prior.linear_prior)
 
     def linear_param_units(
         self,
         astro_data: GaiaAstrometryData | None,  # noqa: ARG002
         rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
     ) -> tuple[str, ...]:
         if rv_data is None:
             msg = "_RVStrategy requires rv_data"
             raise TypeError(msg)
         rv_unit = str(rv_data.rv.unit)
-        return (rv_unit, rv_unit)
+        n_linear = prior.linear_prior.loc.shape[0]
+        return (rv_unit,) * n_linear
 
     def sample_linear_one(
         self,
@@ -227,6 +302,7 @@ class _RVStrategy(_DataTypeStrategy):
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
         time_unit: Any,
+        data: InputData,
     ) -> jax.Array:
         if rv_data is None:
             msg = "_RVStrategy requires rv_data"
@@ -239,7 +315,18 @@ class _RVStrategy(_DataTypeStrategy):
             arg_peri=sample["arg_peri"],
         )
         sin_f, cos_f = _solve_kepler(rv_data, params)
-        dm = _get_rv_design_matrix(params, sin_f, cos_f)
+        dm_base = _get_rv_design_matrix(params, sin_f, cos_f)
+        if (
+            prior.offsets is not None
+            and isinstance(data, SourceData)
+            and data.n_rv() > 1
+        ):
+            indicator = _build_indicator_matrix(
+                data.get_datasets_by_type(RadialVelocityData), prior.offsets
+            )
+            dm = jnp.concatenate([dm_base, indicator], axis=-1)
+        else:
+            dm = dm_base
         rv_unit = str(rv_data.rv.unit)
         marg = MarginalizedLinear(
             design_matrix=dm,
@@ -293,6 +380,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,  # noqa: ARG002
         prior: RejectionPrior,
+        data: InputData,  # noqa: ARG002
     ) -> Any:
         if astro_data is None:
             msg = "_AstrometryStrategy requires astro_data"
@@ -305,6 +393,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,  # noqa: ARG002
+        prior: RejectionPrior,  # noqa: ARG002
     ) -> tuple[str, ...]:
         if astro_data is None:
             msg = "_AstrometryStrategy requires astro_data"
@@ -321,6 +410,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         rv_data: RadialVelocityData | None,  # noqa: ARG002
         prior: RejectionPrior,
         time_unit: Any,
+        data: InputData,  # noqa: ARG002
     ) -> jax.Array:
         if astro_data is None:
             msg = "_AstrometryStrategy requires astro_data"
@@ -392,6 +482,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
+        data: InputData,  # noqa: ARG002
     ) -> Any:
         if astro_data is None or rv_data is None:
             msg = "_CombinedStrategy requires both astro_data and rv_data"
@@ -415,6 +506,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,  # noqa: ARG002
     ) -> tuple[str, ...]:
         if astro_data is None or rv_data is None:
             msg = "_CombinedStrategy requires both astro_data and rv_data"
@@ -441,6 +533,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
         time_unit: Any,
+        data: InputData,  # noqa: ARG002
     ) -> jax.Array:
         if astro_data is None or rv_data is None:
             msg = "_CombinedStrategy requires both astro_data and rv_data"
@@ -649,7 +742,9 @@ class RejectionSampler(eqx.Module):
         """
         strategy = self._infer_strategy(data)
         astro_data, rv_data = strategy.extract_data(data)
-        lik = strategy.build_marginalized_likelihood(astro_data, rv_data, self.prior)
+        lik = strategy.build_marginalized_likelihood(
+            astro_data, rv_data, self.prior, data
+        )
 
         key = jr.PRNGKey(seed)
         sample_key, rej_key = jr.split(key)
@@ -663,7 +758,7 @@ class RejectionSampler(eqx.Module):
 
         linear_key = jr.fold_in(key, 2)
         linear_samples = self._sample_linear_parameters(
-            linear_key, accepted_nonlinear, astro_data, rv_data, strategy
+            linear_key, accepted_nonlinear, astro_data, rv_data, strategy, data
         )
 
         if max_posterior_samples is not None:
@@ -684,13 +779,22 @@ class RejectionSampler(eqx.Module):
         else:
             t_ref = data.t_ref
 
+        extra_linear_names: tuple[str, ...] = ()
+        if self.prior.offsets is not None:
+            extra_linear_names = tuple(
+                k for k, v in self.prior.offsets.items() if v is not None
+            )
+
         return Samples(
             _nonlinear=accepted_nonlinear,
             _linear=linear_samples,
             _orbit_cls=strategy.orbit_cls,
             _full_cls=strategy.full_cls,
-            _linear_param_units=strategy.linear_param_units(astro_data, rv_data),
+            _linear_param_units=strategy.linear_param_units(
+                astro_data, rv_data, self.prior
+            ),
             _metadata={"t_ref": t_ref},
+            _extra_linear_names=extra_linear_names,
         )
 
     @eqx.filter_jit
@@ -764,6 +868,7 @@ class RejectionSampler(eqx.Module):
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
         strategy: _DataTypeStrategy,
+        data: InputData,
     ) -> jax.Array:
         """Sample linear parameters from conditional posterior using vmap.
 
@@ -782,6 +887,8 @@ class RejectionSampler(eqx.Module):
             Radial velocity data, or None.
         strategy
             Data-type strategy for building params and design matrices.
+        data
+            Original input data (needed for multi-survey instrument ordering).
 
         Returns
         -------
@@ -790,7 +897,8 @@ class RejectionSampler(eqx.Module):
         """
         n_samples = len(nonlinear_samples["log_period"])
         if n_samples == 0:
-            return jnp.zeros((0, strategy.n_linear))
+            n_linear = self.prior.linear_prior.loc.shape[0]
+            return jnp.zeros((0, n_linear))
 
         _ref = rv_data if rv_data is not None else astro_data
         time_unit = _ref.time.unit  # type: ignore[union-attr]
@@ -799,7 +907,7 @@ class RejectionSampler(eqx.Module):
 
         def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> jax.Array:
             return strategy.sample_linear_one(
-                key, sample, astro_data, rv_data, self.prior, time_unit
+                key, sample, astro_data, rv_data, self.prior, time_unit, data
             )
 
         return jax.vmap(_sample_one)(keys, nonlinear_samples)
