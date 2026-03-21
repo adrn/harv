@@ -4,11 +4,17 @@ This module implements rejection sampling with analytical marginalization over
 linear parameters. The sampler draws samples from the prior distribution over
 nonlinear parameters, evaluates the marginalized likelihood, and performs
 rejection sampling to obtain posterior samples.
+
+Data-type-specific logic (param struct construction, likelihood building,
+linear sampling) is encapsulated in ``_DataTypeStrategy`` descriptors, keeping
+the sampler methods themselves branch-free.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+import dataclasses
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Literal, final
 
 import equinox as eqx
 import jax
@@ -32,6 +38,7 @@ from harv.likelihood._params import (
     RVFullParameters,
     RVOrbitParameters,
 )
+from harv.likelihood.combined import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import (
     MarginalizedGaiaAstrometryLikelihood,
 )
@@ -54,6 +61,481 @@ if TYPE_CHECKING:
 __all__ = ["RejectionSampler"]
 
 DataType = Literal["astrometry", "rv", "combined"]
+
+
+# ---------------------------------------------------------------------------
+# Data-type strategy descriptors (private)
+# ---------------------------------------------------------------------------
+
+
+class _DataTypeStrategy(ABC):
+    """Per-data-type strategy encapsulating all branching logic.
+
+    Each concrete subclass provides data extraction, likelihood construction,
+    orbit param building, and linear parameter sampling for one data type.
+    Required prior params are derived from the orbit param class fields.
+    """
+
+    # Stateless strategies: equality/hashing by class identity so that
+    # eqx.filter_jit can hash them as static arguments.
+    def __hash__(self) -> int:
+        return hash(type(self).__name__)
+
+    def __eq__(self, other: object) -> bool:
+        return type(self) is type(other)
+
+    @property
+    @abstractmethod
+    def orbit_cls(self) -> type: ...
+
+    @property
+    @abstractmethod
+    def full_cls(self) -> tuple[type, ...]: ...
+
+    @property
+    def data_type(self) -> DataType:
+        """Data type string, derived from ``orbit_cls.data_type``."""
+        return self.orbit_cls.data_type  # type: ignore[attr-defined]
+
+    @property
+    def required_prior_params(self) -> tuple[str, ...]:
+        """Prior parameter names, derived from ``orbit_cls`` fields.
+
+        Maps ``period`` → ``log_period`` to match the prior's parameterization.
+        """
+        return tuple(
+            "log_period" if f.name == "period" else f.name
+            for f in dataclasses.fields(self.orbit_cls)
+        )
+
+    @property
+    def n_linear(self) -> int:
+        """Total linear parameters, summed from ``full_cls.linear_param_names``."""
+        return sum(
+            len(cls.linear_param_names)  # type: ignore[attr-defined,misc]
+            for cls in self.full_cls
+        )
+
+    @abstractmethod
+    def extract_data(
+        self,
+        data: InputData,
+    ) -> tuple[GaiaAstrometryData | None, RadialVelocityData | None]:
+        """Extract concrete data objects from the input."""
+        ...
+
+    @abstractmethod
+    def build_marginalized_likelihood(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+    ) -> Any:
+        """Build the marginalized likelihood for batched evaluation."""
+        ...
+
+    @abstractmethod
+    def linear_param_units(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+    ) -> tuple[str, ...]:
+        """Derive linear parameter unit strings from the data."""
+        ...
+
+    @abstractmethod
+    def sample_linear_one(
+        self,
+        key: jax.Array,
+        sample: dict[str, jax.Array],
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+        time_unit: Any,
+    ) -> jax.Array:
+        """Sample linear parameters for one accepted nonlinear sample."""
+        ...
+
+    @abstractmethod
+    def build_orbit_params(
+        self,
+        period: jax.Array,
+        ecc: jax.Array,
+        phase: jax.Array,
+        arg_peri: jax.Array,
+        cos_i: jax.Array,
+        lon_asc: jax.Array,
+        time_unit: Any,
+    ) -> eqx.Module:
+        """Build orbit param struct from batch-sliced scalar arrays.
+
+        Called inside ``fori_loop``.  The strategy is closed over as a static
+        value so this branch is resolved at trace time.
+        """
+        ...
+
+
+@final
+class _RVStrategy(_DataTypeStrategy):
+    @property
+    def orbit_cls(self) -> type:
+        return RVOrbitParameters
+
+    @property
+    def full_cls(self) -> tuple[type, ...]:
+        return (RVFullParameters,)
+
+    def extract_data(
+        self,
+        data: InputData,
+    ) -> tuple[None, RadialVelocityData]:
+        if isinstance(data, RadialVelocityData):
+            return None, data
+        if isinstance(data, SourceData):
+            rv = next(iter(data.get_datasets_by_type(RadialVelocityData).values()))
+            return None, rv
+        msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
+        raise TypeError(msg)
+
+    def build_marginalized_likelihood(
+        self,
+        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+    ) -> Any:
+        if rv_data is None:
+            msg = "_RVStrategy requires rv_data"
+            raise TypeError(msg)
+        return MarginalizedRVLikelihood(data=rv_data, linear_prior=prior.linear_prior)
+
+    def linear_param_units(
+        self,
+        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
+        rv_data: RadialVelocityData | None,
+    ) -> tuple[str, ...]:
+        if rv_data is None:
+            msg = "_RVStrategy requires rv_data"
+            raise TypeError(msg)
+        rv_unit = str(rv_data.rv.unit)
+        return (rv_unit, rv_unit)
+
+    def sample_linear_one(
+        self,
+        key: jax.Array,
+        sample: dict[str, jax.Array],
+        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+        time_unit: Any,
+    ) -> jax.Array:
+        if rv_data is None:
+            msg = "_RVStrategy requires rv_data"
+            raise TypeError(msg)
+        period: Quantity[Time] = Quantity(10.0 ** sample["log_period"], time_unit)
+        params = RVOrbitParameters(
+            period=period,
+            eccentricity=sample["eccentricity"],
+            phase_peri=sample["phase_peri"],
+            arg_peri=sample["arg_peri"],
+        )
+        sin_f, cos_f = _solve_kepler(rv_data, params)
+        dm = _get_rv_design_matrix(params, sin_f, cos_f)
+        rv_unit = str(rv_data.rv.unit)
+        marg = MarginalizedLinear(
+            design_matrix=dm,
+            prior_distribution=prior.linear_prior,
+            data_distribution=dist.Normal(0.0, ustrip(rv_unit, rv_data.rv_err)),
+        )
+        return marg.conditional(ustrip(rv_unit, rv_data.rv)).sample(key)
+
+    def build_orbit_params(
+        self,
+        period: jax.Array,
+        ecc: jax.Array,
+        phase: jax.Array,
+        arg_peri: jax.Array,
+        cos_i: jax.Array,  # noqa: ARG002
+        lon_asc: jax.Array,  # noqa: ARG002
+        time_unit: Any,
+    ) -> eqx.Module:
+        return RVOrbitParameters(
+            period=Quantity(period, time_unit),
+            eccentricity=ecc,
+            phase_peri=phase,
+            arg_peri=arg_peri,
+        )
+
+
+@final
+class _AstrometryStrategy(_DataTypeStrategy):
+    @property
+    def orbit_cls(self) -> type:
+        return GaiaAstrometryOrbitParameters
+
+    @property
+    def full_cls(self) -> tuple[type, ...]:
+        return (GaiaAstrometryFullParameters,)
+
+    def extract_data(
+        self,
+        data: InputData,
+    ) -> tuple[GaiaAstrometryData, None]:
+        if isinstance(data, GaiaAstrometryData):
+            return data, None
+        if isinstance(data, SourceData):
+            astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
+            return astro, None
+        msg = f"Expected GaiaAstrometryData or SourceData, got {type(data)}"
+        raise TypeError(msg)
+
+    def build_marginalized_likelihood(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        prior: RejectionPrior,
+    ) -> Any:
+        if astro_data is None:
+            msg = "_AstrometryStrategy requires astro_data"
+            raise TypeError(msg)
+        return MarginalizedGaiaAstrometryLikelihood(
+            data=astro_data, linear_prior=prior.linear_prior
+        )
+
+    def linear_param_units(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,  # noqa: ARG002
+    ) -> tuple[str, ...]:
+        if astro_data is None:
+            msg = "_AstrometryStrategy requires astro_data"
+            raise TypeError(msg)
+        pos_unit = str(astro_data.al_position.unit)
+        pm_unit = f"{pos_unit}/yr"
+        return (pos_unit, pos_unit, pm_unit, pm_unit, pos_unit, pos_unit)
+
+    def sample_linear_one(
+        self,
+        key: jax.Array,
+        sample: dict[str, jax.Array],
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        prior: RejectionPrior,
+        time_unit: Any,
+    ) -> jax.Array:
+        if astro_data is None:
+            msg = "_AstrometryStrategy requires astro_data"
+            raise TypeError(msg)
+        period: Quantity[Time] = Quantity(10.0 ** sample["log_period"], time_unit)
+        params = GaiaAstrometryOrbitParameters(
+            period=period,
+            eccentricity=sample["eccentricity"],
+            phase_peri=sample["phase_peri"],
+            cos_i=sample["cos_i"],
+            arg_peri=sample["arg_peri"],
+            lon_asc_node=sample["lon_asc_node"],
+        )
+        sin_f, cos_f = _solve_kepler(astro_data, params)
+        dm = _get_gaia_design_matrix(astro_data, params, sin_f, cos_f)
+        astro_unit = str(astro_data.al_position.unit)
+        marg = MarginalizedLinear(
+            design_matrix=dm,
+            prior_distribution=prior.linear_prior,
+            data_distribution=dist.Normal(
+                0.0, ustrip(astro_unit, astro_data.al_position_err)
+            ),
+        )
+        return marg.conditional(ustrip(astro_unit, astro_data.al_position)).sample(key)
+
+    def build_orbit_params(
+        self,
+        period: jax.Array,
+        ecc: jax.Array,
+        phase: jax.Array,
+        arg_peri: jax.Array,
+        cos_i: jax.Array,
+        lon_asc: jax.Array,
+        time_unit: Any,
+    ) -> eqx.Module:
+        return GaiaAstrometryOrbitParameters(
+            period=Quantity(period, time_unit),
+            eccentricity=ecc,
+            phase_peri=phase,
+            arg_peri=arg_peri,
+            cos_i=cos_i,
+            lon_asc_node=lon_asc,
+        )
+
+
+@final
+class _CombinedStrategy(_DataTypeStrategy):
+    @property
+    def orbit_cls(self) -> type:
+        return CombinedOrbitParameters
+
+    @property
+    def full_cls(self) -> tuple[type, ...]:
+        return (GaiaAstrometryFullParameters, RVFullParameters)
+
+    def extract_data(
+        self,
+        data: InputData,
+    ) -> tuple[GaiaAstrometryData, RadialVelocityData]:
+        if not isinstance(data, SourceData):
+            msg = "Combined data type requires SourceData"
+            raise TypeError(msg)
+        astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
+        rv = next(iter(data.get_datasets_by_type(RadialVelocityData).values()))
+        return astro, rv
+
+    def build_marginalized_likelihood(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+    ) -> Any:
+        if astro_data is None or rv_data is None:
+            msg = "_CombinedStrategy requires both astro_data and rv_data"
+            raise TypeError(msg)
+        n_astro = len(GaiaAstrometryFullParameters.linear_param_names)
+        astro_prior = dist.MultivariateNormal(
+            loc=prior.linear_prior.loc[:n_astro],
+            scale_tril=prior.linear_prior.scale_tril[:n_astro, :n_astro],
+        )
+        rv_prior = dist.MultivariateNormal(
+            loc=prior.linear_prior.loc[n_astro:],
+            scale_tril=prior.linear_prior.scale_tril[n_astro:, n_astro:],
+        )
+        astro_lik = MarginalizedGaiaAstrometryLikelihood(
+            data=astro_data, linear_prior=astro_prior
+        )
+        rv_lik = MarginalizedRVLikelihood(data=rv_data, linear_prior=rv_prior)
+        return CompositeLikelihood(astro=astro_lik, rv=rv_lik)
+
+    def linear_param_units(
+        self,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+    ) -> tuple[str, ...]:
+        if astro_data is None or rv_data is None:
+            msg = "_CombinedStrategy requires both astro_data and rv_data"
+            raise TypeError(msg)
+        pos_unit = str(astro_data.al_position.unit)
+        pm_unit = f"{pos_unit}/yr"
+        rv_unit = str(rv_data.rv.unit)
+        return (
+            pos_unit,
+            pos_unit,
+            pm_unit,
+            pm_unit,
+            pos_unit,
+            pos_unit,
+            rv_unit,
+            rv_unit,
+        )
+
+    def sample_linear_one(
+        self,
+        key: jax.Array,
+        sample: dict[str, jax.Array],
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+        prior: RejectionPrior,
+        time_unit: Any,
+    ) -> jax.Array:
+        if astro_data is None or rv_data is None:
+            msg = "_CombinedStrategy requires both astro_data and rv_data"
+            raise TypeError(msg)
+        k_astro, k_rv = jr.split(key)
+        period: Quantity[Time] = Quantity(10.0 ** sample["log_period"], time_unit)
+
+        astro_params = GaiaAstrometryOrbitParameters(
+            period=period,
+            eccentricity=sample["eccentricity"],
+            phase_peri=sample["phase_peri"],
+            cos_i=sample["cos_i"],
+            arg_peri=sample["arg_peri"],
+            lon_asc_node=sample["lon_asc_node"],
+        )
+
+        # Astrometry linear params
+        astro_sin_f, astro_cos_f = _solve_kepler(astro_data, astro_params)
+        astro_dm = _get_gaia_design_matrix(
+            astro_data, astro_params, astro_sin_f, astro_cos_f
+        )
+        n_astro = len(GaiaAstrometryFullParameters.linear_param_names)
+        astro_linear_prior = dist.MultivariateNormal(
+            loc=prior.linear_prior.loc[:n_astro],
+            scale_tril=prior.linear_prior.scale_tril[:n_astro, :n_astro],
+        )
+        astro_unit = str(astro_data.al_position.unit)
+        astro_marg = MarginalizedLinear(
+            design_matrix=astro_dm,
+            prior_distribution=astro_linear_prior,
+            data_distribution=dist.Normal(
+                0.0, ustrip(astro_unit, astro_data.al_position_err)
+            ),
+        )
+        astro_sample = astro_marg.conditional(
+            ustrip(astro_unit, astro_data.al_position)
+        ).sample(k_astro)
+
+        # RV linear params
+        rv_params = RVOrbitParameters(
+            period=period,
+            eccentricity=sample["eccentricity"],
+            phase_peri=sample["phase_peri"],
+            arg_peri=sample["arg_peri"],
+        )
+        rv_sin_f, rv_cos_f = _solve_kepler(rv_data, rv_params)
+        rv_dm = _get_rv_design_matrix(rv_params, rv_sin_f, rv_cos_f)
+        rv_linear_prior = dist.MultivariateNormal(
+            loc=prior.linear_prior.loc[n_astro:],
+            scale_tril=prior.linear_prior.scale_tril[n_astro:, n_astro:],
+        )
+        rv_unit = str(rv_data.rv.unit)
+        rv_marg = MarginalizedLinear(
+            design_matrix=rv_dm,
+            prior_distribution=rv_linear_prior,
+            data_distribution=dist.Normal(0.0, ustrip(rv_unit, rv_data.rv_err)),
+        )
+        rv_sample = rv_marg.conditional(ustrip(rv_unit, rv_data.rv)).sample(k_rv)
+
+        return jnp.concatenate([astro_sample, rv_sample])
+
+    def build_orbit_params(
+        self,
+        period: jax.Array,
+        ecc: jax.Array,
+        phase: jax.Array,
+        arg_peri: jax.Array,
+        cos_i: jax.Array,
+        lon_asc: jax.Array,
+        time_unit: Any,
+    ) -> eqx.Module:
+        return CombinedOrbitParameters(
+            period=Quantity(period, time_unit),
+            eccentricity=ecc,
+            phase_peri=phase,
+            arg_peri=arg_peri,
+            cos_i=cos_i,
+            lon_asc_node=lon_asc,
+        )
+
+
+# SB2 strategy placeholder — requires SystemData (not yet implemented).
+# See spec §Planned: SystemData for details.
+# class _SB2Strategy(_DataTypeStrategy): ...
+
+_STRATEGIES: dict[str, _DataTypeStrategy] = {
+    "rv": _RVStrategy(),
+    "astrometry": _AstrometryStrategy(),
+    "combined": _CombinedStrategy(),
+}
+
+
+# ---------------------------------------------------------------------------
+# Sampler
+# ---------------------------------------------------------------------------
 
 
 class RejectionSampler(eqx.Module):
@@ -81,21 +563,11 @@ class RejectionSampler(eqx.Module):
     prior: RejectionPrior
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def _infer_and_validate_data_type(
-        self,
-        data: InputData,
-    ) -> DataType:
-        """Infer data type and validate prior has required parameters.
+    def _infer_strategy(self, data: InputData) -> _DataTypeStrategy:
+        """Infer data type from ``data`` and return the matching strategy.
 
-        Parameters
-        ----------
-        data
-            Observational data.
-
-        Returns
-        -------
-        data_type
-            Inferred data type.
+        Also validates that the prior has all required parameters for the
+        inferred data type (derived from the orbit param class fields).
 
         Raises
         ------
@@ -105,16 +577,13 @@ class RejectionSampler(eqx.Module):
             If prior is missing required parameters for the data type.
         """
         if isinstance(data, SourceData):
-            rv_datasets = list(data.get_datasets_by_type(RadialVelocityData).values())
-            astro_datasets = list(
-                data.get_datasets_by_type(AbstractAstrometryData).values()
-            )
-
-            if len(astro_datasets) > 0 and len(rv_datasets) > 0:
+            has_rv = data.n_rv() > 0
+            has_astro = data.n_astrometry() > 0
+            if has_astro and has_rv:
                 data_type = "combined"
-            elif len(astro_datasets) > 0:
+            elif has_astro:
                 data_type = "astrometry"
-            elif len(rv_datasets) > 0:
+            elif has_rv:
                 data_type = "rv"
             else:
                 msg = "SourceData must contain at least one dataset"
@@ -127,24 +596,14 @@ class RejectionSampler(eqx.Module):
             msg = f"Unsupported data type: {type(data)}"
             raise TypeError(msg)
 
-        # Validate prior has required parameters (prior fields use log_period)
-        # TODO: these should be taken from the Parameters classes, not duplicated here.
-        if data_type in ["astrometry", "combined"]:
-            required = [
-                "log_period",
-                "eccentricity",
-                "phase_peri",
-                "cos_i",
-                "arg_peri",
-                "lon_asc_node",
-            ]
-        elif data_type == "rv":
-            required = ["log_period", "eccentricity", "phase_peri", "arg_peri"]
-        else:
-            msg = f"Unknown data type: {data_type}"
-            raise ValueError(msg)
+        strategy = _STRATEGIES[data_type]
 
-        missing = [p for p in required if getattr(self.prior, p, None) is None]
+        # Validate prior — required params derived from orbit param class fields
+        missing = [
+            p
+            for p in strategy.required_prior_params
+            if getattr(self.prior, p, None) is None
+        ]
         if missing:
             msg = (
                 f"Prior missing required parameters for {data_type} data: {missing}. "
@@ -152,7 +611,7 @@ class RejectionSampler(eqx.Module):
             )
             raise ValueError(msg)
 
-        return data_type  # type: ignore[return-value]
+        return strategy
 
     def run(
         self,
@@ -161,7 +620,7 @@ class RejectionSampler(eqx.Module):
         *,
         max_posterior_samples: int | None = None,
         seed: int = 0,
-    ) -> "Samples":
+    ) -> Samples:
         """Run rejection sampling.
 
         Parameters
@@ -174,7 +633,7 @@ class RejectionSampler(eqx.Module):
             Maximum number of posterior samples to return. If None, returns all
             accepted samples.
         seed
-            Random seed for reproducibility. Default: 42.
+            Random seed for reproducibility. Default: 0.
 
         Returns
         -------
@@ -188,86 +647,24 @@ class RejectionSampler(eqx.Module):
         ValueError
             If prior is missing required parameters.
         """
-        data_type = self._infer_and_validate_data_type(data)
+        strategy = self._infer_strategy(data)
+        astro_data, rv_data = strategy.extract_data(data)
+        lik = strategy.build_marginalized_likelihood(astro_data, rv_data, self.prior)
 
         key = jr.PRNGKey(seed)
         sample_key, rej_key = jr.split(key)
 
         prior_samples, log_likelihoods = self._sample_prior_and_evaluate_batched(
-            sample_key, data, n_prior_samples, data_type
+            sample_key, data, n_prior_samples, lik, strategy
         )
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
-
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
 
         linear_key = jr.fold_in(key, 2)
         linear_samples = self._sample_linear_parameters(
-            linear_key, accepted_nonlinear, data, data_type
+            linear_key, accepted_nonlinear, astro_data, rv_data, strategy
         )
-
-        # Determine orbit/full parameter classes and derive linear param units
-        # from the actual data so that samples["K"] returns the data's native unit.
-        if isinstance(data, SourceData):
-            _rv_data = next(
-                iter(data.get_datasets_by_type(RadialVelocityData).values()),
-                None,
-            )
-            _astro_data = next(
-                iter(data.get_datasets_by_type(GaiaAstrometryData).values()),
-                None,
-            )
-        else:
-            _rv_data = data if isinstance(data, RadialVelocityData) else None
-            _astro_data = data if isinstance(data, GaiaAstrometryData) else None
-
-        orbit_cls: type
-        full_cls: tuple[type, ...]
-        linear_param_units: tuple[str, ...]
-
-        if data_type == "astrometry":
-            orbit_cls = GaiaAstrometryOrbitParameters
-            full_cls = (GaiaAstrometryFullParameters,)
-            if _astro_data is None:
-                msg = "Expected GaiaAstrometryData for astrometry data_type"
-                raise TypeError(msg)
-            _pos_unit = str(_astro_data.al_position.unit)
-            _pm_unit = f"{_pos_unit}/yr"
-            linear_param_units = (
-                _pos_unit,
-                _pos_unit,
-                _pm_unit,
-                _pm_unit,
-                _pos_unit,
-                _pos_unit,
-            )
-        elif data_type == "rv":
-            orbit_cls = RVOrbitParameters
-            full_cls = (RVFullParameters,)
-            if _rv_data is None:
-                msg = "Expected RadialVelocityData for rv data_type"
-                raise TypeError(msg)
-            _rv_unit = str(_rv_data.rv.unit)
-            linear_param_units = (_rv_unit, _rv_unit)
-        else:  # combined
-            orbit_cls = CombinedOrbitParameters
-            full_cls = (GaiaAstrometryFullParameters, RVFullParameters)
-            if _astro_data is None or _rv_data is None:
-                msg = "Expected GaiaAstrometryData and RadialVelocityData for combined"
-                raise TypeError(msg)
-            _pos_unit = str(_astro_data.al_position.unit)
-            _pm_unit = f"{_pos_unit}/yr"
-            _rv_unit = str(_rv_data.rv.unit)
-            linear_param_units = (
-                _pos_unit,
-                _pos_unit,
-                _pm_unit,
-                _pm_unit,
-                _pos_unit,
-                _pos_unit,
-                _rv_unit,
-                _rv_unit,
-            )
 
         if max_posterior_samples is not None:
             n_accepted = len(accepted_nonlinear["log_period"])
@@ -290,23 +687,28 @@ class RejectionSampler(eqx.Module):
         return Samples(
             _nonlinear=accepted_nonlinear,
             _linear=linear_samples,
-            _orbit_cls=orbit_cls,
-            _full_cls=full_cls,
-            _linear_param_units=linear_param_units,
+            _orbit_cls=strategy.orbit_cls,
+            _full_cls=strategy.full_cls,
+            _linear_param_units=strategy.linear_param_units(astro_data, rv_data),
             _metadata={"t_ref": t_ref},
         )
 
     @eqx.filter_jit
-    def _sample_prior_and_evaluate_batched(  # noqa: C901
+    def _sample_prior_and_evaluate_batched(
         self,
         key: jax.Array,
         data: InputData,
         n_prior_samples: int,
-        data_type: DataType,
+        lik: Any,
+        strategy: _DataTypeStrategy,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Sample prior and evaluate likelihoods in batches.
 
-        TODO: the if statements and logic flow here is horrendous. Let's redesign.
+        The pre-built ``lik`` (a single marginalized likelihood or a
+        ``CompositeLikelihood``) is evaluated with ``jax.vmap`` inside a
+        ``fori_loop`` over batches of ``batch_size`` samples.  ``strategy`` is
+        a static value (hashed by class identity) so ``build_orbit_params``
+        dispatches to the correct param type at trace time.
         """
         prior_samples = self.prior.sample_nonlinear(key, n_prior_samples)
 
@@ -317,8 +719,6 @@ class RejectionSampler(eqx.Module):
         def pad_batch(arr: jax.Array) -> jax.Array:
             return jnp.pad(arr, (0, pad_size)).reshape(n_batches, self.batch_size)
 
-        # Prior samples log_period = log10(period / data_time_unit); derive time unit
-        # from data so that Quantity(10**log_period, time_unit) is consistent.
         _ref = next(iter(data.values())) if isinstance(data, SourceData) else data
         time_unit = _ref.time.unit
 
@@ -327,100 +727,22 @@ class RejectionSampler(eqx.Module):
         phase_batched = pad_batch(prior_samples["phase_peri"])
         arg_peri_batched = pad_batch(prior_samples["arg_peri"])
 
-        if data_type in ["rv", "sb2"]:
-            if isinstance(data, RadialVelocityData):
-                rv_data = data
-            elif isinstance(data, SourceData):
-                rv_data = next(
-                    iter(data.get_datasets_by_type(RadialVelocityData).values())
-                )
-            else:
-                msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
-                raise TypeError(msg)
-            linear_prior = dist.MultivariateNormal(
-                loc=jnp.zeros(2),
-                covariance_matrix=self.prior.linear_prior_scale**2 * jnp.eye(2),
+        # Pad optional params with zeros (unused values are ignored by the builder).
+        _zeros = jnp.zeros(n_prior_samples)
+        cos_i_batched = pad_batch(prior_samples.get("cos_i", _zeros))
+        lon_asc_batched = pad_batch(prior_samples.get("lon_asc_node", _zeros))
+
+        def body_fn(i: int, acc: jax.Array) -> jax.Array:
+            params = strategy.build_orbit_params(
+                period_batched[i],
+                ecc_batched[i],
+                phase_batched[i],
+                arg_peri_batched[i],
+                cos_i_batched[i],
+                lon_asc_batched[i],
+                time_unit,
             )
-            lik = MarginalizedRVLikelihood(data=rv_data, linear_prior=linear_prior)
-
-            def body_fn(i: int, acc: jax.Array) -> jax.Array:
-                params = RVOrbitParameters(
-                    period=Quantity(period_batched[i], time_unit),
-                    eccentricity=ecc_batched[i],
-                    phase_peri=phase_batched[i],
-                    arg_peri=arg_peri_batched[i],
-                )
-                return acc.at[i].set(jax.vmap(lik.log_prob)(params))
-
-        else:
-            cos_i_batched = pad_batch(prior_samples["cos_i"])
-            lon_asc_batched = pad_batch(prior_samples["lon_asc_node"])
-
-            if isinstance(data, GaiaAstrometryData):
-                astro_data = data
-            elif isinstance(data, SourceData):
-                astro_data = next(
-                    iter(data.get_datasets_by_type(GaiaAstrometryData).values())
-                )
-            else:
-                msg = f"Expected AbstractAstrometryData or SourceData, got {type(data)}"
-                raise TypeError(msg)
-            astro_linear_prior = dist.MultivariateNormal(
-                loc=jnp.zeros(6),
-                covariance_matrix=self.prior.linear_prior_scale**2 * jnp.eye(6),
-            )
-            astro_lik = MarginalizedGaiaAstrometryLikelihood(
-                data=astro_data, linear_prior=astro_linear_prior
-            )
-
-            if data_type == "combined":
-                if isinstance(data, SourceData):
-                    rv_data = next(
-                        iter(data.get_datasets_by_type(RadialVelocityData).values())
-                    )
-                else:
-                    msg = "Combined data_type requires SourceData"
-                    raise TypeError(msg)
-                rv_linear_prior = dist.MultivariateNormal(
-                    loc=jnp.zeros(2),
-                    covariance_matrix=self.prior.linear_prior_scale**2 * jnp.eye(2),
-                )
-                rv_lik = MarginalizedRVLikelihood(
-                    data=rv_data, linear_prior=rv_linear_prior
-                )
-
-                def body_fn(i: int, acc: jax.Array) -> jax.Array:
-                    params = GaiaAstrometryOrbitParameters(
-                        period=Quantity(period_batched[i], time_unit),
-                        eccentricity=ecc_batched[i],
-                        phase_peri=phase_batched[i],
-                        cos_i=cos_i_batched[i],
-                        arg_peri=arg_peri_batched[i],
-                        lon_asc_node=lon_asc_batched[i],
-                    )
-                    rv_params = RVOrbitParameters(
-                        period=params.period,
-                        eccentricity=params.eccentricity,
-                        phase_peri=params.phase_peri,
-                        arg_peri=params.arg_peri,
-                    )
-                    log_lik = jax.vmap(astro_lik.log_prob)(params) + jax.vmap(
-                        rv_lik.log_prob
-                    )(rv_params)
-                    return acc.at[i].set(log_lik)
-
-            else:
-
-                def body_fn(i: int, acc: jax.Array) -> jax.Array:
-                    params = GaiaAstrometryOrbitParameters(
-                        period=Quantity(period_batched[i], time_unit),
-                        eccentricity=ecc_batched[i],
-                        phase_peri=phase_batched[i],
-                        cos_i=cos_i_batched[i],
-                        arg_peri=arg_peri_batched[i],
-                        lon_asc_node=lon_asc_batched[i],
-                    )
-                    return acc.at[i].set(jax.vmap(astro_lik.log_prob)(params))
+            return acc.at[i].set(jax.vmap(lik.log_prob)(params))
 
         log_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
@@ -435,195 +757,49 @@ class RejectionSampler(eqx.Module):
         uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
         return uniform_draws < weights
 
-    def _sample_linear_parameters(  # noqa: C901
+    def _sample_linear_parameters(
         self,
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
-        data: InputData,
-        data_type: DataType,
-        n_linear_per_nonlinear: int = 1,
+        astro_data: GaiaAstrometryData | None,
+        rv_data: RadialVelocityData | None,
+        strategy: _DataTypeStrategy,
     ) -> jax.Array:
-        """Sample linear parameters from conditional posterior.
+        """Sample linear parameters from conditional posterior using vmap.
 
         For each accepted nonlinear sample, draws from the conditional posterior
-        distribution of the linear parameters given the nonlinear parameters and data.
+        of the linear parameters given the nonlinear parameters and data.
 
         Parameters
         ----------
-        key : jax.Array
+        key
             Random key.
-        nonlinear_samples : dict[str, jax.Array]
-            Accepted nonlinear parameter samples (contains log_period).
-        data : GaiaAstrometryData | RadialVelocityData | SourceData
-            Observational data.
-        data_type : DataType
-            Type of data being processed.
-        n_linear_per_nonlinear : int, optional
-            Number of linear samples per nonlinear sample. Default: 1.
+        nonlinear_samples
+            Accepted nonlinear parameter samples.
+        astro_data
+            Gaia astrometry data, or None.
+        rv_data
+            Radial velocity data, or None.
+        strategy
+            Data-type strategy for building params and design matrices.
 
         Returns
         -------
-        linear_samples : jax.Array
-            Shape (n_samples * n_linear_per_nonlinear, n_linear).
+        linear_samples
+            Shape ``(n_samples, n_linear)``.
         """
         n_samples = len(nonlinear_samples["log_period"])
-
-        if data_type == "rv":
-            n_linear = 2
-        elif data_type == "astrometry":
-            n_linear = 6
-        else:  # combined
-            n_linear = 8
-
         if n_samples == 0:
-            return jnp.zeros((0, n_linear))
+            return jnp.zeros((0, strategy.n_linear))
 
-        # Extract concrete data objects and time unit
-        if isinstance(data, SourceData):
-            rv_list = list(data.get_datasets_by_type(RadialVelocityData).values())
-            astro_list = list(data.get_datasets_by_type(GaiaAstrometryData).values())
-            rv_data: RadialVelocityData | None = rv_list[0] if rv_list else None
-            astro_data: GaiaAstrometryData | None = (
-                astro_list[0] if astro_list else None
-            )
-        else:
-            rv_data = data if isinstance(data, RadialVelocityData) else None
-            astro_data = data if isinstance(data, GaiaAstrometryData) else None
+        _ref = rv_data if rv_data is not None else astro_data
+        time_unit = _ref.time.unit  # type: ignore[union-attr]
 
-        _time_ref = rv_data if rv_data is not None else astro_data
-        time_unit = _time_ref.time.unit  # type: ignore[union-attr]
-
-        # Validate required data is present and narrow optional types for loop use.
-        if data_type == "rv":
-            if rv_data is None:
-                msg = "Expected RadialVelocityData for rv data_type"
-                raise TypeError(msg)
-            _rv_unit: str = str(rv_data.rv.unit)
-            _rv = rv_data
-        elif data_type == "astrometry":
-            if astro_data is None:
-                msg = "Expected GaiaAstrometryData for astrometry data_type"
-                raise TypeError(msg)
-            _astro_unit: str = str(astro_data.al_position.unit)
-            _astro = astro_data
-        else:  # combined
-            if rv_data is None or astro_data is None:
-                msg = "Expected both data types for combined data_type"
-                raise TypeError(msg)
-            _rv_unit = str(rv_data.rv.unit)
-            _astro_unit = str(astro_data.al_position.unit)
-            _rv = rv_data
-            _astro = astro_data
-
-        linear_samples = []
         keys = jr.split(key, n_samples)
 
-        for i in range(n_samples):
-            # Prior stores log_period = log10(period / data_time_unit)
-            period: Quantity[Time] = Quantity(
-                10.0 ** nonlinear_samples["log_period"][i], time_unit
+        def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> jax.Array:
+            return strategy.sample_linear_one(
+                key, sample, astro_data, rv_data, self.prior, time_unit
             )
 
-            if data_type == "rv":
-                params = RVOrbitParameters(
-                    period=period,
-                    eccentricity=nonlinear_samples["eccentricity"][i],
-                    phase_peri=nonlinear_samples["phase_peri"][i],
-                    arg_peri=nonlinear_samples["arg_peri"][i],
-                )
-                sin_f, cos_f = _solve_kepler(_rv, params)
-                design_matrix = _get_rv_design_matrix(params, sin_f, cos_f)
-
-                marg_dist = MarginalizedLinear(
-                    design_matrix=design_matrix,
-                    prior_distribution=dist.Normal(0.0, self.prior.linear_prior_scale),
-                    data_distribution=dist.Normal(
-                        0.0,
-                        ustrip(_rv_unit, _rv.rv_err),
-                    ),
-                )
-                posterior = marg_dist.conditional(ustrip(_rv_unit, _rv.rv))
-                sample = posterior.sample(
-                    keys[i], sample_shape=(n_linear_per_nonlinear,)
-                )
-
-            elif data_type == "astrometry":
-                astro_params = GaiaAstrometryOrbitParameters(
-                    period=period,
-                    eccentricity=nonlinear_samples["eccentricity"][i],
-                    phase_peri=nonlinear_samples["phase_peri"][i],
-                    cos_i=nonlinear_samples["cos_i"][i],
-                    arg_peri=nonlinear_samples["arg_peri"][i],
-                    lon_asc_node=nonlinear_samples["lon_asc_node"][i],
-                )
-                sin_f, cos_f = _solve_kepler(_astro, astro_params)
-                design_matrix = _get_gaia_design_matrix(
-                    _astro, astro_params, sin_f, cos_f
-                )
-
-                marg_dist = MarginalizedLinear(
-                    design_matrix=design_matrix,
-                    prior_distribution=dist.Normal(0.0, self.prior.linear_prior_scale),
-                    data_distribution=dist.Normal(
-                        0.0,
-                        ustrip(_astro_unit, _astro.al_position_err),
-                    ),
-                )
-                posterior = marg_dist.conditional(
-                    ustrip(_astro_unit, _astro.al_position)
-                )
-                sample = posterior.sample(
-                    keys[i], sample_shape=(n_linear_per_nonlinear,)
-                )
-
-            else:  # combined: sample astro and RV linear params separately
-                astro_params = GaiaAstrometryOrbitParameters(
-                    period=period,
-                    eccentricity=nonlinear_samples["eccentricity"][i],
-                    phase_peri=nonlinear_samples["phase_peri"][i],
-                    cos_i=nonlinear_samples["cos_i"][i],
-                    arg_peri=nonlinear_samples["arg_peri"][i],
-                    lon_asc_node=nonlinear_samples["lon_asc_node"][i],
-                )
-
-                astro_sin_f, astro_cos_f = _solve_kepler(_astro, astro_params)
-                astro_dm = _get_gaia_design_matrix(
-                    _astro, astro_params, astro_sin_f, astro_cos_f
-                )
-                astro_marg = MarginalizedLinear(
-                    design_matrix=astro_dm,
-                    prior_distribution=dist.Normal(0.0, self.prior.linear_prior_scale),
-                    data_distribution=dist.Normal(
-                        0.0,
-                        ustrip(_astro_unit, _astro.al_position_err),
-                    ),
-                )
-                astro_sample = astro_marg.conditional(
-                    ustrip(_astro_unit, _astro.al_position)
-                ).sample(keys[i], sample_shape=(n_linear_per_nonlinear,))
-
-                rv_params = RVOrbitParameters(
-                    period=astro_params.period,
-                    eccentricity=astro_params.eccentricity,
-                    phase_peri=astro_params.phase_peri,
-                    arg_peri=astro_params.arg_peri,
-                )
-                rv_sin_f, rv_cos_f = _solve_kepler(_rv, rv_params)
-                rv_dm = _get_rv_design_matrix(rv_params, rv_sin_f, rv_cos_f)
-                rv_marg = MarginalizedLinear(
-                    design_matrix=rv_dm,
-                    prior_distribution=dist.Normal(0.0, self.prior.linear_prior_scale),
-                    data_distribution=dist.Normal(
-                        0.0,
-                        ustrip(_rv_unit, _rv.rv_err),
-                    ),
-                )
-                rv_sample = rv_marg.conditional(ustrip(_rv_unit, _rv.rv)).sample(
-                    keys[i], sample_shape=(n_linear_per_nonlinear,)
-                )
-
-                sample = jnp.concatenate([astro_sample, rv_sample], axis=-1)
-
-            linear_samples.append(sample)
-
-        return jnp.concatenate(linear_samples, axis=0)
+        return jax.vmap(_sample_one)(keys, nonlinear_samples)
