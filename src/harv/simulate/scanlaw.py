@@ -1,6 +1,7 @@
 """Gaia scanning law simulation utilities."""
 
 import pathlib
+from typing import Any
 
 import equinox as eqx
 import h5py
@@ -69,7 +70,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
             )
         return pathlib.Path(SCANLAW_DATA_POOCH.fetch(fname))
 
-    def read_metadata(self) -> dict:
+    def read_metadata(self) -> dict[str, Any]:
         """Read and return the metadata from the scan law file."""
         with h5py.File(self.file_path, "r") as f:
             return dict(f.attrs)
@@ -119,7 +120,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
         scan_data
             Structured array containing the scan data for the specified sky location.
         """
-        ra = ustrip("deg", Quantity.from_(ra))
-        dec = ustrip("deg", Quantity.from_(dec))
-        healpix_pixel = hp.ang2pix(self._nside, ra, dec, lonlat=True)
+        ra_deg = ustrip("deg", Quantity.from_(ra))
+        dec_deg = ustrip("deg", Quantity.from_(dec))
+        healpix_pixel = hp.ang2pix(self._nside, ra_deg, dec_deg, lonlat=True)
         return self.load_scans_for_healpix(healpix_pixel)

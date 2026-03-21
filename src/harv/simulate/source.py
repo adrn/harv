@@ -129,7 +129,7 @@ class LinearMotionSmallAngleSource(AbstractSource):
             and system as ``ref_epoch``.
         """
         # Project back to spherical
-        pos_t = xyz_t.represent_as(cx.LonLatSphericalPos)
+        pos_t = xyz_t.represent_as(cx.SphericalPos)
 
         # Compute angular offsets
         d_ra_cosdec = (pos_t.lon - self.pos0.lon) * jnp.cos(pos_t.lat)
@@ -148,7 +148,9 @@ class Accelerating3DSource(AbstractSource):
         "TwoBodySystem"  # TODO: generalize - TwoBody, constant acceleration, or trend?
     )
 
-    def offset_sky(self, times: Quantity["time"]) -> tuple[Quantity, Quantity]:
+    def offset_sky(  # type: ignore[override]
+        self, times: Quantity["time"]
+    ) -> tuple[Quantity[Any], Quantity[Any]]:
         """Compute sky offset of primary star.
 
         Parameters
@@ -158,7 +160,7 @@ class Accelerating3DSource(AbstractSource):
             and system as ``ref_epoch``.
         """
         barycenter = SingleStarSource(
-            pos0=self.pos0, vel=self.vel, ref_epoch=self.ref_epoch
+            pos0=self.pos0, vel0=self.vel0, ref_epoch=self.ref_epoch
         )
         xyz_bary_t = barycenter.offset_3d(times)
 
@@ -176,7 +178,7 @@ class Accelerating3DSource(AbstractSource):
         )
 
         # Project to sky
-        pos_t = xyz_primary_t.represent_as(cx.LonLatSphericalPos)
+        pos_t = xyz_primary_t.represent_as(cx.SphericalPos)
 
         # Angular offsets from reference position
         d_ra_cosdec = (pos_t.lon - self.pos0.lon) * jnp.cos(pos_t.lat)

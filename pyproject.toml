@@ -34,8 +34,8 @@ dependencies = [
     "h5py>=3.15.1",
     "coordinax>=0.23.1",
     "numpyro-ext>=0.0.4",
-    "arviz>=0.22.0",
-    "jedi==0.19.1"  # TODO: pinned because I had kernel issues
+    "arviz>=0.22.0", # TODO: pinned because I had kernel issues
+    "jedi==0.19.1",
 ]
 
 [tool.uv]
@@ -169,6 +169,13 @@ precision = 2
     module = "harv.*"
 
   [[tool.mypy.overrides]]
+    # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
+    # available when those packages are installed. Suppress errors that vary
+    # between environments so that both `uv run mypy` and pre-commit agree.
+    disable_error_code = ["arg-type", "assignment", "attr-defined"]
+    module = "harv.simulate.*"
+
+  [[tool.mypy.overrides]]
     ignore_missing_imports = true
     module = [
       "astropy.*",
@@ -253,6 +260,9 @@ exclude = [
     "S101",  # 'Use of assert detected' ignored because we are using pytest.
     "INP001",  # 'Insecure input' ignored because we are testing.
     "ANN201",  # 'Missing type annotation for {return}' ignored because all tests return `None`.
+]
+"src/harv/samplers/*.py" = [
+    "S101",  # 'Use of assert detected' — used for type narrowing of invariants from extract_data
 ]
 "src/harv/likelihood/*.py" = [
     "RUF001",  # ambiguous unicode
