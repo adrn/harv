@@ -1,10 +1,45 @@
 """Unit tests for Samples container."""
 
+import jax
 import jax.numpy as jnp
 import pytest
 from unxt import Quantity
 
+from harv.likelihood._params import (
+    GaiaAstrometryFullParameters,
+    GaiaAstrometryOrbitParameters,
+    RVFullParameters,
+    RVOrbitParameters,
+)
 from harv.samplers.samples import Samples
+
+
+def _make_astro_samples():
+    """Helper: astrometry Samples with 3 draws."""
+    nonlinear = {
+        "period": jnp.array([10.0, 100.0, 1000.0]),  # days
+        "eccentricity": jnp.array([0.1, 0.2, 0.3]),
+        "phase_peri": jnp.array([0.0, 0.25, 0.5]),
+        "cos_i": jnp.array([0.5, 0.6, 0.7]),
+        "arg_peri": jnp.array([0.5, 1.0, 1.5]),
+        "lon_asc_node": jnp.array([1.0, 2.0, 3.0]),
+    }
+    linear = jnp.array(
+        [
+            [10.0, 20.0, 5.0, -3.0, 10.0, 1.0],
+            [11.0, 21.0, 6.0, -2.0, 11.0, 1.1],
+            [12.0, 22.0, 7.0, -1.0, 12.0, 1.2],
+        ]
+    )
+    return Samples(
+        _nonlinear=nonlinear,
+        _linear=linear,
+        _orbit_cls=GaiaAstrometryOrbitParameters,
+        _full_cls=(GaiaAstrometryFullParameters,),
+        _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
+        _time_unit="day",
+        _metadata={"t_ref": 0.0},
+    )
 
 
 class TestSamplesCreation:
@@ -12,29 +47,7 @@ class TestSamplesCreation:
 
     def test_basic_creation(self):
         """Test creating a basic Samples object."""
-        nonlinear = {
-            "log_period": jnp.array([1.0, 2.0, 3.0]),
-            "eccentricity": jnp.array([0.1, 0.2, 0.3]),
-            "phase_peri": jnp.array([0.0, 0.5, 1.0]),
-            "cos_i": jnp.array([0.5, 0.6, 0.7]),
-            "lon_asc_node": jnp.array([1.0, 2.0, 3.0]),
-        }
-        linear = jnp.array([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]] * 3)
-
-        samples = Samples(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _linear_param_names=(
-                "alpha_0",
-                "delta_0",
-                "mu_alpha",
-                "mu_delta",
-                "parallax",
-                "semimajor_axis",
-            ),
-            _data_type="astrometry",
-            _metadata={"t_ref": 0.0},
-        )
+        samples = _make_astro_samples()
 
         assert samples.n_samples == 3
         assert samples.data_type == "astrometry"
@@ -42,17 +55,20 @@ class TestSamplesCreation:
     def test_n_samples_property(self):
         """Test that n_samples returns correct value."""
         nonlinear = {
-            "log_period": jnp.array([1.0, 2.0]),
+            "period": jnp.array([100.0, 200.0]),
             "eccentricity": jnp.array([0.1, 0.2]),
             "phase_peri": jnp.array([0.0, 0.5]),
+            "arg_peri": jnp.array([1.0, 2.0]),
         }
         linear = jnp.array([[1.0, 2.0], [3.0, 4.0]])
 
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _linear_param_names=("K", "v0"),
-            _data_type="rv",
+            _orbit_cls=RVOrbitParameters,
+            _full_cls=(RVFullParameters,),
+            _linear_param_units=("km/s", "km/s"),
+            _time_unit="day",
             _metadata={},
         )
 
@@ -66,36 +82,7 @@ class TestSamplesAccess:
     @pytest.fixture
     def astrometry_samples(self):
         """Create sample astrometry Samples object."""
-        nonlinear = {
-            "log_period": jnp.array([1.0, 2.0, 3.0]),
-            "eccentricity": jnp.array([0.1, 0.2, 0.3]),
-            "phase_peri": jnp.array([0.0, 0.25, 0.5]),
-            "cos_i": jnp.array([0.5, 0.6, 0.7]),
-            "arg_peri": jnp.array([0.5, 1.0, 1.5]),
-            "lon_asc_node": jnp.array([1.0, 2.0, 3.0]),
-        }
-        linear = jnp.array(
-            [
-                [10.0, 20.0, 5.0, -3.0, 10.0, 1.0],
-                [11.0, 21.0, 6.0, -2.0, 11.0, 1.1],
-                [12.0, 22.0, 7.0, -1.0, 12.0, 1.2],
-            ]
-        )
-
-        return Samples(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _linear_param_names=(
-                "alpha_0",
-                "delta_0",
-                "mu_alpha",
-                "mu_delta",
-                "parallax",
-                "semimajor_axis",
-            ),
-            _data_type="astrometry",
-            _metadata={"t_ref": 0.0},
-        )
+        return _make_astro_samples()
 
     def test_getitem_nonlinear(self, astrometry_samples):
         """Test accessing nonlinear parameters."""
@@ -110,13 +97,15 @@ class TestSamplesAccess:
         assert isinstance(parallax, Quantity)
         assert parallax.shape == (3,)
 
-    def test_getitem_derived_period(self, astrometry_samples):
-        """Test accessing derived period."""
+    def test_getitem_period_and_log_period(self, astrometry_samples):
+        """Test period (stored) and log_period (derived)."""
         period = astrometry_samples["period"]
         assert isinstance(period, Quantity)
-        # log_period = [1, 2, 3] -> period = [10, 100, 1000] days
-        expected = jnp.array([10.0, 100.0, 1000.0])
-        assert jnp.allclose(period.value, expected)
+        assert jnp.allclose(period.value, jnp.array([10.0, 100.0, 1000.0]))
+
+        log_period = astrometry_samples["log_period"]
+        expected = jnp.array([1.0, 2.0, 3.0])
+        assert jnp.allclose(log_period, expected)
 
     def test_getitem_invalid_key(self, astrometry_samples):
         """Test that invalid key raises KeyError."""
@@ -127,16 +116,17 @@ class TestSamplesAccess:
         """Test keys() returns all parameter names."""
         keys = astrometry_samples.keys()
         assert isinstance(keys, list)
+        assert "period" in keys
         assert "log_period" in keys
         assert "eccentricity" in keys
         assert "parallax" in keys
-        # 6 nonlinear + 6 linear + 3 derived (period, t_peri, inclination) = 15
+        # 6 nonlinear + 6 linear + 3 derived (log_period, t_peri, inclination) = 15
         assert len(keys) == 15
 
     def test_unit_conversion_angles(self):
         """Test that angles are returned with correct units."""
         nonlinear = {
-            "log_period": jnp.array([1.0]),
+            "period": jnp.array([100.0]),
             "eccentricity": jnp.array([0.1]),
             "phase_peri": jnp.array([0.0]),
             "arg_peri": jnp.array([1.57]),  # ~π/2 radians
@@ -147,14 +137,16 @@ class TestSamplesAccess:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _linear_param_names=("K", "v0"),
-            _data_type="rv",
+            _orbit_cls=RVOrbitParameters,
+            _full_cls=(RVFullParameters,),
+            _linear_param_units=("km/s", "km/s"),
+            _time_unit="day",
             _metadata={},
         )
 
         arg_peri = samples["arg_peri"]
         assert isinstance(arg_peri, Quantity)
-        assert arg_peri.unit == "rad"
+        assert str(arg_peri.unit) == "rad"
 
 
 class TestSamplesRepr:
@@ -163,17 +155,20 @@ class TestSamplesRepr:
     def test_repr(self):
         """Test __repr__ method."""
         nonlinear = {
-            "log_period": jnp.array([1.0, 2.0]),
+            "period": jnp.array([100.0, 200.0]),
             "eccentricity": jnp.array([0.1, 0.2]),
             "phase_peri": jnp.array([0.0, 0.5]),
+            "arg_peri": jnp.array([1.0, 2.0]),
         }
         linear = jnp.array([[1.0, 2.0], [3.0, 4.0]])
 
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _linear_param_names=("K", "v0"),
-            _data_type="rv",
+            _orbit_cls=RVOrbitParameters,
+            _full_cls=(RVFullParameters,),
+            _linear_param_units=("km/s", "km/s"),
+            _time_unit="day",
             _metadata={},
         )
 
@@ -181,3 +176,17 @@ class TestSamplesRepr:
         assert "n_samples=2" in repr_str
         assert "data_type='rv'" in repr_str
         assert "parameters=" in repr_str
+
+
+class TestSamplesJAX:
+    """Tests for JAX compatibility."""
+
+    def test_pytree_flatten_unflatten(self):
+        """Test that Samples is a valid JAX pytree."""
+        samples = _make_astro_samples()
+        leaves, treedef = jax.tree_util.tree_flatten(samples)
+        reconstructed = jax.tree_util.tree_unflatten(treedef, leaves)
+        assert reconstructed.n_samples == samples.n_samples
+        assert jnp.allclose(
+            reconstructed["eccentricity"], samples["eccentricity"]
+        )

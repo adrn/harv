@@ -46,8 +46,8 @@ class Samples(eqx.Module):
     Parameters
     ----------
     _nonlinear : dict[str, jnp.ndarray]
-        Nonlinear parameter samples (dimensionless arrays).
-        Keys: "log_period", "eccentricity", "phase_peri", and optionally
+        Nonlinear parameter samples.
+        Keys: "period" (days), "eccentricity", "phase_peri", and optionally
         "cos_i", "arg_peri", "lon_asc_node" depending on data type.
     _linear : jnp.ndarray
         Linear parameter samples, shape (n_samples, n_linear_params).
@@ -81,6 +81,9 @@ class Samples(eqx.Module):
     _orbit_cls: type = eqx.field(static=True)
     _full_cls: tuple[type, ...] = eqx.field(static=True)
     _linear_param_units: tuple[str, ...] = eqx.field(static=True)
+    # Time unit string for the period and t_peri derived quantities.
+    # Must match the unit of the data used during sampling (e.g. "day", "yr").
+    _time_unit: str = eqx.field(static=True)
     _metadata: dict[str, Any] = eqx.field(static=True)
     # Extra linear parameter names beyond those in _full_cls (e.g. per-instrument
     # RV offsets for multi-survey data).  Empty by default.
@@ -89,7 +92,7 @@ class Samples(eqx.Module):
     @property
     def n_samples(self) -> int:
         """Number of posterior samples."""
-        return len(self._nonlinear["log_period"])
+        return len(next(iter(self._nonlinear.values())))
 
     @property
     def data_type(self) -> str:
@@ -108,8 +111,8 @@ class Samples(eqx.Module):
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self._nonlinear.keys()) + list(self._linear_param_names)
-        # Add derived quantities
-        derived_keys = ["period", "t_peri"]
+        # Add derived quantities ("period" is now in _nonlinear; log_period is derived)
+        derived_keys = ["log_period", "t_peri"]
 
         # Add inclination if cos_i is available
         if "cos_i" in self._nonlinear:
@@ -146,14 +149,17 @@ class Samples(eqx.Module):
             return self._get_linear_with_units(idx)
 
         # Check derived quantities
-        if key == "period":
-            return Quantity(10.0 ** self._nonlinear["log_period"], "day")
+        if key == "log_period":
+            return jnp.log10(self._nonlinear["period"])
         if key == "t_peri":
-            period = 10.0 ** self._nonlinear["log_period"]
+            period = self._nonlinear["period"]
+            t_ref = self._metadata.get("t_ref", 0.0)
+            t_ref_val = (
+                ustrip(self._time_unit, t_ref) if isinstance(t_ref, Quantity) else t_ref
+            )
             return Quantity(
-                self._nonlinear["phase_peri"] * period
-                + self._metadata.get("t_ref", 0.0),
-                "day",
+                self._nonlinear["phase_peri"] * period + t_ref_val,
+                self._time_unit,
             )
         if key == "inclination":
             if "cos_i" in self._nonlinear:
@@ -172,9 +178,8 @@ class Samples(eqx.Module):
         if key in ["eccentricity", "phase_peri", "cos_i"]:
             return value
 
-        # log_period is dimensionless but represents log10(period/day)
-        if key == "log_period":
-            return value
+        if key == "period":
+            return Quantity(value, self._time_unit)
 
         # Angles in radians
         if key in ["arg_peri", "lon_asc_node"]:
@@ -343,6 +348,8 @@ class Samples(eqx.Module):
                 cls.__name__ for cls in self._full_cls
             )
             meta_group.attrs["linear_param_units"] = ",".join(self._linear_param_units)
+            meta_group.attrs["time_unit"] = self._time_unit
+            meta_group.attrs["extra_linear_names"] = ",".join(self._extra_linear_names)
             meta_group.attrs["n_samples"] = self.n_samples
 
             # Store custom metadata
@@ -399,11 +406,24 @@ class Samples(eqx.Module):
             orbit_cls = _ORBIT_CLS_BY_NAME[orbit_cls_name]
             full_cls = tuple(_FULL_CLS_BY_NAME[n] for n in full_cls_names)
             linear_param_units = tuple(meta.attrs["linear_param_units"].split(","))
+            # Fall back to "day" when loading files written before _time_unit was added.
+            time_unit: str = meta.attrs.get("time_unit", "day")
+            raw_extra = meta.attrs.get("extra_linear_names", "")
+            extra_linear_names: tuple[str, ...] = (
+                tuple(raw_extra.split(",")) if raw_extra else ()
+            )
 
             # Load custom metadata
             metadata: dict[str, Any] = {}
             for key in meta.attrs:
-                if key in ["orbit_cls", "full_cls", "linear_param_units", "n_samples"]:
+                if key in [
+                    "orbit_cls",
+                    "full_cls",
+                    "linear_param_units",
+                    "time_unit",
+                    "extra_linear_names",
+                    "n_samples",
+                ]:
                     continue
                 if key.endswith("_value"):
                     # Skip, will be reconstructed with unit
@@ -423,6 +443,8 @@ class Samples(eqx.Module):
             _orbit_cls=orbit_cls,
             _full_cls=full_cls,
             _linear_param_units=linear_param_units,
+            _time_unit=time_unit,
+            _extra_linear_names=extra_linear_names,
             _metadata=metadata,
         )
 

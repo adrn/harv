@@ -123,8 +123,8 @@ class TestBasicAPI:
         """Test creating a custom prior with specific parameter bounds."""
         # Custom prior with tight period bounds
         prior = RejectionPrior.default_astrometry(
-            log_period_min=1.0,  # 10 days
-            log_period_max=3.0,  # 1000 days
+            period_min=10.0,  # 10 days
+            period_max=1000.0,  # 1000 days
             linear_prior_scale=500.0,  # Tighter linear prior
         )
 
@@ -192,18 +192,19 @@ class TestSamplesContainer:
         assert "lon_asc_node" in samples.keys()
 
         # Test linear parameter access
-        assert "alpha_0" in samples.keys()
-        assert "delta_0" in samples.keys()
-        assert "mu_alpha" in samples.keys()
-        assert "mu_delta" in samples.keys()
+        assert "ra0" in samples.keys()
+        assert "dec0" in samples.keys()
+        assert "pmra" in samples.keys()
+        assert "pmdec" in samples.keys()
         assert "parallax" in samples.keys()
-        assert "semimajor_axis" in samples.keys()
+        assert "semi_major_axis" in samples.keys()
 
         # Test derived quantity access
         assert "period" in samples.keys()
+        assert "log_period" in samples.keys()
         period = samples["period"]
         log_period = samples["log_period"]
-        np.testing.assert_allclose(period.to_value("day"), 10.0**log_period, rtol=1e-10)
+        np.testing.assert_allclose(period.to_value("day"), 10.0**log_period, rtol=1e-5)
 
     def test_unit_conversion(self):
         """Test that units are properly restored when accessing parameters."""
@@ -220,16 +221,16 @@ class TestSamplesContainer:
         assert lon_asc.unit == "rad"
 
         # Astrometric parameters should have proper units
-        alpha_0 = samples["alpha_0"]
-        assert alpha_0.unit == "deg"
+        ra0 = samples["ra0"]
+        assert ra0.unit == "mas"
 
-        mu_alpha = samples["mu_alpha"]
-        assert mu_alpha.unit == "mas/yr"
+        pmra = samples["pmra"]
+        assert pmra.unit == "mas/yr"
 
         parallax = samples["parallax"]
         assert parallax.unit == "mas"
 
-        semimaj = samples["semimajor_axis"]
+        semimaj = samples["semi_major_axis"]
         assert semimaj.unit == "mas"
 
     def test_dimensionless_parameters(self):

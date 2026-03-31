@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -37,7 +38,7 @@ from harv.likelihood._params import (
     GaiaAstrometryOrbitParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
-from harv.likelihood.helpers import _solve_kepler
+from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
 
 if TYPE_CHECKING:
     from harv.data import GaiaAstrometryData
@@ -138,7 +139,7 @@ class MarginalizedGaiaAstrometryLikelihood(
     """
 
     data: GaiaAstrometryData
-    linear_prior: dist.MultivariateNormal
+    linear_prior: dist.MultivariateNormal | eqx.Module
 
     param_names = (
         "period",
@@ -149,23 +150,15 @@ class MarginalizedGaiaAstrometryLikelihood(
         "lon_asc_node",
     )
 
-    def __check_init__(self) -> None:
-        if not isinstance(self.linear_prior, dist.MultivariateNormal):
-            msg = (
-                "MarginalizedGaiaAstrometryLikelihood requires a "
-                "dist.MultivariateNormal prior for analytic marginalization; "
-                f"got {type(self.linear_prior)}"
-            )
-            raise TypeError(msg)
-
     def log_prob(self, params: GaiaAstrometryOrbitParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
+        lp = _resolve_linear_prior(self.linear_prior, params)
 
         marg_dist = MarginalizedLinear(
             design_matrix=design_matrix,
-            prior_distribution=self.linear_prior,
+            prior_distribution=lp,
             data_distribution=dist.Normal(
                 0.0, ustrip("mas", self.data.al_position_err)
             ),

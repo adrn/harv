@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from harv.likelihood.base import AbstractLikelihood
 
-__all__ = ["CompositeLikelihood"]
+__all__ = ("CompositeLikelihood",)
 
 
 class CompositeLikelihood(eqx.Module):

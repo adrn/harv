@@ -16,10 +16,10 @@ Speed = Literal["speed"]
 Time = Literal["time"]
 Dimless = Literal["dimensionless"]
 
-NAngle = Real[Quantity[Angle], "n"]
-NTime = Real[Quantity[Time], "n"]
-NVelocity = Real[Quantity[Speed], "n"]
+NAngle = Real[Quantity["angle"], "n"]
+NTime = Real[Quantity["time"], "n"]
+NVelocity = Real[Quantity["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
 
-DimlessValue = Quantity[Dimless] | jax.Array | float
+DimlessValue = Quantity["dimensionless"] | jax.Array | float

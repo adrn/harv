@@ -1,5 +1,6 @@
 """Unit tests for rejection sampling priors."""
 
+import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
 import pytest
@@ -14,12 +15,10 @@ class TestRejectionPriorAstrometry:
         """Test creating default astrometry prior."""
         prior = RejectionPrior.default_astrometry()
 
-        assert (
-            prior.n_nonlinear == 6
-        )  # log_period, ecc, phase_peri, cos_i, arg_peri, lon_asc_node
-        assert prior.cos_i is not None
-        assert prior.lon_asc_node is not None
-        assert prior.arg_peri is not None  # Required for astrometry
+        assert prior.n_nonlinear == 6  # period, ecc, phase_peri, cos_i, arg_peri, lon_asc_node
+        assert "cos_i" in prior.nonlinear_priors
+        assert "lon_asc_node" in prior.nonlinear_priors
+        assert "arg_peri" in prior.nonlinear_priors
 
     def test_astrometry_prior_sampling(self):
         """Test sampling from astrometry prior."""
@@ -29,14 +28,14 @@ class TestRejectionPriorAstrometry:
         samples = prior.sample_nonlinear(key, n_samples=100)
 
         assert set(samples.keys()) == {
-            "log_period",
+            "period",
             "eccentricity",
             "phase_peri",
             "cos_i",
             "arg_peri",
             "lon_asc_node",
         }
-        assert samples["log_period"].shape == (100,)
+        assert samples["period"].shape == (100,)
         assert samples["eccentricity"].shape == (100,)
 
         # Check ranges
@@ -49,27 +48,25 @@ class TestRejectionPriorAstrometry:
 
     def test_custom_period_bounds(self):
         """Test custom period bounds."""
-        prior = RejectionPrior.default_astrometry(
-            log_period_min=0.0, log_period_max=3.0
-        )
+        prior = RejectionPrior.default_astrometry(period_min=1.0, period_max=1000.0)
         key = jr.PRNGKey(123)
 
         samples = prior.sample_nonlinear(key, n_samples=1000)
 
-        assert (samples["log_period"] >= 0.0).all()
-        assert (samples["log_period"] <= 3.0).all()
+        assert (samples["period"] >= 1.0).all()
+        assert (samples["period"] <= 1000.0).all()
 
     def test_linear_prior_distribution(self):
-        """Test getting linear prior distribution."""
+        """Test linear prior is a MultivariateNormal."""
         prior = RejectionPrior.default_astrometry(linear_prior_scale=500.0)
 
-        linear_dist = prior.get_linear_prior_distribution()
-
-        assert isinstance(linear_dist, dist.Normal)
+        assert isinstance(prior.linear_prior, dist.MultivariateNormal)
+        # Astrometry has 6 linear parameters
+        assert prior.linear_prior.loc.shape == (6,)
         # Sample from it to verify it works
         key = jr.PRNGKey(42)
-        linear_samples = linear_dist.sample(key, (10,))
-        assert linear_samples.shape == (10,)
+        linear_samples = prior.linear_prior.sample(key, (10,))
+        assert linear_samples.shape == (10, 6)
 
 
 class TestRejectionPriorRV:
@@ -79,10 +76,10 @@ class TestRejectionPriorRV:
         """Test creating default RV prior."""
         prior = RejectionPrior.default_rv()
 
-        assert prior.n_nonlinear == 4  # log_period, ecc, arg_peri, phase_peri
-        assert prior.arg_peri is not None
-        assert prior.cos_i is None  # Not used for RV-only
-        assert prior.lon_asc_node is None
+        assert prior.n_nonlinear == 4  # period, ecc, arg_peri, phase_peri
+        assert "arg_peri" in prior.nonlinear_priors
+        assert "cos_i" not in prior.nonlinear_priors
+        assert "lon_asc_node" not in prior.nonlinear_priors
 
     def test_rv_with_offsets(self):
         """Test RV prior with multi-instrument offsets."""
@@ -107,7 +104,7 @@ class TestRejectionPriorRV:
         samples = prior.sample_nonlinear(key, n_samples=100)
 
         assert set(samples.keys()) == {
-            "log_period",
+            "period",
             "eccentricity",
             "phase_peri",
             "arg_peri",
@@ -123,9 +120,9 @@ class TestRejectionPriorCombined:
         prior = RejectionPrior.default_combined()
 
         assert prior.n_nonlinear == 6  # All 6 parameters
-        assert prior.cos_i is not None
-        assert prior.arg_peri is not None
-        assert prior.lon_asc_node is not None
+        assert "cos_i" in prior.nonlinear_priors
+        assert "arg_peri" in prior.nonlinear_priors
+        assert "lon_asc_node" in prior.nonlinear_priors
 
     def test_combined_prior_sampling(self):
         """Test sampling from combined prior."""
@@ -135,7 +132,7 @@ class TestRejectionPriorCombined:
         samples = prior.sample_nonlinear(key, n_samples=50)
 
         assert set(samples.keys()) == {
-            "log_period",
+            "period",
             "eccentricity",
             "phase_peri",
             "cos_i",
@@ -152,51 +149,47 @@ class TestRejectionPriorSB2:
         prior = RejectionPrior.default_sb2()
 
         # SB2 has same nonlinear params as RV (no orientation)
-        assert prior.n_nonlinear == 4  # log_period, ecc, phase_peri, arg_peri
-        assert prior.arg_peri is not None
-        assert prior.cos_i is None
-        assert prior.lon_asc_node is None
+        assert prior.n_nonlinear == 4  # period, ecc, phase_peri, arg_peri
+        assert "arg_peri" in prior.nonlinear_priors
+        assert "cos_i" not in prior.nonlinear_priors
+        assert "lon_asc_node" not in prior.nonlinear_priors
 
 
 class TestPriorValidation:
     """Tests for prior validation."""
-
-    def test_negative_linear_prior_scale(self):
-        """Test that negative linear prior scale raises error."""
-        with pytest.raises(ValueError, match="must be positive"):
-            RejectionPrior(
-                log_period=dist.Uniform(-1, 4),
-                eccentricity=dist.Beta(0.867, 3.03),
-                phase_peri=dist.Uniform(0, 1),
-                linear_prior_scale=-10.0,  # Invalid!
-                arg_peri=dist.Uniform(0, 6.28),
-            )
 
     def test_prior_can_be_created_with_any_params(self):
         """Test that priors can be created with any combination of params.
 
         Validation of required params happens in the sampler, not the prior.
         """
-        # This is valid - missing orientation params are fine at prior level
+        # Missing orientation params are fine at prior level
         prior = RejectionPrior(
-            log_period=dist.Uniform(-1, 4),
-            eccentricity=dist.Beta(0.867, 3.03),
-            phase_peri=dist.Uniform(0, 1),
-            linear_prior_scale=1000.0,
-            # Missing cos_i, arg_peri, lon_asc_node - OK at prior level
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+            },
+            linear_prior=dist.MultivariateNormal(
+                loc=jnp.zeros(2), covariance_matrix=jnp.eye(2) * 1000.0**2
+            ),
         )
-        assert prior.n_nonlinear == 3  # Only the 3 required params
+        assert prior.n_nonlinear == 3  # Only the 3 provided params
 
     def test_prior_with_all_params(self):
         """Test creating a prior with all optional params."""
         prior = RejectionPrior(
-            log_period=dist.Uniform(-1, 4),
-            eccentricity=dist.Beta(0.867, 3.03),
-            phase_peri=dist.Uniform(0, 1),
-            cos_i=dist.Uniform(-1, 1),
-            arg_peri=dist.Uniform(0, 6.28),
-            lon_asc_node=dist.Uniform(0, 6.28),
-            linear_prior_scale=1000.0,
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+                "cos_i": dist.Uniform(-1, 1),
+                "arg_peri": dist.Uniform(0, 6.28),
+                "lon_asc_node": dist.Uniform(0, 6.28),
+            },
+            linear_prior=dist.MultivariateNormal(
+                loc=jnp.zeros(6), covariance_matrix=jnp.eye(6) * 1000.0**2
+            ),
         )
         assert prior.n_nonlinear == 6
 
@@ -231,5 +224,5 @@ class TestPriorProperties:
         samples2 = prior.sample_nonlinear(jr.PRNGKey(42), n_samples=100)
 
         # Should be identical
-        assert (samples1["log_period"] == samples2["log_period"]).all()
+        assert (samples1["period"] == samples2["period"]).all()
         assert (samples1["eccentricity"] == samples2["eccentricity"]).all()

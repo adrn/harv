@@ -109,7 +109,7 @@ def simulate_rv_sb1_data(
         eccentricity = rngs[2].uniform(0.0, 0.7)
 
     if t_peri is None:
-        t_peri = Quantity(rngs[3].uniform(0.0, ustrip("day", period)), "day")
+        t_peri = Quantity(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
 
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -124,16 +124,16 @@ def simulate_rv_sb1_data(
         rv_err = Quantity(rngs[7].uniform(0.01, 0.5, n_obs), "km/s")
 
     if t_ref is None:
-        t_ref = Quantity(rng.uniform(0, 1000.0), "day")
+        t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
     dt: Quantity[Any] = Quantity(
-        jnp.sort(rng.uniform(0.0, ustrip("day", baseline), n_obs)), "day"
+        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)), baseline.unit
     )
     times = dt + t_ref
 
-    # Compute mean anomaly
-    M = 2 * jnp.pi * ustrip("day", dt) / ustrip("day", period)
+    # Compute mean anomaly (dimensionless ratio, unit-agnostic)
+    M = 2 * jnp.pi * ustrip("", dt / period)
 
     # Solve Kepler's equation
     sin_f, cos_f = kepler(M, eccentricity)
@@ -259,7 +259,7 @@ def simulate_rv_multisurv_data(
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.7)
     if t_peri is None:
-        t_peri = Quantity(rngs[3].uniform(0.0, ustrip("day", period)), "day")
+        t_peri = Quantity(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
     if K is None:
@@ -269,7 +269,7 @@ def simulate_rv_multisurv_data(
     if rv_err is None:
         rv_err = Quantity(rngs[7].uniform(0.01, 0.5), "km/s")
     if t_ref is None:
-        t_ref = Quantity(rng.uniform(0, 1000.0), "day")
+        t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Pre-compute RV model constants
     arg_peri_rad = ustrip("rad", arg_peri)
@@ -286,19 +286,19 @@ def simulate_rv_multisurv_data(
 
     for i, (name, offset) in enumerate(instruments.items()):
         inst_rng = rngs[8 + i]
-        eff_offset = offset if offset is not None else Quantity(0.0, "km/s")
+        eff_offset = offset if offset is not None else Quantity(0.0, v0.unit)
         if offset is not None:
             true_params[f"offset_{name}"] = offset
 
         dt: Quantity[Any] = Quantity(
             jnp.sort(
-                inst_rng.uniform(0.0, ustrip("day", baseline), n_obs_per_instrument)
+                inst_rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs_per_instrument)
             ),
-            "day",
+            baseline.unit,
         )
         times = dt + t_ref
 
-        M = 2 * jnp.pi * ustrip("day", dt) / ustrip("day", period)
+        M = 2 * jnp.pi * ustrip("", dt / period)
         from jaxoplanet.core.kepler import kepler
 
         sin_f, cos_f = kepler(M, eccentricity)
@@ -313,7 +313,7 @@ def simulate_rv_multisurv_data(
         datasets[name] = RadialVelocityData(
             time=times,
             rv=rv_obs,
-            rv_err=Quantity(jnp.full(n_obs, ustrip("km/s", rv_err)), "km/s"),
+            rv_err=Quantity(jnp.full(n_obs, ustrip(rv_err.unit, rv_err)), rv_err.unit),
         )
 
     return SourceData(**datasets), true_params

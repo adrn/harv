@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -34,7 +35,7 @@ from harv.likelihood._params import (
     RVOrbitParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
-from harv.likelihood.helpers import _solve_kepler
+from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
 
 if TYPE_CHECKING:
     from harv.data import RadialVelocityData
@@ -101,9 +102,10 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
     ----------
     data : RadialVelocityData
         Radial velocity observations.
-    linear_prior : dist.MultivariateNormal
-        Gaussian prior over [K, v₀]. Must be multivariate normal — this is
-        required for analytic marginalization.
+    linear_prior : dist.MultivariateNormal or eqx.Module
+        Gaussian prior over [K, v₀].  May be a fixed ``dist.MultivariateNormal``
+        or a callable ``eqx.Module`` with signature
+        ``__call__(params: RVOrbitParameters) -> dist.MultivariateNormal``.
 
     Examples
     --------
@@ -112,30 +114,23 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
     """
 
     data: RadialVelocityData
-    linear_prior: dist.MultivariateNormal
+    linear_prior: dist.MultivariateNormal | eqx.Module
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
-
-    def __check_init__(self) -> None:
-        if not isinstance(self.linear_prior, dist.MultivariateNormal):
-            msg = (
-                "MarginalizedRVLikelihood requires a dist.MultivariateNormal "
-                "prior for analytic marginalization; "
-                f"got {type(self.linear_prior)}"
-            )
-            raise TypeError(msg)
 
     def log_prob(self, params: RVOrbitParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)
+        lp = _resolve_linear_prior(self.linear_prior, params)
 
+        rv_unit = self.data.rv.unit
         marg_dist = MarginalizedLinear(
             design_matrix=design_matrix,
-            prior_distribution=self.linear_prior,
-            data_distribution=dist.Normal(0.0, ustrip("km/s", self.data.rv_err)),
+            prior_distribution=lp,
+            data_distribution=dist.Normal(0.0, ustrip(rv_unit, self.data.rv_err)),
         )
-        return marg_dist.log_prob(ustrip("km/s", self.data.rv))
+        return marg_dist.log_prob(ustrip(rv_unit, self.data.rv))
 
 
 # ---------------------------------------------------------------------------
@@ -166,31 +161,24 @@ class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVOrbitParameters])
 
     data: RadialVelocityData
     indicator_matrix: jax.Array
-    linear_prior: dist.MultivariateNormal
+    linear_prior: dist.MultivariateNormal | eqx.Module
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
-
-    def __check_init__(self) -> None:
-        if not isinstance(self.linear_prior, dist.MultivariateNormal):
-            msg = (
-                "MarginalizedMultiSurveyRVLikelihood requires a "
-                "dist.MultivariateNormal prior; "
-                f"got {type(self.linear_prior)}"
-            )
-            raise TypeError(msg)
 
     def log_prob(self, params: RVOrbitParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         dm_base = _get_design_matrix(params, sin_f, cos_f)  # (n_obs, 2)
         dm = jnp.concatenate([dm_base, self.indicator_matrix], axis=-1)
+        lp = _resolve_linear_prior(self.linear_prior, params)
 
+        rv_unit = self.data.rv.unit
         marg_dist = MarginalizedLinear(
             design_matrix=dm,
-            prior_distribution=self.linear_prior,
-            data_distribution=dist.Normal(0.0, ustrip("km/s", self.data.rv_err)),
+            prior_distribution=lp,
+            data_distribution=dist.Normal(0.0, ustrip(rv_unit, self.data.rv_err)),
         )
-        return marg_dist.log_prob(ustrip("km/s", self.data.rv))
+        return marg_dist.log_prob(ustrip(rv_unit, self.data.rv))
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +211,8 @@ class RVLikelihood(AbstractLikelihood[RVFullParameters]):
 
         linear_params = jnp.array([params.K, params.v0])
         rv_pred = design_matrix @ linear_params
-        rv_obs = ustrip("km/s", self.data.rv)
-        rv_err = ustrip("km/s", self.data.rv_err)
+        rv_unit = self.data.rv.unit
+        rv_obs = ustrip(rv_unit, self.data.rv)
+        rv_err = ustrip(rv_unit, self.data.rv_err)
 
         return dist.Normal(rv_pred, rv_err).log_prob(rv_obs).sum()

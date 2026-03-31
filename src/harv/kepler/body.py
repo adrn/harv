@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import KW_ONLY
 from typing import TYPE_CHECKING, Any, cast
 
 import astropy.units as apyu
@@ -15,8 +16,6 @@ from harv.custom_types import Length, Mass, Speed, Time
 from harv.kepler.constants import G
 from harv.kepler.orientation import KeplerianOrientation
 
-if TYPE_CHECKING:
-    from dataclasses import KW_ONLY
 
 
 class KeplerianBody(eqx.Module):

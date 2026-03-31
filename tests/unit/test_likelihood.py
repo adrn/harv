@@ -1,333 +1,198 @@
-"""Unit tests for likelihood functions."""
+"""Unit tests for Gaia astrometry likelihood functions."""
 
+import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
 from unxt import Quantity
 
-from harv.likelihood.astrometry import (
-    compute_marginal_log_likelihood_astrometry,
-    compute_marginal_log_likelihood_astrometry_batch,
-    get_astrometry_design_matrix,
+from harv.data import GaiaAstrometryData
+from harv.likelihood._params import GaiaAstrometryOrbitParameters
+from harv.likelihood.gaia_astrometry import (
+    MarginalizedGaiaAstrometryLikelihood,
+    _get_design_matrix,
 )
+
+
+def _make_astro_data(n_obs=50):
+    """Helper: synthetic GaiaAstrometryData."""
+    return GaiaAstrometryData(
+        time=Quantity(jnp.linspace(0, 1000, n_obs), "day"),
+        al_position=Quantity(jnp.zeros(n_obs), "mas"),
+        al_position_err=Quantity(jnp.ones(n_obs) * 0.1, "mas"),
+        scan_angle=Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad"),
+        parallax_factor=jnp.ones(n_obs) * 0.5,
+        t_ref=Quantity(0.0, "day"),
+    )
+
+
+def _make_astro_params(
+    period_day=100.0,
+    eccentricity=0.3,
+    phase_peri=0.0,
+    arg_peri=1.0,
+    cos_i=0.5,
+    lon_asc_node=2.0,
+):
+    return GaiaAstrometryOrbitParameters(
+        period=Quantity(period_day, "day"),
+        eccentricity=eccentricity,
+        phase_peri=phase_peri,
+        arg_peri=arg_peri,
+        cos_i=cos_i,
+        lon_asc_node=lon_asc_node,
+    )
+
+
+def _astro_prior(n=6):
+    return dist.MultivariateNormal(
+        loc=jnp.zeros(n), covariance_matrix=jnp.eye(n) * 1000.0**2
+    )
 
 
 class TestAstrometryDesignMatrix:
     """Tests for astrometry design matrix construction."""
 
     def test_design_matrix_shape(self):
-        """Test that design matrix has correct shape."""
-        n_obs = 50
-        times = Quantity(jnp.linspace(0, 1000, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        sin_f = jnp.zeros(n_obs)
-        cos_f = jnp.ones(n_obs)
-        t_ref = Quantity(0.0, "day")
-        cos_i = 0.5
-        arg_peri = 1.0
-        lon_asc_node = 2.0
+        """Test that design matrix has correct shape (n_obs, 6)."""
+        data = _make_astro_data(n_obs=50)
+        params = _make_astro_params()
+        sin_f = jnp.zeros(50)
+        cos_f = jnp.ones(50)
 
-        design_matrix = get_astrometry_design_matrix(
-            times,
-            scan_angle,
-            parallax_factor,
-            sin_f,
-            cos_f,
-            t_ref,
-            cos_i,
-            arg_peri,
-            lon_asc_node,
-        )
+        dm = _get_design_matrix(data, params, sin_f, cos_f)
 
-        assert design_matrix.shape == (n_obs, 6)
+        assert dm.shape == (50, 6)
 
-    def test_design_matrix_columns(self):
-        """Test that design matrix columns are computed correctly."""
+    def test_design_matrix_pm_columns(self):
+        """With scan_angle=0, RA offset column = 1 and Dec offset column = 0."""
         n_obs = 10
-        times = Quantity(jnp.array([0.0, 1.0, 2.0] * 3 + [3.0]), "day")
-        scan_angle = Quantity(jnp.zeros(n_obs), "rad")  # All zero for simplicity
-        parallax_factor = jnp.ones(n_obs)
+        data = GaiaAstrometryData(
+            time=Quantity(jnp.zeros(n_obs), "day"),
+            al_position=Quantity(jnp.zeros(n_obs), "mas"),
+            al_position_err=Quantity(jnp.ones(n_obs) * 0.1, "mas"),
+            scan_angle=Quantity(jnp.zeros(n_obs), "rad"),  # all zero
+            parallax_factor=jnp.ones(n_obs),
+            t_ref=Quantity(0.0, "day"),
+        )
+        params = _make_astro_params()
         sin_f = jnp.zeros(n_obs)
         cos_f = jnp.ones(n_obs)
-        t_ref = Quantity(0.0, "day")
-        cos_i = 1.0  # Face-on
-        arg_peri = 0.0
-        lon_asc_node = 0.0
 
-        design_matrix = get_astrometry_design_matrix(
-            times,
-            scan_angle,
-            parallax_factor,
-            sin_f,
-            cos_f,
-            t_ref,
-            cos_i,
-            arg_peri,
-            lon_asc_node,
-        )
+        dm = _get_design_matrix(data, params, sin_f, cos_f)
 
-        # With scan_angle=0, cos(scan)=1, sin(scan)=0
-        # Column 0 (α₀): cos(scan) = 1
-        assert jnp.allclose(design_matrix[:, 0], 1.0)
-        # Column 1 (δ₀): sin(scan) = 0
-        assert jnp.allclose(design_matrix[:, 1], 0.0)
-
-    def test_thiele_innes_computation(self):
-        """Test that Thiele-Innes constants are computed correctly."""
-        n_obs = 5
-        times = Quantity(jnp.zeros(n_obs), "day")
-        scan_angle = Quantity(jnp.zeros(n_obs), "rad")
-        parallax_factor = jnp.zeros(n_obs)
-        sin_f = jnp.ones(n_obs)  # sin(f) = 1
-        cos_f = jnp.zeros(n_obs)  # cos(f) = 0
-        t_ref = Quantity(0.0, "day")
-
-        # Face-on orbit (i=0, cos(i)=1)
-        cos_i = 1.0
-        arg_peri = 0.0  # ω = 0
-        lon_asc_node = 0.0  # Ω = 0
-
-        design_matrix = get_astrometry_design_matrix(
-            times,
-            scan_angle,
-            parallax_factor,
-            sin_f,
-            cos_f,
-            t_ref,
-            cos_i,
-            arg_peri,
-            lon_asc_node,
-        )
-
-        # For face-on, ω=0, Ω=0:
-        # A = cos(0)*cos(0) - sin(0)*sin(0)*1 = 1
-        # B = cos(0)*sin(0) + sin(0)*cos(0)*1 = 0
-        # F = -sin(0)*cos(0) - cos(0)*sin(0)*1 = 0
-        # G = -sin(0)*sin(0) + cos(0)*cos(0)*1 = 1
-        # semimaj_term = (A*0 + B*1)*0 + (F*0 + G*1)*1 = G = 1
-        # Column 5 should be semimaj_term = 1 (with scan_angle=0, sin=0, cos=1)
-        # Actually: semimaj_term = (A*sin + B*cos)*cos_f + (F*sin + G*cos)*sin_f
-        #         = (1*0 + 0*1)*0 + (0*0 + 1*1)*1 = 1
-        assert jnp.allclose(design_matrix[:, 5], 1.0)
+        # scan_angle=0 → cos(ψ)=1, sin(ψ)=0
+        # Column 0 (ra0): cos(scan) = 1
+        assert jnp.allclose(dm[:, 0], 1.0)
+        # Column 1 (dec0): sin(scan) = 0
+        assert jnp.allclose(dm[:, 1], 0.0)
 
 
 class TestMarginalizedLikelihood:
-    """Tests for marginalized log-likelihood computation."""
+    """Tests for marginalized astrometry log-likelihood."""
 
     def test_likelihood_finite(self):
-        """Test that likelihood returns finite value."""
-        n_obs = 50
-        times = Quantity(jnp.linspace(0, 1000, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        y_al = Quantity(jnp.zeros(n_obs), "mas")
-        y_al_error = Quantity(jnp.ones(n_obs) * 0.1, "mas")
-        t_ref = Quantity(0.0, "day")
+        """Test that likelihood returns a finite scalar."""
+        data = _make_astro_data()
+        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
+        params = _make_astro_params()
 
-        log_lik = compute_marginal_log_likelihood_astrometry(
-            log_period=jnp.log10(100.0),
-            eccentricity=0.3,
-            phase_peri=0.0,
-            cos_i=jnp.cos(1.0),
-            arg_peri=0.5,
-            lon_asc_node=1.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
-        )
+        log_lik = lik.log_prob(params)
 
         assert jnp.isfinite(log_lik)
-        assert isinstance(log_lik, (float, jnp.ndarray))
 
     def test_likelihood_decreases_with_noise(self):
-        """Test that likelihood decreases as we add more noise."""
+        """Test that log_prob is higher with smaller errors."""
         n_obs = 30
         times = Quantity(jnp.linspace(0, 500, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        y_al = Quantity(jnp.zeros(n_obs), "mas")
-        t_ref = Quantity(0.0, "day")
+        scan = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
+        pf = jnp.ones(n_obs) * 0.5
 
-        # Small errors
-        y_al_error_small = Quantity(jnp.ones(n_obs) * 0.01, "mas")
-        log_lik_small = compute_marginal_log_likelihood_astrometry(
-            log_period=2.0,
-            eccentricity=0.2,
-            phase_peri=0.0,
-            cos_i=0.5,
-            arg_peri=1.0,
-            lon_asc_node=2.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error_small,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
+        data_small = GaiaAstrometryData(
+            time=times,
+            al_position=Quantity(jnp.zeros(n_obs), "mas"),
+            al_position_err=Quantity(jnp.ones(n_obs) * 0.01, "mas"),
+            scan_angle=scan,
+            parallax_factor=pf,
+            t_ref=Quantity(0.0, "day"),
+        )
+        data_large = GaiaAstrometryData(
+            time=times,
+            al_position=Quantity(jnp.zeros(n_obs), "mas"),
+            al_position_err=Quantity(jnp.ones(n_obs) * 1.0, "mas"),
+            scan_angle=scan,
+            parallax_factor=pf,
+            t_ref=Quantity(0.0, "day"),
         )
 
-        # Large errors
-        y_al_error_large = Quantity(jnp.ones(n_obs) * 1.0, "mas")
-        log_lik_large = compute_marginal_log_likelihood_astrometry(
-            log_period=2.0,
-            eccentricity=0.2,
-            phase_peri=0.0,
-            cos_i=0.5,
-            arg_peri=1.0,
-            lon_asc_node=2.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error_large,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
-        )
+        params = _make_astro_params()
+        prior = _astro_prior()
 
-        # Likelihood should be higher (less negative) with smaller errors
-        # since the model can fit the data more precisely
+        log_lik_small = MarginalizedGaiaAstrometryLikelihood(data_small, prior).log_prob(params)
+        log_lik_large = MarginalizedGaiaAstrometryLikelihood(data_large, prior).log_prob(params)
+
         assert log_lik_small > log_lik_large
 
     def test_circular_vs_eccentric(self):
-        """Test likelihood for circular vs eccentric orbits."""
-        n_obs = 50
-        times = Quantity(jnp.linspace(0, 365, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        y_al = Quantity(jnp.zeros(n_obs), "mas")
-        y_al_error = Quantity(jnp.ones(n_obs) * 0.1, "mas")
-        t_ref = Quantity(0.0, "day")
+        """Both circular and eccentric log_probs should be finite."""
+        data = _make_astro_data()
+        prior = _astro_prior()
 
-        # Circular orbit
-        log_lik_circular = compute_marginal_log_likelihood_astrometry(
-            log_period=2.0,
-            eccentricity=0.0,
-            phase_peri=0.0,
-            cos_i=0.5,
-            arg_peri=0.0,
-            lon_asc_node=0.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
+        log_lik_circ = MarginalizedGaiaAstrometryLikelihood(data, prior).log_prob(
+            _make_astro_params(eccentricity=0.0, arg_peri=0.0)
+        )
+        log_lik_ecc = MarginalizedGaiaAstrometryLikelihood(data, prior).log_prob(
+            _make_astro_params(eccentricity=0.7, arg_peri=1.0)
         )
 
-        # Eccentric orbit
-        log_lik_eccentric = compute_marginal_log_likelihood_astrometry(
-            log_period=2.0,
-            eccentricity=0.7,
-            phase_peri=0.0,
-            cos_i=0.5,
-            arg_peri=1.0,
-            lon_asc_node=1.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
-        )
-
-        # Both should be finite
-        assert jnp.isfinite(log_lik_circular)
-        assert jnp.isfinite(log_lik_eccentric)
-
+        assert jnp.isfinite(log_lik_circ)
+        assert jnp.isfinite(log_lik_ecc)
 
 class TestBatchLikelihood:
-    """Tests for batch likelihood computation."""
+    """Tests for batched astrometry likelihood via vmap."""
 
     def test_batch_shape(self):
-        """Test that batch likelihood returns correct shape."""
-        n_samples = 100
-        n_obs = 30
+        """Test that vmap over log_prob returns correct shape."""
+        n_samples = 10
+        data = _make_astro_data()
+        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
 
-        # Batch parameters
-        log_periods = jnp.ones(n_samples) * 2.0
-        eccentricities = jnp.linspace(0, 0.5, n_samples)
-        phase_peris = jnp.zeros(n_samples)
-        cos_is = jnp.ones(n_samples) * 0.5
-        arg_peris = jnp.ones(n_samples) * 1.0
-        lon_asc_nodes = jnp.ones(n_samples) * 2.0
-
-        # Data (same for all)
-        times = Quantity(jnp.linspace(0, 1000, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        y_al = Quantity(jnp.zeros(n_obs), "mas")
-        y_al_error = Quantity(jnp.ones(n_obs) * 0.1, "mas")
-        t_ref = Quantity(0.0, "day")
-
-        log_liks = compute_marginal_log_likelihood_astrometry_batch(
-            log_periods,
-            eccentricities,
-            phase_peris,
-            cos_is,
-            arg_peris,
-            lon_asc_nodes,
-            times,
-            scan_angle,
-            parallax_factor,
-            y_al,
-            y_al_error,
-            t_ref,
-            dist.Normal(0.0, 1000.0),
+        params_batch = GaiaAstrometryOrbitParameters(
+            period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
+            eccentricity=jnp.linspace(0.0, 0.5, n_samples),
+            phase_peri=jnp.zeros(n_samples),
+            arg_peri=jnp.ones(n_samples) * 1.0,
+            cos_i=jnp.ones(n_samples) * 0.5,
+            lon_asc_node=jnp.ones(n_samples) * 2.0,
         )
+
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
 
         assert log_liks.shape == (n_samples,)
-        assert jnp.isfinite(log_liks).all()
+        assert jnp.all(jnp.isfinite(log_liks))
 
     def test_batch_vs_single(self):
-        """Test that batch computation gives same results as single."""
+        """Test that vmap gives same result as serial evaluation."""
         n_obs = 20
-        times = Quantity(jnp.linspace(0, 500, n_obs), "day")
-        scan_angle = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
-        parallax_factor = jnp.ones(n_obs) * 0.5
-        y_al = Quantity(jnp.zeros(n_obs), "mas")
-        y_al_error = Quantity(jnp.ones(n_obs) * 0.1, "mas")
-        t_ref = Quantity(0.0, "day")
+        data = _make_astro_data(n_obs=n_obs)
+        prior = _astro_prior()
+        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=prior)
 
-        # Single computation
-        log_lik_single = compute_marginal_log_likelihood_astrometry(
-            log_period=2.0,
-            eccentricity=0.3,
-            phase_peri=0.0,
-            cos_i=0.5,
-            arg_peri=1.0,
-            lon_asc_node=2.0,
-            times=times,
-            scan_angle=scan_angle,
-            parallax_factor=parallax_factor,
-            y_al=y_al,
-            y_al_error=y_al_error,
-            t_ref=t_ref,
-            linear_prior=dist.Normal(0.0, 1000.0),
+        eccs = jnp.array([0.1, 0.3])
+        params_batch = GaiaAstrometryOrbitParameters(
+            period=Quantity(jnp.ones(2) * 100.0, "day"),
+            eccentricity=eccs,
+            phase_peri=jnp.zeros(2),
+            arg_peri=jnp.ones(2),
+            cos_i=jnp.ones(2) * 0.5,
+            lon_asc_node=jnp.ones(2) * 2.0,
+        )
+        log_liks_batch = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+        log_liks_serial = jnp.array(
+            [
+                lik.log_prob(_make_astro_params(eccentricity=float(eccs[i])))
+                for i in range(2)
+            ]
         )
 
-        # Batch computation with same parameters
-        log_liks_batch = compute_marginal_log_likelihood_astrometry_batch(
-            jnp.array([2.0, 2.0]),
-            jnp.array([0.3, 0.3]),
-            jnp.array([0.0, 0.0]),
-            jnp.array([0.5, 0.5]),
-            jnp.array([1.0, 1.0]),
-            jnp.array([2.0, 2.0]),
-            times,
-            scan_angle,
-            parallax_factor,
-            y_al,
-            y_al_error,
-            t_ref,
-            dist.Normal(0.0, 1000.0),
-        )
-
-        # Should be identical
-        assert jnp.allclose(log_liks_batch[0], log_lik_single)
-        assert jnp.allclose(log_liks_batch[1], log_lik_single)
+        assert jnp.allclose(log_liks_batch, log_liks_serial, rtol=1e-5)

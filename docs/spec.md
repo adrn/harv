@@ -274,18 +274,13 @@ class attributes to name the output `Samples` columns, avoiding hardcoded string
 
 ### The `period` convention
 
-Parameter structs store `period: Quantity["time"]`. The prior and sampler internally
-work in log-space:
-
-```
-log_period = log₁₀(period / data_time_unit)
-```
-
-where `data_time_unit` is derived from `data.time.unit`. The sampler converts back
-before constructing param structs:
+Parameter structs store `period: Quantity["time"]`. The period prior is a
+`dist.LogUniform(period_min, period_max)` in the native time unit of the data (days by
+default). The prior samples period directly — no log-space transform is needed in the
+sampler. The sampler constructs param structs as:
 
 ```python
-period = Quantity(10.0 ** log_period_sample, data.time.unit)
+period = Quantity(period_sample, data.time.unit)
 ```
 
 This keeps the sampler unit-agnostic: if the data is in days the period will be in
@@ -372,7 +367,10 @@ Combines multiple `AbstractLikelihood` components by summing their log-likelihoo
 Shared nonlinear parameters (e.g. `period` appears in both the RV and astrometry
 models) are automatically de-duplicated in `param_names` by order of first appearance.
 Each component's `log_prob` reads only the fields it needs from the shared params
-struct:
+struct via duck typing — passing a `CombinedOrbitParameters` to a component that
+declares `RVOrbitParameters` works because the former is a superset of the latter.
+
+This is the canonical way to combine heterogeneous datasets, including astrometry + RV:
 
 ```python
 composite = CompositeLikelihood(
@@ -381,6 +379,33 @@ composite = CompositeLikelihood(
 )
 log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
 ```
+
+Each component holds its own `linear_prior`, which may be a fixed
+`dist.MultivariateNormal` or a callable `eqx.Module`. When callable, it receives
+whatever params struct is passed by the caller — for combined data this is
+`CombinedOrbitParameters`, giving the callable access to all nonlinear parameters.
+
+#### `_IndexedCallable` — splitting a joint prior
+
+When the user provides a single joint `linear_prior` callable covering all linear
+parameters (e.g. an 8-dim prior for combined astrometry + RV), the sampler wraps it
+in `_IndexedCallable` to produce per-component sub-priors. Each instance holds a
+static `indices: tuple[int, ...]` and extracts the relevant rows and columns via
+fancy indexing:
+
+```python
+full = wrapped(params)                          # full joint MultivariateNormal
+idx = jnp.array(indices)
+sub_prior = dist.MultivariateNormal(
+    loc=full.loc[idx],
+    scale_tril=full.scale_tril[jnp.ix_(idx, idx)],
+)
+```
+
+`jnp.ix_` constructs the open mesh needed for 2-D fancy indexing on `scale_tril`.
+Because `indices` is a static field, it is resolved at JAX trace time and compiles
+away completely — no runtime overhead. Using index arrays (rather than `start:stop`
+slices) means the design is robust to non-contiguous or reordered parameter layouts.
 
 ______________________________________________________________________
 
@@ -407,29 +432,35 @@ pattern keeps the class simple and avoids a proliferation of factory methods.
 
 ### Nonlinear parameter priors
 
-| Field          | Description                                                  |
-| -------------- | ------------------------------------------------------------ |
-| `log_period`   | Prior on log₁₀(period / data_time_unit), typically `Uniform` |
-| `eccentricity` | Typically `Beta(0.867, 3.03)` following Kipping (2013)       |
-| `phase_peri`   | Typically `Uniform(0, 1)`                                    |
-| `cos_i`        | Astrometry/combined only; `None` for RV-only                 |
-| `arg_peri`     | RV or combined; `None` if not needed                         |
-| `lon_asc_node` | Astrometry or combined; `None` if not needed                 |
+| Field          | Description                                                          |
+| -------------- | -------------------------------------------------------------------- |
+| `period`       | Prior on period in data time units; default `LogUniform(min, max)`   |
+| `eccentricity` | Typically `Beta(0.867, 3.03)` following Kipping (2013)               |
+| `phase_peri`   | Typically `Uniform(0, 1)`                                            |
+| `cos_i`        | Astrometry/combined only; absent for RV-only                         |
+| `arg_peri`     | RV or combined; absent if not needed                                 |
+| `lon_asc_node` | Astrometry or combined; absent if not needed                         |
 
 ### Linear parameter prior
 
-The linear prior is stored directly as `linear_prior: dist.MultivariateNormal` and
-passed through to the likelihood during the sampler's likelihood evaluation step.
-It may also be a callable `eqx.Module` that takes the nonlinear param struct and
-returns a `dist.MultivariateNormal` — see §Linear prior as a function of nonlinear
-parameters.
+`linear_prior: dist.MultivariateNormal | eqx.Module` is passed through to the
+likelihood during the sampler's likelihood evaluation step. The callable form takes
+the nonlinear param struct and returns a `dist.MultivariateNormal` — see §Linear
+prior as a function of nonlinear parameters.
 
-The `default_*` constructors accept `linear_prior_scale` convenience arguments (floats)
-and build the appropriate `dist.MultivariateNormal` internally. For combined data,
-`default_combined` takes separate `linear_prior_scale_astro` (for the 6 astrometric
-parameters, in mas) and `linear_prior_scale_rv` (for the 2 RV parameters, in km/s),
-constructing a block-diagonal 8×8 covariance matrix. Direct `__init__` construction
-accepts any pre-built `dist.MultivariateNormal` for full control.
+For single-dataset cases (RV-only or astrometry-only) `linear_prior` covers exactly
+the linear parameters of that dataset. For combined astrometry + RV, `linear_prior`
+covers all 8 linear parameters `[α₀, δ₀, μ_α, μ_δ, ϖ, a, K, v₀]` in that order.
+The sampler splits this into per-component sub-priors using `_IndexedCallable` (for
+callables) or direct fancy indexing (for fixed MVNs) before constructing the
+`CompositeLikelihood`.
+
+The `default_*` constructors accept `linear_prior_scale` convenience arguments.
+For combined data, `default_combined` takes separate `linear_prior_scale_astro` (for
+the 6 astrometric parameters, in the data's position unit) and `linear_prior_scale_rv`
+(for the 2 RV parameters, in the data's velocity unit), constructing a block-diagonal
+8×8 covariance matrix. Direct `__init__` construction accepts any pre-built
+`dist.MultivariateNormal` for full control.
 
 ### Multi-survey RV offsets
 
@@ -483,8 +514,9 @@ sampling efficient.
 
 **Algorithm:**
 
-1. **Prior sampling.** Draw `n_prior_samples` from the nonlinear prior (in log-space
-   and angles — all dimensionless).
+1. **Prior sampling.** Draw `n_prior_samples` from the nonlinear prior. Period is
+   sampled directly in the data's time unit via `dist.LogUniform`; angles are
+   dimensionless. All samples are raw JAX arrays (units attached later).
 
 1. **Likelihood evaluation** (batched). For each batch of `batch_size` samples,
    construct param structs, build `Marginalized*Likelihood` objects, and evaluate
@@ -557,8 +589,8 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 Dict-style access (`samples["period"]`) dispatches to appropriate unit restoration:
 
-- `"log_period"` → raw dimensionless array
-- `"period"` → `Quantity` in data time units (derived as `10**log_period`)
+- `"period"` → `Quantity` in data time units (stored directly in `_nonlinear`)
+- `"log_period"` → dimensionless array (derived as `log10(period)`)
 - `"t_peri"` → `Quantity` (derived from `phase_peri * period + t_ref`)
 - `"inclination"` → `Quantity` in radians (derived from `arccos(cos_i)`)
 - Linear params (`"K"`, `"v0"`, `"ra0"`, etc.) → `Quantity` with units from `_linear_param_units`
@@ -637,16 +669,31 @@ A dedicated two-component data container (see §Planned: `SystemData` above). Th
 model requires two design matrices with columns \[K₁, 0, 1\] and \[0, -K₂, 1\] for the
 primary and secondary respectively, sharing a common systemic velocity v₀.
 
-### Multi-survey RV with offsets
+### Combined astrometry + multi-survey RV
 
-When `SourceData` contains multiple `RadialVelocityData` datasets, the sampler should:
+**This is a known bug / unimplemented gap. `_CombinedStrategy` raises
+`NotImplementedError` if `SourceData` contains both `GaiaAstrometryData` and more
+than one `RadialVelocityData`.**
 
-1. Pick one as the reference instrument (no offset).
-1. Add one offset column per non-reference instrument to the design matrix.
-1. The offsets become additional linear parameters, sampled jointly with K and v₀.
+The RV-only multi-survey case (no astrometry) is fully implemented — see
+`MarginalizedMultiSurveyRVLikelihood` and `_RVStrategy`. The combined case requires
+the same indicator-matrix treatment applied to the RV block of the joint linear prior:
 
-This is designed in `RejectionPrior._offsets` but not yet wired into the sampler's
-batched evaluation or linear parameter sampling.
+- The joint linear prior becomes `(6 + 2 + n_non_ref)`-dimensional:
+  `[ra0, dec0, pmra, pmdec, parallax, a, K, v₀, δ₁, …, δₖ]`.
+- `MarginalizedCombinedLikelihood` must hold an `indicator_matrix` and append it to
+  the RV design matrix columns inside `log_prob`.
+- `_CombinedStrategy.extract_data` must stack the RV datasets (as `_RVStrategy`
+  does) and build the indicator matrix.
+- `default_combined` must extend the RV block of the covariance matrix when `offsets`
+  is provided.
+- `_extra_linear_names` in `Samples` must carry the offset instrument names through.
+
+**Test:** add an `xfail` test in `tests/unit/samplers/` that constructs a
+`SourceData` with one `GaiaAstrometryData` and two `RadialVelocityData` datasets,
+runs `RejectionSampler.run`, and asserts it raises `NotImplementedError` (mark
+`strict=True` so the test fails if the error is accidentally suppressed, and update
+to a passing test once the feature is implemented).
 
 ### Iterative rejection sampling
 
