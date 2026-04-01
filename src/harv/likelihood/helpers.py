@@ -39,7 +39,7 @@ class _IndexedCallable(eqx.Module):
     indices: tuple[int, ...] = eqx.field(static=True)
 
     def __call__(self, params: Any) -> dist.MultivariateNormal:
-        full = self.wrapped(params)
+        full = self.wrapped(params)  # type: ignore[operator]
         idx = jnp.array(self.indices)
         return dist.MultivariateNormal(
             loc=full.loc[idx],

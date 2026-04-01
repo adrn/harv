@@ -477,12 +477,11 @@ class _CombinedStrategy(_DataTypeStrategy):
         if len(rv_datasets) > 1:
             msg = (
                 "Combined astrometry + multi-survey RV (with per-instrument offsets) "
-                "is not yet implemented. SourceData contains multiple RadialVelocityData "
-                f"datasets ({list(rv_datasets.keys())}), but _CombinedStrategy "
-                "only "
-                "supports a single RV dataset alongside astrometry. "
-                "See docs/spec.md §'Combined astrometry + multi-survey RV' for the "
-                "planned design."
+                "is not yet implemented. SourceData contains multiple "
+                f"RadialVelocityData datasets ({list(rv_datasets.keys())}), but "
+                "_CombinedStrategy only supports a single RV dataset alongside "
+                "astrometry. See docs/spec.md §'Combined astrometry + multi-survey RV' "
+                "for the planned design."
             )
             raise NotImplementedError(msg)
         astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
@@ -506,15 +505,13 @@ class _CombinedStrategy(_DataTypeStrategy):
         if isinstance(lp, dist.MultivariateNormal):
             astro_lp = dist.MultivariateNormal(
                 loc=lp.loc[list(astro_idx)],
-                scale_tril=lp.scale_tril[jnp.ix_(
-                    jnp.array(astro_idx), jnp.array(astro_idx)
-                )],
+                scale_tril=lp.scale_tril[
+                    jnp.ix_(jnp.array(astro_idx), jnp.array(astro_idx))
+                ],
             )
             rv_lp = dist.MultivariateNormal(
                 loc=lp.loc[list(rv_idx)],
-                scale_tril=lp.scale_tril[jnp.ix_(
-                    jnp.array(rv_idx), jnp.array(rv_idx)
-                )],
+                scale_tril=lp.scale_tril[jnp.ix_(jnp.array(rv_idx), jnp.array(rv_idx))],
             )
         else:
             astro_lp = _IndexedCallable(lp, astro_idx)
@@ -586,9 +583,7 @@ class _CombinedStrategy(_DataTypeStrategy):
 
         # Astrometry linear params
         astro_sin_f, astro_cos_f = _solve_kepler(astro_data, params)
-        astro_dm = _get_gaia_design_matrix(
-            astro_data, params, astro_sin_f, astro_cos_f
-        )
+        astro_dm = _get_gaia_design_matrix(astro_data, params, astro_sin_f, astro_cos_f)
         astro_unit = str(astro_data.al_position.unit)
         astro_marg = MarginalizedLinear(
             design_matrix=astro_dm,
@@ -803,6 +798,17 @@ class RejectionSampler(eqx.Module):
         t_ref = _ref.t_ref
         time_unit = str(_ref.time.unit)
 
+        # Convert t_ref to a plain Python float (in time_unit) so it can be stored
+        # safely in the static _metadata dict without "JAX array set as static"
+        # warnings. Samples.__getitem__ reads _metadata["t_ref"] as a scalar in
+        # _time_unit when computing t_peri.
+        if isinstance(t_ref, Quantity):
+            t_ref_stored: float | None = float(ustrip(time_unit, t_ref))
+        elif t_ref is not None:
+            t_ref_stored = float(t_ref)
+        else:
+            t_ref_stored = None
+
         extra_linear_names: tuple[str, ...] = ()
         if self.prior.offsets is not None:
             extra_linear_names = tuple(
@@ -818,7 +824,7 @@ class RejectionSampler(eqx.Module):
                 astro_data, rv_data, self.prior
             ),
             _time_unit=time_unit,
-            _metadata={"t_ref": t_ref},
+            _metadata={"t_ref": t_ref_stored},
             _extra_linear_names=extra_linear_names,
         )
 
