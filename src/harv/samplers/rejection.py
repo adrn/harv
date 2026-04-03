@@ -754,11 +754,7 @@ def _build_full_numpyro_model(
     # constant — it only depends on which instrument each observation belongs to).
     indicator: jax.Array | None = None
     offset_names: tuple[str, ...] = ()
-    if (
-        prior.offsets is not None
-        and isinstance(data, SourceData)
-        and data.n_rv() > 1
-    ):
+    if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
         indicator = _build_indicator_matrix(
             data.get_datasets_by_type(RadialVelocityData), prior.offsets
         )
@@ -807,9 +803,9 @@ def _build_full_numpyro_model(
             sin_f, cos_f = _solve_kepler(astro_data, params)
             dm = _get_gaia_design_matrix(astro_data, params, sin_f, cos_f)
             prediction = dm @ linear_vec[:n_astro]
-            log_lik = log_lik + dist.Normal(prediction, astro_err).log_prob(
-                astro_obs
-            ).sum()
+            log_lik = (
+                log_lik + dist.Normal(prediction, astro_err).log_prob(astro_obs).sum()
+            )
 
         if rv_data is not None:
             sin_f, cos_f = _solve_kepler(rv_data, params)
@@ -817,9 +813,7 @@ def _build_full_numpyro_model(
             if indicator is not None:
                 dm = jnp.concatenate([dm, indicator], axis=-1)
             prediction = dm @ linear_vec[n_astro:]
-            log_lik = log_lik + dist.Normal(prediction, rv_err).log_prob(
-                rv_obs
-            ).sum()
+            log_lik = log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
 
         numpyro.factor("log_lik", log_lik)
 
@@ -958,11 +952,7 @@ def _build_extra_numpyro_model(
     # Multi-survey RV offset columns (appended after the base linear params).
     indicator: jax.Array | None = None
     offset_names: tuple[str, ...] = ()
-    if (
-        prior.offsets is not None
-        and isinstance(data, SourceData)
-        and data.n_rv() > 1
-    ):
+    if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
         indicator = _build_indicator_matrix(
             data.get_datasets_by_type(RadialVelocityData), prior.offsets
         )
@@ -1052,13 +1042,17 @@ def _build_extra_numpyro_model(
                 if a_fixed:
                     fv = jnp.stack([fixed_linear[all_linear_names[i]] for i in a_fixed])
                     prediction = prediction + dm_a[:, jnp.array(a_fixed)] @ fv
-                log_lik = log_lik + dist.Normal(prediction, astro_err).log_prob(
-                    astro_obs
-                ).sum()
+                log_lik = (
+                    log_lik
+                    + dist.Normal(prediction, astro_err).log_prob(astro_obs).sum()
+                )
             else:
-                log_lik = log_lik + dist.Normal(
-                    jnp.zeros_like(astro_obs), astro_err
-                ).log_prob(y_a).sum()
+                log_lik = (
+                    log_lik
+                    + dist.Normal(jnp.zeros_like(astro_obs), astro_err)
+                    .log_prob(y_a)
+                    .sum()
+                )
 
         # --- RV component ---
         if rv_data is not None:
@@ -1076,7 +1070,9 @@ def _build_extra_numpyro_model(
 
             y_r = rv_obs
             if r_fixed_local:
-                fv = jnp.stack([fixed_linear[all_linear_names[i]] for i in r_fixed_global])
+                fv = jnp.stack(
+                    [fixed_linear[all_linear_names[i]] for i in r_fixed_global]
+                )
                 y_r = y_r - dm_r[:, jnp.array(r_fixed_local)] @ fv
 
             if r_free_local and marginalized:
@@ -1094,13 +1090,18 @@ def _build_extra_numpyro_model(
                     numpyro.deterministic(all_linear_names[col], free_vals[j])
                 prediction = dm_r[:, jnp.array(r_free_local)] @ free_vals
                 if r_fixed_local:
-                    fv = jnp.stack([fixed_linear[all_linear_names[i]] for i in r_fixed_global])
+                    fv = jnp.stack(
+                        [fixed_linear[all_linear_names[i]] for i in r_fixed_global]
+                    )
                     prediction = prediction + dm_r[:, jnp.array(r_fixed_local)] @ fv
-                log_lik = log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
+                log_lik = (
+                    log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
+                )
             else:
-                log_lik = log_lik + dist.Normal(
-                    jnp.zeros_like(rv_obs), rv_err
-                ).log_prob(y_r).sum()
+                log_lik = (
+                    log_lik
+                    + dist.Normal(jnp.zeros_like(rv_obs), rv_err).log_prob(y_r).sum()
+                )
 
         numpyro.factor("log_lik", log_lik)
 

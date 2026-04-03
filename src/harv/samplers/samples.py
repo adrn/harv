@@ -756,8 +756,8 @@ class Samples(eqx.Module):
 
         # Collect per-instrument datasets (multi-survey support).
         if isinstance(data, SourceData):
-            rv_datasets: dict[str, RadialVelocityData] = (
-                data.get_datasets_by_type(RadialVelocityData)
+            rv_datasets: dict[str, RadialVelocityData] = data.get_datasets_by_type(
+                RadialVelocityData
             )
         elif isinstance(data, RadialVelocityData):
             rv_datasets = {"data": data}
@@ -779,8 +779,13 @@ class Samples(eqx.Module):
             color = colors[color_idx % len(colors)]
             label = instr_name if len(rv_datasets) > 1 else "data"
             ax.errorbar(
-                phase_obs, rv_obs, yerr=rv_err,
-                fmt="o", color=color, label=label, zorder=3,
+                phase_obs,
+                rv_obs,
+                yerr=rv_err,
+                fmt="o",
+                color=color,
+                label=label,
+                zorder=3,
             )
 
         # Posterior model curves.
