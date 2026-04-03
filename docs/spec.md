@@ -432,14 +432,14 @@ pattern keeps the class simple and avoids a proliferation of factory methods.
 
 ### Nonlinear parameter priors
 
-| Field          | Description                                                          |
-| -------------- | -------------------------------------------------------------------- |
-| `period`       | Prior on period in data time units; default `LogUniform(min, max)`   |
-| `eccentricity` | Typically `Beta(0.867, 3.03)` following Kipping (2013)               |
-| `phase_peri`   | Typically `Uniform(0, 1)`                                            |
-| `cos_i`        | Astrometry/combined only; absent for RV-only                         |
-| `arg_peri`     | RV or combined; absent if not needed                                 |
-| `lon_asc_node` | Astrometry or combined; absent if not needed                         |
+| Field          | Description                                                        |
+| -------------- | ------------------------------------------------------------------ |
+| `period`       | Prior on period in data time units; default `LogUniform(min, max)` |
+| `eccentricity` | Typically `Beta(0.867, 3.03)` following Kipping (2013)             |
+| `phase_peri`   | Typically `Uniform(0, 1)`                                          |
+| `cos_i`        | Astrometry/combined only; absent for RV-only                       |
+| `arg_peri`     | RV or combined; absent if not needed                               |
+| `lon_asc_node` | Astrometry or combined; absent if not needed                       |
 
 ### Linear parameter prior
 
@@ -770,6 +770,7 @@ posterior = mcmc.get_samples()  # adds K, v0 (as deterministics) to the above
 ```
 
 **Warm-start positions:**
+
 - Marginalized model: `init_params` contains the nonlinear parameter arrays, shape
   `(num_chains,)` per key.
 - Full model: same nonlinear arrays, plus `"_linear"` with shape
@@ -799,11 +800,11 @@ the posterior.
 **`Samples.plot(data=source_data)`** — implemented in `samplers/samples.py`.  Selects
 panels automatically based on `data_type`:
 
-| `data_type`   | Panel(s)                                             |
-|---------------|------------------------------------------------------|
-| `"rv"`        | Phase-folded RV curve; data points + posterior curves |
-| `"astrometry"`| On-sky orbital ellipses (posterior samples only)     |
-| `"combined"`  | Both panels side by side                             |
+| `data_type`    | Panel(s)                                              |
+| -------------- | ----------------------------------------------------- |
+| `"rv"`         | Phase-folded RV curve; data points + posterior curves |
+| `"astrometry"` | On-sky orbital ellipses (posterior samples only)      |
+| `"combined"`   | Both panels side by side                              |
 
 ```python
 fig = samples.plot(data=rv_data)           # RV: data + model curves
