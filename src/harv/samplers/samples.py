@@ -24,6 +24,111 @@ from harv.likelihood._params import (
 
 __all__ = ["Samples"]
 
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _kepler_plot(M: np.ndarray, ecc: float) -> tuple[np.ndarray, np.ndarray]:
+    """Solve Kepler's equation for plotting; return (sin_f, cos_f).
+
+    Delegates to ``jaxoplanet.core.kepler`` (the project's authoritative solver)
+    and converts the JAX output to plain numpy arrays for matplotlib.
+
+    Parameters
+    ----------
+    M : np.ndarray
+        Mean anomaly in radians.
+    ecc : float
+        Orbital eccentricity in [0, 1).
+
+    Returns
+    -------
+    sin_f, cos_f : np.ndarray
+        Sine and cosine of the true anomaly.
+    """
+    from jaxoplanet.core.kepler import kepler
+
+    sin_f, cos_f = kepler(jnp.asarray(M), float(ecc))
+    return np.asarray(sin_f), np.asarray(cos_f)
+
+
+class _WarmStartMCMC:
+    """Wrapper around ``numpyro.infer.MCMC`` with pre-set warm-start init params.
+
+    Constructed by :meth:`RejectionSampler.init_mcmc`. Provides the full numpyro MCMC
+    API via attribute delegation; only :meth:`run` is overridden to inject the
+    rejection-sampler posterior positions as starting points unless the caller
+    explicitly passes their own ``init_params``.
+
+    Parameters
+    ----------
+    sampler :
+        An instantiated numpyro MCMC kernel (e.g. ``NUTS(model)``).
+    _init_params : dict[str, np.ndarray]
+        Per-chain initial parameter values, shape ``(num_chains,)`` per key.
+        Keys must match the numpyro site names used in the kernel's model.
+    **mcmc_kwargs :
+        Forwarded unchanged to ``numpyro.infer.MCMC.__init__``.
+    """
+
+    def __init__(
+        self,
+        sampler: Any,
+        *,
+        _init_params: dict[str, Any],
+        **mcmc_kwargs: Any,
+    ) -> None:
+        try:
+            from numpyro import infer
+        except ImportError as e:
+            msg = "numpyro is required. Install with: pip install numpyro"
+            raise ImportError(msg) from e
+        self._mcmc = infer.MCMC(sampler, **mcmc_kwargs)
+        self._init_params = _init_params
+
+    def run(
+        self,
+        rng_key: Any,
+        *args: Any,
+        init_params: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run MCMC, using rejection-sampler positions as starting points.
+
+        Parameters
+        ----------
+        rng_key :
+            JAX PRNGKey passed to the underlying ``numpyro.infer.MCMC.run``.
+        *args :
+            Positional arguments forwarded to ``MCMC.run``.
+        init_params : dict, optional
+            If provided, overrides the warm-start positions supplied at
+            construction time.
+        **kwargs :
+            Keyword arguments forwarded to ``MCMC.run``.
+        """
+        self._mcmc.run(
+            rng_key,
+            *args,
+            init_params=init_params if init_params is not None else self._init_params,
+            **kwargs,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate everything else (get_samples, print_summary, …) to the
+        # underlying numpyro MCMC object.
+        return getattr(self._mcmc, name)
+
+    def __repr__(self) -> str:
+        return (
+            f"_WarmStartMCMC("
+            f"num_chains={self._mcmc.num_chains}, "
+            f"num_samples={self._mcmc.num_samples})"
+        )
+
+
 # Maps stored class-name strings back to classes for HDF5 round-trips.
 _ORBIT_CLS_BY_NAME: dict[str, type] = {
     "RVOrbitParameters": RVOrbitParameters,
@@ -552,3 +657,203 @@ class Samples(eqx.Module):
 
         # Create corner plot
         return az.plot_pair(idata, **default_kwargs)
+
+    def plot(
+        self,
+        data: Any = None,
+        *,
+        n_samples: int = 50,
+        **kwargs: Any,
+    ) -> Any:
+        """Phase-folded RV curve and/or astrometric orbit on sky.
+
+        Selects panels automatically based on ``data_type``:
+
+        - ``"rv"`` — phase-folded RV curve; ``data`` must be a
+          ``RadialVelocityData`` or ``SourceData`` containing RV datasets.
+        - ``"astrometry"`` — on-sky orbital ellipses drawn from posterior
+          samples; ``data`` is not required (orbit shape comes from samples).
+        - ``"combined"`` — both panels side by side; ``data`` must be a
+          ``SourceData`` containing both ``GaiaAstrometryData`` and at least
+          one ``RadialVelocityData``.
+
+        Parameters
+        ----------
+        data : RadialVelocityData or SourceData, optional
+            Observed data to overplot on the RV panel.  Required for ``"rv"``
+            and ``"combined"`` data types; optional for ``"astrometry"``.
+        n_samples : int, optional
+            Number of posterior orbit curves to draw.  Default: 50.
+        **kwargs :
+            Additional keyword arguments forwarded to
+            ``matplotlib.pyplot.subplots``.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The figure containing the plot(s).
+
+        Raises
+        ------
+        ImportError
+            If matplotlib is not installed.
+        ValueError
+            If the data type is unknown.
+
+        Examples
+        --------
+        >>> fig = samples.plot(data=rv_data)
+        >>> fig = samples.plot(data=source_data, n_samples=100)
+        >>> fig = samples.plot()  # astrometry only, no data points needed
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            msg = (
+                "matplotlib is required for plotting. "
+                "Install with: pip install matplotlib"
+            )
+            raise ImportError(msg) from e
+
+        dt = self.data_type
+        if dt == "rv":
+            fig, ax = plt.subplots(**kwargs)
+            self._draw_rv(data, ax=ax, n_samples=n_samples, plt=plt)
+            fig.tight_layout()
+            return fig
+        if dt == "astrometry":
+            fig, ax = plt.subplots(**kwargs)
+            self._draw_astrometry(ax=ax, n_samples=n_samples)
+            fig.tight_layout()
+            return fig
+        if dt == "combined":
+            figsize = kwargs.pop("figsize", (12, 5))
+            fig, axes = plt.subplots(1, 2, figsize=figsize, **kwargs)
+            self._draw_rv(data, ax=axes[0], n_samples=n_samples, plt=plt)
+            self._draw_astrometry(ax=axes[1], n_samples=n_samples)
+            fig.tight_layout()
+            return fig
+        msg = f"Unknown data_type '{dt}' for plot()."
+        raise ValueError(msg)
+
+    # ------------------------------------------------------------------
+    # Private drawing helpers (draw into a caller-supplied Axes object)
+    # ------------------------------------------------------------------
+
+    def _draw_rv(
+        self,
+        data: Any,
+        *,
+        ax: Any,
+        n_samples: int,
+        plt: Any,
+    ) -> None:
+        """Phase-folded RV curve drawn into *ax*."""
+        from harv.data import RadialVelocityData, SourceData
+
+        median_period = float(np.median(np.asarray(self._nonlinear["period"])))
+        t_ref = float(self._metadata.get("t_ref", 0.0))
+
+        # Collect per-instrument datasets (multi-survey support).
+        if isinstance(data, SourceData):
+            rv_datasets: dict[str, RadialVelocityData] = (
+                data.get_datasets_by_type(RadialVelocityData)
+            )
+        elif isinstance(data, RadialVelocityData):
+            rv_datasets = {"data": data}
+        elif data is None:
+            rv_datasets = {}
+        else:
+            msg = "data must be RadialVelocityData or SourceData for data_type='rv'."
+            raise ValueError(msg)
+
+        # Infer RV unit from the K column (first linear parameter).
+        rv_unit = self._linear_param_units[0] if self._linear_param_units else "km/s"
+
+        colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        for color_idx, (instr_name, rv_data) in enumerate(rv_datasets.items()):
+            t_obs = np.asarray(ustrip(self._time_unit, rv_data.time))
+            phase_obs = ((t_obs - t_ref) / median_period) % 1.0
+            rv_obs = np.asarray(ustrip(rv_unit, rv_data.rv))
+            rv_err = np.asarray(ustrip(rv_unit, rv_data.rv_err))
+            color = colors[color_idx % len(colors)]
+            label = instr_name if len(rv_datasets) > 1 else "data"
+            ax.errorbar(
+                phase_obs, rv_obs, yerr=rv_err,
+                fmt="o", color=color, label=label, zorder=3,
+            )
+
+        # Posterior model curves.
+        phi_grid = np.linspace(0.0, 1.0, 500)
+        linear = np.asarray(self._linear)
+        n_draw = min(n_samples, self.n_samples)
+        for i in range(n_draw):
+            ecc = float(np.asarray(self._nonlinear["eccentricity"])[i])
+            phase_peri = float(np.asarray(self._nonlinear["phase_peri"])[i])
+            arg_peri = float(np.asarray(self._nonlinear["arg_peri"])[i])
+            K = float(linear[i, 0]) if linear.ndim == 2 else float(linear[0])
+            M = 2.0 * np.pi * (phi_grid - phase_peri)
+            sin_f, cos_f = _kepler_plot(M, ecc)
+            rv_model = K * (
+                np.cos(arg_peri) * cos_f
+                - np.sin(arg_peri) * sin_f
+                + ecc * np.cos(arg_peri)
+            )
+            ax.plot(phi_grid, rv_model, color="C0", alpha=0.15, lw=0.8)
+
+        ax.set_xlabel("Orbital phase")
+        ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
+        ax.set_xlim(0.0, 1.0)
+        if rv_datasets:
+            ax.legend(loc="best")
+        ax.set_title(
+            f"Phase-folded RV  (median P = {median_period:.1f} {self._time_unit})"
+        )
+
+    def _draw_astrometry(self, *, ax: Any, n_samples: int) -> None:
+        """On-sky orbital ellipses drawn into *ax* for each posterior sample.
+
+        Gaia along-scan measurements are 1-D projections and cannot be plotted
+        directly as 2-D sky positions, so only the model orbit curves are shown.
+        """
+        phi_grid = np.linspace(0.0, 1.0, 500)
+        linear = np.asarray(self._linear)
+        names = self._linear_param_names
+
+        sma_idx = names.index("semi_major_axis") if "semi_major_axis" in names else -1
+        sma_unit = self._linear_param_units[sma_idx] if sma_idx >= 0 else "mas"
+
+        n_draw = min(n_samples, self.n_samples)
+        for i in range(n_draw):
+            ecc = float(np.asarray(self._nonlinear["eccentricity"])[i])
+            phase_peri = float(np.asarray(self._nonlinear["phase_peri"])[i])
+            arg_peri = float(np.asarray(self._nonlinear["arg_peri"])[i])
+            cos_i = float(np.asarray(self._nonlinear["cos_i"])[i])
+            lon_asc = float(np.asarray(self._nonlinear["lon_asc_node"])[i])
+            sma = (
+                float(linear[i, sma_idx] if linear.ndim == 2 else linear[sma_idx])
+                if sma_idx >= 0
+                else 1.0
+            )
+
+            M = 2.0 * np.pi * (phi_grid - phase_peri)
+            sin_f, cos_f = _kepler_plot(M, ecc)
+
+            # Thiele-Innes constants.
+            ca, sa = np.cos(arg_peri), np.sin(arg_peri)
+            cO, sO = np.cos(lon_asc), np.sin(lon_asc)
+            A = ca * cO - sa * sO * cos_i
+            B = ca * sO + sa * cO * cos_i
+            F = -sa * cO - ca * sO * cos_i
+            G = -sa * sO + ca * cO * cos_i
+
+            delta_ra = (A * cos_f + F * sin_f) * sma
+            delta_dec = (B * cos_f + G * sin_f) * sma
+            ax.plot(delta_ra, delta_dec, color="C0", alpha=0.15, lw=0.8)
+
+        ax.set_xlabel(f"\u0394RA [{sma_unit}]")
+        ax.set_ylabel(f"\u0394Dec [{sma_unit}]")
+        ax.set_aspect("equal")
+        ax.axhline(0, color="k", lw=0.5, ls="--")
+        ax.axvline(0, color="k", lw=0.5, ls="--")
+        ax.set_title("Orbit on sky")

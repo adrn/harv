@@ -724,28 +724,63 @@ MCMC.
 
 ### MCMC initialization
 
-The rejection-sampler posterior provides a good set of starting points for MCMC. The
-intended interface wraps numpyro's `MCMC` class directly, using numpyro's parameter
-names and kernel API:
+**Implemented** — `RejectionSampler.init_mcmc` in `samplers/rejection.py`.
+
+The rejection-sampler posterior provides warm-start positions for MCMC chains.
+`init_mcmc` takes the `Samples` object returned by `run`, the observed data, and an
+optional numpyro kernel *class*.  It builds a numpyro model automatically from the
+sampler's prior and data, draws one starting position per chain from the posterior,
+and returns a `_WarmStartMCMC` wrapper whose `run()` injects those positions
+automatically.
+
+Two model variants are supported via the `marginalized` argument:
+
+**Marginalized** (`marginalized=True`, default) — MCMC explores only the nonlinear
+subspace; linear parameters are analytically integrated out, identical to rejection
+sampling.  Sample sites: nonlinear parameter names only.
 
 ```python
-import numpyro.infer as infer
+import jax.random as jr
 
-mcmc = samples.init_mcmc(
-    kernel=infer.NUTS,           # or HMC, SA, etc. — any numpyro kernel
-    num_samples=10_000,
-    num_warmup=2_000,
-    num_chains=4,                # independent chains (parallel with pmap)
-    thinning=10,
+prior = RejectionPrior.default_rv(period_min=50, period_max=200)
+sampler = RejectionSampler(prior)
+samples = sampler.run(rv_data, n_prior_samples=500_000)
+
+mcmc = sampler.init_mcmc(
+    samples, rv_data,
+    num_chains=4, num_warmup=2_000, num_samples=10_000,
 )
 mcmc.run(jr.PRNGKey(0))
+posterior = mcmc.get_samples()  # keys: period, eccentricity, phase_peri, arg_peri
 ```
 
-`samples.init_mcmc` constructs a numpyro `MCMC` object initialised at the rejection
-sampler's posterior samples (one per chain). The keyword arguments are passed through
-unchanged to `numpyro.infer.MCMC`, so the full numpyro API is available. The role of
-`samples.init_mcmc` is solely to handle the warm-start initialisation; the returned
-object is a standard `numpyro.infer.MCMC` instance that users interact with directly.
+**Full** (`marginalized=False`) — MCMC samples all parameters jointly.  Linear
+parameters are drawn from the prior's `MultivariateNormal` as a joint latent site
+`"_linear"`; each component is also exposed as a named `deterministic` site (e.g.
+`"K"`, `"v0"`, `"semi_major_axis"`) for easy access via `get_samples()`.  The
+correlation structure of the linear prior is preserved.
+
+```python
+mcmc = sampler.init_mcmc(
+    samples, rv_data, marginalized=False,
+    num_chains=4, num_warmup=2_000, num_samples=10_000,
+)
+mcmc.run(jr.PRNGKey(0))
+posterior = mcmc.get_samples()  # adds K, v0 (as deterministics) to the above
+```
+
+**Warm-start positions:**
+- Marginalized model: `init_params` contains the nonlinear parameter arrays, shape
+  `(num_chains,)` per key.
+- Full model: same nonlinear arrays, plus `"_linear"` with shape
+  `(num_chains, n_linear)` drawn from `samples._linear`.  Named deterministic sites
+  (`"K"`, `"v0"`, …) are computed from `"_linear"` at runtime and do not appear in
+  `init_params`.
+
+`_WarmStartMCMC` (in `samplers/samples.py`) is a thin wrapper around
+`numpyro.infer.MCMC`.  It delegates all attributes (`get_samples`, `print_summary`, …)
+to the underlying MCMC object via `__getattr__`, and only overrides `run` to inject
+`init_params` unless the caller provides their own.
 
 ### Absolute and relative astrometry
 
@@ -758,9 +793,35 @@ object is a standard `numpyro.infer.MCMC` instance that users interact with dire
 
 ### Visualization
 
-`Samples.plot_corner()` exists using arviz. Planned: a `samples.plot(data=source_data)`
-interface that automatically selects the right panels (RV curve overlay, astrometric
-orbit on sky, etc.) based on the data type.
+**`Samples.plot_corner()`** — implemented; uses arviz `plot_pair` for a corner plot of
+the posterior.
+
+**`Samples.plot(data=source_data)`** — implemented in `samplers/samples.py`.  Selects
+panels automatically based on `data_type`:
+
+| `data_type`   | Panel(s)                                             |
+|---------------|------------------------------------------------------|
+| `"rv"`        | Phase-folded RV curve; data points + posterior curves |
+| `"astrometry"`| On-sky orbital ellipses (posterior samples only)     |
+| `"combined"`  | Both panels side by side                             |
+
+```python
+fig = samples.plot(data=rv_data)           # RV: data + model curves
+fig = samples.plot(data=source_data)       # combined: two panels
+fig = samples.plot(n_samples=100)          # astrometry: orbits only
+```
+
+**RV panel** — phase-folds observations at the median posterior period; overlays `n_samples`
+model curves drawn from the posterior.  Multi-survey datasets are coloured by instrument.
+
+**Astrometry panel** — plots the photocentric orbit as an ellipse in (ΔRA, ΔDec) using
+the Thiele-Innes constants derived from each posterior sample.  Gaia along-scan
+measurements are 1-D projections and cannot be shown as 2-D sky positions, so only
+model curves appear.
+
+The numpy Kepler solver `_kepler_newton` (module-level in `samplers/samples.py`) is
+used for plotting; it is a simple Newton-Raphson iteration and is intentionally separate
+from the JAX `_solve_kepler` used inside likelihoods.
 
 ______________________________________________________________________
 
