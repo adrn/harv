@@ -11,13 +11,13 @@ from unxt import Quantity, ustrip
 if TYPE_CHECKING:
     from jaxtyping import Array, Float
 
-    from harv.custom_types import Time
+    from harv.custom_types import ScalarFloat, Time
 
 
 def compute_true_anomaly_components(
     time: Quantity[Time],
     period: Quantity[Time],
-    eccentricity: Float[Array, ""],
+    eccentricity: ScalarFloat,
     t_peri: Quantity[Time],
 ) -> tuple[Float[Array, ""], Float[Array, ""]]:
     """Compute true anomaly at given times.

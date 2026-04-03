@@ -7,9 +7,12 @@ from typing import TYPE_CHECKING, cast
 import equinox as eqx
 
 if TYPE_CHECKING:
-    from unxt import Quantity
-
-    from harv.custom_types import Length, Mass, Speed, Time
+    from harv.custom_types import (
+        ScalarQLength,
+        ScalarQMass,
+        ScalarQSpeed,
+        ScalarQTime,
+    )
     from harv.kepler.body import KeplerianBody
 
 
@@ -22,7 +25,7 @@ class AbstractNBodySystem(eqx.Module):
         raise NotImplementedError
 
     @property
-    def m_total(self) -> Quantity[Mass]:
+    def m_total(self) -> ScalarQMass:
         """Total system mass."""
         raise NotImplementedError
 
@@ -35,7 +38,7 @@ class TwoBodySystem(AbstractNBodySystem):
     - 1: Companion
     """
 
-    m_primary: Quantity[Mass]
+    m_primary: ScalarQMass
     companion: KeplerianBody
 
     # ========================================================================
@@ -48,12 +51,12 @@ class TwoBodySystem(AbstractNBodySystem):
         return 2
 
     @property
-    def m_companion(self) -> Quantity[Mass]:
+    def m_companion(self) -> ScalarQMass:
         """Companion mass."""
         return self.companion.get_mass(self.m_primary)
 
     @property
-    def m_total(self) -> Quantity[Mass]:
+    def m_total(self) -> ScalarQMass:
         """Total system mass."""
         return self.m_primary + self.m_companion
 
@@ -61,9 +64,7 @@ class TwoBodySystem(AbstractNBodySystem):
     # Methods
     #
 
-    def position_barycentric(
-        self, time: Quantity[Time], body_idx: int
-    ) -> Quantity[Length]:
+    def position_barycentric(self, time: ScalarQTime, body_idx: int) -> ScalarQLength:
         """Get barycentric position of specified body at given time(s).
 
         Parameters
@@ -84,11 +85,11 @@ class TwoBodySystem(AbstractNBodySystem):
             return r2  # companion about barycenter
 
         if body_idx == 0:
-            return cast("Quantity[Length]", -(self.m_companion / self.m_primary) * r2)
+            return cast("ScalarQLength", -(self.m_companion / self.m_primary) * r2)
 
         raise IndexError("body_idx must be 0 (primary) or 1 (companion)")
 
-    def position_relative(self, time: Quantity[Time]) -> Quantity[Length]:
+    def position_relative(self, time: ScalarQTime) -> ScalarQLength:
         """Position of companion relative to primary.
 
         Parameters
@@ -102,11 +103,9 @@ class TwoBodySystem(AbstractNBodySystem):
             3D position vector(s) of companion relative to primary
         """
         r2 = self.position_barycentric(time, 1)
-        return cast("Quantity[Length]", r2 * (1 + self.m_companion / self.m_primary))
+        return cast("ScalarQLength", r2 * (1 + self.m_companion / self.m_primary))
 
-    def velocity_barycentric(
-        self, time: Quantity[Time], body_idx: int
-    ) -> Quantity[Speed]:
+    def velocity_barycentric(self, time: ScalarQTime, body_idx: int) -> ScalarQSpeed:
         """Get barycentric velocity of specified body at given time(s).
 
         Parameters
@@ -127,11 +126,11 @@ class TwoBodySystem(AbstractNBodySystem):
             return v2
 
         if body_idx == 0:
-            return cast("Quantity[Speed]", -(self.m_companion / self.m_primary) * v2)
+            return cast("ScalarQSpeed", -(self.m_companion / self.m_primary) * v2)
 
         raise IndexError("body_idx must be 0 (primary) or 1 (companion)")
 
-    def velocity_relative(self, time: Quantity[Time]) -> Quantity[Speed]:
+    def velocity_relative(self, time: ScalarQTime) -> ScalarQSpeed:
         """Velocity of companion relative to primary.
 
         Parameters
@@ -145,4 +144,4 @@ class TwoBodySystem(AbstractNBodySystem):
             3D velocity vector(s) of companion relative to primary
         """
         v2 = self.velocity_barycentric(time, 1)
-        return cast("Quantity[Speed]", v2 * (1 + self.m_companion / self.m_primary))
+        return cast("ScalarQSpeed", v2 * (1 + self.m_companion / self.m_primary))

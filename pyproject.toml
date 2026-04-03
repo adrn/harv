@@ -81,6 +81,7 @@ test = [
     "pytest-raises",
     "pytest-randomly",
     "pytest-xdist",
+    "beartype",
 ]
 
 [project.urls]

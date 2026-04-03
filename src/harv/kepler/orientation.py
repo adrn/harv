@@ -8,10 +8,10 @@ import equinox as eqx
 import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
+from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
+
 if TYPE_CHECKING:
     import jax
-
-    from harv.custom_types import Angle, DimlessValue, Length
 
 
 class KeplerianOrientation(eqx.Module):
@@ -27,16 +27,16 @@ class KeplerianOrientation(eqx.Module):
     """
 
     # sin/cos of argument of pericenter (ω)
-    sin_arg_peri: DimlessValue = 0.0
-    cos_arg_peri: DimlessValue = 1.0
+    sin_arg_peri: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
+    cos_arg_peri: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
 
     # sin/cos of longitude of ascending node (Ω)
-    sin_lon_asc_node: DimlessValue = 0.0
-    cos_lon_asc_node: DimlessValue = 1.0
+    sin_lon_asc_node: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
+    cos_lon_asc_node: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
 
     # sin/cos of inclination (i)
-    sin_i: DimlessValue = 0.0
-    cos_i: DimlessValue = 1.0
+    sin_i: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
+    cos_i: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
 
     def __check_init__(self) -> None:
         x = jnp.array(self.sin_arg_peri**2 + self.cos_arg_peri**2)
@@ -82,9 +82,9 @@ class KeplerianOrientation(eqx.Module):
     def from_angles(
         cls,
         /,
-        arg_peri: Quantity[Angle] = Quantity.from_(0.0, "rad"),
-        lon_asc_node: Quantity[Angle] = Quantity.from_(0.0, "rad"),
-        inclination: Quantity[Angle] = Quantity.from_(0.0, "rad"),
+        arg_peri: ScalarQAngle = Quantity.from_(0.0, "rad"),
+        lon_asc_node: ScalarQAngle = Quantity.from_(0.0, "rad"),
+        inclination: ScalarQAngle = Quantity.from_(0.0, "rad"),
     ) -> "KeplerianOrientation":
         """Construct from angle values."""
         return cls(
@@ -99,11 +99,11 @@ class KeplerianOrientation(eqx.Module):
     @classmethod
     def from_thiele_innes(
         cls,
-        A: Quantity[Length] | Quantity[Angle],
-        B: Quantity[Length] | Quantity[Angle],
-        F: Quantity[Length] | Quantity[Angle],
-        G: Quantity[Length] | Quantity[Angle],
-    ) -> tuple["KeplerianOrientation", Quantity[Length] | Quantity[Angle]]:
+        A: ScalarQLength | ScalarQAngle,
+        B: ScalarQLength | ScalarQAngle,
+        F: ScalarQLength | ScalarQAngle,
+        G: ScalarQLength | ScalarQAngle,
+    ) -> tuple["KeplerianOrientation", ScalarQLength | ScalarQAngle]:
         """Construct orientation from Thiele-Innes constants.
 
         Inverts the Thiele-Innes constants to recover (ω, Ω, i, a).
@@ -174,23 +174,23 @@ class KeplerianOrientation(eqx.Module):
                 lon_asc_node=Quantity.from_(Omega, "rad"),
                 inclination=Quantity.from_(i, "rad"),
             ),
-            cast("Quantity[Length] | Quantity[Angle]", a),
+            cast("ScalarQLength | ScalarQAngle", a),
         )
 
     @property
-    def arg_peri(self) -> Quantity[Angle]:
+    def arg_peri(self) -> ScalarQAngle:
         """Argument of pericenter (ω)."""
         return Quantity.from_(jnp.arctan2(self.sin_arg_peri, self.cos_arg_peri), "rad")
 
     @property
-    def lon_asc_node(self) -> Quantity[Angle]:
+    def lon_asc_node(self) -> ScalarQAngle:
         """Longitude of ascending node (Ω)."""
         return Quantity.from_(
             jnp.arctan2(self.sin_lon_asc_node, self.cos_lon_asc_node), "rad"
         )
 
     @property
-    def inclination(self) -> Quantity[Angle]:
+    def inclination(self) -> ScalarQAngle:
         """Inclination (i)."""
         return Quantity.from_(jnp.arctan2(self.sin_i, self.cos_i), "rad")
 
@@ -245,8 +245,8 @@ class KeplerianOrientation(eqx.Module):
         return jnp.array([[r11, r12, r13], [r21, r22, r23], [r31, r32, r33]])
 
     def thiele_innes_constants(
-        self, semi_major_axis: Quantity[Length] | Quantity[Angle] | None = None
-    ) -> tuple[Quantity[Length] | Quantity[Angle] | jax.Array, ...]:
+        self, semi_major_axis: ScalarQLength | ScalarQAngle | None = None
+    ) -> tuple[ScalarQLength | ScalarQAngle | jax.Array, ...]:
         """Compute Thiele-Innes constants (A, B, F, G).
 
         These constants linearize the relationship between orbital position
@@ -262,7 +262,7 @@ class KeplerianOrientation(eqx.Module):
         A, B, F, G
             The four Thiele-Innes constants.
         """
-        a: jax.Array | Quantity[Length] | Quantity[Angle] = (
+        a: jax.Array | ScalarQLength | ScalarQAngle = (
             jnp.array(1.0)
             if semi_major_axis is None
             else Quantity.from_(semi_major_axis)
@@ -280,5 +280,5 @@ class KeplerianOrientation(eqx.Module):
         G = -a * (s_w * s_W - c_w * c_W * c_i)
 
         return cast(
-            "tuple[Quantity[Length] | Quantity[Angle] | jax.Array, ...]", (A, B, F, G)
+            "tuple[ScalarQLength | ScalarQAngle | jax.Array, ...]", (A, B, F, G)
         )
