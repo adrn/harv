@@ -1,17 +1,13 @@
 """Keplerian orbit implementation with units support and JAX compatibility."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import equinox as eqx
+import jax
 import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
-
-if TYPE_CHECKING:
-    import jax
 
 
 class KeplerianOrientation(eqx.Module):

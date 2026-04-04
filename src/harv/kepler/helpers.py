@@ -1,24 +1,18 @@
 """Helpers for Keplerian orbits."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
-from unxt import Quantity, ustrip
+from jaxtyping import Array, Float
+from unxt import ustrip
 
-if TYPE_CHECKING:
-    from jaxtyping import Array, Float
-
-    from harv.custom_types import ScalarFloat, Time
+from harv.custom_types import ScalarFloat, ScalarQTime
 
 
 def compute_true_anomaly_components(
-    time: Quantity[Time],
-    period: Quantity[Time],
+    time: ScalarQTime,
+    period: ScalarQTime,
     eccentricity: ScalarFloat,
-    t_peri: Quantity[Time],
+    t_peri: ScalarQTime,
 ) -> tuple[Float[Array, ""], Float[Array, ""]]:
     """Compute true anomaly at given times.
 

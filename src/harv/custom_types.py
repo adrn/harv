@@ -1,7 +1,5 @@
 """Custom types used in harv."""
 
-from __future__ import annotations
-
 from typing import Any, Literal
 
 import jax
@@ -32,6 +30,9 @@ NTime = Real[Quantity["time"], "n"]
 NVelocity = Real[Quantity["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
+
+Vec3QLength = Real[Quantity["length"], "3"]
+Vec3QSpeed = Real[Quantity["speed"], "3"]
 
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 
