@@ -258,10 +258,13 @@ exclude = [
     "I001",  # 'Import block is un-sorted or un-formatted' ignored because we may have to import in a particular, not-alphabetical order.
 ]
 "tests/**/*.py" = [
-    "D102",  # 'Missing docstring in public method'
-    "S101",  # 'Use of assert detected' ignored because we are using pytest.
-    "INP001",  # 'Insecure input' ignored because we are testing.
-    "ANN201",  # 'Missing type annotation for {return}' ignored because all tests return `None`.
+    "ANN202", # Missing type annotation"
+    "D101",  # Missing docstring in public class
+    "D102",  # Missing docstring in public method
+    "D104",  # Missing docstring in public package
+    "S101",  # Use of assert detected' ignored because we are using pytest.
+    "INP001",  # Insecure input ignored because we are testing.
+    "ANN201",  # Missing type annotation for {return} ignored because all tests return `None`.
 ]
 "src/harv/samplers/*.py" = [
     "S101",  # 'Use of assert detected' — used for type narrowing of invariants from extract_data
