@@ -1,6 +1,5 @@
 """Root conftest.py: configure runtime type checking via beartype + jaxtyping."""
 
-from beartype import beartype
 from jaxtyping import install_import_hook
 
 # Enable runtime shape/dtype checking for modules with complete type annotations.
@@ -12,4 +11,4 @@ from jaxtyping import install_import_hook
 #   - harv.simulate
 #   - harv.samplers
 #   - harv.priors
-install_import_hook("harv.kepler", typechecker=beartype)
+install_import_hook("harv.kepler", "beartype.beartype")
