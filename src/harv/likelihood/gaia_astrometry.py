@@ -24,7 +24,6 @@ For the marginalized model, the astrometric model is:
 where A, B, F, G are Thiele-Innes constants and f is the true anomaly.
 """
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist

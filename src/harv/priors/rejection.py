@@ -16,6 +16,7 @@ import jax
 import jax.random as jr
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
+
 from harv.likelihood.helpers import LinearPriorCallable
 
 __all__ = ["RejectionPrior"]

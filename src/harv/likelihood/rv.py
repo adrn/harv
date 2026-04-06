@@ -25,7 +25,6 @@ For the SB1 model the RV model is:
 For the SB2 case, see :func:`_get_design_matrix_sb2`.
 """
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist

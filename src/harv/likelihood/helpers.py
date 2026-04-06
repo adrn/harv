@@ -14,7 +14,6 @@ from harv.data import AbstractData
 from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 
-
 # ---------------------------------------------------------------------------
 # Linear prior Protocol
 # ---------------------------------------------------------------------------
