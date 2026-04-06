@@ -202,9 +202,7 @@ class GaiaAstrometryLikelihood(
         )
         return marg_dist.log_prob(y_obs)
 
-    def _log_prob_explicit(
-        self, params: GaiaAstrometryParameters
-    ) -> jax.Array:
+    def _log_prob_explicit(self, params: GaiaAstrometryParameters) -> jax.Array:
         """Explicit log-likelihood with all parameters specified."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)

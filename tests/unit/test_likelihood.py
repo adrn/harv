@@ -93,9 +93,7 @@ class TestMarginalizedLikelihood:
     def test_likelihood_finite(self):
         """Test that likelihood returns a finite scalar."""
         data = _make_astro_data()
-        lik = GaiaAstrometryLikelihood(
-            data=data, linear_prior=_astro_prior()
-        )
+        lik = GaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
         params = _make_astro_params()
 
         log_lik = lik.log_prob(params)
@@ -129,12 +127,8 @@ class TestMarginalizedLikelihood:
         params = _make_astro_params()
         prior = _astro_prior()
 
-        log_lik_small = GaiaAstrometryLikelihood(
-            data_small, prior
-        ).log_prob(params)
-        log_lik_large = GaiaAstrometryLikelihood(
-            data_large, prior
-        ).log_prob(params)
+        log_lik_small = GaiaAstrometryLikelihood(data_small, prior).log_prob(params)
+        log_lik_large = GaiaAstrometryLikelihood(data_large, prior).log_prob(params)
 
         assert log_lik_small > log_lik_large
 
@@ -161,9 +155,7 @@ class TestBatchLikelihood:
         """Test that vmap over log_prob returns correct shape."""
         n_samples = 10
         data = _make_astro_data()
-        lik = GaiaAstrometryLikelihood(
-            data=data, linear_prior=_astro_prior()
-        )
+        lik = GaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
 
         params_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(jnp.ones(n_samples) * 100.0, "day"),

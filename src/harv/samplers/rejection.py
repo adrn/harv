@@ -40,18 +40,11 @@ from harv.likelihood._params import (
 )
 from harv.likelihood.combined import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
-from harv.likelihood.gaia_astrometry import (
-    _get_design_matrix as _get_gaia_design_matrix,
-)
 from harv.likelihood.helpers import (
     _IndexedCallable,
     _resolve_linear_prior,
-    _solve_kepler,
 )
 from harv.likelihood.rv import RVLikelihood
-from harv.likelihood.rv import (
-    _get_design_matrix as _get_rv_design_matrix,
-)
 from harv.samplers.samples import Samples, _WarmStartMCMC
 
 if TYPE_CHECKING:
@@ -213,6 +206,7 @@ class _DataTypeStrategy(ABC):
         prior: RejectionPrior,
         time_unit: Any,
         data: InputData,
+        lik: Any,
     ) -> jax.Array:
         """Sample linear parameters for one accepted nonlinear sample."""
         ...
@@ -311,7 +305,8 @@ class _RVStrategy(_DataTypeStrategy):
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
         time_unit: Any,
-        data: InputData,
+        data: InputData,  # noqa: ARG002
+        lik: Any,
     ) -> jax.Array:
         if rv_data is None:
             msg = "_RVStrategy requires rv_data"
@@ -323,19 +318,7 @@ class _RVStrategy(_DataTypeStrategy):
             phase_peri=sample["phase_peri"],
             arg_peri=sample["arg_peri"],
         )
-        sin_f, cos_f = _solve_kepler(rv_data, params)
-        dm_base = _get_rv_design_matrix(params, sin_f, cos_f)
-        if (
-            prior.offsets is not None
-            and isinstance(data, SourceData)
-            and data.n_rv() > 1
-        ):
-            indicator = _build_indicator_matrix(
-                data.get_datasets_by_type(RadialVelocityData), prior.offsets
-            )
-            dm = jnp.concatenate([dm_base, indicator], axis=-1)
-        else:
-            dm = dm_base
+        dm = lik.design_matrix(params)
         rv_unit = str(rv_data.rv.unit)
         lp = _resolve_linear_prior(prior.linear_prior, params)
         marg = MarginalizedLinear(
@@ -425,6 +408,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         prior: RejectionPrior,
         time_unit: Any,
         data: InputData,  # noqa: ARG002
+        lik: Any,
     ) -> jax.Array:
         if astro_data is None:
             msg = "_AstrometryStrategy requires astro_data"
@@ -438,8 +422,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
             arg_peri=sample["arg_peri"],
             lon_asc_node=sample["lon_asc_node"],
         )
-        sin_f, cos_f = _solve_kepler(astro_data, params)
-        dm = _get_gaia_design_matrix(astro_data, params, sin_f, cos_f)
+        dm = lik.design_matrix(params)
         astro_unit = str(astro_data.al_position.unit)
         lp = _resolve_linear_prior(prior.linear_prior, params)
         marg = MarginalizedLinear(
@@ -572,6 +555,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         prior: RejectionPrior,
         time_unit: Any,
         data: InputData,  # noqa: ARG002
+        lik: Any,
     ) -> jax.Array:
         if astro_data is None or rv_data is None:
             msg = "_CombinedStrategy requires both astro_data and rv_data"
@@ -600,9 +584,8 @@ class _CombinedStrategy(_DataTypeStrategy):
             scale_tril=full_lp.scale_tril[n_astro:, n_astro:],
         )
 
-        # Astrometry linear params
-        astro_sin_f, astro_cos_f = _solve_kepler(astro_data, params)
-        astro_dm = _get_gaia_design_matrix(astro_data, params, astro_sin_f, astro_cos_f)
+        # Astrometry linear params — delegate DM construction to the component
+        astro_dm = lik["astro"].design_matrix(params)
         astro_unit = str(astro_data.al_position.unit)
         astro_marg = MarginalizedLinear(
             design_matrix=astro_dm,
@@ -615,15 +598,8 @@ class _CombinedStrategy(_DataTypeStrategy):
             ustrip(astro_unit, astro_data.al_position)
         ).sample(k_astro)
 
-        # RV linear params
-        rv_params = RVParameters.marginalized(
-            period=period,
-            eccentricity=sample["eccentricity"],
-            phase_peri=sample["phase_peri"],
-            arg_peri=sample["arg_peri"],
-        )
-        rv_sin_f, rv_cos_f = _solve_kepler(rv_data, rv_params)
-        rv_dm = _get_rv_design_matrix(rv_params, rv_sin_f, rv_cos_f)
+        # RV linear params — duck typing: params carries all needed fields
+        rv_dm = lik["rv"].design_matrix(params)
         rv_unit = str(rv_data.rv.unit)
         rv_marg = MarginalizedLinear(
             design_matrix=rv_dm,
@@ -767,16 +743,21 @@ def _build_full_numpyro_model(
         (),
     )
 
-    # Multi-survey RV: build the indicator matrix at model-build time (it is
-    # constant — it only depends on which instrument each observation belongs to).
-    indicator: jax.Array | None = None
+    # Multi-survey RV: offset names (the indicator matrix is already inside
+    # the RVLikelihood built by the strategy).
     offset_names: tuple[str, ...] = ()
     if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
-        indicator = _build_indicator_matrix(
-            data.get_datasets_by_type(RadialVelocityData), prior.offsets
-        )
         offset_names = tuple(k for k, v in prior.offsets.items() if v is not None)
     linear_param_names = linear_param_names + offset_names
+
+    # Build the likelihood and extract per-component objects for DM construction.
+    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
+    if isinstance(lik, CompositeLikelihood):
+        astro_lik = lik["astro"]
+        rv_lik = lik["rv"]
+    else:
+        astro_lik = lik if astro_data is not None else None
+        rv_lik = lik if rv_data is not None else None
 
     # Slice boundaries for combined data (astro columns come first).
     n_astro = (
@@ -787,13 +768,11 @@ def _build_full_numpyro_model(
 
     # Pre-strip units from data arrays (outside the model closure for efficiency).
     if astro_data is not None:
-        astro_unit = str(astro_data.al_position.unit)
-        astro_obs = ustrip(astro_unit, astro_data.al_position)
-        astro_err = ustrip(astro_unit, astro_data.al_position_err)
+        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
+        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
     if rv_data is not None:
-        rv_unit = str(rv_data.rv.unit)
-        rv_obs = ustrip(rv_unit, rv_data.rv)
-        rv_err = ustrip(rv_unit, rv_data.rv_err)
+        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
+        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
 
     def model() -> None:
         # --- nonlinear parameters ---
@@ -816,19 +795,15 @@ def _build_full_numpyro_model(
         # --- data log-likelihood ---
         log_lik: jax.Array = jnp.zeros(())
 
-        if astro_data is not None:
-            sin_f, cos_f = _solve_kepler(astro_data, params)
-            dm = _get_gaia_design_matrix(astro_data, params, sin_f, cos_f)
+        if astro_lik is not None:
+            dm = astro_lik.design_matrix(params)
             prediction = dm @ linear_vec[:n_astro]
             log_lik = (
                 log_lik + dist.Normal(prediction, astro_err).log_prob(astro_obs).sum()
             )
 
-        if rv_data is not None:
-            sin_f, cos_f = _solve_kepler(rv_data, params)
-            dm = _get_rv_design_matrix(params, sin_f, cos_f)
-            if indicator is not None:
-                dm = jnp.concatenate([dm, indicator], axis=-1)
+        if rv_lik is not None:
+            dm = rv_lik.design_matrix(params)
             prediction = dm @ linear_vec[n_astro:]
             log_lik = log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
 
@@ -967,14 +942,20 @@ def _build_extra_numpyro_model(
     )
 
     # Multi-survey RV offset columns (appended after the base linear params).
-    indicator: jax.Array | None = None
+    # The indicator matrix is already inside the RVLikelihood built by the strategy.
     offset_names: tuple[str, ...] = ()
     if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
-        indicator = _build_indicator_matrix(
-            data.get_datasets_by_type(RadialVelocityData), prior.offsets
-        )
         offset_names = tuple(k for k, v in prior.offsets.items() if v is not None)
     all_linear_names = all_linear_names + offset_names
+
+    # Build the likelihood and extract per-component objects for DM construction.
+    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
+    if isinstance(lik, CompositeLikelihood):
+        astro_lik = lik["astro"]
+        rv_lik = lik["rv"]
+    else:
+        astro_lik = lik if astro_data is not None else None
+        rv_lik = lik if rv_data is not None else None
 
     # Index boundary separating astrometry columns from RV columns.
     n_astro = (
@@ -985,13 +966,11 @@ def _build_extra_numpyro_model(
 
     # Pre-strip units from data arrays.
     if astro_data is not None:
-        astro_unit = str(astro_data.al_position.unit)
-        astro_obs = ustrip(astro_unit, astro_data.al_position)
-        astro_err = ustrip(astro_unit, astro_data.al_position_err)
+        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
+        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
     if rv_data is not None:
-        rv_unit = str(rv_data.rv.unit)
-        rv_obs = ustrip(rv_unit, rv_data.rv)
-        rv_err = ustrip(rv_unit, rv_data.rv_err)
+        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
+        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
 
     def model() -> None:
         # --- nonlinear parameters ---
@@ -1030,9 +1009,8 @@ def _build_extra_numpyro_model(
         log_lik: jax.Array = jnp.zeros(())
 
         # --- astrometry component ---
-        if astro_data is not None:
-            sin_f, cos_f = _solve_kepler(astro_data, params)
-            dm_a = _get_gaia_design_matrix(astro_data, params, sin_f, cos_f)
+        if astro_lik is not None:
+            dm_a = astro_lik.design_matrix(params)
 
             a_fixed = [i for i in fixed_idx if i < n_astro]
             a_free = [i for i in free_idx if i < n_astro]
@@ -1072,11 +1050,8 @@ def _build_extra_numpyro_model(
                 )
 
         # --- RV component ---
-        if rv_data is not None:
-            sin_f, cos_f = _solve_kepler(rv_data, params)
-            dm_r = _get_rv_design_matrix(params, sin_f, cos_f)
-            if indicator is not None:
-                dm_r = jnp.concatenate([dm_r, indicator], axis=-1)
+        if rv_lik is not None:
+            dm_r = rv_lik.design_matrix(params)
 
             # Shift column indices into the RV block (starts at n_astro in the
             # joint linear vector, but the RV design matrix is zero-indexed).
@@ -1241,9 +1216,7 @@ class RejectionSampler(eqx.Module):
         """
         strategy = self._infer_strategy(data)
         astro_data, rv_data = strategy.extract_data(data)
-        lik = strategy.build_likelihood(
-            astro_data, rv_data, self.prior, data
-        )
+        lik = strategy.build_likelihood(astro_data, rv_data, self.prior, data)
 
         key = jr.PRNGKey(seed)
         sample_key, rej_key = jr.split(key)
@@ -1257,7 +1230,7 @@ class RejectionSampler(eqx.Module):
 
         linear_key = jr.fold_in(key, 2)
         linear_samples = self._sample_linear_parameters(
-            linear_key, accepted_nonlinear, astro_data, rv_data, strategy, data
+            linear_key, accepted_nonlinear, astro_data, rv_data, strategy, data, lik
         )
 
         if max_posterior_samples is not None:
@@ -1609,6 +1582,7 @@ class RejectionSampler(eqx.Module):
         rv_data: RadialVelocityData | None,
         strategy: _DataTypeStrategy,
         data: InputData,
+        lik: Any,
     ) -> jax.Array:
         """Sample linear parameters from conditional posterior using vmap.
 
@@ -1629,6 +1603,8 @@ class RejectionSampler(eqx.Module):
             Data-type strategy for building params and design matrices.
         data
             Original input data (needed for multi-survey instrument ordering).
+        lik
+            Pre-built likelihood (or CompositeLikelihood) for DM construction.
 
         Returns
         -------
@@ -1649,7 +1625,7 @@ class RejectionSampler(eqx.Module):
 
         def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> jax.Array:
             return strategy.sample_linear_one(
-                key, sample, astro_data, rv_data, self.prior, time_unit, data
+                key, sample, astro_data, rv_data, self.prior, time_unit, data, lik
             )
 
         return jax.vmap(_sample_one)(keys, nonlinear_samples)

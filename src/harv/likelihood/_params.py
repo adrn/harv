@@ -24,8 +24,6 @@ Annotations use ``Batchable*`` type aliases (e.g. ``BatchableQTime``,
 with a leading batch axis; ``jax.vmap`` then slices each leaf to scalar.
 """
 
-from __future__ import annotations
-
 import dataclasses
 from typing import Any, ClassVar, final
 

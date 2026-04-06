@@ -45,9 +45,7 @@ class TestMultiSurveyLikelihood:
         lp = dist.MultivariateNormal(
             loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
         )
-        lik = RVLikelihood(
-            data=stacked, indicator_matrix=indicator, linear_prior=lp
-        )
+        lik = RVLikelihood(data=stacked, indicator_matrix=indicator, linear_prior=lp)
         params = RVParameters.marginalized(
             period=Quantity(50.0, "day"),
             eccentricity=0.2,
@@ -122,9 +120,7 @@ class TestMultiSurveyLikelihood:
         lp = dist.MultivariateNormal(
             loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
         )
-        lik = RVLikelihood(
-            data=stacked, indicator_matrix=indicator, linear_prior=lp
-        )
+        lik = RVLikelihood(data=stacked, indicator_matrix=indicator, linear_prior=lp)
 
         n = 8
         params_batch = RVParameters.marginalized(

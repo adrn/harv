@@ -139,9 +139,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
 
-    def design_matrix(
-        self, params: MarginalizedParameters | RVParameters
-    ) -> jax.Array:
+    def design_matrix(self, params: MarginalizedParameters | RVParameters) -> jax.Array:
         """Build the full design matrix for the given parameters.
 
         Returns shape ``(n_obs, n_cols)`` where ``n_cols`` is 2 for single-
