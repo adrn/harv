@@ -244,6 +244,7 @@ ignore = [
     "FBT001",  # Some boolean function thing
     "FBT002",  # Some boolean function thing
     "UP037",   # Remove quote from type annotation  <- jaxtyping
+    "N802",    # Function name should be lowercase
 ]
 exclude = [
     "src/harv/_version.py",
@@ -284,7 +285,7 @@ known-first-party = ["src", "harv"]
 # type annotations. Hopefully these can eventually be removed?
 unused-type-ignore-comment = "ignore"
 unresolved-import = "ignore"
-# unresolved-reference = "ignore"
+unresolved-reference = "ignore"
 
 [tool.pydoclint]
 style = "numpy"

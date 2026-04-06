@@ -1,13 +1,7 @@
 """Abstract base class for likelihood components."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import equinox as eqx
-
-if TYPE_CHECKING:
-    import jax
+import jax
 
 
 class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
@@ -16,7 +10,7 @@ class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
     Generic over the parameter struct type ``_ParamT``. Subclasses declare
     their expected parameter type explicitly::
 
-        class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
+        class MarginalizedRVLikelihood(AbstractLikelihood[RVMarginalizedParameters]):
             ...
 
     This makes batching clean::

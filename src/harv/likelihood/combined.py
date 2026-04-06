@@ -1,16 +1,12 @@
 """Composite likelihood for combining heterogeneous data sources."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import equinox as eqx
+import jax
 import quaxed.numpy as jnp
 
-if TYPE_CHECKING:
-    import jax
-
-    from harv.likelihood.base import AbstractLikelihood
+from harv.likelihood.base import AbstractLikelihood
 
 __all__ = ("CompositeLikelihood",)
 
@@ -25,7 +21,7 @@ class CompositeLikelihood(eqx.Module):
     required fields satisfies every component simultaneously.
 
     For combined astrometry + RV data the natural params struct is
-    ``CombinedOrbitParameters`` (6 nonlinear params).
+    ``GaiaAstrometryMarginalizedParameters`` (6 nonlinear params).
     ``MarginalizedRVLikelihood`` only reads ``period``, ``eccentricity``,
     ``phase_peri``, and ``arg_peri`` from it; the extra ``cos_i`` and
     ``lon_asc_node`` fields are silently ignored.  This means ``period`` (and
@@ -45,7 +41,7 @@ class CompositeLikelihood(eqx.Module):
     --------
     Combining marginalized astrometry and RV likelihoods.  Both components
     share ``period``, ``eccentricity``, ``phase_peri``, and ``arg_peri``
-    automatically — pass a ``CombinedOrbitParameters`` and each component
+    automatically — pass a ``GaiaAstrometryMarginalizedParameters`` and each component
     reads what it needs::
 
         import numpyro.distributions as dist
@@ -53,7 +49,7 @@ class CompositeLikelihood(eqx.Module):
         from harv.likelihood.combined import CompositeLikelihood
         from harv.likelihood.gaia_astrometry import MarginalizedGaiaAstrometryLikelihood
         from harv.likelihood.rv import MarginalizedRVLikelihood
-        from harv.likelihood._params import CombinedOrbitParameters
+        from harv.likelihood._params import GaiaAstrometryMarginalizedParameters
 
         astro_prior = dist.MultivariateNormal(
             loc=jnp.zeros(6), covariance_matrix=jnp.eye(6) * 1000.0**2
@@ -73,9 +69,9 @@ class CompositeLikelihood(eqx.Module):
         composite.n_params
         # 6
 
-        # Evaluate at a single point — CombinedOrbitParameters satisfies both
+        # Evaluate at a single point — GaiaAstrometryMarginalizedParameters satisfies both
         # components via duck typing
-        log_lik = composite.log_prob(params)  # params: CombinedOrbitParameters
+        log_lik = composite.log_prob(params)  # params: GaiaAstrometryMarginalizedParameters
 
         # Batch evaluation over prior samples
         log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)

@@ -34,11 +34,10 @@ from harv.data import (
     SourceData,
 )
 from harv.likelihood._params import (
-    CombinedOrbitParameters,
-    GaiaAstrometryFullParameters,
-    GaiaAstrometryOrbitParameters,
-    RVFullParameters,
-    RVOrbitParameters,
+    GaiaAstrometryMarginalizedParameters,
+    GaiaAstrometryParameters,
+    RVMarginalizedParameters,
+    RVParameters,
 )
 from harv.likelihood.combined import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import (
@@ -152,9 +151,8 @@ class _DataTypeStrategy(ABC):
     def full_cls(self) -> tuple[type, ...]: ...
 
     @property
-    def data_type(self) -> DataType:
-        """Data type string, derived from ``orbit_cls.data_type``."""
-        return self.orbit_cls.data_type  # type: ignore[attr-defined]
+    @abstractmethod
+    def data_type(self) -> DataType: ...
 
     @property
     def required_prior_params(self) -> tuple[str, ...]:
@@ -165,7 +163,7 @@ class _DataTypeStrategy(ABC):
     def n_linear(self) -> int:
         """Total linear parameters, summed from ``full_cls.linear_param_names``."""
         return sum(
-            len(cls.linear_param_names)  # type: ignore[attr-defined,misc]
+            len(cls.linear_param_names)  # type: ignore[attr-defined]
             for cls in self.full_cls
         )
 
@@ -234,12 +232,16 @@ class _DataTypeStrategy(ABC):
 @final
 class _RVStrategy(_DataTypeStrategy):
     @property
+    def data_type(self) -> DataType:
+        return "rv"
+
+    @property
     def orbit_cls(self) -> type:
-        return RVOrbitParameters
+        return RVMarginalizedParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
-        return (RVFullParameters,)
+        return (RVParameters,)
 
     def extract_data(
         self,
@@ -308,7 +310,7 @@ class _RVStrategy(_DataTypeStrategy):
             msg = "_RVStrategy requires rv_data"
             raise TypeError(msg)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
-        params = RVOrbitParameters(
+        params = RVMarginalizedParameters(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -346,7 +348,7 @@ class _RVStrategy(_DataTypeStrategy):
         lon_asc: jax.Array,  # noqa: ARG002
         time_unit: Any,
     ) -> eqx.Module:
-        return RVOrbitParameters(
+        return RVMarginalizedParameters(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -357,12 +359,16 @@ class _RVStrategy(_DataTypeStrategy):
 @final
 class _AstrometryStrategy(_DataTypeStrategy):
     @property
+    def data_type(self) -> DataType:
+        return "astrometry"
+
+    @property
     def orbit_cls(self) -> type:
-        return GaiaAstrometryOrbitParameters
+        return GaiaAstrometryMarginalizedParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
-        return (GaiaAstrometryFullParameters,)
+        return (GaiaAstrometryParameters,)
 
     def extract_data(
         self,
@@ -417,7 +423,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
             msg = "_AstrometryStrategy requires astro_data"
             raise TypeError(msg)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
-        params = GaiaAstrometryOrbitParameters(
+        params = GaiaAstrometryMarginalizedParameters(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -448,7 +454,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         lon_asc: jax.Array,
         time_unit: Any,
     ) -> eqx.Module:
-        return GaiaAstrometryOrbitParameters(
+        return GaiaAstrometryMarginalizedParameters(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -461,12 +467,16 @@ class _AstrometryStrategy(_DataTypeStrategy):
 @final
 class _CombinedStrategy(_DataTypeStrategy):
     @property
+    def data_type(self) -> DataType:
+        return "combined"
+
+    @property
     def orbit_cls(self) -> type:
-        return CombinedOrbitParameters
+        return GaiaAstrometryMarginalizedParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
-        return (GaiaAstrometryFullParameters, RVFullParameters)
+        return (GaiaAstrometryParameters, RVParameters)
 
     def extract_data(
         self,
@@ -500,7 +510,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         if astro_data is None or rv_data is None:
             msg = "_CombinedStrategy requires both astro_data and rv_data"
             raise TypeError(msg)
-        n = len(GaiaAstrometryFullParameters.linear_param_names)  # 6
+        n = len(GaiaAstrometryParameters.linear_param_names)  # 6
         astro_idx = tuple(range(n))
         rv_idx = tuple(range(n, n + 2))  # K, v0
         lp = prior.linear_prior
@@ -562,7 +572,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         k_astro, k_rv = jr.split(key)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
 
-        params = CombinedOrbitParameters(
+        params = GaiaAstrometryMarginalizedParameters(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -573,7 +583,7 @@ class _CombinedStrategy(_DataTypeStrategy):
 
         # Resolve callable or fixed prior, then slice into astro + RV blocks
         full_lp = _resolve_linear_prior(prior.linear_prior, params)
-        n_astro = len(GaiaAstrometryFullParameters.linear_param_names)
+        n_astro = len(GaiaAstrometryParameters.linear_param_names)
         astro_linear_prior = dist.MultivariateNormal(
             loc=full_lp.loc[:n_astro],
             scale_tril=full_lp.scale_tril[:n_astro, :n_astro],
@@ -599,7 +609,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         ).sample(k_astro)
 
         # RV linear params
-        rv_params = RVOrbitParameters(
+        rv_params = RVMarginalizedParameters(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -627,7 +637,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         lon_asc: jax.Array,
         time_unit: Any,
     ) -> eqx.Module:
-        return CombinedOrbitParameters(
+        return GaiaAstrometryMarginalizedParameters(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -746,7 +756,7 @@ def _build_full_numpyro_model(
 
     # Linear parameter names, in the same column order as samples._linear.
     linear_param_names: tuple[str, ...] = sum(
-        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined,misc]
+        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined]
         (),
     )
 
@@ -763,7 +773,7 @@ def _build_full_numpyro_model(
 
     # Slice boundaries for combined data (astro columns come first).
     n_astro = (
-        len(GaiaAstrometryFullParameters.linear_param_names)
+        len(GaiaAstrometryParameters.linear_param_names)
         if astro_data is not None
         else 0
     )
@@ -945,7 +955,7 @@ def _build_extra_numpyro_model(
 
     # All linear parameter names, in the same column order as samples._linear.
     all_linear_names: tuple[str, ...] = sum(
-        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined,misc]
+        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined]
         (),
     )
 
@@ -961,7 +971,7 @@ def _build_extra_numpyro_model(
 
     # Index boundary separating astrometry columns from RV columns.
     n_astro = (
-        len(GaiaAstrometryFullParameters.linear_param_names)
+        len(GaiaAstrometryParameters.linear_param_names)
         if astro_data is not None
         else 0
     )
@@ -1286,6 +1296,7 @@ class RejectionSampler(eqx.Module):
                 astro_data, rv_data, self.prior
             ),
             _time_unit=time_unit,
+            _data_type=strategy.data_type,
             _metadata={"t_ref": t_ref_stored},
             _extra_linear_names=extra_linear_names,
         )

@@ -15,11 +15,10 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.likelihood._params import (
-    CombinedOrbitParameters,
-    GaiaAstrometryFullParameters,
-    GaiaAstrometryOrbitParameters,
-    RVFullParameters,
-    RVOrbitParameters,
+    GaiaAstrometryMarginalizedParameters,
+    GaiaAstrometryParameters,
+    RVMarginalizedParameters,
+    RVParameters,
 )
 
 __all__ = ["Samples"]
@@ -131,13 +130,19 @@ class _WarmStartMCMC:
 
 # Maps stored class-name strings back to classes for HDF5 round-trips.
 _ORBIT_CLS_BY_NAME: dict[str, type] = {
-    "RVOrbitParameters": RVOrbitParameters,
-    "GaiaAstrometryOrbitParameters": GaiaAstrometryOrbitParameters,
-    "CombinedOrbitParameters": CombinedOrbitParameters,
+    "RVMarginalizedParameters": RVMarginalizedParameters,
+    "GaiaAstrometryMarginalizedParameters": GaiaAstrometryMarginalizedParameters,
+    # Backward compat: old HDF5 files stored these names
+    "RVOrbitParameters": RVMarginalizedParameters,
+    "GaiaAstrometryOrbitParameters": GaiaAstrometryMarginalizedParameters,
+    "CombinedOrbitParameters": GaiaAstrometryMarginalizedParameters,
 }
 _FULL_CLS_BY_NAME: dict[str, type] = {
-    "RVFullParameters": RVFullParameters,
-    "GaiaAstrometryFullParameters": GaiaAstrometryFullParameters,
+    "RVParameters": RVParameters,
+    "GaiaAstrometryParameters": GaiaAstrometryParameters,
+    # Backward compat: old HDF5 files stored these names
+    "RVFullParameters": RVParameters,
+    "GaiaAstrometryFullParameters": GaiaAstrometryParameters,
 }
 
 
@@ -157,11 +162,11 @@ class Samples(eqx.Module):
     _linear : jnp.ndarray
         Linear parameter samples, shape (n_samples, n_linear_params).
     _orbit_cls : type
-        Orbit-only parameter class (e.g. RVOrbitParameters). Its
+        Orbit-only parameter class (e.g. RVMarginalizedParameters). Its
         ``data_type`` class variable gives the data type string.
     _full_cls : tuple[type, ...]
-        Ordered tuple of full parameter classes (e.g. ``(RVFullParameters,)``
-        or ``(GaiaAstrometryFullParameters, RVFullParameters)`` for combined).
+        Ordered tuple of full parameter classes (e.g. ``(RVParameters,)``
+        or ``(GaiaAstrometryParameters, RVParameters)`` for combined).
         Linear parameter names are concatenated from each class's
         ``linear_param_names`` class variable.
     _linear_param_units : tuple[str, ...]
@@ -193,6 +198,8 @@ class Samples(eqx.Module):
     # Extra linear parameter names beyond those in _full_cls (e.g. per-instrument
     # RV offsets for multi-survey data).  Empty by default.
     _extra_linear_names: tuple[str, ...] = eqx.field(static=True, default=())
+    # Data type string ("rv", "astrometry", or "combined").
+    _data_type: str = eqx.field(static=True, default="")
 
     @property
     def n_samples(self) -> int:
@@ -202,7 +209,7 @@ class Samples(eqx.Module):
     @property
     def data_type(self) -> str:
         """Data type these samples correspond to."""
-        return self._orbit_cls.data_type  # type: ignore[attr-defined]
+        return self._data_type
 
     @property
     def _linear_param_names(self) -> tuple[str, ...]:
@@ -449,6 +456,7 @@ class Samples(eqx.Module):
             # Store class references and metadata
             meta_group = f.create_group("metadata")
             meta_group.attrs["orbit_cls"] = self._orbit_cls.__name__
+            meta_group.attrs["data_type"] = self._data_type
             meta_group.attrs["full_cls"] = ",".join(
                 cls.__name__ for cls in self._full_cls
             )
@@ -511,6 +519,16 @@ class Samples(eqx.Module):
             orbit_cls = _ORBIT_CLS_BY_NAME[orbit_cls_name]
             full_cls = tuple(_FULL_CLS_BY_NAME[n] for n in full_cls_names)
             linear_param_units = tuple(meta.attrs["linear_param_units"].split(","))
+
+            # data_type: read from file, or infer for old files
+            _DATA_TYPE_BY_OLD_CLS = {
+                "CombinedOrbitParameters": "combined",
+                "RVMarginalizedParameters": "rv",
+                "GaiaAstrometryMarginalizedParameters": "astrometry",
+            }
+            data_type: str = meta.attrs.get(
+                "data_type", _DATA_TYPE_BY_OLD_CLS.get(orbit_cls_name, "")
+            )
             # Fall back to "day" when loading files written before _time_unit was added.
             time_unit: str = meta.attrs.get("time_unit", "day")
             raw_extra = meta.attrs.get("extra_linear_names", "")
@@ -528,6 +546,7 @@ class Samples(eqx.Module):
                     "time_unit",
                     "extra_linear_names",
                     "n_samples",
+                    "data_type",
                 ]:
                     continue
                 if key.endswith("_value"):
@@ -550,6 +569,7 @@ class Samples(eqx.Module):
             _linear_param_units=linear_param_units,
             _time_unit=time_unit,
             _extra_linear_names=extra_linear_names,
+            _data_type=data_type,
             _metadata=metadata,
         )
 

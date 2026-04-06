@@ -7,7 +7,6 @@ import astropy.units as apyu
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from jaxoplanet.core.kepler import kepler
 from unxt import Quantity, ustrip
 
 from harv.custom_types import (
@@ -19,6 +18,7 @@ from harv.custom_types import (
     Vec3QSpeed,
     float_converter,
 )
+from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
 from harv.kepler.constants import G
 from harv.kepler.orientation import KeplerianOrientation
 
@@ -162,13 +162,16 @@ class KeplerianBody(eqx.Module):
         relative to the system barycenter, accounting for the orbit orientation.
         """
         # Mean anomaly
-        M = ustrip("", 2 * jnp.pi * (time - self.t_peri) / self.period)
+        M = mean_anomaly(
+            ustrip(self.period.unit, time - self.t_peri),
+            ustrip(self.period.unit, self.period),
+        )
 
-        # Eccentric anomaly using jaxoplanet kepler solver
+        # True anomaly; circular shortcut avoids Kepler solver for e ≈ 0
         sin_cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M), jnp.cos(M)),
-            lambda: kepler(M, self.eccentricity),
+            lambda: true_anomaly_from_mean(M, self.eccentricity),
         )
 
         # Distance from focus
@@ -197,13 +200,16 @@ class KeplerianBody(eqx.Module):
     ) -> Vec3QSpeed:
         """Get 3D velocity of the body relative to the system barycenter."""
         # Mean anomaly (dimensionless)
-        M = ustrip("", 2 * jnp.pi * (time - self.t_peri) / self.period)
+        M = mean_anomaly(
+            ustrip(self.period.unit, time - self.t_peri),
+            ustrip(self.period.unit, self.period),
+        )
 
         # True anomaly (sin f, cos f); circular shortcut consistent with get_position
         sin_f, cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M), jnp.cos(M)),
-            lambda: kepler(M, self.eccentricity),
+            lambda: true_anomaly_from_mean(M, self.eccentricity),
         )
 
         a = self.semi_major_axis

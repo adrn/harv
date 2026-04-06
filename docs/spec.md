@@ -62,6 +62,102 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
+## Type annotations and runtime checking
+
+### Annotation conventions
+
+All module fields and function signatures use **jaxtyping** shape-and-dtype annotations
+built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_types`:
+
+| Alias                 | Definition                                                              | Use for                                       |
+| --------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
+| `ScalarQTime`         | `Real[Quantity["time"], ""]`                                            | Scalar time quantities (period, t_peri, …)    |
+| `ScalarQLength`       | `Real[Quantity["length"], ""]`                                          | Scalar length quantities (semi-major axis, …) |
+| `ScalarQMass`         | `Real[Quantity["mass"], ""]`                                            | Scalar mass quantities                        |
+| `ScalarQSpeed`        | `Real[Quantity["speed"], ""]`                                           | Scalar velocity quantities                    |
+| `ScalarQAngle`        | `Real[Quantity["angle"], ""]`                                           | Scalar angle quantities                       |
+| `ScalarQAngularSpeed` | `Real[Quantity["angular speed"], ""]`                                   | Scalar angular speed quantities               |
+| `ScalarQDimless`      | `Real[Quantity["dimensionless"], ""]`                                   | Scalar dimensionless quantities               |
+| `Vec3QLength`         | `Real[Quantity["length"], "3"]`                                         | 3-vector position returns                     |
+| `Vec3QSpeed`          | `Real[Quantity["speed"], "3"]`                                          | 3-vector velocity returns                     |
+| `NTime`, `NAngle`, …  | `Real[Quantity[dim], "n"]`                                              | 1-d arrays of observations                    |
+| `NFloatArray`         | `Float[jax.Array, "n"]`                                                 | Plain JAX float arrays                        |
+| `ScalarFloat`         | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
+
+Dimension literal aliases (`Time = Literal["time"]`, `Speed = Literal["speed"]`, etc.)
+are also exported for use in `Quantity[Time]`-style annotations elsewhere.
+
+### `ScalarFloat` and `float_converter`
+
+Dimensionless scalar fields (e.g. eccentricity, sin/cos of angles) accept a wide union
+of input types via `ScalarFloat` and normalize them to bare `Float[jax.Array, ""]` at
+storage time using `float_converter`:
+
+```python
+class KeplerianBody(eqx.Module):
+    eccentricity: ScalarFloat = eqx.field(converter=float_converter)
+```
+
+`float_converter` calls `ustrip(AllowValue, "", x)`, which strips units from a
+dimensionless `Quantity` or passes through plain scalars, always producing a 0-d JAX
+array.
+
+### Annotation semantics
+
+Field annotations describe the **accepted input type**, not necessarily the stored type.
+When a field has a `converter`, the stored type is whatever the converter returns. For
+example, `eccentricity: ScalarFloat` accepts `float`, `int`, `jax.Array`, or a
+dimensionless `Quantity`, but after `float_converter` the stored value is always
+`Float[jax.Array, ""]`.
+
+### No `from __future__ import annotations`
+
+Modules checked by beartype **must not** use `from __future__ import annotations`.
+That directive turns all annotations into strings, which prevents jaxtyping and beartype
+from inspecting them at runtime. Python 3.12+ provides native `X | Y` union syntax, so
+the future import is unnecessary.
+
+### Runtime checking with beartype
+
+The jaxtyping import hook activates beartype checking for annotated functions and
+methods:
+
+```python
+# conftest.py
+from jaxtyping import install_import_hook
+install_import_hook("harv.kepler", "beartype.beartype")
+```
+
+The first argument is the package prefix to instrument; the second is the **string**
+path to the typechecker callable (not a direct import). This ensures that every public
+method in `harv.kepler` validates its argument shapes and dtypes at call time during
+tests.
+
+### Trace-friendly validation
+
+Runtime checks that guard field *values* (as opposed to types) inside `__check_init__`
+must use `eqx.error_if` instead of Python `if … raise`. Plain conditionals attempt to
+concretize JAX tracers, which breaks inside `jax.vmap` and `jax.jit`.
+
+```python
+def __check_init__(self):
+    eqx.error_if(
+        self.eccentricity,
+        (self.eccentricity < 0) | (self.eccentricity >= 1),
+        "eccentricity must be in [0, 1)",
+    )
+```
+
+`eqx.error_if` inserts a runtime assertion into the traced computation graph that
+raises `EquinoxRuntimeError` (a subclass of `RuntimeError`) when the condition is true.
+This works correctly under all JAX transformations.
+
+**Exception:** Checks on static metadata (e.g. verifying that unit dimensions are
+consistent) can remain as plain `if … raise ValueError`, since those values are never
+traced.
+
+______________________________________________________________________
+
 ## Package structure
 
 ```
@@ -69,6 +165,7 @@ src/harv/
 ├── custom_types.py          # Unit-dimension Literal aliases
 ├── data.py                  # Observation data classes
 ├── kepler/                  # Orbit mechanics (JAX)
+│   ├── _orbit_math.py       # Low-level building blocks (raw arrays)
 │   ├── body.py              # KeplerianBody
 │   ├── orientation.py       # KeplerianOrientation + Thiele-Innes
 │   ├── helpers.py           # compute_true_anomaly_components
@@ -207,6 +304,23 @@ ______________________________________________________________________
 
 ## Kepler mechanics (`harv.kepler`)
 
+### Shared building blocks (`harv.kepler._orbit_math`)
+
+Four pure functions on raw JAX arrays (no Quantity, no eqx.Module) that provide
+the canonical implementations of core orbit computations. All three consumers
+(`harv.kepler`, `harv.likelihood`, `harv.simulate`) call these building blocks
+instead of duplicating the math.
+
+- `mean_anomaly(dt, period)` — `M = 2π · dt / period`
+- `true_anomaly_from_mean(M, eccentricity)` — solve Kepler's equation → (sin f, cos f)
+- `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
+- `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
+
+Callers strip Quantities to a common unit before calling, and wrap results back
+into Quantities if needed. The building blocks are shape-agnostic: they work for
+both scalar inputs (`KeplerianBody`) and batched inputs (`jax.vmap` over
+parameter structs).
+
 ### `KeplerianOrientation`
 
 Stores the three Euler angles (ω, Ω, i) that orient the orbital plane relative to the
@@ -244,33 +358,45 @@ These are the objects passed to `likelihood.log_prob(params)`. Each struct is an
 `jax.vmap(lik.log_prob)(params_batch)` work with zero extra machinery — JAX
 automatically vectorizes over all leaves simultaneously.
 
-### Two-level hierarchy
+### Abstract-final hierarchy
+
+The parameter classes follow the project-wide **abstract-final** pattern: a single
+abstract base class `AbstractParameters(eqx.Module)` defines the interface, and each
+concrete class is `@final` with all fields declared explicitly (no intermediate
+abstract classes, no multi-level inheritance).
 
 There are two levels for each data type: an **orbit-parameters-only** struct (used
 with marginalized likelihoods during the rejection-sampling hot path) and a
 **full-parameters** struct (used when all parameters are specified explicitly, e.g.
 for forward modeling, MCMC, or plotting).
 
-The naming convention appends `Full` to distinguish the superset:
+**Marginalized structs** (nonlinear parameters only; linear parameters are analytically marginalized out):
 
-**Orbit-only structs** (nonlinear parameters, no linear parameters):
+| Struct                                 | Fields                                                                      |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `RVMarginalizedParameters`             | `period`, `eccentricity`, `phase_peri`, `arg_peri`                          |
+| `GaiaAstrometryMarginalizedParameters` | `period`, `eccentricity`, `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node` |
 
-| Struct                          | Fields                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------- |
-| `RVOrbitParameters`             | `period`, `eccentricity`, `phase_peri`, `arg_peri`                          |
-| `GaiaAstrometryOrbitParameters` | `period`, `eccentricity`, `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node` |
+`GaiaAstrometryMarginalizedParameters` is used for both pure-astrometry and combined
+astrometry + RV runs. The distinction between these run types is carried by the
+`Samples._data_type` field, not by the parameter class.
 
-**Full structs** (orbit parameters + all linear/observational parameters):
+**Full structs** (all parameters specified explicitly — orbit + linear/observational):
 
-| Struct                         | Additional fields                                                              | `linear_param_names`                                              |
-| ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `RVFullParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`                                | `("K", "v0")`                                                     |
-| `GaiaAstrometryFullParameters` | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis` (all `Quantity`) | `("ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis")` |
+| Struct                     | Additional fields                                                              | `linear_param_names`                                              |
+| -------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `RVParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`                                | `("K", "v0")`                                                     |
+| `GaiaAstrometryParameters` | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis` (all `Quantity`) | `("ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis")` |
 
 `linear_param_names` is a `ClassVar[tuple[str, ...]]` on the full structs. It names
 every linear parameter the struct holds, in design-matrix column order. It is *not* a
 pytree leaf (ClassVar is excluded by equinox). The rejection sampler reads these
 class attributes to name the output `Samples` columns, avoiding hardcoded strings.
+
+Parameter classes are pure data containers — they carry no `data_type` metadata.
+The data type string (`"rv"`, `"astrometry"`, or `"combined"`) is a property of
+the sampling run, stored on `Samples._data_type` and derived from the sampler
+strategy.
 
 ### The `period` convention
 
@@ -285,13 +411,13 @@ period = Quantity(period_sample, data.time.unit)
 
 This keeps the sampler unit-agnostic: if the data is in days the period will be in
 days; if it is in years it will be in years. The likelihood is also unit-agnostic
-because `_solve_kepler` computes the mean anomaly as:
+because `_solve_kepler` computes the mean anomaly via the shared building block:
 
 ```
-M = 2π · ustrip("", dt / params.period)
+M = mean_anomaly(ustrip(unit, dt), ustrip(unit, params.period))
 ```
 
-The ratio `dt / params.period` is dimensionless regardless of units.
+The ratio `dt / period` is dimensionless regardless of units.
 
 ### `phase_peri` vs `t_peri`
 
@@ -326,7 +452,7 @@ prior (over \[K, v₀\]). For each nonlinear parameter sample it:
 1. Builds the (n_obs, 2) design matrix `[rv_amplitude, 1]`.
 1. Constructs a `MarginalizedLinear` distribution (numpyro-ext) and calls `.log_prob()`.
 
-`RVLikelihood` takes `RVFullParameters` (includes K and v₀) and evaluates the Gaussian
+`RVLikelihood` takes `RVParameters` (includes K and v₀) and evaluates the Gaussian
 log-likelihood explicitly without marginalization.
 
 #### Linear prior as a function of nonlinear parameters
@@ -367,8 +493,8 @@ Combines multiple `AbstractLikelihood` components by summing their log-likelihoo
 Shared nonlinear parameters (e.g. `period` appears in both the RV and astrometry
 models) are automatically de-duplicated in `param_names` by order of first appearance.
 Each component's `log_prob` reads only the fields it needs from the shared params
-struct via duck typing — passing a `CombinedOrbitParameters` to a component that
-declares `RVOrbitParameters` works because the former is a superset of the latter.
+struct via duck typing — passing a `GaiaAstrometryMarginalizedParameters` to a component that
+declares `RVMarginalizedParameters` works because the former is a superset of the latter.
 
 This is the canonical way to combine heterogeneous datasets, including astrometry + RV:
 
@@ -383,7 +509,7 @@ log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
 Each component holds its own `linear_prior`, which may be a fixed
 `dist.MultivariateNormal` or a callable `eqx.Module`. When callable, it receives
 whatever params struct is passed by the caller — for combined data this is
-`CombinedOrbitParameters`, giving the callable access to all nonlinear parameters.
+`GaiaAstrometryMarginalizedParameters`, giving the callable access to all nonlinear parameters.
 
 #### `_IndexedCallable` — splitting a joint prior
 
@@ -573,14 +699,14 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 ### Design
 
-| Internal field        | Content                                                                   |
-| --------------------- | ------------------------------------------------------------------------- |
-| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                      |
-| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                                 |
-| `_orbit_cls`          | Static reference to the orbit-only param class (e.g. `RVOrbitParameters`) |
-| `_full_cls`           | Static tuple of full param classes (e.g. `(RVFullParameters,)`)           |
-| `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler    |
-| `_metadata`           | Static dict with `t_ref` and any extra info                               |
+| Internal field        | Content                                                                          |
+| --------------------- | -------------------------------------------------------------------------------- |
+| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                             |
+| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                                        |
+| `_orbit_cls`          | Static reference to the orbit-only param class (e.g. `RVMarginalizedParameters`) |
+| `_full_cls`           | Static tuple of full param classes (e.g. `(RVParameters,)`)                      |
+| `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler           |
+| `_metadata`           | Static dict with `t_ref` and any extra info                                      |
 
 `_linear_param_names` is derived on demand from `_full_cls[i].linear_param_names`
 (concatenated across all full classes). Unit restoration for each linear parameter uses

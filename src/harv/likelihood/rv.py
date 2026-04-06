@@ -17,10 +17,6 @@ For the marginalized SB1 model, the RV model is:
 For the SB2 case, see :func:`_get_design_matrix_sb2`.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -29,16 +25,15 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import ustrip
 from unxt.quantity import AllowValue
 
+from harv.data import RadialVelocityData
+from harv.kepler._orbit_math import rv_shape as _rv_shape
 from harv.likelihood._params import (
-    AbstractRVParameters,
-    RVFullParameters,
-    RVOrbitParameters,
+    AbstractParameters,
+    RVMarginalizedParameters,
+    RVParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
-
-if TYPE_CHECKING:
-    from harv.data import RadialVelocityData
 
 __all__ = [
     "MarginalizedMultiSurveyRVLikelihood",
@@ -53,19 +48,18 @@ __all__ = [
 
 
 def _get_design_matrix(
-    params: AbstractRVParameters,
+    params: AbstractParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
     """Build (n_obs, 2) design matrix for SB1: columns [K, v₀]."""
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
-    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f
-    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)
+    rv_amplitude = _rv_shape(sin_f, cos_f, params.eccentricity, _arg_peri)
     return jnp.column_stack([rv_amplitude, jnp.ones_like(rv_amplitude)])
 
 
 def _get_design_matrix_sb2(
-    params: AbstractRVParameters,
+    params: AbstractParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
     primary: bool,
@@ -75,8 +69,7 @@ def _get_design_matrix_sb2(
     For primary: [X(t), 0, 1].  For secondary: [0, -X(t), 1].
     """
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
-    cos_omega_plus_f = jnp.cos(_arg_peri) * cos_f - jnp.sin(_arg_peri) * sin_f
-    rv_amplitude = cos_omega_plus_f + params.eccentricity * jnp.cos(_arg_peri)
+    rv_amplitude = _rv_shape(sin_f, cos_f, params.eccentricity, _arg_peri)
 
     if primary:
         return jnp.column_stack(
@@ -92,7 +85,7 @@ def _get_design_matrix_sb2(
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
+class MarginalizedRVLikelihood(AbstractLikelihood[RVMarginalizedParameters]):
     """RV likelihood with linear parameters (K, v₀) analytically marginalized.
 
     Analytically integrates over K and v₀ given a Gaussian prior, using the
@@ -105,7 +98,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
     linear_prior : dist.MultivariateNormal or eqx.Module
         Gaussian prior over [K, v₀].  May be a fixed ``dist.MultivariateNormal``
         or a callable ``eqx.Module`` with signature
-        ``__call__(params: RVOrbitParameters) -> dist.MultivariateNormal``.
+        ``__call__(params: RVMarginalizedParameters) -> dist.MultivariateNormal``.
 
     Examples
     --------
@@ -118,7 +111,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
 
-    def log_prob(self, params: RVOrbitParameters) -> jax.Array:
+    def log_prob(self, params: RVMarginalizedParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)
@@ -138,7 +131,7 @@ class MarginalizedRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVOrbitParameters]):
+class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVMarginalizedParameters]):
     """RV likelihood for multiple instruments with offset parameters marginalized.
 
     Linear parameters are ``[K, v₀, δ₁, …, δₖ]`` where δᵢ is the zero-point
@@ -165,7 +158,7 @@ class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVOrbitParameters])
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
 
-    def log_prob(self, params: RVOrbitParameters) -> jax.Array:
+    def log_prob(self, params: RVMarginalizedParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         dm_base = _get_design_matrix(params, sin_f, cos_f)  # (n_obs, 2)
@@ -186,7 +179,7 @@ class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[RVOrbitParameters])
 # ---------------------------------------------------------------------------
 
 
-class RVLikelihood(AbstractLikelihood[RVFullParameters]):
+class RVLikelihood(AbstractLikelihood[RVParameters]):
     """Full RV likelihood with all parameters (including K and v₀) specified.
 
     Parameters
@@ -204,7 +197,7 @@ class RVLikelihood(AbstractLikelihood[RVFullParameters]):
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri", "K", "v0")
 
-    def log_prob(self, params: RVFullParameters) -> jax.Array:
+    def log_prob(self, params: RVParameters) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)

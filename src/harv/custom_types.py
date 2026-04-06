@@ -34,6 +34,15 @@ NIntArray = Int[jax.Array, "n"]
 Vec3QLength = Real[Quantity["length"], "3"]
 Vec3QSpeed = Real[Quantity["speed"], "3"]
 
+BatchableQAngle = Real[Quantity["angle"], "*batch"]
+BatchableQAngularSpeed = Real[Quantity["angular speed"], "*batch"]
+BatchableQLength = Real[Quantity["length"], "*batch"]
+BatchableQSpeed = Real[Quantity["speed"], "*batch"]
+BatchableQTime = Real[Quantity["time"], "*batch"]
+BatchableFloat = (
+    Float[jax.Array, "*batch"] | np.floating[Any] | float | int | ScalarQDimless
+)
+
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 
 

@@ -11,54 +11,49 @@ Two levels of parameterization exist for each data type:
   where linear parameters are analytically integrated out given a Gaussian prior.
 - **Full parameters** (nonlinear + linear): used with full likelihoods where
   all parameters are specified explicitly.
+
+Annotations use ``Batchable*`` type aliases (e.g. ``BatchableQTime``,
+``BatchableFloat``) which accept both scalar and batched arrays via the
+``*batch`` shape wildcard.  The rejection sampler constructs parameter structs
+with a leading batch axis; ``jax.vmap`` then slices each leaf to scalar.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar, final
 
 import equinox as eqx
 
-if TYPE_CHECKING:
-    import jax
-    from unxt import Quantity
+from harv.custom_types import (
+    BatchableFloat,
+    BatchableQAngle,
+    BatchableQAngularSpeed,
+    BatchableQLength,
+    BatchableQSpeed,
+    BatchableQTime,
+)
 
-    from harv.custom_types import Angle, AngularSpeed, Length, Speed, Time
 
+class AbstractParameters(eqx.Module):
+    """Abstract base for all parameter structs.
 
-class AbstractBaseKeplerParameters(eqx.Module):
-    """Base class for Keplerian orbital parameters shared across data types.
-
-    This includes the 4 nonlinear orbital parameters common to both RV and
-    astrometry: period, eccentricity, phase of periastron, and argument of
-    periastron.
+    Declares the 4 orbital fields shared by every concrete parameter class.
     """
 
-    period: Quantity[Time]
-    eccentricity: float | jax.Array
-    phase_peri: float | jax.Array
-    arg_peri: float | jax.Array
+    period: BatchableQTime
+    eccentricity: BatchableFloat
+    phase_peri: BatchableFloat
+    arg_peri: BatchableFloat
 
 
-# ---------------------------------------------------------------------------
-# Radial velocity
-# ---------------------------------------------------------------------------
-
-
-class AbstractRVParameters(AbstractBaseKeplerParameters):
-    """Abstract base class for RV parameter structs."""
-
-    data_type: ClassVar[str] = "rv"
-
-
-class RVOrbitParameters(AbstractRVParameters):
+@final
+class RVMarginalizedParameters(AbstractParameters):
     """Nonlinear orbital parameters for the marginalized RV likelihood.
 
     The linear parameters (K, v0) are analytically marginalized out.
     """
 
 
-class RVFullParameters(AbstractRVParameters):
+@final
+class RVParameters(AbstractParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters and the linear RV parameters
@@ -67,44 +62,27 @@ class RVFullParameters(AbstractRVParameters):
 
     linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
 
-    K: Quantity[Speed]  # RV semi-amplitude
-    v0: Quantity[Speed]  # systemic velocity
+    K: BatchableQSpeed  # RV semi-amplitude
+    v0: BatchableQSpeed  # systemic velocity
 
 
-# ---------------------------------------------------------------------------
-# Gaia epoch astrometry
-# ---------------------------------------------------------------------------
-
-
-class AbstractGaiaAstrometryParameters(AbstractBaseKeplerParameters):
-    """Abstract base class for Gaia astrometry parameter structs."""
-
-    data_type: ClassVar[str] = "astrometry"
-
-    cos_i: float | jax.Array
-    lon_asc_node: float | jax.Array
-
-
-class GaiaAstrometryOrbitParameters(AbstractGaiaAstrometryParameters):
+@final
+class GaiaAstrometryMarginalizedParameters(AbstractParameters):
     """Nonlinear orbital parameters for the marginalized Gaia astrometry likelihood.
+
+    Also used for combined astrometry + RV runs (the nonlinear parameter set is
+    identical; the data type distinction is carried by the sampler/Samples, not here).
 
     The 6 linear astrometric parameters (ra0, dec0, pmra, pmdec, parallax, a) are
     analytically marginalized out.
     """
 
-
-class CombinedOrbitParameters(AbstractGaiaAstrometryParameters):
-    """Nonlinear orbital parameters for combined astrometry + RV data.
-
-    Identical structure to GaiaAstrometryOrbitParameters but tagged with
-    data_type = "combined" so that Samples can distinguish combined from
-    pure-astrometry posteriors.
-    """
-
-    data_type: ClassVar[str] = "combined"
+    cos_i: BatchableFloat
+    lon_asc_node: BatchableFloat
 
 
-class GaiaAstrometryFullParameters(AbstractGaiaAstrometryParameters):
+@final
+class GaiaAstrometryParameters(AbstractParameters):
     """Full parameter set for the Gaia astrometry likelihood.
 
     Includes both nonlinear orbital parameters and the 6 linear astrometric
@@ -125,9 +103,11 @@ class GaiaAstrometryFullParameters(AbstractGaiaAstrometryParameters):
         "semi_major_axis",
     )
 
-    ra0: Quantity[Angle]  # reference RA offset
-    dec0: Quantity[Angle]  # reference Dec offset
-    pmra: Quantity[AngularSpeed]  # proper motion in RA
-    pmdec: Quantity[AngularSpeed]  # proper motion in Dec
-    parallax: Quantity[Angle]  # parallax
-    semi_major_axis: Quantity[Length]  # photocentric semi-major axis
+    cos_i: BatchableFloat
+    lon_asc_node: BatchableFloat
+    ra0: BatchableQAngle  # reference RA offset
+    dec0: BatchableQAngle  # reference Dec offset
+    pmra: BatchableQAngularSpeed  # proper motion in RA
+    pmdec: BatchableQAngularSpeed  # proper motion in Dec
+    parallax: BatchableQAngle  # parallax
+    semi_major_axis: BatchableQLength  # photocentric semi-major axis

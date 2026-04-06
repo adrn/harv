@@ -20,10 +20,6 @@ For the marginalized model, the astrometric model is:
 where A, B, F, G are Thiele-Innes constants and f is the true anomaly.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -32,22 +28,21 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import ustrip
 from unxt.quantity import AllowValue
 
+from harv.data import GaiaAstrometryData
+from harv.kepler._orbit_math import thiele_innes_ABFG
 from harv.likelihood._params import (
-    AbstractGaiaAstrometryParameters,
-    GaiaAstrometryFullParameters,
-    GaiaAstrometryOrbitParameters,
+    GaiaAstrometryMarginalizedParameters,
+    GaiaAstrometryParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
-
-if TYPE_CHECKING:
-    from harv.data import GaiaAstrometryData
 
 __all__ = [
     "MarginalizedGaiaAstrometryLikelihood",
     "GaiaAstrometryLikelihood",
 ]
 
+_GaiaParams = GaiaAstrometryMarginalizedParameters | GaiaAstrometryParameters
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -56,7 +51,7 @@ __all__ = [
 
 def _get_design_matrix(
     data: GaiaAstrometryData,
-    params: AbstractGaiaAstrometryParameters,
+    params: _GaiaParams,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -75,22 +70,13 @@ def _get_design_matrix(
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
     _lon_asc_node = ustrip(AllowValue, "", params.lon_asc_node)
 
-    # Thiele-Innes constants
-    A = (
-        jnp.cos(_arg_peri) * jnp.cos(_lon_asc_node)
-        - jnp.sin(_arg_peri) * jnp.sin(_lon_asc_node) * _cos_i
-    )
-    B = (
-        jnp.cos(_arg_peri) * jnp.sin(_lon_asc_node)
-        + jnp.sin(_arg_peri) * jnp.cos(_lon_asc_node) * _cos_i
-    )
-    F = (
-        -jnp.sin(_arg_peri) * jnp.cos(_lon_asc_node)
-        - jnp.cos(_arg_peri) * jnp.sin(_lon_asc_node) * _cos_i
-    )
-    G = (
-        -jnp.sin(_arg_peri) * jnp.sin(_lon_asc_node)
-        + jnp.cos(_arg_peri) * jnp.cos(_lon_asc_node) * _cos_i
+    # Thiele-Innes constants (unit, i.e. semi-major axis = 1)
+    A, B, F, G = thiele_innes_ABFG(
+        jnp.cos(_arg_peri),
+        jnp.sin(_arg_peri),
+        jnp.cos(_lon_asc_node),
+        jnp.sin(_lon_asc_node),
+        _cos_i,
     )
 
     semimaj_term = (A * sin_psi + B * cos_psi) * cos_f + (
@@ -116,7 +102,7 @@ def _get_design_matrix(
 
 
 class MarginalizedGaiaAstrometryLikelihood(
-    AbstractLikelihood[GaiaAstrometryOrbitParameters]
+    AbstractLikelihood[GaiaAstrometryMarginalizedParameters]
 ):
     """Gaia astrometry likelihood with linear parameters analytically marginalized.
 
@@ -150,7 +136,7 @@ class MarginalizedGaiaAstrometryLikelihood(
         "lon_asc_node",
     )
 
-    def log_prob(self, params: GaiaAstrometryOrbitParameters) -> jax.Array:
+    def log_prob(self, params: GaiaAstrometryMarginalizedParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
@@ -171,7 +157,7 @@ class MarginalizedGaiaAstrometryLikelihood(
 # ---------------------------------------------------------------------------
 
 
-class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryFullParameters]):
+class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
     """Full Gaia astrometry likelihood with all parameters specified explicitly.
 
     Parameters
@@ -202,7 +188,7 @@ class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryFullParameters])
         "semi_major_axis",
     )
 
-    def log_prob(self, params: GaiaAstrometryFullParameters) -> jax.Array:
+    def log_prob(self, params: GaiaAstrometryParameters) -> jax.Array:
         """Compute the log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)

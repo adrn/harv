@@ -6,10 +6,10 @@ import pytest
 from unxt import Quantity
 
 from harv.likelihood._params import (
-    GaiaAstrometryFullParameters,
-    GaiaAstrometryOrbitParameters,
-    RVFullParameters,
-    RVOrbitParameters,
+    GaiaAstrometryMarginalizedParameters,
+    GaiaAstrometryParameters,
+    RVMarginalizedParameters,
+    RVParameters,
 )
 from harv.samplers.samples import Samples
 
@@ -34,10 +34,11 @@ def _make_astro_samples():
     return Samples(
         _nonlinear=nonlinear,
         _linear=linear,
-        _orbit_cls=GaiaAstrometryOrbitParameters,
-        _full_cls=(GaiaAstrometryFullParameters,),
+        _orbit_cls=GaiaAstrometryMarginalizedParameters,
+        _full_cls=(GaiaAstrometryParameters,),
         _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
         _time_unit="day",
+        _data_type="astrometry",
         _metadata={"t_ref": 0.0},
     )
 
@@ -65,10 +66,11 @@ class TestSamplesCreation:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVOrbitParameters,
-            _full_cls=(RVFullParameters,),
+            _orbit_cls=RVMarginalizedParameters,
+            _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
+            _data_type="rv",
             _metadata={},
         )
 
@@ -137,10 +139,11 @@ class TestSamplesAccess:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVOrbitParameters,
-            _full_cls=(RVFullParameters,),
+            _orbit_cls=RVMarginalizedParameters,
+            _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
+            _data_type="rv",
             _metadata={},
         )
 
@@ -165,10 +168,11 @@ class TestSamplesRepr:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVOrbitParameters,
-            _full_cls=(RVFullParameters,),
+            _orbit_cls=RVMarginalizedParameters,
+            _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
+            _data_type="rv",
             _metadata={},
         )
 
@@ -187,6 +191,4 @@ class TestSamplesJAX:
         leaves, treedef = jax.tree_util.tree_flatten(samples)
         reconstructed = jax.tree_util.tree_unflatten(treedef, leaves)
         assert reconstructed.n_samples == samples.n_samples
-        assert jnp.allclose(
-            reconstructed["eccentricity"], samples["eccentricity"]
-        )
+        assert jnp.allclose(reconstructed["eccentricity"], samples["eccentricity"])

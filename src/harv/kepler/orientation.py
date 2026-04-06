@@ -8,6 +8,7 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
+from harv.kepler._orbit_math import thiele_innes_ABFG
 
 
 class KeplerianOrientation(eqx.Module):
@@ -263,18 +264,16 @@ class KeplerianOrientation(eqx.Module):
             if semi_major_axis is None
             else Quantity.from_(semi_major_axis)
         )
-        s_w = self.sin_arg_peri
-        c_w = self.cos_arg_peri
-        s_W = self.sin_lon_asc_node
-        c_W = self.cos_lon_asc_node
-        c_i = self.cos_i
 
-        # Eq A.1 of https://arxiv.org/abs/2206.05726
-        A = a * (c_w * c_W - s_w * s_W * c_i)
-        B = a * (c_w * s_W + s_w * c_W * c_i)
-        F = -a * (s_w * c_W + c_w * s_W * c_i)
-        G = -a * (s_w * s_W - c_w * c_W * c_i)
+        A, B, F, G = thiele_innes_ABFG(
+            self.cos_arg_peri,
+            self.sin_arg_peri,
+            self.cos_lon_asc_node,
+            self.sin_lon_asc_node,
+            self.cos_i,
+        )
 
         return cast(
-            "tuple[ScalarQLength | ScalarQAngle | jax.Array, ...]", (A, B, F, G)
+            "tuple[ScalarQLength | ScalarQAngle | jax.Array, ...]",
+            (a * A, a * B, a * F, a * G),
         )

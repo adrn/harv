@@ -10,10 +10,10 @@ from typing import Any
 
 import numpy as np
 import quaxed.numpy as jnp
-from jaxoplanet.core.kepler import kepler
 from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
+from harv.kepler._orbit_math import mean_anomaly, rv_shape, true_anomaly_from_mean
 
 __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
 
@@ -109,7 +109,9 @@ def simulate_rv_sb1_data(
         eccentricity = rngs[2].uniform(0.0, 0.7)
 
     if t_peri is None:
-        t_peri = Quantity(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+        t_peri = Quantity(
+            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
+        )
 
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -128,21 +130,16 @@ def simulate_rv_sb1_data(
 
     # Observation times over baseline
     dt: Quantity[Any] = Quantity(
-        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)), baseline.unit
+        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
+        baseline.unit,
     )
     times = dt + t_ref
 
-    # Compute mean anomaly (dimensionless ratio, unit-agnostic)
-    M = 2 * jnp.pi * ustrip("", dt / period)
-
-    # Solve Kepler's equation
-    sin_f, cos_f = kepler(M, eccentricity)
-
-    # Compute RV
-    # RV = K·[cos(ω + f) + e·cos(ω)] + v₀
-    arg_peri_rad = ustrip("rad", arg_peri)
-    cos_omega_plus_f = jnp.cos(arg_peri_rad) * cos_f - jnp.sin(arg_peri_rad) * sin_f
-    rv_amplitude = cos_omega_plus_f + eccentricity * jnp.cos(arg_peri_rad)
+    # Compute RV model: RV(t) = K·[cos(ω + f) + e·cos(ω)] + v₀
+    _pu = period.unit
+    M = mean_anomaly(ustrip(_pu, times - t_peri), ustrip(_pu, period))
+    sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
+    rv_amplitude = rv_shape(sin_f, cos_f, eccentricity, ustrip("rad", arg_peri))
 
     rv_true = K * rv_amplitude + v0
 
@@ -259,7 +256,9 @@ def simulate_rv_multisurv_data(
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.7)
     if t_peri is None:
-        t_peri = Quantity(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+        t_peri = Quantity(
+            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
+        )
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
     if K is None:
@@ -292,19 +291,19 @@ def simulate_rv_multisurv_data(
 
         dt: Quantity[Any] = Quantity(
             jnp.sort(
-                inst_rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs_per_instrument)
+                inst_rng.uniform(
+                    0.0, ustrip(baseline.unit, baseline), n_obs_per_instrument
+                )
             ),
             baseline.unit,
         )
         times = dt + t_ref
 
-        M = 2 * jnp.pi * ustrip("", dt / period)
-        from jaxoplanet.core.kepler import kepler
-
-        sin_f, cos_f = kepler(M, eccentricity)
-        cos_omega_plus_f = jnp.cos(arg_peri_rad) * cos_f - jnp.sin(arg_peri_rad) * sin_f
-        rv_amplitude = cos_omega_plus_f + eccentricity * jnp.cos(arg_peri_rad)
-        rv_true = K * rv_amplitude + v0 + eff_offset
+        _pu = period.unit
+        M = mean_anomaly(ustrip(_pu, times - t_peri), ustrip(_pu, period))
+        sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
+        rv_amp = rv_shape(sin_f, cos_f, eccentricity, arg_peri_rad)
+        rv_true = K * rv_amp + v0 + eff_offset
 
         n_obs = n_obs_per_instrument
         noise: Quantity[Any] = Quantity.from_(inst_rng.normal(size=n_obs), "")

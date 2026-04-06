@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
-from harv.likelihood._params import RVOrbitParameters
+from harv.likelihood._params import RVMarginalizedParameters
 from harv.likelihood.rv import (
     MarginalizedRVLikelihood,
     _get_design_matrix,
@@ -14,10 +14,8 @@ from harv.likelihood.rv import (
 )
 
 
-def _make_rv_params(
-    period_day=100.0, eccentricity=0.3, phase_peri=0.0, arg_peri=1.0
-):
-    return RVOrbitParameters(
+def _make_rv_params(period_day=100.0, eccentricity=0.3, phase_peri=0.0, arg_peri=1.0):
+    return RVMarginalizedParameters(
         period=Quantity(period_day, "day"),
         eccentricity=eccentricity,
         phase_peri=phase_peri,
@@ -181,6 +179,7 @@ class TestMarginalizedLikelihoodRV:
         assert jnp.isfinite(log_lik_circ)
         assert jnp.isfinite(log_lik_ecc)
 
+
 class TestBatchLikelihoodRV:
     """Tests for batched RV likelihood via vmap."""
 
@@ -191,7 +190,7 @@ class TestBatchLikelihoodRV:
         lik = MarginalizedRVLikelihood(data=data, linear_prior=_rv_prior())
 
         eccentricities = jnp.linspace(0.0, 0.5, n_samples)
-        params_batch = RVOrbitParameters(
+        params_batch = RVMarginalizedParameters(
             period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=eccentricities,
             phase_peri=jnp.zeros(n_samples),
@@ -216,7 +215,7 @@ class TestBatchLikelihoodRV:
 
         eccs = jnp.linspace(0.0, 0.5, 5)
 
-        params_batch = RVOrbitParameters(
+        params_batch = RVMarginalizedParameters(
             period=Quantity(jnp.ones(5) * 100.0, "day"),
             eccentricity=eccs,
             phase_peri=jnp.zeros(5),
@@ -227,7 +226,7 @@ class TestBatchLikelihoodRV:
         log_liks_serial = jnp.array(
             [
                 lik.log_prob(
-                    RVOrbitParameters(
+                    RVMarginalizedParameters(
                         period=Quantity(100.0, "day"),
                         eccentricity=float(eccs[i]),
                         phase_peri=0.0,

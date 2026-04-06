@@ -10,13 +10,14 @@ import quaxed.numpy as jnp
 from unxt import Quantity
 
 if TYPE_CHECKING:
+    from harv.custom_types import ScalarQTime
     from harv.kepler import TwoBodySystem
 
 
 class AbstractSource(eqx.Module):
     """Abstract base class for astrometric source models."""
 
-    ref_epoch: Quantity["time"]  # reference time
+    ref_epoch: "ScalarQTime"  # reference time
     pos0: cx.vecs.AbstractPos
     vel0: cx.vecs.AbstractVel
 

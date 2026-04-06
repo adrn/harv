@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from unxt import Quantity
 
 from harv.data import GaiaAstrometryData
-from harv.likelihood._params import GaiaAstrometryOrbitParameters
+from harv.likelihood._params import GaiaAstrometryMarginalizedParameters
 from harv.likelihood.gaia_astrometry import (
     MarginalizedGaiaAstrometryLikelihood,
     _get_design_matrix,
@@ -33,7 +33,7 @@ def _make_astro_params(
     cos_i=0.5,
     lon_asc_node=2.0,
 ):
-    return GaiaAstrometryOrbitParameters(
+    return GaiaAstrometryMarginalizedParameters(
         period=Quantity(period_day, "day"),
         eccentricity=eccentricity,
         phase_peri=phase_peri,
@@ -93,7 +93,9 @@ class TestMarginalizedLikelihood:
     def test_likelihood_finite(self):
         """Test that likelihood returns a finite scalar."""
         data = _make_astro_data()
-        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
+        lik = MarginalizedGaiaAstrometryLikelihood(
+            data=data, linear_prior=_astro_prior()
+        )
         params = _make_astro_params()
 
         log_lik = lik.log_prob(params)
@@ -127,8 +129,12 @@ class TestMarginalizedLikelihood:
         params = _make_astro_params()
         prior = _astro_prior()
 
-        log_lik_small = MarginalizedGaiaAstrometryLikelihood(data_small, prior).log_prob(params)
-        log_lik_large = MarginalizedGaiaAstrometryLikelihood(data_large, prior).log_prob(params)
+        log_lik_small = MarginalizedGaiaAstrometryLikelihood(
+            data_small, prior
+        ).log_prob(params)
+        log_lik_large = MarginalizedGaiaAstrometryLikelihood(
+            data_large, prior
+        ).log_prob(params)
 
         assert log_lik_small > log_lik_large
 
@@ -147,6 +153,7 @@ class TestMarginalizedLikelihood:
         assert jnp.isfinite(log_lik_circ)
         assert jnp.isfinite(log_lik_ecc)
 
+
 class TestBatchLikelihood:
     """Tests for batched astrometry likelihood via vmap."""
 
@@ -154,9 +161,11 @@ class TestBatchLikelihood:
         """Test that vmap over log_prob returns correct shape."""
         n_samples = 10
         data = _make_astro_data()
-        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=_astro_prior())
+        lik = MarginalizedGaiaAstrometryLikelihood(
+            data=data, linear_prior=_astro_prior()
+        )
 
-        params_batch = GaiaAstrometryOrbitParameters(
+        params_batch = GaiaAstrometryMarginalizedParameters(
             period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n_samples),
             phase_peri=jnp.zeros(n_samples),
@@ -178,7 +187,7 @@ class TestBatchLikelihood:
         lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=prior)
 
         eccs = jnp.array([0.1, 0.3])
-        params_batch = GaiaAstrometryOrbitParameters(
+        params_batch = GaiaAstrometryMarginalizedParameters(
             period=Quantity(jnp.ones(2) * 100.0, "day"),
             eccentricity=eccs,
             phase_peri=jnp.zeros(2),
