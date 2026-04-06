@@ -642,7 +642,129 @@ _STRATEGIES: dict[str, _DataTypeStrategy] = {
 
 
 # ---------------------------------------------------------------------------
-# Numpyro model builder
+# Numpyro model builder helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _ModelContext:
+    """Pre-computed shared state used by all numpyro model builders."""
+
+    prior: "RejectionPrior"
+    strategy: _DataTypeStrategy
+    astro_data: GaiaAstrometryData | None
+    rv_data: RadialVelocityData | None
+    time_unit: str
+    nonlinear_cls: type
+    nonlinear_priors: dict[str, Any]
+    lik: Any  # AbstractLikelihood or CompositeLikelihood
+    astro_lik: Any  # component likelihood or None
+    rv_lik: Any  # component likelihood or None
+    n_astro: int
+    all_linear_names: tuple[str, ...]
+    astro_obs: jax.Array | None
+    astro_err: jax.Array | None
+    rv_obs: jax.Array | None
+    rv_err: jax.Array | None
+
+
+def _build_model_context(
+    sampler: "RejectionSampler",
+    data: InputData,
+) -> _ModelContext:
+    """Pre-compute shared state for numpyro model builders.
+
+    Extracts the prior, strategy, data splits, time unit, likelihood
+    components, linear parameter names, and unit-stripped data arrays — all
+    the setup that every builder needs (or a superset thereof).
+    """
+    prior = sampler.prior
+    strategy = sampler._infer_strategy(data)
+    astro_data, rv_data = strategy.extract_data(data)
+    time_unit = str(
+        astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
+    )
+    nonlinear_cls = strategy.nonlinear_cls
+    nonlinear_priors = prior.nonlinear_priors
+
+    # Linear parameter names, in the same column order as samples._linear.
+    all_linear_names: tuple[str, ...] = sum(
+        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined]
+        (),
+    )
+    offset_names: tuple[str, ...] = ()
+    if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
+        offset_names = tuple(k for k, v in prior.offsets.items() if v is not None)
+    all_linear_names = all_linear_names + offset_names
+
+    # Build likelihood + extract per-component objects for DM construction.
+    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
+    if isinstance(lik, CompositeLikelihood):
+        astro_lik = lik["astro"]
+        rv_lik = lik["rv"]
+    else:
+        astro_lik = lik if astro_data is not None else None
+        rv_lik = lik if rv_data is not None else None
+
+    # Slice boundary for combined data (astro columns come first).
+    n_astro = (
+        len(GaiaAstrometryParameters.linear_param_names)
+        if astro_data is not None
+        else 0
+    )
+
+    # Pre-strip units from data arrays (outside the model closure for efficiency).
+    astro_obs = astro_err = rv_obs = rv_err = None
+    if astro_data is not None:
+        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
+        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
+    if rv_data is not None:
+        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
+        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
+
+    return _ModelContext(
+        prior=prior,
+        strategy=strategy,
+        astro_data=astro_data,
+        rv_data=rv_data,
+        time_unit=time_unit,
+        nonlinear_cls=nonlinear_cls,
+        nonlinear_priors=nonlinear_priors,
+        lik=lik,
+        astro_lik=astro_lik,
+        rv_lik=rv_lik,
+        n_astro=n_astro,
+        all_linear_names=all_linear_names,
+        astro_obs=astro_obs,
+        astro_err=astro_err,
+        rv_obs=rv_obs,
+        rv_err=rv_err,
+    )
+
+
+def _sample_nonlinear(
+    ctx: _ModelContext,
+) -> tuple[dict[str, Any], MarginalizedParameters]:
+    """Sample nonlinear parameters inside a numpyro model closure.
+
+    Must be called within an active numpyro model context.  Returns the raw
+    sampled values dict *and* a ``MarginalizedParameters`` instance suitable
+    for passing to ``lik.design_matrix()`` or ``lik.log_prob()``.
+    """
+    import numpyro
+
+    values: dict[str, Any] = {}
+    for name, d in ctx.nonlinear_priors.items():
+        values[name] = numpyro.sample(name, d)
+
+    orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
+    orbit_kwargs["period"] = Quantity(values["period"], ctx.time_unit)
+    params = ctx.nonlinear_cls.marginalized(**orbit_kwargs)
+    return values, params
+
+
+# ---------------------------------------------------------------------------
+# Numpyro model builders
 # ---------------------------------------------------------------------------
 
 
@@ -673,26 +795,11 @@ def _build_marginalized_numpyro_model(
     """
     import numpyro
 
-    prior = sampler.prior
-    strategy = sampler._infer_strategy(data)
-    astro_data, rv_data = strategy.extract_data(data)
-    time_unit = str(
-        astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
-    )
-    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
-    nonlinear_cls = strategy.nonlinear_cls
-    nonlinear_priors = prior.nonlinear_priors  # snapshot at model-build time
+    ctx = _build_model_context(sampler, data)
 
     def model() -> None:
-        values: dict[str, Any] = {}
-        for name, d in nonlinear_priors.items():
-            values[name] = numpyro.sample(name, d)
-
-        orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
-        orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = nonlinear_cls.marginalized(**orbit_kwargs)
-
-        numpyro.factor("log_lik", lik.log_prob(params))
+        _, params = _sample_nonlinear(ctx)
+        numpyro.factor("log_lik", ctx.lik.log_prob(params))
 
     return model
 
@@ -728,84 +835,36 @@ def _build_full_numpyro_model(
     """
     import numpyro
 
-    prior = sampler.prior
-    strategy = sampler._infer_strategy(data)
-    astro_data, rv_data = strategy.extract_data(data)
-    time_unit = str(
-        astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
-    )
-    nonlinear_cls = strategy.nonlinear_cls
-    nonlinear_priors = prior.nonlinear_priors
-
-    # Linear parameter names, in the same column order as samples._linear.
-    linear_param_names: tuple[str, ...] = sum(
-        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined]
-        (),
-    )
-
-    # Multi-survey RV: offset names (the indicator matrix is already inside
-    # the RVLikelihood built by the strategy).
-    offset_names: tuple[str, ...] = ()
-    if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
-        offset_names = tuple(k for k, v in prior.offsets.items() if v is not None)
-    linear_param_names = linear_param_names + offset_names
-
-    # Build the likelihood and extract per-component objects for DM construction.
-    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
-    if isinstance(lik, CompositeLikelihood):
-        astro_lik = lik["astro"]
-        rv_lik = lik["rv"]
-    else:
-        astro_lik = lik if astro_data is not None else None
-        rv_lik = lik if rv_data is not None else None
-
-    # Slice boundaries for combined data (astro columns come first).
-    n_astro = (
-        len(GaiaAstrometryParameters.linear_param_names)
-        if astro_data is not None
-        else 0
-    )
-
-    # Pre-strip units from data arrays (outside the model closure for efficiency).
-    if astro_data is not None:
-        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
-        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
-    if rv_data is not None:
-        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
-        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
+    ctx = _build_model_context(sampler, data)
 
     def model() -> None:
-        # --- nonlinear parameters ---
-        values: dict[str, Any] = {}
-        for name, d in nonlinear_priors.items():
-            values[name] = numpyro.sample(name, d)
-
-        orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
-        orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = nonlinear_cls.marginalized(**orbit_kwargs)
+        _, params = _sample_nonlinear(ctx)
 
         # --- linear parameters ---
         # Sample the full vector jointly to preserve the prior's covariance.
-        resolved_lp = _resolve_linear_prior(prior.linear_prior, params)
+        resolved_lp = _resolve_linear_prior(ctx.prior.linear_prior, params)
         linear_vec = numpyro.sample("_linear", resolved_lp)
         # Expose each column as a named deterministic site.
-        for i, lname in enumerate(linear_param_names):
+        for i, lname in enumerate(ctx.all_linear_names):
             numpyro.deterministic(lname, linear_vec[i])
 
         # --- data log-likelihood ---
         log_lik: jax.Array = jnp.zeros(())
 
-        if astro_lik is not None:
-            dm = astro_lik.design_matrix(params)
-            prediction = dm @ linear_vec[:n_astro]
+        if ctx.astro_lik is not None:
+            dm = ctx.astro_lik.design_matrix(params)
+            prediction = dm @ linear_vec[: ctx.n_astro]
             log_lik = (
-                log_lik + dist.Normal(prediction, astro_err).log_prob(astro_obs).sum()
+                log_lik
+                + dist.Normal(prediction, ctx.astro_err).log_prob(ctx.astro_obs).sum()
             )
 
-        if rv_lik is not None:
-            dm = rv_lik.design_matrix(params)
-            prediction = dm @ linear_vec[n_astro:]
-            log_lik = log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
+        if ctx.rv_lik is not None:
+            dm = ctx.rv_lik.design_matrix(params)
+            prediction = dm @ linear_vec[ctx.n_astro :]
+            log_lik = (
+                log_lik + dist.Normal(prediction, ctx.rv_err).log_prob(ctx.rv_obs).sum()
+            )
 
         numpyro.factor("log_lik", log_lik)
 
@@ -926,61 +985,11 @@ def _build_extra_numpyro_model(
     """
     import numpyro
 
-    prior = sampler.prior
-    strategy = sampler._infer_strategy(data)
-    astro_data, rv_data = strategy.extract_data(data)
-    time_unit = str(
-        astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
-    )
-    nonlinear_cls = strategy.nonlinear_cls
-    nonlinear_priors = prior.nonlinear_priors
-
-    # All linear parameter names, in the same column order as samples._linear.
-    all_linear_names: tuple[str, ...] = sum(
-        (cls.linear_param_names for cls in strategy.full_cls),  # type: ignore[attr-defined]
-        (),
-    )
-
-    # Multi-survey RV offset columns (appended after the base linear params).
-    # The indicator matrix is already inside the RVLikelihood built by the strategy.
-    offset_names: tuple[str, ...] = ()
-    if prior.offsets is not None and isinstance(data, SourceData) and data.n_rv() > 1:
-        offset_names = tuple(k for k, v in prior.offsets.items() if v is not None)
-    all_linear_names = all_linear_names + offset_names
-
-    # Build the likelihood and extract per-component objects for DM construction.
-    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
-    if isinstance(lik, CompositeLikelihood):
-        astro_lik = lik["astro"]
-        rv_lik = lik["rv"]
-    else:
-        astro_lik = lik if astro_data is not None else None
-        rv_lik = lik if rv_data is not None else None
-
-    # Index boundary separating astrometry columns from RV columns.
-    n_astro = (
-        len(GaiaAstrometryParameters.linear_param_names)
-        if astro_data is not None
-        else 0
-    )
-
-    # Pre-strip units from data arrays.
-    if astro_data is not None:
-        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
-        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
-    if rv_data is not None:
-        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
-        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
+    ctx = _build_model_context(sampler, data)
 
     def model() -> None:
         # --- nonlinear parameters ---
-        values: dict[str, Any] = {}
-        for name, d in nonlinear_priors.items():
-            values[name] = numpyro.sample(name, d)
-
-        orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
-        orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = nonlinear_cls.marginalized(**orbit_kwargs)
+        values, params = _sample_nonlinear(ctx)
 
         # --- extra model: sample physical params, get fixed linear values ---
         # ``values`` contains raw scalar nonlinear parameters; period is in
@@ -988,11 +997,11 @@ def _build_extra_numpyro_model(
         fixed_linear: dict[str, Any] = extra_model_fn(values)
 
         # Validate returned keys at trace time (string comparison is static).
-        unknown = set(fixed_linear.keys()) - set(all_linear_names)
+        unknown = set(fixed_linear.keys()) - set(ctx.all_linear_names)
         if unknown:
             msg = (
                 f"extra_model returned unknown linear parameter name(s): {unknown}. "
-                f"Valid names for this data type: {all_linear_names}"
+                f"Valid names for this data type: {ctx.all_linear_names}"
             )
             raise ValueError(msg)
 
@@ -1000,31 +1009,33 @@ def _build_extra_numpyro_model(
             numpyro.deterministic(name, val)
 
         # Determine fixed/free column split (static Python-level at trace time).
-        fixed_idx = [i for i, n in enumerate(all_linear_names) if n in fixed_linear]
-        free_idx = [i for i, n in enumerate(all_linear_names) if n not in fixed_linear]
+        fixed_idx = [i for i, n in enumerate(ctx.all_linear_names) if n in fixed_linear]
+        free_idx = [
+            i for i, n in enumerate(ctx.all_linear_names) if n not in fixed_linear
+        ]
 
         # Resolve the linear prior once (may depend on orbit params if callable).
-        resolved_lp = _resolve_linear_prior(prior.linear_prior, params)
+        resolved_lp = _resolve_linear_prior(ctx.prior.linear_prior, params)
 
         log_lik: jax.Array = jnp.zeros(())
 
         # --- astrometry component ---
-        if astro_lik is not None:
-            dm_a = astro_lik.design_matrix(params)
+        if ctx.astro_lik is not None:
+            dm_a = ctx.astro_lik.design_matrix(params)
 
-            a_fixed = [i for i in fixed_idx if i < n_astro]
-            a_free = [i for i in free_idx if i < n_astro]
+            a_fixed = [i for i in fixed_idx if i < ctx.n_astro]
+            a_free = [i for i in free_idx if i < ctx.n_astro]
 
-            y_a = astro_obs
+            y_a = ctx.astro_obs
             if a_fixed:
-                fv = jnp.stack([fixed_linear[all_linear_names[i]] for i in a_fixed])
+                fv = jnp.stack([fixed_linear[ctx.all_linear_names[i]] for i in a_fixed])
                 y_a = y_a - dm_a[:, jnp.array(a_fixed)] @ fv
 
             if a_free and marginalized:
                 marg = MarginalizedLinear(
                     design_matrix=dm_a[:, jnp.array(a_free)],
                     prior_distribution=_marginal_mvn(resolved_lp, a_free),
-                    data_distribution=dist.Normal(0.0, astro_err),
+                    data_distribution=dist.Normal(0.0, ctx.astro_err),
                 )
                 log_lik = log_lik + marg.log_prob(y_a)
             elif a_free:
@@ -1032,38 +1043,42 @@ def _build_extra_numpyro_model(
                     "_astro_linear_free", _marginal_mvn(resolved_lp, a_free)
                 )
                 for j, col in enumerate(a_free):
-                    numpyro.deterministic(all_linear_names[col], free_vals[j])
+                    numpyro.deterministic(ctx.all_linear_names[col], free_vals[j])
                 prediction = dm_a[:, jnp.array(a_free)] @ free_vals
                 if a_fixed:
-                    fv = jnp.stack([fixed_linear[all_linear_names[i]] for i in a_fixed])
+                    fv = jnp.stack(
+                        [fixed_linear[ctx.all_linear_names[i]] for i in a_fixed]
+                    )
                     prediction = prediction + dm_a[:, jnp.array(a_fixed)] @ fv
                 log_lik = (
                     log_lik
-                    + dist.Normal(prediction, astro_err).log_prob(astro_obs).sum()
+                    + dist.Normal(prediction, ctx.astro_err)
+                    .log_prob(ctx.astro_obs)
+                    .sum()
                 )
             else:
                 log_lik = (
                     log_lik
-                    + dist.Normal(jnp.zeros_like(astro_obs), astro_err)
+                    + dist.Normal(jnp.zeros_like(ctx.astro_obs), ctx.astro_err)
                     .log_prob(y_a)
                     .sum()
                 )
 
         # --- RV component ---
-        if rv_lik is not None:
-            dm_r = rv_lik.design_matrix(params)
+        if ctx.rv_lik is not None:
+            dm_r = ctx.rv_lik.design_matrix(params)
 
             # Shift column indices into the RV block (starts at n_astro in the
             # joint linear vector, but the RV design matrix is zero-indexed).
-            r_fixed_global = [i for i in fixed_idx if i >= n_astro]
-            r_free_global = [i for i in free_idx if i >= n_astro]
-            r_fixed_local = [i - n_astro for i in r_fixed_global]
-            r_free_local = [i - n_astro for i in r_free_global]
+            r_fixed_global = [i for i in fixed_idx if i >= ctx.n_astro]
+            r_free_global = [i for i in free_idx if i >= ctx.n_astro]
+            r_fixed_local = [i - ctx.n_astro for i in r_fixed_global]
+            r_free_local = [i - ctx.n_astro for i in r_free_global]
 
-            y_r = rv_obs
+            y_r = ctx.rv_obs
             if r_fixed_local:
                 fv = jnp.stack(
-                    [fixed_linear[all_linear_names[i]] for i in r_fixed_global]
+                    [fixed_linear[ctx.all_linear_names[i]] for i in r_fixed_global]
                 )
                 y_r = y_r - dm_r[:, jnp.array(r_fixed_local)] @ fv
 
@@ -1071,7 +1086,7 @@ def _build_extra_numpyro_model(
                 marg = MarginalizedLinear(
                     design_matrix=dm_r[:, jnp.array(r_free_local)],
                     prior_distribution=_marginal_mvn(resolved_lp, r_free_global),
-                    data_distribution=dist.Normal(0.0, rv_err),
+                    data_distribution=dist.Normal(0.0, ctx.rv_err),
                 )
                 log_lik = log_lik + marg.log_prob(y_r)
             elif r_free_local:
@@ -1079,20 +1094,23 @@ def _build_extra_numpyro_model(
                     "_rv_linear_free", _marginal_mvn(resolved_lp, r_free_global)
                 )
                 for j, col in enumerate(r_free_global):
-                    numpyro.deterministic(all_linear_names[col], free_vals[j])
+                    numpyro.deterministic(ctx.all_linear_names[col], free_vals[j])
                 prediction = dm_r[:, jnp.array(r_free_local)] @ free_vals
                 if r_fixed_local:
                     fv = jnp.stack(
-                        [fixed_linear[all_linear_names[i]] for i in r_fixed_global]
+                        [fixed_linear[ctx.all_linear_names[i]] for i in r_fixed_global]
                     )
                     prediction = prediction + dm_r[:, jnp.array(r_fixed_local)] @ fv
                 log_lik = (
-                    log_lik + dist.Normal(prediction, rv_err).log_prob(rv_obs).sum()
+                    log_lik
+                    + dist.Normal(prediction, ctx.rv_err).log_prob(ctx.rv_obs).sum()
                 )
             else:
                 log_lik = (
                     log_lik
-                    + dist.Normal(jnp.zeros_like(rv_obs), rv_err).log_prob(y_r).sum()
+                    + dist.Normal(jnp.zeros_like(ctx.rv_obs), ctx.rv_err)
+                    .log_prob(y_r)
+                    .sum()
                 )
 
         numpyro.factor("log_lik", log_lik)
