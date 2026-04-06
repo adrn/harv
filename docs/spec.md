@@ -458,11 +458,11 @@ with leading batch dimension).
 `RadialVelocityData` object and supports three evaluation modes:
 
 1. **Marginalized** (`linear_prior` provided, `params` is `MarginalizedParameters`):
-   analytically integrates over [K, v₀] via `MarginalizedLinear`. Supports partial
+   analytically integrates over \[K, v₀\] via `MarginalizedLinear`. Supports partial
    marginalization via `params.marginalized_names`.
-2. **Multi-survey marginalized** (`indicator_matrix` provided): appends
-   instrument-offset columns and marginalizes [K, v₀, δ₁, …, δₖ] jointly.
-3. **Explicit** (`linear_prior` is `None`, `params` is `RVParameters`): evaluates the
+1. **Multi-survey marginalized** (`indicator_matrix` provided): appends
+   instrument-offset columns and marginalizes \[K, v₀, δ₁, …, δₖ\] jointly.
+1. **Explicit** (`linear_prior` is `None`, `params` is `RVParameters`): evaluates the
    Gaussian data log-likelihood directly.
 
 For each nonlinear parameter sample it:
@@ -734,14 +734,14 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 ### Design
 
-| Internal field        | Content                                                                          |
-| --------------------- | -------------------------------------------------------------------------------- |
-| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                             |
-| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                                        |
-| `_orbit_cls`          | Static reference to the nonlinear param class (e.g. `RVParameters`)              |
-| `_full_cls`           | Static tuple of full param classes (e.g. `(RVParameters,)`)                      |
-| `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler           |
-| `_metadata`           | Static dict with `t_ref` and any extra info                                      |
+| Internal field        | Content                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                   |
+| `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                              |
+| `_orbit_cls`          | Static reference to the nonlinear param class (e.g. `RVParameters`)    |
+| `_full_cls`           | Static tuple of full param classes (e.g. `(RVParameters,)`)            |
+| `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler |
+| `_metadata`           | Static dict with `t_ref` and any extra info                            |
 
 `_linear_param_names` is derived on demand from `_full_cls[i].linear_param_names`
 (concatenated across all full classes). Unit restoration for each linear parameter uses
