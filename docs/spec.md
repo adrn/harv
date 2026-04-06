@@ -182,8 +182,8 @@ src/harv/
 │   └── rejection.py         # RejectionPrior
 ├── samplers/
 │   ├── rejection.py         # RejectionSampler
-│   ├── _strategies.py       # Data-type strategies (RV, astrometry, combined)
-│   ├── _numpyro.py          # Numpyro model builders for MCMC
+│   ├── _strategies.py       # Data-type strategies + _ComponentSlice metadata
+│   ├── _numpyro.py          # Numpyro model builders for MCMC (_ModelContext)
 │   └── samples.py           # Samples container
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data
@@ -735,6 +735,25 @@ sampling efficient.
 - `SourceData` with multiple RV datasets → **currently treated as multi-survey RV**
   (not SB2 — see §Planned: `SystemData`)
 - `SystemData` (planned) → `"sb2"`
+
+### Data-type strategy pattern
+
+All data-type-specific logic (data extraction, likelihood construction, parameter
+building, linear sampling) is encapsulated in `_DataTypeStrategy` subclasses in
+`_strategies.py`. The sampler and numpyro model builders are kept data-type-generic.
+
+**Component-generic design:** each strategy produces a tuple of `_ComponentSlice`
+objects — lightweight frozen dataclasses that carry each likelihood component's
+sub-likelihood, its global column indices into the joint linear vector, and
+unit-stripped observations/errors. The numpyro model builders loop over these
+components instead of branching on hardcoded astro/rv fields. This means adding a new
+data type (photometry, relative astrometry, SB2) requires only a new strategy
+subclass and likelihood class — zero changes to `_ModelContext` or the builders.
+
+`_ModelContext` (in `_numpyro.py`) holds only generic fields: `prior`, `strategy`,
+`time_unit`, `nonlinear_cls`, `nonlinear_priors`, `lik`, `components`, and
+`all_linear_names`. Multi-survey offset names are computed by
+`strategy.all_linear_names()` rather than being bolted on in the context builder.
 
 ### `batch_size` and GPU support
 

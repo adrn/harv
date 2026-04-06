@@ -41,6 +41,38 @@ DataType = Literal["astrometry", "rv", "combined"]
 
 
 # ---------------------------------------------------------------------------
+# Component slice — metadata for one likelihood component in the joint vector
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _ComponentSlice:
+    """One component's metadata within the joint linear parameter vector.
+
+    Produced by ``_DataTypeStrategy.build_component_slices`` and consumed by
+    the numpyro model builders in ``_numpyro.py``.  ``global_col_indices``
+    replaces the old hardcoded ``n_astro`` boundary: for combined data the
+    astro component might be ``(0, 1, 2, 3, 4, 5)`` and the RV component
+    ``(6, 7)``, with no coupling between them.
+    """
+
+    name: str
+    """Human-readable label (e.g. ``"astro"``, ``"rv"``)."""
+
+    lik: Any
+    """The per-component likelihood object (has ``design_matrix``)."""
+
+    global_col_indices: tuple[int, ...]
+    """Indices into the joint linear parameter vector."""
+
+    obs: jax.Array
+    """Unit-stripped observed data vector."""
+
+    err: jax.Array
+    """Unit-stripped uncertainties vector."""
+
+
+# ---------------------------------------------------------------------------
 # Multi-survey RV helpers (private)
 # ---------------------------------------------------------------------------
 
@@ -155,15 +187,18 @@ class _DataTypeStrategy(ABC):
     def extract_data(
         self,
         data: InputData,
-    ) -> tuple[GaiaAstrometryData | None, RadialVelocityData | None]:
-        """Extract concrete data objects from the input."""
+    ) -> dict[str, Any]:
+        """Extract concrete data objects from the input.
+
+        Returns a dict keyed by component name (e.g. ``{"rv": rv_data}`` or
+        ``{"astro": astro_data, "rv": rv_data}``).
+        """
         ...
 
     @abstractmethod
     def build_likelihood(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
         data: InputData,
     ) -> Any:
@@ -171,10 +206,20 @@ class _DataTypeStrategy(ABC):
         ...
 
     @abstractmethod
+    def build_component_slices(
+        self,
+        lik: Any,
+        datasets: dict[str, Any],
+        prior: RejectionPrior,
+        data: InputData,
+    ) -> tuple[_ComponentSlice, ...]:
+        """Build component metadata for the numpyro model builders."""
+        ...
+
+    @abstractmethod
     def linear_param_units(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
     ) -> tuple[str, ...]:
         """Derive linear parameter unit strings from the data."""
@@ -185,8 +230,7 @@ class _DataTypeStrategy(ABC):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
         time_unit: Any,
         data: InputData,
@@ -194,6 +238,24 @@ class _DataTypeStrategy(ABC):
     ) -> jax.Array:
         """Sample linear parameters for one accepted nonlinear sample."""
         ...
+
+    def all_linear_names(
+        self,
+        prior: RejectionPrior,
+        data: InputData,
+    ) -> tuple[str, ...]:
+        """All linear parameter names including multi-survey offsets."""
+        names: tuple[str, ...] = sum(
+            (cls.linear_param_names for cls in self.full_cls),  # type: ignore[attr-defined]
+            (),
+        )
+        if (
+            prior.offsets is not None
+            and isinstance(data, SourceData)
+            and data.n_rv() > 1
+        ):
+            names = names + tuple(k for k, v in prior.offsets.items() if v is not None)
+        return names
 
     @abstractmethod
     def build_orbit_params(
@@ -231,28 +293,24 @@ class _RVStrategy(_DataTypeStrategy):
     def extract_data(
         self,
         data: InputData,
-    ) -> tuple[None, RadialVelocityData]:
+    ) -> dict[str, RadialVelocityData]:
         if isinstance(data, RadialVelocityData):
-            return None, data
+            return {"rv": data}
         if isinstance(data, SourceData):
             rv_datasets = data.get_datasets_by_type(RadialVelocityData)
             if len(rv_datasets) == 1:
-                return None, next(iter(rv_datasets.values()))
-            # Multi-survey: stack all datasets in dict order.
-            return None, _stack_rv_datasets(rv_datasets)
+                return {"rv": next(iter(rv_datasets.values()))}
+            return {"rv": _stack_rv_datasets(rv_datasets)}
         msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
     def build_likelihood(
         self,
-        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
         data: InputData,
     ) -> Any:
-        if rv_data is None:
-            msg = "_RVStrategy requires rv_data"
-            raise TypeError(msg)
+        rv_data = datasets["rv"]
         indicator = None
         if (
             prior.offsets is not None
@@ -268,15 +326,32 @@ class _RVStrategy(_DataTypeStrategy):
             indicator_matrix=indicator,
         )
 
+    def build_component_slices(
+        self,
+        lik: Any,
+        datasets: dict[str, Any],
+        prior: RejectionPrior,
+        data: InputData,
+    ) -> tuple[_ComponentSlice, ...]:
+        rv_data = datasets["rv"]
+        obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
+        err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
+        n_base = len(RVParameters.linear_param_names)
+        n_offsets = 0
+        if (
+            prior.offsets is not None
+            and isinstance(data, SourceData)
+            and data.n_rv() > 1
+        ):
+            n_offsets = sum(1 for v in prior.offsets.values() if v is not None)
+        return (_ComponentSlice("rv", lik, tuple(range(n_base + n_offsets)), obs, err),)
+
     def linear_param_units(
         self,
-        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
     ) -> tuple[str, ...]:
-        if rv_data is None:
-            msg = "_RVStrategy requires rv_data"
-            raise TypeError(msg)
+        rv_data = datasets["rv"]
         rv_unit = str(rv_data.rv.unit)
         n_offsets = sum(1 for v in (prior.offsets or {}).values() if v is not None)
         return (rv_unit,) * (self.n_linear + n_offsets)
@@ -285,8 +360,7 @@ class _RVStrategy(_DataTypeStrategy):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        datasets: dict[str, Any],  # noqa: ARG002
         prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002
@@ -335,38 +409,44 @@ class _AstrometryStrategy(_DataTypeStrategy):
     def extract_data(
         self,
         data: InputData,
-    ) -> tuple[GaiaAstrometryData, None]:
+    ) -> dict[str, GaiaAstrometryData]:
         if isinstance(data, GaiaAstrometryData):
-            return data, None
+            return {"astro": data}
         if isinstance(data, SourceData):
             astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
-            return astro, None
+            return {"astro": astro}
         msg = f"Expected GaiaAstrometryData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
     def build_likelihood(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        datasets: dict[str, Any],
         prior: RejectionPrior,
         data: InputData,  # noqa: ARG002
     ) -> Any:
-        if astro_data is None:
-            msg = "_AstrometryStrategy requires astro_data"
-            raise TypeError(msg)
         return GaiaAstrometryLikelihood(
-            data=astro_data, linear_prior=prior.linear_prior
+            data=datasets["astro"], linear_prior=prior.linear_prior
         )
+
+    def build_component_slices(
+        self,
+        lik: Any,
+        datasets: dict[str, Any],
+        prior: RejectionPrior,  # noqa: ARG002
+        data: InputData,  # noqa: ARG002
+    ) -> tuple[_ComponentSlice, ...]:
+        astro_data = datasets["astro"]
+        obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
+        err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
+        n = len(GaiaAstrometryParameters.linear_param_names)
+        return (_ComponentSlice("astro", lik, tuple(range(n)), obs, err),)
 
     def linear_param_units(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        datasets: dict[str, Any],
         prior: RejectionPrior,  # noqa: ARG002
     ) -> tuple[str, ...]:
-        if astro_data is None:
-            msg = "_AstrometryStrategy requires astro_data"
-            raise TypeError(msg)
+        astro_data = datasets["astro"]
         pos_unit = str(astro_data.al_position.unit)
         pm_unit = f"{pos_unit}/yr"
         return (pos_unit, pos_unit, pm_unit, pm_unit, pos_unit, pos_unit)
@@ -375,8 +455,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        datasets: dict[str, Any],  # noqa: ARG002
         prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002
@@ -429,7 +508,7 @@ class _CombinedStrategy(_DataTypeStrategy):
     def extract_data(
         self,
         data: InputData,
-    ) -> tuple[GaiaAstrometryData, RadialVelocityData]:
+    ) -> dict[str, Any]:
         if not isinstance(data, SourceData):
             msg = "Combined data type requires SourceData"
             raise TypeError(msg)
@@ -446,18 +525,16 @@ class _CombinedStrategy(_DataTypeStrategy):
             raise NotImplementedError(msg)
         astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
         rv = next(iter(rv_datasets.values()))
-        return astro, rv
+        return {"astro": astro, "rv": rv}
 
     def build_likelihood(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,
         data: InputData,  # noqa: ARG002
     ) -> Any:
-        if astro_data is None or rv_data is None:
-            msg = "_CombinedStrategy requires both astro_data and rv_data"
-            raise TypeError(msg)
+        astro_data = datasets["astro"]
+        rv_data = datasets["rv"]
         n = len(GaiaAstrometryParameters.linear_param_names)  # 6
         astro_idx = tuple(range(n))
         rv_idx = tuple(range(n, n + 2))  # K, v0
@@ -473,15 +550,41 @@ class _CombinedStrategy(_DataTypeStrategy):
             rv=RVLikelihood(rv_data, rv_lp),
         )
 
+    def build_component_slices(
+        self,
+        lik: Any,
+        datasets: dict[str, Any],
+        prior: RejectionPrior,  # noqa: ARG002
+        data: InputData,  # noqa: ARG002
+    ) -> tuple[_ComponentSlice, ...]:
+        astro_data = datasets["astro"]
+        rv_data = datasets["rv"]
+        n_astro = len(GaiaAstrometryParameters.linear_param_names)
+        n_rv = len(RVParameters.linear_param_names)
+        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
+        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
+        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
+        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
+        return (
+            _ComponentSlice(
+                "astro", lik["astro"], tuple(range(n_astro)), astro_obs, astro_err
+            ),
+            _ComponentSlice(
+                "rv",
+                lik["rv"],
+                tuple(range(n_astro, n_astro + n_rv)),
+                rv_obs,
+                rv_err,
+            ),
+        )
+
     def linear_param_units(
         self,
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         prior: RejectionPrior,  # noqa: ARG002
     ) -> tuple[str, ...]:
-        if astro_data is None or rv_data is None:
-            msg = "_CombinedStrategy requires both astro_data and rv_data"
-            raise TypeError(msg)
+        astro_data = datasets["astro"]
+        rv_data = datasets["rv"]
         pos_unit = str(astro_data.al_position.unit)
         pm_unit = f"{pos_unit}/yr"
         rv_unit = str(rv_data.rv.unit)
@@ -500,8 +603,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        datasets: dict[str, Any],  # noqa: ARG002
         prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002

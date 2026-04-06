@@ -24,7 +24,6 @@ from unxt import Quantity, ustrip
 
 from harv.data import (
     AbstractAstrometryData,
-    GaiaAstrometryData,
     InputData,
     RadialVelocityData,
     SourceData,
@@ -161,8 +160,8 @@ class RejectionSampler(eqx.Module):
             If prior is missing required parameters.
         """
         strategy = self._infer_strategy(data)
-        astro_data, rv_data = strategy.extract_data(data)
-        lik = strategy.build_likelihood(astro_data, rv_data, self.prior, data)
+        datasets = strategy.extract_data(data)
+        lik = strategy.build_likelihood(datasets, self.prior, data)
 
         key = jr.PRNGKey(seed)
         sample_key, rej_key = jr.split(key)
@@ -176,7 +175,7 @@ class RejectionSampler(eqx.Module):
 
         linear_key = jr.fold_in(key, 2)
         linear_samples = self._sample_linear_parameters(
-            linear_key, accepted_nonlinear, astro_data, rv_data, strategy, data, lik
+            linear_key, accepted_nonlinear, datasets, strategy, data, lik
         )
 
         if max_posterior_samples is not None:
@@ -218,9 +217,7 @@ class RejectionSampler(eqx.Module):
             _linear=linear_samples,
             _orbit_cls=strategy.nonlinear_cls,
             _full_cls=strategy.full_cls,
-            _linear_param_units=strategy.linear_param_units(
-                astro_data, rv_data, self.prior
-            ),
+            _linear_param_units=strategy.linear_param_units(datasets, self.prior),
             _time_unit=time_unit,
             _data_type=strategy.data_type,
             _metadata={"t_ref": t_ref_stored},
@@ -524,8 +521,7 @@ class RejectionSampler(eqx.Module):
         self,
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
+        datasets: dict[str, Any],
         strategy: _DataTypeStrategy,
         data: InputData,
         lik: Any,
@@ -541,10 +537,8 @@ class RejectionSampler(eqx.Module):
             Random key.
         nonlinear_samples
             Accepted nonlinear parameter samples.
-        astro_data
-            Gaia astrometry data, or None.
-        rv_data
-            Radial velocity data, or None.
+        datasets
+            Extracted data objects keyed by component name.
         strategy
             Data-type strategy for building params and design matrices.
         data
@@ -564,14 +558,14 @@ class RejectionSampler(eqx.Module):
             )
             return jnp.zeros((0, strategy.n_linear + n_offsets))
 
-        _ref = rv_data if rv_data is not None else astro_data
-        time_unit = _ref.time.unit  # type: ignore[union-attr]
+        _ref = next(iter(datasets.values()))
+        time_unit = _ref.time.unit
 
         keys = jr.split(key, n_samples)
 
         def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> jax.Array:
             return strategy.sample_linear_one(
-                key, sample, astro_data, rv_data, self.prior, time_unit, data, lik
+                key, sample, datasets, self.prior, time_unit, data, lik
             )
 
         return jax.vmap(_sample_one)(keys, nonlinear_samples)
