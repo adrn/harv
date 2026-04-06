@@ -6,11 +6,9 @@ share pre-computed state via ``_build_model_context`` to avoid duplicating
 setup logic.
 """
 
-from __future__ import annotations
-
 import dataclasses
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -21,11 +19,8 @@ from unxt import Quantity
 from harv.data import InputData
 from harv.likelihood._params import MarginalizedParameters
 from harv.likelihood.helpers import _resolve_linear_prior
+from harv.priors.rejection import RejectionPrior
 from harv.samplers._strategies import _ComponentSlice, _DataTypeStrategy
-
-if TYPE_CHECKING:
-    from harv.priors.rejection import RejectionPrior
-
 
 # ---------------------------------------------------------------------------
 # Shared pre-computed context

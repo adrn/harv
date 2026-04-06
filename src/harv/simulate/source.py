@@ -46,7 +46,7 @@ class AbstractSource(eqx.Module):
         d_lat
             Latitude offset, in angular units
         """
-        pos_t = self.pos_at_time(times)
+        self.pos_at_time(times)
 
         # TODO: convert to offset class with origin at ref_pos
         # Rotate to ref_pos, convert to lon/lat

@@ -4,8 +4,6 @@ This module provides utilities for generating synthetic RV measurements
 for single-lined (SB1) and double-lined (SB2) spectroscopic binaries.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

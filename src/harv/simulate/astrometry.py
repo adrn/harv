@@ -12,8 +12,6 @@ The astrometric model includes:
 - Keplerian orbital motion parameterized by Thiele-Innes constants
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

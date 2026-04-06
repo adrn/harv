@@ -7,8 +7,6 @@ The prior is agnostic to data type - it simply holds distributions for any/all
 parameters. The sampler validates which parameters are needed based on the data.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import equinox as eqx

@@ -4,8 +4,6 @@ This module provides the Samples class which stores posterior samples from
 rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

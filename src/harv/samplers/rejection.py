@@ -10,10 +10,8 @@ linear sampling) is encapsulated in ``_DataTypeStrategy`` descriptors in
 ``_strategies.py``; numpyro model builder helpers live in ``_numpyro.py``.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -28,6 +26,7 @@ from harv.data import (
     RadialVelocityData,
     SourceData,
 )
+from harv.priors.rejection import RejectionPrior
 from harv.samplers._numpyro import (
     _build_extra_numpyro_model,
     _build_full_numpyro_model,
@@ -38,9 +37,6 @@ from harv.samplers._strategies import (
     _DataTypeStrategy,
 )
 from harv.samplers.samples import Samples, _WarmStartMCMC
-
-if TYPE_CHECKING:
-    from harv.priors.rejection import RejectionPrior
 
 __all__ = ["RejectionSampler"]
 

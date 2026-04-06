@@ -5,11 +5,9 @@ type (RV-only, astrometry-only, combined).  The sampler itself is kept
 branch-free by dispatching to the appropriate strategy instance.
 """
 
-from __future__ import annotations
-
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal, final
+from typing import Any, Literal, final
 
 import equinox as eqx
 import jax
@@ -33,9 +31,7 @@ from harv.likelihood.combined import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.helpers import _IndexedCallable, _sub_mvn
 from harv.likelihood.rv import RVLikelihood
-
-if TYPE_CHECKING:
-    from harv.priors.rejection import RejectionPrior
+from harv.priors.rejection import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
 
