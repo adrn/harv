@@ -168,6 +168,38 @@ class GaiaAstrometryLikelihood(
             return self._log_prob_explicit(params)
         return self._log_prob_marginalized(params)
 
+    def sample_conditional_linear(
+        self, params: MarginalizedParameters, key: jax.Array
+    ) -> jax.Array:
+        """Sample linear parameters from the conditional posterior.
+
+        Builds a ``MarginalizedLinear`` from the design matrix, the resolved
+        linear prior, and the data errors, then draws one sample from the
+        posterior conditioned on the observed data.
+
+        Parameters
+        ----------
+        params : MarginalizedParameters
+            Nonlinear orbital parameters (period, eccentricity, etc.).
+        key : jax.Array
+            PRNG key for sampling.
+
+        Returns
+        -------
+        jax.Array
+            Sampled linear parameter vector of length 6.
+        """
+        dm = self.design_matrix(params)
+        lp = _resolve_linear_prior(self.linear_prior, params)
+        y_obs = ustrip("mas", self.data.al_position)
+        y_err = ustrip("mas", self.data.al_position_err)
+        marg = MarginalizedLinear(
+            design_matrix=dm,
+            prior_distribution=lp,
+            data_distribution=dist.Normal(0.0, y_err),
+        )
+        return marg.conditional(y_obs).sample(key)
+
     # -- private helpers ----------------------------------------------------
 
     def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:

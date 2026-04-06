@@ -302,31 +302,19 @@ class _RVStrategy(_DataTypeStrategy):
         key: jax.Array,
         sample: dict[str, jax.Array],
         astro_data: GaiaAstrometryData | None,  # noqa: ARG002
-        rv_data: RadialVelocityData | None,
-        prior: RejectionPrior,
+        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
     ) -> jax.Array:
-        if rv_data is None:
-            msg = "_RVStrategy requires rv_data"
-            raise TypeError(msg)
-        period: Quantity[Time] = Quantity(sample["period"], time_unit)
         params = RVParameters.marginalized(
-            period=period,
+            period=Quantity(sample["period"], time_unit),
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
             arg_peri=sample["arg_peri"],
         )
-        dm = lik.design_matrix(params)
-        rv_unit = str(rv_data.rv.unit)
-        lp = _resolve_linear_prior(prior.linear_prior, params)
-        marg = MarginalizedLinear(
-            design_matrix=dm,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(0.0, ustrip(rv_unit, rv_data.rv_err)),
-        )
-        return marg.conditional(ustrip(rv_unit, rv_data.rv)).sample(key)
+        return lik.sample_conditional_linear(params, key)
 
     def build_orbit_params(
         self,
@@ -403,36 +391,22 @@ class _AstrometryStrategy(_DataTypeStrategy):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,
+        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
         rv_data: RadialVelocityData | None,  # noqa: ARG002
-        prior: RejectionPrior,
+        prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
     ) -> jax.Array:
-        if astro_data is None:
-            msg = "_AstrometryStrategy requires astro_data"
-            raise TypeError(msg)
-        period: Quantity[Time] = Quantity(sample["period"], time_unit)
         params = GaiaAstrometryParameters.marginalized(
-            period=period,
+            period=Quantity(sample["period"], time_unit),
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
             cos_i=sample["cos_i"],
             arg_peri=sample["arg_peri"],
             lon_asc_node=sample["lon_asc_node"],
         )
-        dm = lik.design_matrix(params)
-        astro_unit = str(astro_data.al_position.unit)
-        lp = _resolve_linear_prior(prior.linear_prior, params)
-        marg = MarginalizedLinear(
-            design_matrix=dm,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(
-                0.0, ustrip(astro_unit, astro_data.al_position_err)
-            ),
-        )
-        return marg.conditional(ustrip(astro_unit, astro_data.al_position)).sample(key)
+        return lik.sample_conditional_linear(params, key)
 
     def build_orbit_params(
         self,
@@ -550,64 +524,24 @@ class _CombinedStrategy(_DataTypeStrategy):
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        astro_data: GaiaAstrometryData | None,
-        rv_data: RadialVelocityData | None,
-        prior: RejectionPrior,
+        astro_data: GaiaAstrometryData | None,  # noqa: ARG002
+        rv_data: RadialVelocityData | None,  # noqa: ARG002
+        prior: RejectionPrior,  # noqa: ARG002
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
     ) -> jax.Array:
-        if astro_data is None or rv_data is None:
-            msg = "_CombinedStrategy requires both astro_data and rv_data"
-            raise TypeError(msg)
         k_astro, k_rv = jr.split(key)
-        period: Quantity[Time] = Quantity(sample["period"], time_unit)
-
         params = GaiaAstrometryParameters.marginalized(
-            period=period,
+            period=Quantity(sample["period"], time_unit),
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
             cos_i=sample["cos_i"],
             arg_peri=sample["arg_peri"],
             lon_asc_node=sample["lon_asc_node"],
         )
-
-        # Resolve callable or fixed prior, then slice into astro + RV blocks
-        full_lp = _resolve_linear_prior(prior.linear_prior, params)
-        n_astro = len(GaiaAstrometryParameters.linear_param_names)
-        astro_linear_prior = dist.MultivariateNormal(
-            loc=full_lp.loc[:n_astro],
-            scale_tril=full_lp.scale_tril[:n_astro, :n_astro],
-        )
-        rv_linear_prior = dist.MultivariateNormal(
-            loc=full_lp.loc[n_astro:],
-            scale_tril=full_lp.scale_tril[n_astro:, n_astro:],
-        )
-
-        # Astrometry linear params — delegate DM construction to the component
-        astro_dm = lik["astro"].design_matrix(params)
-        astro_unit = str(astro_data.al_position.unit)
-        astro_marg = MarginalizedLinear(
-            design_matrix=astro_dm,
-            prior_distribution=astro_linear_prior,
-            data_distribution=dist.Normal(
-                0.0, ustrip(astro_unit, astro_data.al_position_err)
-            ),
-        )
-        astro_sample = astro_marg.conditional(
-            ustrip(astro_unit, astro_data.al_position)
-        ).sample(k_astro)
-
-        # RV linear params — duck typing: params carries all needed fields
-        rv_dm = lik["rv"].design_matrix(params)
-        rv_unit = str(rv_data.rv.unit)
-        rv_marg = MarginalizedLinear(
-            design_matrix=rv_dm,
-            prior_distribution=rv_linear_prior,
-            data_distribution=dist.Normal(0.0, ustrip(rv_unit, rv_data.rv_err)),
-        )
-        rv_sample = rv_marg.conditional(ustrip(rv_unit, rv_data.rv)).sample(k_rv)
-
+        astro_sample = lik["astro"].sample_conditional_linear(params, k_astro)
+        rv_sample = lik["rv"].sample_conditional_linear(params, k_rv)
         return jnp.concatenate([astro_sample, rv_sample])
 
     def build_orbit_params(
