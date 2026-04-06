@@ -1,15 +1,18 @@
 """Likelihood functions for Gaia epoch astrometry data.
 
-This module implements likelihood evaluations for Gaia along-scan astrometry.
-Two variants are provided:
+This module implements the unified :class:`GaiaAstrometryLikelihood` for Gaia
+along-scan astrometry.  The class supports two evaluation modes via the same
+``log_prob`` interface:
 
-- :class:`MarginalizedGaiaAstrometryLikelihood`: analytically marginalizes over
-  some or all of the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a)
-  given a Gaussian prior.  Supports partial marginalization via
-  ``params.marginalized_names``.
+1. **Marginalized** (``params`` is :class:`MarginalizedParameters`,
+   ``linear_prior`` provided): analytically marginalizes over some or all of
+   the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a
+   Gaussian prior.  Supports partial marginalization via
+   ``params.marginalized_names``.
 
-- :class:`GaiaAstrometryLikelihood`: full likelihood with all parameters
-  specified explicitly.
+2. **Explicit** (``params`` is :class:`GaiaAstrometryParameters`,
+   ``linear_prior`` is ``None``): evaluates the Gaussian data log-likelihood
+   directly at the provided linear parameter values.
 
 For the marginalized model, the astrometric model is:
 
@@ -38,10 +41,7 @@ from harv.likelihood._params import (
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
 
-__all__ = [
-    "MarginalizedGaiaAstrometryLikelihood",
-    "GaiaAstrometryLikelihood",
-]
+__all__ = ("GaiaAstrometryLikelihood",)
 
 # Column order in the astrometry design matrix.
 _ASTRO_LINEAR_NAMES: tuple[str, ...] = GaiaAstrometryParameters.linear_param_names
@@ -99,37 +99,46 @@ def _get_design_matrix(
 
 
 # ---------------------------------------------------------------------------
-# Marginalized likelihood
+# Unified Gaia astrometry likelihood
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedGaiaAstrometryLikelihood(
-    AbstractLikelihood[MarginalizedParameters]
+class GaiaAstrometryLikelihood(
+    AbstractLikelihood[MarginalizedParameters | GaiaAstrometryParameters],
 ):
-    """Gaia astrometry likelihood with linear parameters analytically marginalized.
+    """Unified Gaia astrometry likelihood supporting marginalized and explicit evaluation.
 
-    Analytically integrates over some or all of the 6 linear astrometric
-    parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a Gaussian prior, using the
-    ``MarginalizedLinear`` distribution from numpyro-ext.  Partial
-    marginalization is supported: parameters in ``params.marginalized_names``
-    are integrated out, while any remaining linear parameters must be present
-    on the ``MarginalizedParameters`` wrapper as explicit fields.
+    When ``linear_prior`` is provided and ``params`` is a
+    :class:`MarginalizedParameters` instance, the likelihood analytically
+    marginalizes over the linear parameters.
+
+    When ``linear_prior`` is ``None``, ``params`` must be a full
+    :class:`GaiaAstrometryParameters` and the likelihood is evaluated
+    explicitly.
 
     Parameters
     ----------
     data : GaiaAstrometryData
         Gaia epoch astrometry observations.
-    linear_prior : dist.MultivariateNormal or eqx.Module
-        Gaussian prior over the marginalized linear parameters.
+    linear_prior : dist.MultivariateNormal or eqx.Module or None
+        Gaussian prior over the marginalized linear parameters.  ``None``
+        for explicit evaluation.
 
     Examples
     --------
-    >>> lik = MarginalizedGaiaAstrometryLikelihood(data=gaia_data, linear_prior=prior)
-    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+    Marginalized::
+
+        lik = GaiaAstrometryLikelihood(data=gaia_data, linear_prior=prior)
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+    Explicit::
+
+        lik = GaiaAstrometryLikelihood(data=gaia_data)
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(full_params_batch)
     """
 
     data: GaiaAstrometryData
-    linear_prior: dist.MultivariateNormal | eqx.Module
+    linear_prior: dist.MultivariateNormal | eqx.Module | None = None
 
     param_names = (
         "period",
@@ -140,15 +149,35 @@ class MarginalizedGaiaAstrometryLikelihood(
         "lon_asc_node",
     )
 
-    def log_prob(self, params: MarginalizedParameters) -> jax.Array:
-        """Compute the marginalized log-likelihood for a single parameter sample."""
+    def design_matrix(
+        self, params: MarginalizedParameters | GaiaAstrometryParameters
+    ) -> jax.Array:
+        """Build the (n_obs, 6) design matrix for the given parameters."""
+        sin_f, cos_f = _solve_kepler(self.data, params)
+        return _get_design_matrix(self.data, params, sin_f, cos_f)
+
+    def log_prob(
+        self, params: MarginalizedParameters | GaiaAstrometryParameters
+    ) -> jax.Array:
+        """Compute the log-likelihood for a single parameter sample.
+
+        Dispatches to marginalized or explicit evaluation based on the
+        presence of ``linear_prior``.
+        """
+        if self.linear_prior is None:
+            return self._log_prob_explicit(params)
+        return self._log_prob_marginalized(params)
+
+    # -- private helpers ----------------------------------------------------
+
+    def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:
+        """Marginalized log-likelihood."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
 
         y_obs = ustrip("mas", self.data.al_position)
         y_err = ustrip("mas", self.data.al_position_err)
 
-        # Determine which astro linear params are marginalized vs explicit.
         my_marg = tuple(
             n for n in _ASTRO_LINEAR_NAMES if n in params.marginalized_names
         )
@@ -158,14 +187,12 @@ class MarginalizedGaiaAstrometryLikelihood(
         marg_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_marg]
         explicit_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_explicit]
 
-        # Adjust observations for explicit parameters.
         if explicit_idx:
             explicit_vals = jnp.array(
                 [ustrip("mas", getattr(params, n)) for n in my_explicit]
             )
             y_obs = y_obs - design_matrix[:, jnp.array(explicit_idx)] @ explicit_vals
 
-        # Marginalize over the remaining columns.
         dm_marg = design_matrix[:, jnp.array(marg_idx)]
         lp = _resolve_linear_prior(self.linear_prior, params)
         marg_dist = MarginalizedLinear(
@@ -175,45 +202,10 @@ class MarginalizedGaiaAstrometryLikelihood(
         )
         return marg_dist.log_prob(y_obs)
 
-
-# ---------------------------------------------------------------------------
-# Full likelihood
-# ---------------------------------------------------------------------------
-
-
-class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
-    """Full Gaia astrometry likelihood with all parameters specified explicitly.
-
-    Parameters
-    ----------
-    data : GaiaAstrometryData
-        Gaia epoch astrometry observations.
-
-    Examples
-    --------
-    >>> lik = GaiaAstrometryLikelihood(data=gaia_data)
-    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
-    """
-
-    data: GaiaAstrometryData
-
-    param_names = (
-        "period",
-        "eccentricity",
-        "phase_peri",
-        "cos_i",
-        "arg_peri",
-        "lon_asc_node",
-        "ra0",
-        "dec0",
-        "pmra",
-        "pmdec",
-        "parallax",
-        "semi_major_axis",
-    )
-
-    def log_prob(self, params: GaiaAstrometryParameters) -> jax.Array:
-        """Compute the log-likelihood for a single parameter sample."""
+    def _log_prob_explicit(
+        self, params: GaiaAstrometryParameters
+    ) -> jax.Array:
+        """Explicit log-likelihood with all parameters specified."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
 
@@ -232,3 +224,7 @@ class GaiaAstrometryLikelihood(AbstractLikelihood[GaiaAstrometryParameters]):
         y_err = ustrip("mas", self.data.al_position_err)
 
         return dist.Normal(y_pred, y_err).log_prob(y_obs).sum()
+
+
+# Backward-compatibility alias (deprecated)
+MarginalizedGaiaAstrometryLikelihood = GaiaAstrometryLikelihood

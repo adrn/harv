@@ -8,7 +8,7 @@ from unxt import Quantity
 from harv.data import RadialVelocityData
 from harv.likelihood._params import RVParameters
 from harv.likelihood.rv import (
-    MarginalizedRVLikelihood,
+    RVLikelihood,
     _get_design_matrix,
     _get_design_matrix_sb2,
 )
@@ -128,7 +128,7 @@ class TestMarginalizedLikelihoodRV:
     def test_likelihood_is_finite(self):
         """Test that likelihood returns finite value."""
         data = _make_rv_data()
-        lik = MarginalizedRVLikelihood(data=data, linear_prior=_rv_prior())
+        lik = RVLikelihood(data=data, linear_prior=_rv_prior())
         params = _make_rv_params()
 
         log_lik = lik.log_prob(params)
@@ -155,8 +155,8 @@ class TestMarginalizedLikelihoodRV:
         params = _make_rv_params(eccentricity=0.2)
         prior = _rv_prior()
 
-        log_lik_small = MarginalizedRVLikelihood(data_small, prior).log_prob(params)
-        log_lik_large = MarginalizedRVLikelihood(data_large, prior).log_prob(params)
+        log_lik_small = RVLikelihood(data_small, prior).log_prob(params)
+        log_lik_large = RVLikelihood(data_large, prior).log_prob(params)
 
         assert log_lik_small > log_lik_large
 
@@ -169,10 +169,10 @@ class TestMarginalizedLikelihoodRV:
         )
         prior = _rv_prior()
 
-        log_lik_circ = MarginalizedRVLikelihood(data, prior).log_prob(
+        log_lik_circ = RVLikelihood(data, prior).log_prob(
             _make_rv_params(eccentricity=0.0, arg_peri=0.0)
         )
-        log_lik_ecc = MarginalizedRVLikelihood(data, prior).log_prob(
+        log_lik_ecc = RVLikelihood(data, prior).log_prob(
             _make_rv_params(eccentricity=0.5, arg_peri=0.0)
         )
 
@@ -187,7 +187,7 @@ class TestBatchLikelihoodRV:
         """Test that vmap over log_prob returns correct shape."""
         n_samples = 10
         data = _make_rv_data()
-        lik = MarginalizedRVLikelihood(data=data, linear_prior=_rv_prior())
+        lik = RVLikelihood(data=data, linear_prior=_rv_prior())
 
         eccentricities = jnp.linspace(0.0, 0.5, n_samples)
         params_batch = RVParameters.marginalized(
@@ -211,7 +211,7 @@ class TestBatchLikelihoodRV:
             rv_err=Quantity(jnp.ones(n_obs) * 0.1, "km/s"),
         )
         prior = _rv_prior()
-        lik = MarginalizedRVLikelihood(data=data, linear_prior=prior)
+        lik = RVLikelihood(data=data, linear_prior=prior)
 
         eccs = jnp.linspace(0.0, 0.5, 5)
 

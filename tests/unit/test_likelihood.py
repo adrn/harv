@@ -8,7 +8,7 @@ from unxt import Quantity
 from harv.data import GaiaAstrometryData
 from harv.likelihood._params import GaiaAstrometryParameters
 from harv.likelihood.gaia_astrometry import (
-    MarginalizedGaiaAstrometryLikelihood,
+    GaiaAstrometryLikelihood,
     _get_design_matrix,
 )
 
@@ -93,7 +93,7 @@ class TestMarginalizedLikelihood:
     def test_likelihood_finite(self):
         """Test that likelihood returns a finite scalar."""
         data = _make_astro_data()
-        lik = MarginalizedGaiaAstrometryLikelihood(
+        lik = GaiaAstrometryLikelihood(
             data=data, linear_prior=_astro_prior()
         )
         params = _make_astro_params()
@@ -129,10 +129,10 @@ class TestMarginalizedLikelihood:
         params = _make_astro_params()
         prior = _astro_prior()
 
-        log_lik_small = MarginalizedGaiaAstrometryLikelihood(
+        log_lik_small = GaiaAstrometryLikelihood(
             data_small, prior
         ).log_prob(params)
-        log_lik_large = MarginalizedGaiaAstrometryLikelihood(
+        log_lik_large = GaiaAstrometryLikelihood(
             data_large, prior
         ).log_prob(params)
 
@@ -143,10 +143,10 @@ class TestMarginalizedLikelihood:
         data = _make_astro_data()
         prior = _astro_prior()
 
-        log_lik_circ = MarginalizedGaiaAstrometryLikelihood(data, prior).log_prob(
+        log_lik_circ = GaiaAstrometryLikelihood(data, prior).log_prob(
             _make_astro_params(eccentricity=0.0, arg_peri=0.0)
         )
-        log_lik_ecc = MarginalizedGaiaAstrometryLikelihood(data, prior).log_prob(
+        log_lik_ecc = GaiaAstrometryLikelihood(data, prior).log_prob(
             _make_astro_params(eccentricity=0.7, arg_peri=1.0)
         )
 
@@ -161,7 +161,7 @@ class TestBatchLikelihood:
         """Test that vmap over log_prob returns correct shape."""
         n_samples = 10
         data = _make_astro_data()
-        lik = MarginalizedGaiaAstrometryLikelihood(
+        lik = GaiaAstrometryLikelihood(
             data=data, linear_prior=_astro_prior()
         )
 
@@ -184,7 +184,7 @@ class TestBatchLikelihood:
         n_obs = 20
         data = _make_astro_data(n_obs=n_obs)
         prior = _astro_prior()
-        lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=prior)
+        lik = GaiaAstrometryLikelihood(data=data, linear_prior=prior)
 
         eccs = jnp.array([0.1, 0.3])
         params_batch = GaiaAstrometryParameters.marginalized(

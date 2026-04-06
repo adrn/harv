@@ -22,7 +22,7 @@ class CompositeLikelihood(eqx.Module):
 
     For combined astrometry + RV data the natural params struct is
     a ``MarginalizedParameters`` wrapping ``GaiaAstrometryParameters`` (6 nonlinear params).
-    ``MarginalizedRVLikelihood`` only reads ``period``, ``eccentricity``,
+    ``RVLikelihood`` only reads ``period``, ``eccentricity``,
     ``phase_peri``, and ``arg_peri`` from it; the extra ``cos_i`` and
     ``lon_asc_node`` fields are silently ignored.  This means ``period`` (and
     the other shared orbital elements) is passed once and consumed by both
@@ -39,16 +39,16 @@ class CompositeLikelihood(eqx.Module):
 
     Examples
     --------
-    Combining marginalized astrometry and RV likelihoods.  Both components
-    share ``period``, ``eccentricity``, ``phase_peri``, and ``arg_peri``
+    Combining astrometry and RV likelihoods.  Both components share
+    ``period``, ``eccentricity``, ``phase_peri``, and ``arg_peri``
     automatically — pass a ``MarginalizedParameters`` and each component
     reads what it needs::
 
         import numpyro.distributions as dist
         import jax.numpy as jnp
         from harv.likelihood.combined import CompositeLikelihood
-        from harv.likelihood.gaia_astrometry import MarginalizedGaiaAstrometryLikelihood
-        from harv.likelihood.rv import MarginalizedRVLikelihood
+        from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
+        from harv.likelihood.rv import RVLikelihood
         from harv.likelihood._params import GaiaAstrometryParameters
 
         astro_prior = dist.MultivariateNormal(
@@ -59,8 +59,8 @@ class CompositeLikelihood(eqx.Module):
         )
 
         composite = CompositeLikelihood(
-            astro=MarginalizedGaiaAstrometryLikelihood(gaia_data, astro_prior),
-            rv=MarginalizedRVLikelihood(rv_data, rv_prior),
+            astro=GaiaAstrometryLikelihood(gaia_data, astro_prior),
+            rv=RVLikelihood(rv_data, rv_prior),
         )
 
         # Union of both param_names: 6 unique orbital parameters
@@ -79,8 +79,8 @@ class CompositeLikelihood(eqx.Module):
     A pure-RV composite (e.g. two instruments, one marginalized each)::
 
         composite_rv = CompositeLikelihood(
-            keck=MarginalizedRVLikelihood(keck_data, rv_prior),
-            espresso=MarginalizedRVLikelihood(espresso_data, rv_prior),
+            keck=RVLikelihood(keck_data, rv_prior),
+            espresso=RVLikelihood(espresso_data, rv_prior),
         )
         # period and other orbital params shared across both instruments
         composite_rv.param_names

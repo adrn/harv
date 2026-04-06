@@ -39,9 +39,7 @@ from harv.likelihood._params import (
     RVParameters,
 )
 from harv.likelihood.combined import CompositeLikelihood
-from harv.likelihood.gaia_astrometry import (
-    MarginalizedGaiaAstrometryLikelihood,
-)
+from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.gaia_astrometry import (
     _get_design_matrix as _get_gaia_design_matrix,
 )
@@ -50,10 +48,7 @@ from harv.likelihood.helpers import (
     _resolve_linear_prior,
     _solve_kepler,
 )
-from harv.likelihood.rv import (
-    MarginalizedMultiSurveyRVLikelihood,
-    MarginalizedRVLikelihood,
-)
+from harv.likelihood.rv import RVLikelihood
 from harv.likelihood.rv import (
     _get_design_matrix as _get_rv_design_matrix,
 )
@@ -166,7 +161,9 @@ class _DataTypeStrategy(ABC):
         """Prior parameter names (nonlinear fields of ``nonlinear_cls``)."""
         linear = set(self.nonlinear_cls.linear_param_names)
         return tuple(
-            f.name for f in dataclasses.fields(self.nonlinear_cls) if f.name not in linear
+            f.name
+            for f in dataclasses.fields(self.nonlinear_cls)
+            if f.name not in linear
         )
 
     @property
@@ -186,14 +183,14 @@ class _DataTypeStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_marginalized_likelihood(
+    def build_likelihood(
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
         prior: RejectionPrior,
         data: InputData,
     ) -> Any:
-        """Build the marginalized likelihood for batched evaluation."""
+        """Build the likelihood for batched evaluation."""
         ...
 
     @abstractmethod
@@ -268,7 +265,7 @@ class _RVStrategy(_DataTypeStrategy):
         msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
-    def build_marginalized_likelihood(
+    def build_likelihood(
         self,
         astro_data: GaiaAstrometryData | None,  # noqa: ARG002
         rv_data: RadialVelocityData | None,
@@ -278,6 +275,7 @@ class _RVStrategy(_DataTypeStrategy):
         if rv_data is None:
             msg = "_RVStrategy requires rv_data"
             raise TypeError(msg)
+        indicator = None
         if (
             prior.offsets is not None
             and isinstance(data, SourceData)
@@ -286,12 +284,11 @@ class _RVStrategy(_DataTypeStrategy):
             indicator = _build_indicator_matrix(
                 data.get_datasets_by_type(RadialVelocityData), prior.offsets
             )
-            return MarginalizedMultiSurveyRVLikelihood(
-                data=rv_data,
-                indicator_matrix=indicator,
-                linear_prior=prior.linear_prior,
-            )
-        return MarginalizedRVLikelihood(data=rv_data, linear_prior=prior.linear_prior)
+        return RVLikelihood(
+            data=rv_data,
+            linear_prior=prior.linear_prior,
+            indicator_matrix=indicator,
+        )
 
     def linear_param_units(
         self,
@@ -392,7 +389,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         msg = f"Expected GaiaAstrometryData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
-    def build_marginalized_likelihood(
+    def build_likelihood(
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,  # noqa: ARG002
@@ -402,7 +399,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         if astro_data is None:
             msg = "_AstrometryStrategy requires astro_data"
             raise TypeError(msg)
-        return MarginalizedGaiaAstrometryLikelihood(
+        return GaiaAstrometryLikelihood(
             data=astro_data, linear_prior=prior.linear_prior
         )
 
@@ -510,7 +507,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         rv = next(iter(rv_datasets.values()))
         return astro, rv
 
-    def build_marginalized_likelihood(
+    def build_likelihood(
         self,
         astro_data: GaiaAstrometryData | None,
         rv_data: RadialVelocityData | None,
@@ -539,8 +536,8 @@ class _CombinedStrategy(_DataTypeStrategy):
             astro_lp = _IndexedCallable(lp, astro_idx)
             rv_lp = _IndexedCallable(lp, rv_idx)
         return CompositeLikelihood(
-            astro=MarginalizedGaiaAstrometryLikelihood(astro_data, astro_lp),
-            rv=MarginalizedRVLikelihood(rv_data, rv_lp),
+            astro=GaiaAstrometryLikelihood(astro_data, astro_lp),
+            rv=RVLikelihood(rv_data, rv_lp),
         )
 
     def linear_param_units(
@@ -706,7 +703,7 @@ def _build_marginalized_numpyro_model(
     time_unit = str(
         astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
     )
-    lik = strategy.build_marginalized_likelihood(astro_data, rv_data, prior, data)
+    lik = strategy.build_likelihood(astro_data, rv_data, prior, data)
     nonlinear_cls = strategy.nonlinear_cls
     nonlinear_priors = prior.nonlinear_priors  # snapshot at model-build time
 
@@ -1244,7 +1241,7 @@ class RejectionSampler(eqx.Module):
         """
         strategy = self._infer_strategy(data)
         astro_data, rv_data = strategy.extract_data(data)
-        lik = strategy.build_marginalized_likelihood(
+        lik = strategy.build_likelihood(
             astro_data, rv_data, self.prior, data
         )
 

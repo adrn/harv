@@ -1,18 +1,24 @@
 """Likelihood functions for radial velocity data.
 
-This module implements likelihood evaluations for radial velocity observations.
-Two variants are provided:
+This module implements the unified :class:`RVLikelihood` for radial velocity
+observations.  The class supports three evaluation modes via the same
+``log_prob`` interface, determined by the type of ``params`` and the
+presence of an optional ``indicator_matrix``:
 
-- :class:`MarginalizedRVLikelihood`: analytically marginalizes over some or all
-  of the linear RV parameters (K, v₀) given a Gaussian prior.  Supports
-  partial marginalization: parameters listed in
-  ``params.marginalized_names`` are integrated out; any remaining linear
-  parameters must be present as explicit fields on the params object.
+1. **Marginalized** (``params`` is :class:`MarginalizedParameters`,
+   ``linear_prior`` provided): analytically integrates over the linear RV
+   parameters (K, v₀) given a Gaussian prior.  Supports partial
+   marginalization via ``params.marginalized_names``.
 
-- :class:`RVLikelihood`: full likelihood with all parameters specified
-  explicitly.
+2. **Multi-survey marginalized** (``indicator_matrix`` is not ``None``):
+   appends instrument-offset columns to the design matrix and marginalizes
+   ``[K, v₀, δ₁, …, δₖ]`` jointly.
 
-For the marginalized SB1 model, the RV model is:
+3. **Explicit** (``params`` is :class:`RVParameters`, ``linear_prior`` is
+   ``None``): evaluates the Gaussian data log-likelihood directly at the
+   provided linear parameter values.
+
+For the SB1 model the RV model is:
 
     RV(t) = K·[cos(ω + f(t)) + e·cos(ω)] + v₀
 
@@ -37,11 +43,7 @@ from harv.likelihood._params import (
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
 
-__all__ = [
-    "MarginalizedMultiSurveyRVLikelihood",
-    "MarginalizedRVLikelihood",
-    "RVLikelihood",
-]
+__all__ = ("RVLikelihood",)
 
 # Column order in the RV design matrix.
 _RV_LINEAR_NAMES: tuple[str, ...] = RVParameters.linear_param_names  # ("K", "v0")
@@ -86,43 +88,85 @@ def _get_design_matrix_sb2(
 
 
 # ---------------------------------------------------------------------------
-# Marginalized likelihood
+# Unified RV likelihood
 # ---------------------------------------------------------------------------
 
 
-class MarginalizedRVLikelihood(AbstractLikelihood[MarginalizedParameters]):
-    """RV likelihood with linear parameters (K, v₀) analytically marginalized.
+class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
+    """Unified RV likelihood supporting marginalized and explicit evaluation.
 
-    Analytically integrates over some or all of the linear RV parameters
-    given a Gaussian prior, using the ``MarginalizedLinear`` distribution
-    from numpyro-ext.  Partial marginalization is supported: parameters in
-    ``params.marginalized_names`` are integrated out, while any remaining
-    linear parameters must be present on the ``MarginalizedParameters``
-    wrapper as explicit fields.
+    When ``linear_prior`` is provided and ``params`` is a
+    :class:`MarginalizedParameters` instance, the likelihood analytically
+    marginalizes over the linear parameters (K, v₀) — and optionally
+    per-instrument offsets when ``indicator_matrix`` is supplied.
+
+    When ``linear_prior`` is ``None``, ``params`` must be a full
+    :class:`RVParameters` and the likelihood is evaluated explicitly.
 
     Parameters
     ----------
     data : RadialVelocityData
         Radial velocity observations.
-    linear_prior : dist.MultivariateNormal or eqx.Module
-        Gaussian prior over the marginalized linear parameters.  For full
-        marginalization this covers [K, v₀]; for partial marginalization it
-        covers only the marginalized subset.  May be a fixed
-        ``dist.MultivariateNormal`` or a callable ``eqx.Module``.
+    linear_prior : dist.MultivariateNormal or eqx.Module or None
+        Gaussian prior over the marginalized linear parameters.  ``None``
+        for explicit evaluation.
+    indicator_matrix : jax.Array or None
+        For multi-survey RV: boolean/float indicator matrix of shape
+        ``(n_obs_total, n_non_ref)`` selecting which observations belong to
+        each non-reference instrument.  ``None`` for single-instrument data.
 
     Examples
     --------
-    >>> lik = MarginalizedRVLikelihood(data=rv_data, linear_prior=prior)
-    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+    Marginalized (single instrument)::
+
+        lik = RVLikelihood(data=rv_data, linear_prior=prior)
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+    Multi-survey marginalized::
+
+        lik = RVLikelihood(data=stacked, linear_prior=prior, indicator_matrix=ind)
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+    Explicit evaluation::
+
+        lik = RVLikelihood(data=rv_data)
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(full_params_batch)
     """
 
     data: RadialVelocityData
-    linear_prior: dist.MultivariateNormal | eqx.Module
+    linear_prior: dist.MultivariateNormal | eqx.Module | None = None
+    indicator_matrix: jax.Array | None = None
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
 
-    def log_prob(self, params: MarginalizedParameters) -> jax.Array:
-        """Compute the marginalized log-likelihood for a single parameter sample."""
+    def design_matrix(
+        self, params: MarginalizedParameters | RVParameters
+    ) -> jax.Array:
+        """Build the full design matrix for the given parameters.
+
+        Returns shape ``(n_obs, n_cols)`` where ``n_cols`` is 2 for single-
+        instrument data or 2 + n_non_ref for multi-survey data.
+        """
+        sin_f, cos_f = _solve_kepler(self.data, params)
+        dm = _get_design_matrix(params, sin_f, cos_f)
+        if self.indicator_matrix is not None:
+            dm = jnp.concatenate([dm, self.indicator_matrix], axis=-1)
+        return dm
+
+    def log_prob(self, params: MarginalizedParameters | RVParameters) -> jax.Array:
+        """Compute the log-likelihood for a single parameter sample.
+
+        Dispatches to marginalized or explicit evaluation based on the
+        presence of ``linear_prior``.
+        """
+        if self.linear_prior is None:
+            return self._log_prob_explicit(params)
+        return self._log_prob_marginalized(params)
+
+    # -- private helpers ----------------------------------------------------
+
+    def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:
+        """Marginalized log-likelihood (single or multi-survey)."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)  # (n_obs, 2)
 
@@ -130,24 +174,31 @@ class MarginalizedRVLikelihood(AbstractLikelihood[MarginalizedParameters]):
         rv_obs = ustrip(rv_unit, self.data.rv)
         rv_err = ustrip(rv_unit, self.data.rv_err)
 
-        # Determine which RV linear params are marginalized vs explicit.
+        if self.indicator_matrix is not None:
+            # Multi-survey: append indicator columns and marginalize everything.
+            dm = jnp.concatenate([design_matrix, self.indicator_matrix], axis=-1)
+            lp = _resolve_linear_prior(self.linear_prior, params)
+            marg_dist = MarginalizedLinear(
+                design_matrix=dm,
+                prior_distribution=lp,
+                data_distribution=dist.Normal(0.0, rv_err),
+            )
+            return marg_dist.log_prob(rv_obs)
+
+        # Single-instrument: partial marginalization.
         my_marg = tuple(n for n in _RV_LINEAR_NAMES if n in params.marginalized_names)
         my_explicit = tuple(
             n for n in _RV_LINEAR_NAMES if n not in params.marginalized_names
         )
-
-        # Indices into the design matrix columns (column order = _RV_LINEAR_NAMES).
         marg_idx = [_RV_LINEAR_NAMES.index(n) for n in my_marg]
         explicit_idx = [_RV_LINEAR_NAMES.index(n) for n in my_explicit]
 
-        # Adjust observations for explicit parameters.
         if explicit_idx:
             explicit_vals = jnp.array(
                 [ustrip(rv_unit, getattr(params, n)) for n in my_explicit]
             )
             rv_obs = rv_obs - design_matrix[:, jnp.array(explicit_idx)] @ explicit_vals
 
-        # Marginalize over the remaining columns.
         dm_marg = design_matrix[:, jnp.array(marg_idx)]
         lp = _resolve_linear_prior(self.linear_prior, params)
         marg_dist = MarginalizedLinear(
@@ -157,80 +208,8 @@ class MarginalizedRVLikelihood(AbstractLikelihood[MarginalizedParameters]):
         )
         return marg_dist.log_prob(rv_obs)
 
-
-# ---------------------------------------------------------------------------
-# Multi-survey marginalized likelihood
-# ---------------------------------------------------------------------------
-
-
-class MarginalizedMultiSurveyRVLikelihood(AbstractLikelihood[MarginalizedParameters]):
-    """RV likelihood for multiple instruments with offset parameters marginalized.
-
-    Linear parameters are ``[K, v₀, δ₁, …, δₖ]`` where δᵢ is the zero-point
-    offset for the i-th non-reference instrument.  The ``indicator_matrix``
-    (shape ``n_obs_total × n_non_ref``) selects which observations belong to
-    each non-reference instrument; it is constant across parameter samples and
-    is closed over at construction time.
-
-    Parameters
-    ----------
-    data : RadialVelocityData
-        All RV observations stacked in instrument dict order.
-    indicator_matrix : jax.Array
-        Boolean/float indicator matrix, shape ``(n_obs_total, n_non_ref)``.
-        ``indicator_matrix[i, j] == 1`` when observation *i* comes from
-        non-reference instrument *j*.
-    linear_prior : dist.MultivariateNormal
-        Joint Gaussian prior over ``[K, v₀, δ₁, …, δₖ]``.
-    """
-
-    data: RadialVelocityData
-    indicator_matrix: jax.Array
-    linear_prior: dist.MultivariateNormal | eqx.Module
-
-    param_names = ("period", "eccentricity", "phase_peri", "arg_peri")
-
-    def log_prob(self, params: MarginalizedParameters) -> jax.Array:
-        """Compute the marginalized log-likelihood for a single parameter sample."""
-        sin_f, cos_f = _solve_kepler(self.data, params)
-        dm_base = _get_design_matrix(params, sin_f, cos_f)  # (n_obs, 2)
-        dm = jnp.concatenate([dm_base, self.indicator_matrix], axis=-1)
-        lp = _resolve_linear_prior(self.linear_prior, params)
-
-        rv_unit = self.data.rv.unit
-        marg_dist = MarginalizedLinear(
-            design_matrix=dm,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(0.0, ustrip(rv_unit, self.data.rv_err)),
-        )
-        return marg_dist.log_prob(ustrip(rv_unit, self.data.rv))
-
-
-# ---------------------------------------------------------------------------
-# Full likelihood
-# ---------------------------------------------------------------------------
-
-
-class RVLikelihood(AbstractLikelihood[RVParameters]):
-    """Full RV likelihood with all parameters (including K and v₀) specified.
-
-    Parameters
-    ----------
-    data : RadialVelocityData
-        Radial velocity observations.
-
-    Examples
-    --------
-    >>> lik = RVLikelihood(data=rv_data)
-    >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
-    """
-
-    data: RadialVelocityData
-
-    param_names = ("period", "eccentricity", "phase_peri", "arg_peri", "K", "v0")
-
-    def log_prob(self, params: RVParameters) -> jax.Array:
-        """Compute the log-likelihood for a single parameter sample."""
+    def _log_prob_explicit(self, params: RVParameters) -> jax.Array:
+        """Explicit log-likelihood with all parameters specified."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(params, sin_f, cos_f)
 
@@ -241,3 +220,8 @@ class RVLikelihood(AbstractLikelihood[RVParameters]):
         rv_err = ustrip(rv_unit, self.data.rv_err)
 
         return dist.Normal(rv_pred, rv_err).log_prob(rv_obs).sum()
+
+
+# Backward-compatibility aliases (deprecated)
+MarginalizedRVLikelihood = RVLikelihood
+MarginalizedMultiSurveyRVLikelihood = RVLikelihood

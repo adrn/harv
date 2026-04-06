@@ -14,10 +14,7 @@ from unxt import Quantity
 
 from harv.data import RadialVelocityData
 from harv.likelihood._params import RVParameters
-from harv.likelihood.rv import (
-    MarginalizedMultiSurveyRVLikelihood,
-    MarginalizedRVLikelihood,
-)
+from harv.likelihood.rv import RVLikelihood
 from harv.priors.rejection import RejectionPrior
 from harv.samplers.rejection import (
     RejectionSampler,
@@ -28,7 +25,7 @@ from harv.simulate.rv import simulate_rv_multisurv_data
 
 
 class TestMultiSurveyLikelihood:
-    """Unit-style tests for MarginalizedMultiSurveyRVLikelihood."""
+    """Unit-style tests for RVLikelihood."""
 
     def test_log_prob_finite(self):
         """Likelihood returns a finite scalar at arbitrary parameters."""
@@ -48,7 +45,7 @@ class TestMultiSurveyLikelihood:
         lp = dist.MultivariateNormal(
             loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
         )
-        lik = MarginalizedMultiSurveyRVLikelihood(
+        lik = RVLikelihood(
             data=stacked, indicator_matrix=indicator, linear_prior=lp
         )
         params = RVParameters.marginalized(
@@ -85,7 +82,7 @@ class TestMultiSurveyLikelihood:
         lp_multi = dist.MultivariateNormal(
             loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
         )
-        lik_multi = MarginalizedMultiSurveyRVLikelihood(
+        lik_multi = RVLikelihood(
             data=stacked, indicator_matrix=indicator, linear_prior=lp_multi
         )
 
@@ -93,7 +90,7 @@ class TestMultiSurveyLikelihood:
         lp_single = dist.MultivariateNormal(
             loc=jnp.zeros(2), covariance_matrix=100.0**2 * jnp.eye(2)
         )
-        lik_single = MarginalizedRVLikelihood(data=stacked, linear_prior=lp_single)
+        lik_single = RVLikelihood(data=stacked, linear_prior=lp_single)
 
         params = RVParameters.marginalized(
             period=Quantity(100.0, "day"),
@@ -125,7 +122,7 @@ class TestMultiSurveyLikelihood:
         lp = dist.MultivariateNormal(
             loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
         )
-        lik = MarginalizedMultiSurveyRVLikelihood(
+        lik = RVLikelihood(
             data=stacked, indicator_matrix=indicator, linear_prior=lp
         )
 

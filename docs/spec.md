@@ -174,8 +174,8 @@ src/harv/
 │   ├── base.py              # AbstractLikelihood[ParamT]
 │   ├── _params.py           # Parameter structs (eqx.Module pytrees)
 │   ├── helpers.py           # _solve_kepler
-│   ├── rv.py                # RVLikelihood, MarginalizedRVLikelihood
-│   ├── gaia_astrometry.py   # GaiaAstrometryLikelihood, Marginalized…
+│   ├── rv.py                # RVLikelihood (unified)
+│   ├── gaia_astrometry.py   # GaiaAstrometryLikelihood (unified)
 │   ├── combined.py          # CompositeLikelihood
 │   └── astrometry.py        # Stub: future absolute/relative astrometry
 ├── priors/
@@ -450,17 +450,28 @@ The design guarantees that `jax.vmap(lik.log_prob)(params_batch)` works out-of-t
 when `params_batch` is a pytree of stacked JAX arrays (i.e. a batch of param structs
 with leading batch dimension).
 
-### `MarginalizedRVLikelihood` / `RVLikelihood`
+### `RVLikelihood`
 
-`MarginalizedRVLikelihood` closes over a `RadialVelocityData` object and a linear
-prior (over \[K, v₀\]). For each nonlinear parameter sample it:
+`RVLikelihood` is the unified radial velocity likelihood class. It closes over a
+`RadialVelocityData` object and supports three evaluation modes:
+
+1. **Marginalized** (`linear_prior` provided, `params` is `MarginalizedParameters`):
+   analytically integrates over [K, v₀] via `MarginalizedLinear`. Supports partial
+   marginalization via `params.marginalized_names`.
+2. **Multi-survey marginalized** (`indicator_matrix` provided): appends
+   instrument-offset columns and marginalizes [K, v₀, δ₁, …, δₖ] jointly.
+3. **Explicit** (`linear_prior` is `None`, `params` is `RVParameters`): evaluates the
+   Gaussian data log-likelihood directly.
+
+For each nonlinear parameter sample it:
 
 1. Solves Kepler's equation for (sin f, cos f) via `_solve_kepler`.
 1. Builds the (n_obs, 2) design matrix `[rv_amplitude, 1]`.
-1. Constructs a `MarginalizedLinear` distribution (numpyro-ext) and calls `.log_prob()`.
+1. If marginalized, constructs a `MarginalizedLinear` distribution (numpyro-ext) and
+   calls `.log_prob()`. If explicit, evaluates `dm @ [K, v₀]` + Gaussian log-prob.
 
-`RVLikelihood` takes `RVParameters` (includes K and v₀) and evaluates the Gaussian
-log-likelihood explicitly without marginalization.
+The `design_matrix(params)` method exposes the full design matrix (including indicator
+columns for multi-survey) for reuse by MCMC builders and other consumers.
 
 #### Linear prior as a function of nonlinear parameters
 
@@ -487,12 +498,15 @@ reference mass m₁), this works cleanly under `jax.vmap` and `jax.jit`. Until t
 is implemented, users who need a mass-based K prior should pre-transform their K
 samples after the fact using the posterior period and eccentricity.
 
-### `MarginalizedGaiaAstrometryLikelihood` / `GaiaAstrometryLikelihood`
+### `GaiaAstrometryLikelihood`
 
-Same structure as the RV pair, but for astrometry. The (n_obs, 6) design matrix
+Same structure as `RVLikelihood`, but for astrometry. Supports marginalized (with
+`linear_prior`) and explicit (without) evaluation modes. The (n_obs, 6) design matrix
 columns are \[α₀, δ₀, μ_α, μ_δ, ϖ, a\], following Appendix A of
 [Holl et al. 2022](https://arxiv.org/abs/2206.05726). The Thiele-Innes constants
 are computed on-the-fly from the nonlinear orientation parameters.
+
+The `design_matrix(params)` method exposes the full design matrix for reuse.
 
 ### `CompositeLikelihood`
 
@@ -508,8 +522,8 @@ This is the canonical way to combine heterogeneous datasets, including astrometr
 
 ```python
 composite = CompositeLikelihood(
-    rv=MarginalizedRVLikelihood(data=rv_data, linear_prior=rv_prior),
-    astro=MarginalizedGaiaAstrometryLikelihood(data=gaia_data, linear_prior=astro_prior),
+    rv=RVLikelihood(data=rv_data, linear_prior=rv_prior),
+    astro=GaiaAstrometryLikelihood(data=gaia_data, linear_prior=astro_prior),
 )
 log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
 ```
