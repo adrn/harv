@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, final
 
 import equinox as eqx
@@ -20,7 +19,6 @@ import numpyro.distributions as dist
 from unxt import Quantity, ustrip
 
 from harv.data import (
-    AbstractAstrometryData,
     GaiaAstrometryData,
     InputData,
     RadialVelocityData,
@@ -37,7 +35,6 @@ from harv.likelihood.helpers import _IndexedCallable
 from harv.likelihood.rv import RVLikelihood
 
 if TYPE_CHECKING:
-    from harv.custom_types import Time
     from harv.priors.rejection import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]

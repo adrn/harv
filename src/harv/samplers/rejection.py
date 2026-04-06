@@ -35,10 +35,8 @@ from harv.samplers._numpyro import (
     _build_marginalized_numpyro_model,
 )
 from harv.samplers._strategies import (
-    _build_indicator_matrix,
-    _DataTypeStrategy,
     _STRATEGIES,
-    _stack_rv_datasets,
+    _DataTypeStrategy,
 )
 from harv.samplers.samples import Samples, _WarmStartMCMC
 

@@ -182,6 +182,8 @@ src/harv/
 │   └── rejection.py         # RejectionPrior
 ├── samplers/
 │   ├── rejection.py         # RejectionSampler
+│   ├── _strategies.py       # Data-type strategies (RV, astrometry, combined)
+│   ├── _numpyro.py          # Numpyro model builders for MCMC
 │   └── samples.py           # Samples container
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data
@@ -473,6 +475,12 @@ For each nonlinear parameter sample it:
 The `design_matrix(params)` method exposes the full design matrix (including indicator
 columns for multi-survey) for reuse by MCMC builders and other consumers.
 
+The `sample_conditional_linear(params, key)` method builds a `MarginalizedLinear`
+from the design matrix, resolved linear prior, and data errors, then draws one sample
+from the posterior conditioned on the observed data. This encapsulates the
+conditional-sampling step used by the rejection sampler's linear parameter sampling
+phase, keeping the strategy code simple.
+
 #### Linear prior as a function of nonlinear parameters
 
 The current implementation stores `linear_prior: dist.MultivariateNormal` as a fixed
@@ -507,6 +515,11 @@ columns are \[α₀, δ₀, μ_α, μ_δ, ϖ, a\], following Appendix A of
 are computed on-the-fly from the nonlinear orientation parameters.
 
 The `design_matrix(params)` method exposes the full design matrix for reuse.
+
+The `sample_conditional_linear(params, key)` method works identically to
+`RVLikelihood.sample_conditional_linear` — builds a `MarginalizedLinear` from the
+design matrix, resolved linear prior, and along-scan data, then draws one conditional
+sample.
 
 ### `CompositeLikelihood`
 
@@ -633,10 +646,10 @@ dimensions when `offsets` is provided. Each non-reference offset prior must be a
 
 In `SourceData` with multiple RV datasets, the sampler stacks all observations in dict
 order and builds an indicator matrix (constant across parameter samples) that selects
-which rows belong to each non-reference instrument. The indicator matrix is closed over
-by `MarginalizedMultiSurveyRVLikelihood` and appended to the base `[K, v₀]` design matrix
-at `log_prob` time. Named access to offset samples works via `samples["espresso"]`
-(the instrument name becomes a linear parameter key).
+which rows belong to each non-reference instrument. The indicator matrix is stored on
+`RVLikelihood` and appended to the base `[K, v₀]` design matrix at `log_prob` time.
+Named access to offset samples works via `samples["espresso"]` (the instrument name
+becomes a linear parameter key).
 
 ### SB2 and hierarchical systems
 
@@ -667,7 +680,7 @@ sampling efficient.
    dimensionless. All samples are raw JAX arrays (units attached later).
 
 1. **Likelihood evaluation** (batched). For each batch of `batch_size` samples,
-   construct param structs, build `Marginalized*Likelihood` objects, and evaluate
+   construct param structs, build the appropriate likelihood objects, and evaluate
    `jax.vmap(lik.log_prob)(params_batch)` using `jax.lax.fori_loop` to control
    memory usage.
 
@@ -675,8 +688,8 @@ sampling efficient.
    `Uniform() < weight`.
 
 1. **Linear parameter sampling.** For each accepted nonlinear sample, call
-   `MarginalizedLinear.conditional()` to sample the linear parameters from their
-   conditional posterior given the data.
+   `likelihood.sample_conditional_linear(params, key)` to sample the linear
+   parameters from their conditional posterior given the data.
 
 1. **Return** a `Samples` object.
 
@@ -824,13 +837,13 @@ primary and secondary respectively, sharing a common systemic velocity v₀.
 than one `RadialVelocityData`.**
 
 The RV-only multi-survey case (no astrometry) is fully implemented — see
-`MarginalizedMultiSurveyRVLikelihood` and `_RVStrategy`. The combined case requires
+`RVLikelihood` (with `indicator_matrix`) and `_RVStrategy`. The combined case requires
 the same indicator-matrix treatment applied to the RV block of the joint linear prior:
 
 - The joint linear prior becomes `(6 + 2 + n_non_ref)`-dimensional:
   `[ra0, dec0, pmra, pmdec, parallax, a, K, v₀, δ₁, …, δₖ]`.
-- `MarginalizedCombinedLikelihood` must hold an `indicator_matrix` and append it to
-  the RV design matrix columns inside `log_prob`.
+- The `RVLikelihood` within the `CompositeLikelihood` must hold an `indicator_matrix`
+  and append it to the RV design matrix columns inside `log_prob`.
 - `_CombinedStrategy.extract_data` must stack the RV datasets (as `_RVStrategy`
   does) and build the indicator matrix.
 - `default_combined` must extend the RV block of the covariance matrix when `offsets`
