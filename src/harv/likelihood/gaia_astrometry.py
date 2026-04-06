@@ -4,8 +4,9 @@ This module implements likelihood evaluations for Gaia along-scan astrometry.
 Two variants are provided:
 
 - :class:`MarginalizedGaiaAstrometryLikelihood`: analytically marginalizes over
-  the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a
-  Gaussian prior. Requires a ``dist.MultivariateNormal`` prior.
+  some or all of the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a)
+  given a Gaussian prior.  Supports partial marginalization via
+  ``params.marginalized_names``.
 
 - :class:`GaiaAstrometryLikelihood`: full likelihood with all parameters
   specified explicitly.
@@ -31,8 +32,8 @@ from unxt.quantity import AllowValue
 from harv.data import GaiaAstrometryData
 from harv.kepler._orbit_math import thiele_innes_ABFG
 from harv.likelihood._params import (
-    GaiaAstrometryMarginalizedParameters,
     GaiaAstrometryParameters,
+    MarginalizedParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
@@ -42,7 +43,8 @@ __all__ = [
     "GaiaAstrometryLikelihood",
 ]
 
-_GaiaParams = GaiaAstrometryMarginalizedParameters | GaiaAstrometryParameters
+# Column order in the astrometry design matrix.
+_ASTRO_LINEAR_NAMES: tuple[str, ...] = GaiaAstrometryParameters.linear_param_names
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -51,7 +53,7 @@ _GaiaParams = GaiaAstrometryMarginalizedParameters | GaiaAstrometryParameters
 
 def _get_design_matrix(
     data: GaiaAstrometryData,
-    params: _GaiaParams,
+    params: MarginalizedParameters | GaiaAstrometryParameters,
     sin_f: jax.Array,
     cos_f: jax.Array,
 ) -> jax.Array:
@@ -102,21 +104,23 @@ def _get_design_matrix(
 
 
 class MarginalizedGaiaAstrometryLikelihood(
-    AbstractLikelihood[GaiaAstrometryMarginalizedParameters]
+    AbstractLikelihood[MarginalizedParameters]
 ):
     """Gaia astrometry likelihood with linear parameters analytically marginalized.
 
-    Analytically integrates over the 6 linear astrometric parameters
-    (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a Gaussian prior, using the
-    ``MarginalizedLinear`` distribution from numpyro-ext.
+    Analytically integrates over some or all of the 6 linear astrometric
+    parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a Gaussian prior, using the
+    ``MarginalizedLinear`` distribution from numpyro-ext.  Partial
+    marginalization is supported: parameters in ``params.marginalized_names``
+    are integrated out, while any remaining linear parameters must be present
+    on the ``MarginalizedParameters`` wrapper as explicit fields.
 
     Parameters
     ----------
     data : GaiaAstrometryData
         Gaia epoch astrometry observations.
-    linear_prior : dist.MultivariateNormal
-        Gaussian prior over the 6 linear parameters. Must be multivariate
-        normal — this is required for analytic marginalization.
+    linear_prior : dist.MultivariateNormal or eqx.Module
+        Gaussian prior over the marginalized linear parameters.
 
     Examples
     --------
@@ -136,20 +140,40 @@ class MarginalizedGaiaAstrometryLikelihood(
         "lon_asc_node",
     )
 
-    def log_prob(self, params: GaiaAstrometryMarginalizedParameters) -> jax.Array:
+    def log_prob(self, params: MarginalizedParameters) -> jax.Array:
         """Compute the marginalized log-likelihood for a single parameter sample."""
         sin_f, cos_f = _solve_kepler(self.data, params)
         design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
-        lp = _resolve_linear_prior(self.linear_prior, params)
 
-        marg_dist = MarginalizedLinear(
-            design_matrix=design_matrix,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(
-                0.0, ustrip("mas", self.data.al_position_err)
-            ),
+        y_obs = ustrip("mas", self.data.al_position)
+        y_err = ustrip("mas", self.data.al_position_err)
+
+        # Determine which astro linear params are marginalized vs explicit.
+        my_marg = tuple(
+            n for n in _ASTRO_LINEAR_NAMES if n in params.marginalized_names
         )
-        return marg_dist.log_prob(ustrip("mas", self.data.al_position))
+        my_explicit = tuple(
+            n for n in _ASTRO_LINEAR_NAMES if n not in params.marginalized_names
+        )
+        marg_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_marg]
+        explicit_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_explicit]
+
+        # Adjust observations for explicit parameters.
+        if explicit_idx:
+            explicit_vals = jnp.array(
+                [ustrip("mas", getattr(params, n)) for n in my_explicit]
+            )
+            y_obs = y_obs - design_matrix[:, jnp.array(explicit_idx)] @ explicit_vals
+
+        # Marginalize over the remaining columns.
+        dm_marg = design_matrix[:, jnp.array(marg_idx)]
+        lp = _resolve_linear_prior(self.linear_prior, params)
+        marg_dist = MarginalizedLinear(
+            design_matrix=dm_marg,
+            prior_distribution=lp,
+            data_distribution=dist.Normal(0.0, y_err),
+        )
+        return marg_dist.log_prob(y_obs)
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
     Generic over the parameter struct type ``_ParamT``. Subclasses declare
     their expected parameter type explicitly::
 
-        class MarginalizedRVLikelihood(AbstractLikelihood[RVMarginalizedParameters]):
+        class MarginalizedRVLikelihood(AbstractLikelihood[MarginalizedParameters]):
             ...
 
     This makes batching clean::

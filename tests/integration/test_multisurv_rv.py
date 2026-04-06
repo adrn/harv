@@ -13,7 +13,7 @@ import pytest
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
-from harv.likelihood._params import RVMarginalizedParameters
+from harv.likelihood._params import RVParameters
 from harv.likelihood.rv import (
     MarginalizedMultiSurveyRVLikelihood,
     MarginalizedRVLikelihood,
@@ -51,7 +51,7 @@ class TestMultiSurveyLikelihood:
         lik = MarginalizedMultiSurveyRVLikelihood(
             data=stacked, indicator_matrix=indicator, linear_prior=lp
         )
-        params = RVMarginalizedParameters(
+        params = RVParameters.marginalized(
             period=Quantity(50.0, "day"),
             eccentricity=0.2,
             phase_peri=0.5,
@@ -95,7 +95,7 @@ class TestMultiSurveyLikelihood:
         )
         lik_single = MarginalizedRVLikelihood(data=stacked, linear_prior=lp_single)
 
-        params = RVMarginalizedParameters(
+        params = RVParameters.marginalized(
             period=Quantity(100.0, "day"),
             eccentricity=0.0,
             phase_peri=0.5,
@@ -130,7 +130,7 @@ class TestMultiSurveyLikelihood:
         )
 
         n = 8
-        params_batch = RVMarginalizedParameters(
+        params_batch = RVParameters.marginalized(
             period=Quantity(jnp.ones(n) * 30.0, "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n),
             phase_peri=jnp.linspace(0.0, 1.0, n),

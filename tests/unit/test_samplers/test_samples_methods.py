@@ -14,9 +14,7 @@ from unxt import Quantity
 
 from harv.data import RadialVelocityData
 from harv.likelihood._params import (
-    GaiaAstrometryMarginalizedParameters,
     GaiaAstrometryParameters,
-    RVMarginalizedParameters,
     RVParameters,
 )
 from harv.priors.rejection import RejectionPrior
@@ -49,7 +47,7 @@ def rv_samples() -> Samples:
     return Samples(
         _nonlinear=nonlinear,
         _linear=linear,
-        _orbit_cls=RVMarginalizedParameters,
+        _orbit_cls=RVParameters,
         _full_cls=(RVParameters,),
         _linear_param_units=("km/s", "km/s"),
         _time_unit="day",
@@ -83,7 +81,7 @@ def astro_samples() -> Samples:
     return Samples(
         _nonlinear=nonlinear,
         _linear=linear,
-        _orbit_cls=GaiaAstrometryMarginalizedParameters,
+        _orbit_cls=GaiaAstrometryParameters,
         _full_cls=(GaiaAstrometryParameters,),
         _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
         _time_unit="day",
@@ -119,7 +117,7 @@ def combined_samples() -> Samples:
     return Samples(
         _nonlinear=nonlinear,
         _linear=linear,
-        _orbit_cls=GaiaAstrometryMarginalizedParameters,
+        _orbit_cls=GaiaAstrometryParameters,
         _full_cls=(GaiaAstrometryParameters, RVParameters),
         _linear_param_units=(
             "mas",
@@ -148,7 +146,7 @@ def empty_rv_samples() -> Samples:
             "arg_peri": jnp.array([]),
         },
         _linear=jnp.empty((0, 2)),
-        _orbit_cls=RVMarginalizedParameters,
+        _orbit_cls=RVParameters,
         _full_cls=(RVParameters,),
         _linear_param_units=("km/s", "km/s"),
         _time_unit="day",
@@ -651,7 +649,7 @@ class TestPlotUnknownDataType:
                 "arg_peri": jnp.zeros(5),
             },
             _linear=jnp.zeros((5, 2)),
-            _orbit_cls=RVMarginalizedParameters,
+            _orbit_cls=RVParameters,
             _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",

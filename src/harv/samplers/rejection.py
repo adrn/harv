@@ -34,9 +34,8 @@ from harv.data import (
     SourceData,
 )
 from harv.likelihood._params import (
-    GaiaAstrometryMarginalizedParameters,
     GaiaAstrometryParameters,
-    RVMarginalizedParameters,
+    MarginalizedParameters,
     RVParameters,
 )
 from harv.likelihood.combined import CompositeLikelihood
@@ -131,7 +130,8 @@ class _DataTypeStrategy(ABC):
 
     Each concrete subclass provides data extraction, likelihood construction,
     orbit param building, and linear parameter sampling for one data type.
-    Required prior params are derived from the orbit param class fields.
+    Required prior params are derived from the full param class fields minus
+    the linear parameter names.
     """
 
     # Stateless strategies: equality/hashing by class identity so that
@@ -144,7 +144,14 @@ class _DataTypeStrategy(ABC):
 
     @property
     @abstractmethod
-    def orbit_cls(self) -> type: ...
+    def nonlinear_cls(self) -> type:
+        """The full parameter class used to create marginalized params.
+
+        For single-data-type strategies this is the single full class.
+        For combined strategies it is the full class with the superset of
+        nonlinear fields (``GaiaAstrometryParameters``).
+        """
+        ...
 
     @property
     @abstractmethod
@@ -156,8 +163,11 @@ class _DataTypeStrategy(ABC):
 
     @property
     def required_prior_params(self) -> tuple[str, ...]:
-        """Prior parameter names, derived from ``orbit_cls`` fields."""
-        return tuple(f.name for f in dataclasses.fields(self.orbit_cls))
+        """Prior parameter names (nonlinear fields of ``nonlinear_cls``)."""
+        linear = set(self.nonlinear_cls.linear_param_names)
+        return tuple(
+            f.name for f in dataclasses.fields(self.nonlinear_cls) if f.name not in linear
+        )
 
     @property
     def n_linear(self) -> int:
@@ -236,8 +246,8 @@ class _RVStrategy(_DataTypeStrategy):
         return "rv"
 
     @property
-    def orbit_cls(self) -> type:
-        return RVMarginalizedParameters
+    def nonlinear_cls(self) -> type:
+        return RVParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
@@ -310,7 +320,7 @@ class _RVStrategy(_DataTypeStrategy):
             msg = "_RVStrategy requires rv_data"
             raise TypeError(msg)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
-        params = RVMarginalizedParameters(
+        params = RVParameters.marginalized(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -347,8 +357,8 @@ class _RVStrategy(_DataTypeStrategy):
         cos_i: jax.Array,  # noqa: ARG002
         lon_asc: jax.Array,  # noqa: ARG002
         time_unit: Any,
-    ) -> eqx.Module:
-        return RVMarginalizedParameters(
+    ) -> MarginalizedParameters:
+        return RVParameters.marginalized(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -363,8 +373,8 @@ class _AstrometryStrategy(_DataTypeStrategy):
         return "astrometry"
 
     @property
-    def orbit_cls(self) -> type:
-        return GaiaAstrometryMarginalizedParameters
+    def nonlinear_cls(self) -> type:
+        return GaiaAstrometryParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
@@ -423,7 +433,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
             msg = "_AstrometryStrategy requires astro_data"
             raise TypeError(msg)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
-        params = GaiaAstrometryMarginalizedParameters(
+        params = GaiaAstrometryParameters.marginalized(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -453,8 +463,8 @@ class _AstrometryStrategy(_DataTypeStrategy):
         cos_i: jax.Array,
         lon_asc: jax.Array,
         time_unit: Any,
-    ) -> eqx.Module:
-        return GaiaAstrometryMarginalizedParameters(
+    ) -> MarginalizedParameters:
+        return GaiaAstrometryParameters.marginalized(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -471,8 +481,8 @@ class _CombinedStrategy(_DataTypeStrategy):
         return "combined"
 
     @property
-    def orbit_cls(self) -> type:
-        return GaiaAstrometryMarginalizedParameters
+    def nonlinear_cls(self) -> type:
+        return GaiaAstrometryParameters
 
     @property
     def full_cls(self) -> tuple[type, ...]:
@@ -572,7 +582,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         k_astro, k_rv = jr.split(key)
         period: Quantity[Time] = Quantity(sample["period"], time_unit)
 
-        params = GaiaAstrometryMarginalizedParameters(
+        params = GaiaAstrometryParameters.marginalized(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -609,7 +619,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         ).sample(k_astro)
 
         # RV linear params
-        rv_params = RVMarginalizedParameters(
+        rv_params = RVParameters.marginalized(
             period=period,
             eccentricity=sample["eccentricity"],
             phase_peri=sample["phase_peri"],
@@ -636,8 +646,8 @@ class _CombinedStrategy(_DataTypeStrategy):
         cos_i: jax.Array,
         lon_asc: jax.Array,
         time_unit: Any,
-    ) -> eqx.Module:
-        return GaiaAstrometryMarginalizedParameters(
+    ) -> MarginalizedParameters:
+        return GaiaAstrometryParameters.marginalized(
             period=Quantity(period, time_unit),
             eccentricity=ecc,
             phase_peri=phase,
@@ -697,7 +707,7 @@ def _build_marginalized_numpyro_model(
         astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
     )
     lik = strategy.build_marginalized_likelihood(astro_data, rv_data, prior, data)
-    orbit_cls = strategy.orbit_cls
+    nonlinear_cls = strategy.nonlinear_cls
     nonlinear_priors = prior.nonlinear_priors  # snapshot at model-build time
 
     def model() -> None:
@@ -707,7 +717,7 @@ def _build_marginalized_numpyro_model(
 
         orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
         orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = orbit_cls(**orbit_kwargs)
+        params = nonlinear_cls.marginalized(**orbit_kwargs)
 
         numpyro.factor("log_lik", lik.log_prob(params))
 
@@ -751,7 +761,7 @@ def _build_full_numpyro_model(
     time_unit = str(
         astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
     )
-    orbit_cls = strategy.orbit_cls
+    nonlinear_cls = strategy.nonlinear_cls
     nonlinear_priors = prior.nonlinear_priors
 
     # Linear parameter names, in the same column order as samples._linear.
@@ -796,7 +806,7 @@ def _build_full_numpyro_model(
 
         orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
         orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = orbit_cls(**orbit_kwargs)
+        params = nonlinear_cls.marginalized(**orbit_kwargs)
 
         # --- linear parameters ---
         # Sample the full vector jointly to preserve the prior's covariance.
@@ -950,7 +960,7 @@ def _build_extra_numpyro_model(
     time_unit = str(
         astro_data.time.unit if astro_data is not None else rv_data.time.unit  # type: ignore[union-attr]
     )
-    orbit_cls = strategy.orbit_cls
+    nonlinear_cls = strategy.nonlinear_cls
     nonlinear_priors = prior.nonlinear_priors
 
     # All linear parameter names, in the same column order as samples._linear.
@@ -994,7 +1004,7 @@ def _build_extra_numpyro_model(
 
         orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
         orbit_kwargs["period"] = Quantity(values["period"], time_unit)
-        params = orbit_cls(**orbit_kwargs)
+        params = nonlinear_cls.marginalized(**orbit_kwargs)
 
         # --- extra model: sample physical params, get fixed linear values ---
         # ``values`` contains raw scalar nonlinear parameters; period is in
@@ -1290,7 +1300,7 @@ class RejectionSampler(eqx.Module):
         return Samples(
             _nonlinear=accepted_nonlinear,
             _linear=linear_samples,
-            _orbit_cls=strategy.orbit_cls,
+            _orbit_cls=strategy.nonlinear_cls,
             _full_cls=strategy.full_cls,
             _linear_param_units=strategy.linear_param_units(
                 astro_data, rv_data, self.prior

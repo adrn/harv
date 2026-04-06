@@ -15,9 +15,7 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.likelihood._params import (
-    GaiaAstrometryMarginalizedParameters,
     GaiaAstrometryParameters,
-    RVMarginalizedParameters,
     RVParameters,
 )
 
@@ -130,12 +128,14 @@ class _WarmStartMCMC:
 
 # Maps stored class-name strings back to classes for HDF5 round-trips.
 _ORBIT_CLS_BY_NAME: dict[str, type] = {
-    "RVMarginalizedParameters": RVMarginalizedParameters,
-    "GaiaAstrometryMarginalizedParameters": GaiaAstrometryMarginalizedParameters,
+    "RVParameters": RVParameters,
+    "GaiaAstrometryParameters": GaiaAstrometryParameters,
     # Backward compat: old HDF5 files stored these names
-    "RVOrbitParameters": RVMarginalizedParameters,
-    "GaiaAstrometryOrbitParameters": GaiaAstrometryMarginalizedParameters,
-    "CombinedOrbitParameters": GaiaAstrometryMarginalizedParameters,
+    "RVMarginalizedParameters": RVParameters,
+    "GaiaAstrometryMarginalizedParameters": GaiaAstrometryParameters,
+    "RVOrbitParameters": RVParameters,
+    "GaiaAstrometryOrbitParameters": GaiaAstrometryParameters,
+    "CombinedOrbitParameters": GaiaAstrometryParameters,
 }
 _FULL_CLS_BY_NAME: dict[str, type] = {
     "RVParameters": RVParameters,
@@ -162,7 +162,7 @@ class Samples(eqx.Module):
     _linear : jnp.ndarray
         Linear parameter samples, shape (n_samples, n_linear_params).
     _orbit_cls : type
-        Orbit-only parameter class (e.g. RVMarginalizedParameters). Its
+        Nonlinear parameter class (e.g. RVParameters). Its
         ``data_type`` class variable gives the data type string.
     _full_cls : tuple[type, ...]
         Ordered tuple of full parameter classes (e.g. ``(RVParameters,)``
@@ -524,7 +524,9 @@ class Samples(eqx.Module):
             _DATA_TYPE_BY_OLD_CLS = {
                 "CombinedOrbitParameters": "combined",
                 "RVMarginalizedParameters": "rv",
+                "RVParameters": "rv",
                 "GaiaAstrometryMarginalizedParameters": "astrometry",
+                "GaiaAstrometryParameters": "astrometry",
             }
             data_type: str = meta.attrs.get(
                 "data_type", _DATA_TYPE_BY_OLD_CLS.get(orbit_cls_name, "")

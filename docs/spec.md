@@ -365,21 +365,9 @@ abstract base class `AbstractParameters(eqx.Module)` defines the interface, and 
 concrete class is `@final` with all fields declared explicitly (no intermediate
 abstract classes, no multi-level inheritance).
 
-There are two levels for each data type: an **orbit-parameters-only** struct (used
-with marginalized likelihoods during the rejection-sampling hot path) and a
-**full-parameters** struct (used when all parameters are specified explicitly, e.g.
-for forward modeling, MCMC, or plotting).
-
-**Marginalized structs** (nonlinear parameters only; linear parameters are analytically marginalized out):
-
-| Struct                                 | Fields                                                                      |
-| -------------------------------------- | --------------------------------------------------------------------------- |
-| `RVMarginalizedParameters`             | `period`, `eccentricity`, `phase_peri`, `arg_peri`                          |
-| `GaiaAstrometryMarginalizedParameters` | `period`, `eccentricity`, `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node` |
-
-`GaiaAstrometryMarginalizedParameters` is used for both pure-astrometry and combined
-astrometry + RV runs. The distinction between these run types is carried by the
-`Samples._data_type` field, not by the parameter class.
+There are two levels for each data type: a **full-parameters** struct (used when all
+parameters are specified explicitly, e.g. for forward modeling, MCMC, or plotting) and
+a **marginalized wrapper** (created on-the-fly via `.marginalize()` or `.marginalized()`).
 
 **Full structs** (all parameters specified explicitly — orbit + linear/observational):
 
@@ -393,10 +381,29 @@ every linear parameter the struct holds, in design-matrix column order. It is *n
 pytree leaf (ClassVar is excluded by equinox). The rejection sampler reads these
 class attributes to name the output `Samples` columns, avoiding hardcoded strings.
 
-Parameter classes are pure data containers — they carry no `data_type` metadata.
-The data type string (`"rv"`, `"astrometry"`, or `"combined"`) is a property of
-the sampling run, stored on `Samples._data_type` and derived from the sampler
-strategy.
+**`MarginalizedParameters` wrapper** (nonlinear parameters only; linear parameters are
+analytically marginalized out):
+
+Instead of separate marginalized classes for each data type, a single
+`MarginalizedParameters(eqx.Module)` wrapper is used. It stores non-marginalized field
+values in a `_values: dict[str, Any]` (pytree leaves) and records which linear
+parameters were removed in `marginalized_names: tuple[str, ...]` (static). Field
+access delegates to `_values` via `__getattr__`, so `params.period` works as expected.
+
+Creation:
+
+```python
+# From an existing full-parameter instance (drops named linear fields):
+marg = full_params.marginalize("K", "v0")  # partial
+marg = full_params.marginalize()             # all linear params
+
+# Classmethod shortcut (sampler construction path):
+marg = RVParameters.marginalized(period=..., eccentricity=..., phase_peri=..., arg_peri=...)
+```
+
+For combined astrometry + RV runs, the wrapper is created from
+`GaiaAstrometryParameters` (6 nonlinear params). The distinction between run types is
+carried by `Samples._data_type`, not by the parameter class.
 
 ### The `period` convention
 
@@ -493,8 +500,9 @@ Combines multiple `AbstractLikelihood` components by summing their log-likelihoo
 Shared nonlinear parameters (e.g. `period` appears in both the RV and astrometry
 models) are automatically de-duplicated in `param_names` by order of first appearance.
 Each component's `log_prob` reads only the fields it needs from the shared params
-struct via duck typing — passing a `GaiaAstrometryMarginalizedParameters` to a component that
-declares `RVMarginalizedParameters` works because the former is a superset of the latter.
+struct via duck typing — passing a `MarginalizedParameters` wrapping
+`GaiaAstrometryParameters` to a component that expects RV fields works because
+the wrapper carries a superset of the required attributes.
 
 This is the canonical way to combine heterogeneous datasets, including astrometry + RV:
 
@@ -508,8 +516,8 @@ log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
 
 Each component holds its own `linear_prior`, which may be a fixed
 `dist.MultivariateNormal` or a callable `eqx.Module`. When callable, it receives
-whatever params struct is passed by the caller — for combined data this is
-`GaiaAstrometryMarginalizedParameters`, giving the callable access to all nonlinear parameters.
+whatever params struct is passed by the caller — for combined data this is a
+`MarginalizedParameters` wrapper, giving the callable access to all nonlinear parameters.
 
 #### `_IndexedCallable` — splitting a joint prior
 
@@ -703,7 +711,7 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 | --------------------- | -------------------------------------------------------------------------------- |
 | `_nonlinear`          | `dict[str, jax.Array]` — nonlinear parameter samples                             |
 | `_linear`             | `jax.Array` shape `(n_samples, n_linear)`                                        |
-| `_orbit_cls`          | Static reference to the orbit-only param class (e.g. `RVMarginalizedParameters`) |
+| `_orbit_cls`          | Static reference to the nonlinear param class (e.g. `RVParameters`)              |
 | `_full_cls`           | Static tuple of full param classes (e.g. `(RVParameters,)`)                      |
 | `_linear_param_units` | Static tuple of unit strings for `_linear` columns, set by the sampler           |
 | `_metadata`           | Static dict with `t_ref` and any extra info                                      |

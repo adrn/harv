@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from unxt import Quantity
 
 from harv.data import GaiaAstrometryData
-from harv.likelihood._params import GaiaAstrometryMarginalizedParameters
+from harv.likelihood._params import GaiaAstrometryParameters
 from harv.likelihood.gaia_astrometry import (
     MarginalizedGaiaAstrometryLikelihood,
     _get_design_matrix,
@@ -33,7 +33,7 @@ def _make_astro_params(
     cos_i=0.5,
     lon_asc_node=2.0,
 ):
-    return GaiaAstrometryMarginalizedParameters(
+    return GaiaAstrometryParameters.marginalized(
         period=Quantity(period_day, "day"),
         eccentricity=eccentricity,
         phase_peri=phase_peri,
@@ -165,7 +165,7 @@ class TestBatchLikelihood:
             data=data, linear_prior=_astro_prior()
         )
 
-        params_batch = GaiaAstrometryMarginalizedParameters(
+        params_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n_samples),
             phase_peri=jnp.zeros(n_samples),
@@ -187,7 +187,7 @@ class TestBatchLikelihood:
         lik = MarginalizedGaiaAstrometryLikelihood(data=data, linear_prior=prior)
 
         eccs = jnp.array([0.1, 0.3])
-        params_batch = GaiaAstrometryMarginalizedParameters(
+        params_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(jnp.ones(2) * 100.0, "day"),
             eccentricity=eccs,
             phase_peri=jnp.zeros(2),

@@ -7,10 +7,16 @@ equinox Modules and therefore JAX pytrees, so batching is simply::
 
 Two levels of parameterization exist for each data type:
 
-- **Orbital parameters** (nonlinear only): used with *marginalized* likelihoods,
-  where linear parameters are analytically integrated out given a Gaussian prior.
-- **Full parameters** (nonlinear + linear): used with full likelihoods where
-  all parameters are specified explicitly.
+- **Full parameters** (nonlinear + linear): the canonical parameter classes.
+  Each data type has one ``@final`` class (e.g. ``RVParameters``,
+  ``GaiaAstrometryParameters``) that declares all fields and a
+  ``linear_param_names`` class variable listing which fields enter the
+  forward model linearly.
+
+- **Marginalized parameters**: a ``MarginalizedParameters`` wrapper created
+  on-the-fly via ``FullClass.marginalize()`` or ``FullClass.marginalized()``.
+  The wrapper drops some or all linear-parameter fields from the pytree,
+  telling the likelihood which parameters to analytically integrate out.
 
 Annotations use ``Batchable*`` type aliases (e.g. ``BatchableQTime``,
 ``BatchableFloat``) which accept both scalar and batched arrays via the
@@ -18,7 +24,10 @@ Annotations use ``Batchable*`` type aliases (e.g. ``BatchableQTime``,
 with a leading batch axis; ``jax.vmap`` then slices each leaf to scalar.
 """
 
-from typing import ClassVar, final
+from __future__ import annotations
+
+import dataclasses
+from typing import Any, ClassVar, final
 
 import equinox as eqx
 
@@ -32,24 +41,164 @@ from harv.custom_types import (
 )
 
 
+# ---------------------------------------------------------------------------
+# MarginalizedParameters wrapper
+# ---------------------------------------------------------------------------
+
+
+class MarginalizedParameters(eqx.Module):
+    """Wrapper that holds non-marginalized field values as a pytree.
+
+    Created by ``AbstractParameters.marginalize()`` or
+    ``AbstractParameters.marginalized()``.  The ``marginalized_names`` tuple
+    records which linear parameters have been removed from the pytree and
+    should be analytically integrated out by the likelihood.
+
+    Field access is delegated to the internal ``_values`` dict, so
+    ``params.period`` works as expected.
+
+    Parameters
+    ----------
+    _values : dict[str, Any]
+        Mapping from field name to value for every *non-marginalized* field.
+        These are the pytree leaves that JAX traces through.
+    marginalized_names : tuple[str, ...]
+        Names of the linear parameters that have been marginalized out.
+        Static (not a pytree leaf).
+    _source_cls : type or None
+        The full parameter class this was derived from, or ``None`` for
+        combined (multi-source-class) wrappers.  Static.
+    """
+
+    _values: dict[str, Any]
+    marginalized_names: tuple[str, ...] = eqx.field(static=True)
+    _source_cls: type | None = eqx.field(static=True, default=None)
+
+    @property
+    def nonlinear_names(self) -> tuple[str, ...]:
+        """Names of the non-marginalized fields present in this wrapper."""
+        return tuple(self._values.keys())
+
+    def __getattr__(self, name: str) -> Any:
+        # eqx.Module uses __getattr__ only as a fallback, so this won't
+        # intercept normal Module attribute access (_values, etc.).
+        try:
+            return self._values[name]
+        except KeyError:
+            raise AttributeError(  # noqa: B904
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Abstract base
+# ---------------------------------------------------------------------------
+
+
 class AbstractParameters(eqx.Module):
     """Abstract base for all parameter structs.
 
-    Declares the 4 orbital fields shared by every concrete parameter class.
+    Declares the 4 orbital fields shared by every concrete parameter class,
+    and provides ``marginalize()`` / ``marginalized()`` for creating
+    ``MarginalizedParameters`` wrappers.
     """
+
+    linear_param_names: ClassVar[tuple[str, ...]] = ()
 
     period: BatchableQTime
     eccentricity: BatchableFloat
     phase_peri: BatchableFloat
     arg_peri: BatchableFloat
 
+    # -- Marginalization helpers ------------------------------------------
 
-@final
-class RVMarginalizedParameters(AbstractParameters):
-    """Nonlinear orbital parameters for the marginalized RV likelihood.
+    def marginalize(self, *names: str) -> MarginalizedParameters:
+        """Return a ``MarginalizedParameters`` wrapper with *names* removed.
 
-    The linear parameters (K, v0) are analytically marginalized out.
-    """
+        Parameters
+        ----------
+        *names : str
+            Names of linear parameters to marginalize.  Each must be in
+            ``self.linear_param_names``.  If none are given, **all** linear
+            parameters are marginalized.
+
+        Returns
+        -------
+        MarginalizedParameters
+
+        Raises
+        ------
+        ValueError
+            If any name is not a recognised linear parameter.
+        """
+        cls = type(self)
+        if not names:
+            names = cls.linear_param_names
+
+        bad = set(names) - set(cls.linear_param_names)
+        if bad:
+            msg = (
+                f"Cannot marginalize {bad}: not in "
+                f"{cls.__name__}.linear_param_names = {cls.linear_param_names}"
+            )
+            raise ValueError(msg)
+
+        keep = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name not in names
+        }
+        return MarginalizedParameters(
+            _values=keep,
+            marginalized_names=tuple(names),
+            _source_cls=cls,
+        )
+
+    @classmethod
+    def marginalized(
+        cls,
+        *names: str,
+        **kwargs: Any,
+    ) -> MarginalizedParameters:
+        """Construct a ``MarginalizedParameters`` directly from keyword args.
+
+        This is the construction path used by the sampler, which does not have
+        linear parameter values.
+
+        Parameters
+        ----------
+        *names : str
+            Names of linear parameters to marginalize.  If none are given,
+            **all** ``cls.linear_param_names`` are marginalized.
+        **kwargs
+            Field values for the non-marginalized parameters (typically the
+            nonlinear orbital parameters).
+
+        Returns
+        -------
+        MarginalizedParameters
+        """
+        if not names:
+            names = cls.linear_param_names
+
+        bad = set(names) - set(cls.linear_param_names)
+        if bad:
+            msg = (
+                f"Cannot marginalize {bad}: not in "
+                f"{cls.__name__}.linear_param_names = {cls.linear_param_names}"
+            )
+            raise ValueError(msg)
+
+        return MarginalizedParameters(
+            _values=kwargs,
+            marginalized_names=tuple(names),
+            _source_cls=cls,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Concrete parameter classes (one per data type)
+# ---------------------------------------------------------------------------
 
 
 @final
@@ -64,21 +213,6 @@ class RVParameters(AbstractParameters):
 
     K: BatchableQSpeed  # RV semi-amplitude
     v0: BatchableQSpeed  # systemic velocity
-
-
-@final
-class GaiaAstrometryMarginalizedParameters(AbstractParameters):
-    """Nonlinear orbital parameters for the marginalized Gaia astrometry likelihood.
-
-    Also used for combined astrometry + RV runs (the nonlinear parameter set is
-    identical; the data type distinction is carried by the sampler/Samples, not here).
-
-    The 6 linear astrometric parameters (ra0, dec0, pmra, pmdec, parallax, a) are
-    analytically marginalized out.
-    """
-
-    cos_i: BatchableFloat
-    lon_asc_node: BatchableFloat
 
 
 @final

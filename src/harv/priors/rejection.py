@@ -169,7 +169,7 @@ class RejectionPrior(eqx.Module):
                 import equinox as eqx
                 import numpyro.distributions as dist
                 import jax.numpy as jnp
-                from harv.likelihood._params import RVMarginalizedParameters
+                from harv.likelihood._params import MarginalizedParameters
                 from harv.priors.rejection import RejectionPrior
                 from unxt import ustrip
 
@@ -178,7 +178,7 @@ class RejectionPrior(eqx.Module):
                     K_scale: float = 100.0  # km/s
 
                     def __call__(
-                        self, params: RVMarginalizedParameters
+                        self, params: MarginalizedParameters
                     ) -> dist.MultivariateNormal:
                         # Rough K upper bound from Kepler's third law:
                         # K ∝ (2π G m₂ / P)^(1/3) (1-e²)^{-1/2}

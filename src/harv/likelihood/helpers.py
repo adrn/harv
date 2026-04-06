@@ -12,7 +12,7 @@ from unxt import ustrip
 
 from harv.data import AbstractData
 from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
-from harv.likelihood._params import AbstractParameters
+from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 
 
 class _IndexedCallable(eqx.Module):
@@ -65,7 +65,7 @@ def _resolve_linear_prior(
 
 def _solve_kepler(
     data: AbstractData,
-    params: AbstractParameters,
+    params: AbstractParameters | MarginalizedParameters,
 ) -> tuple[jax.Array, jax.Array]:
     """Solve Kepler's equation; return (sin_f, cos_f)."""
     t_peri = params.phase_peri * params.period

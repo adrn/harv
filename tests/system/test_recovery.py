@@ -37,7 +37,7 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Quantity, ustrip
 
-from harv.likelihood._params import GaiaAstrometryMarginalizedParameters
+from harv.likelihood._params import GaiaAstrometryParameters
 from harv.likelihood.gaia_astrometry import MarginalizedGaiaAstrometryLikelihood
 from harv.priors.rejection import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
@@ -314,7 +314,7 @@ class TestAstrometryLikelihoodSanity:
         lik, _, true = astro_lik_and_truth
         period_day = float(ustrip("day", true["period"]))
         phase_peri = float(ustrip("day", true["t_peri"])) / period_day
-        params = GaiaAstrometryMarginalizedParameters(
+        params = GaiaAstrometryParameters.marginalized(
             period=true["period"],
             eccentricity=true["eccentricity"],
             phase_peri=phase_peri,
@@ -338,7 +338,7 @@ class TestAstrometryLikelihoodSanity:
         period_day = float(ustrip("day", true["period"]))
         phase_peri = float(ustrip("day", true["t_peri"])) / period_day
 
-        params_true = GaiaAstrometryMarginalizedParameters(
+        params_true = GaiaAstrometryParameters.marginalized(
             period=true["period"],
             eccentricity=true["eccentricity"],
             phase_peri=phase_peri,
@@ -351,7 +351,7 @@ class TestAstrometryLikelihoodSanity:
         # Sample 1000 random nonlinear parameter sets from the prior
         prior = RejectionPrior.default_astrometry(period_min=100.0, period_max=1000.0)
         prior_nl = prior.sample_nonlinear(jr.PRNGKey(0), 1_000)
-        prior_batch = GaiaAstrometryMarginalizedParameters(
+        prior_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(prior_nl["period"], "day"),
             eccentricity=prior_nl["eccentricity"],
             phase_peri=prior_nl["phase_peri"],
@@ -380,7 +380,7 @@ class TestAstrometryLikelihoodSanity:
 
         n_grid = 100
         test_periods = jnp.linspace(200.0, 400.0, n_grid)
-        params_batch = GaiaAstrometryMarginalizedParameters(
+        params_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(test_periods, "day"),
             eccentricity=jnp.ones(n_grid) * ecc,
             phase_peri=jnp.ones(n_grid) * phase_peri,

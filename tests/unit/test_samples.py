@@ -6,9 +6,7 @@ import pytest
 from unxt import Quantity
 
 from harv.likelihood._params import (
-    GaiaAstrometryMarginalizedParameters,
     GaiaAstrometryParameters,
-    RVMarginalizedParameters,
     RVParameters,
 )
 from harv.samplers.samples import Samples
@@ -34,7 +32,7 @@ def _make_astro_samples():
     return Samples(
         _nonlinear=nonlinear,
         _linear=linear,
-        _orbit_cls=GaiaAstrometryMarginalizedParameters,
+        _orbit_cls=GaiaAstrometryParameters,
         _full_cls=(GaiaAstrometryParameters,),
         _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
         _time_unit="day",
@@ -66,7 +64,7 @@ class TestSamplesCreation:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVMarginalizedParameters,
+            _orbit_cls=RVParameters,
             _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
@@ -139,7 +137,7 @@ class TestSamplesAccess:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVMarginalizedParameters,
+            _orbit_cls=RVParameters,
             _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
@@ -168,7 +166,7 @@ class TestSamplesRepr:
         samples = Samples(
             _nonlinear=nonlinear,
             _linear=linear,
-            _orbit_cls=RVMarginalizedParameters,
+            _orbit_cls=RVParameters,
             _full_cls=(RVParameters,),
             _linear_param_units=("km/s", "km/s"),
             _time_unit="day",
