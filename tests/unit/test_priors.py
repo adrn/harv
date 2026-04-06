@@ -3,7 +3,6 @@
 import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
-import pytest
 
 from harv.priors.rejection import RejectionPrior
 
@@ -15,7 +14,9 @@ class TestRejectionPriorAstrometry:
         """Test creating default astrometry prior."""
         prior = RejectionPrior.default_astrometry()
 
-        assert prior.n_nonlinear == 6  # period, ecc, phase_peri, cos_i, arg_peri, lon_asc_node
+        assert (
+            prior.n_nonlinear == 6
+        )  # period, ecc, phase_peri, cos_i, arg_peri, lon_asc_node
         assert "cos_i" in prior.nonlinear_priors
         assert "lon_asc_node" in prior.nonlinear_priors
         assert "arg_peri" in prior.nonlinear_priors

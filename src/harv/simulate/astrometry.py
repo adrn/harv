@@ -179,7 +179,9 @@ def simulate_gaia_epoch_astrometry(
         eccentricity = rngs[2].uniform(0.0, 0.9)
 
     if t_peri is None:
-        t_peri = Quantity(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+        t_peri = Quantity(
+            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
+        )
 
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -222,7 +224,8 @@ def simulate_gaia_epoch_astrometry(
 
     # Observation times over baseline
     dt: Quantity[Any] = Quantity(
-        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)), baseline.unit
+        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
+        baseline.unit,
     )
     times = dt + t_ref
 
