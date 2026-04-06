@@ -498,7 +498,8 @@ a uniform prior on m₂ induces a period- and eccentricity-dependent prior on K.
 cannot be captured by a fixed `dist.MultivariateNormal`.
 
 **Planned design:** The `linear_prior` field should accept either a fixed
-`dist.MultivariateNormal` **or** a callable `eqx.Module` with signature
+`dist.MultivariateNormal` **or** a callable satisfying the `LinearPriorCallable`
+protocol (defined in `harv.likelihood.helpers`) with signature
 `__call__(params) -> dist.MultivariateNormal`. Inside `log_prob`, the implementation
 calls `linear_prior(params)` if the field is callable, otherwise uses it directly.
 Because equinox Modules are valid JAX pytrees and can hold parameters (e.g. the
@@ -542,25 +543,56 @@ log_liks = jax.jit(jax.vmap(composite.log_prob))(params_batch)
 ```
 
 Each component holds its own `linear_prior`, which may be a fixed
-`dist.MultivariateNormal` or a callable `eqx.Module`. When callable, it receives
+`dist.MultivariateNormal` or a `LinearPriorCallable`. When callable, it receives
 whatever params struct is passed by the caller — for combined data this is a
 `MarginalizedParameters` wrapper, giving the callable access to all nonlinear parameters.
 
-#### `_IndexedCallable` — splitting a joint prior
+#### `LinearPriorCallable` protocol
+
+`LinearPriorCallable` (defined in `harv.likelihood.helpers`) is a
+`typing.Protocol` that formalises the callable linear-prior interface:
+
+```python
+class LinearPriorCallable(Protocol):
+    def __call__(self, params: Any) -> dist.MultivariateNormal: ...
+```
+
+Any `eqx.Module` (or other object) whose `__call__` matches this signature
+satisfies the protocol. It is `@runtime_checkable`, but the codebase uses
+`isinstance(lp, dist.MultivariateNormal)` to distinguish fixed priors from
+callables — the isinstance check is a static Python test, safe under JIT.
+
+#### `_sub_mvn` — block-diagonal sub-distribution extraction
+
+`_sub_mvn(mvn, indices)` (in `harv.likelihood.helpers`) extracts a
+sub-block from a block-diagonal `MultivariateNormal` by fancy-indexing
+both `loc` and `scale_tril`:
+
+```python
+def _sub_mvn(mvn, indices):
+    idx = jnp.array(indices)
+    return dist.MultivariateNormal(
+        loc=mvn.loc[idx],
+        scale_tril=mvn.scale_tril[jnp.ix_(idx, idx)],
+    )
+```
+
+This is correct when the selected parameters are independent from the
+unselected ones (block-diagonal covariance), which is the case for the
+default combined astrometry + RV linear prior. Both `_IndexedCallable`
+and `_CombinedStrategy.build_likelihood` delegate to `_sub_mvn`.
+
+#### `_IndexedCallable` — splitting a joint callable prior
 
 When the user provides a single joint `linear_prior` callable covering all linear
 parameters (e.g. an 8-dim prior for combined astrometry + RV), the sampler wraps it
 in `_IndexedCallable` to produce per-component sub-priors. Each instance holds a
-static `indices: tuple[int, ...]` and extracts the relevant rows and columns via
-fancy indexing:
+static `indices: tuple[int, ...]` and delegates to `_sub_mvn`:
 
 ```python
-full = wrapped(params)                          # full joint MultivariateNormal
-idx = jnp.array(indices)
-sub_prior = dist.MultivariateNormal(
-    loc=full.loc[idx],
-    scale_tril=full.scale_tril[jnp.ix_(idx, idx)],
-)
+def __call__(self, params):
+    full = self.wrapped(params)  # full joint MultivariateNormal
+    return _sub_mvn(full, self.indices)
 ```
 
 `jnp.ix_` constructs the open mesh needed for 2-D fancy indexing on `scale_tril`.
@@ -604,7 +636,7 @@ pattern keeps the class simple and avoids a proliferation of factory methods.
 
 ### Linear parameter prior
 
-`linear_prior: dist.MultivariateNormal | eqx.Module` is passed through to the
+`linear_prior: dist.MultivariateNormal | LinearPriorCallable` is passed through to the
 likelihood during the sampler's likelihood evaluation step. The callable form takes
 the nonlinear param struct and returns a `dist.MultivariateNormal` — see §Linear
 prior as a function of nonlinear parameters.
@@ -613,7 +645,7 @@ For single-dataset cases (RV-only or astrometry-only) `linear_prior` covers exac
 the linear parameters of that dataset. For combined astrometry + RV, `linear_prior`
 covers all 8 linear parameters `[α₀, δ₀, μ_α, μ_δ, ϖ, a, K, v₀]` in that order.
 The sampler splits this into per-component sub-priors using `_IndexedCallable` (for
-callables) or direct fancy indexing (for fixed MVNs) before constructing the
+callables) or `_sub_mvn` (for fixed MVNs) before constructing the
 `CompositeLikelihood`.
 
 The `default_*` constructors accept `linear_prior_scale` convenience arguments.

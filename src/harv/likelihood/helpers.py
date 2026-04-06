@@ -2,7 +2,7 @@
 
 __all__ = ["_solve_kepler"]
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -15,6 +15,64 @@ from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 
 
+# ---------------------------------------------------------------------------
+# Linear prior Protocol
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class LinearPriorCallable(Protocol):
+    """Callable that returns a ``MultivariateNormal`` given nonlinear params.
+
+    Any ``eqx.Module`` (or other callable) whose ``__call__`` matches this
+    signature satisfies the protocol.  The rejection sampler and likelihood
+    classes accept either a fixed ``dist.MultivariateNormal`` *or* a
+    ``LinearPriorCallable`` for the ``linear_prior`` field.
+    """
+
+    def __call__(self, params: Any) -> dist.MultivariateNormal: ...
+
+
+# ---------------------------------------------------------------------------
+# Sub-distribution extraction
+# ---------------------------------------------------------------------------
+
+
+def _sub_mvn(
+    mvn: dist.MultivariateNormal,
+    indices: tuple[int, ...],
+) -> dist.MultivariateNormal:
+    """Extract a sub-block from a block-diagonal ``MultivariateNormal``.
+
+    Selects the given rows/columns of ``loc`` and ``scale_tril`` via fancy
+    indexing.  This is correct when the joint distribution is block-diagonal
+    with respect to the selected indices (i.e. the selected parameters are
+    independent from the unselected ones).
+
+    Parameters
+    ----------
+    mvn :
+        Joint multivariate normal distribution.
+    indices :
+        Parameter indices to retain.  Static at JAX trace time.
+
+    Returns
+    -------
+    dist.MultivariateNormal
+        Sub-distribution over the selected parameters.
+    """
+    idx = jnp.array(indices)
+    return dist.MultivariateNormal(
+        loc=mvn.loc[idx],
+        scale_tril=mvn.scale_tril[jnp.ix_(idx, idx)],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Indexed callable & resolve helper
+# ---------------------------------------------------------------------------
+
+
 class _IndexedCallable(eqx.Module):
     """Wraps a joint callable prior, selecting a subset of parameters by index.
 
@@ -25,34 +83,30 @@ class _IndexedCallable(eqx.Module):
 
     Parameters
     ----------
-    wrapped : eqx.Module
+    wrapped : LinearPriorCallable
         Callable returning a ``dist.MultivariateNormal`` given orbit params.
     indices : tuple[int, ...]
         Indices of the linear parameters for this component within the full
         joint prior. Static so JAX can trace through without recompilation.
     """
 
-    wrapped: eqx.Module
+    wrapped: LinearPriorCallable
     indices: tuple[int, ...] = eqx.field(static=True)
 
     def __call__(self, params: Any) -> dist.MultivariateNormal:
-        full = self.wrapped(params)  # type: ignore[operator]
-        idx = jnp.array(self.indices)
-        return dist.MultivariateNormal(
-            loc=full.loc[idx],
-            scale_tril=full.scale_tril[jnp.ix_(idx, idx)],
-        )
+        full = self.wrapped(params)
+        return _sub_mvn(full, self.indices)
 
 
 def _resolve_linear_prior(
-    linear_prior: dist.MultivariateNormal | eqx.Module,
+    linear_prior: dist.MultivariateNormal | LinearPriorCallable,
     params: Any,
 ) -> dist.MultivariateNormal:
     """Resolve a fixed or callable linear prior.
 
     If *linear_prior* is already a ``dist.MultivariateNormal`` it is returned
-    unchanged. If it is a callable ``eqx.Module`` it is called with *params*
-    and must return a ``dist.MultivariateNormal``.
+    unchanged. If it is a callable ``LinearPriorCallable`` it is called with
+    *params* and must return a ``dist.MultivariateNormal``.
 
     This check is a static Python isinstance test; it is evaluated at JAX
     trace time (not at runtime of the compiled function) so it is safe inside
@@ -60,7 +114,7 @@ def _resolve_linear_prior(
     """
     if isinstance(linear_prior, dist.MultivariateNormal):
         return linear_prior
-    return linear_prior(params)  # type: ignore[operator]
+    return linear_prior(params)
 
 
 def _solve_kepler(

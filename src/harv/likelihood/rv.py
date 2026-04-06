@@ -41,7 +41,11 @@ from harv.likelihood._params import (
     RVParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
-from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
+from harv.likelihood.helpers import (
+    LinearPriorCallable,
+    _resolve_linear_prior,
+    _solve_kepler,
+)
 
 __all__ = ("RVLikelihood",)
 
@@ -107,7 +111,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     ----------
     data : RadialVelocityData
         Radial velocity observations.
-    linear_prior : dist.MultivariateNormal or eqx.Module or None
+    linear_prior : dist.MultivariateNormal or LinearPriorCallable or None
         Gaussian prior over the marginalized linear parameters.  ``None``
         for explicit evaluation.
     indicator_matrix : jax.Array or None
@@ -134,7 +138,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     """
 
     data: RadialVelocityData
-    linear_prior: dist.MultivariateNormal | eqx.Module | None = None
+    linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None
     indicator_matrix: jax.Array | None = None
 
     param_names = ("period", "eccentricity", "phase_peri", "arg_peri")

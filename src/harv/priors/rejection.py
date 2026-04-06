@@ -16,6 +16,7 @@ import jax
 import jax.random as jr
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
+from harv.likelihood.helpers import LinearPriorCallable
 
 __all__ = ["RejectionPrior"]
 
@@ -80,7 +81,7 @@ class RejectionPrior(eqx.Module):
     """
 
     nonlinear_priors: dict[str, dist.Distribution]
-    linear_prior: dist.MultivariateNormal | eqx.Module
+    linear_prior: dist.MultivariateNormal | LinearPriorCallable
 
     # Multi-instrument offsets (RV only, optional)
     offsets: dict[str, dist.Normal | None] | None = None
@@ -132,7 +133,7 @@ class RejectionPrior(eqx.Module):
         phase_peri: dist.Distribution | None = None,
         arg_peri: dist.Distribution | None = None,
         # linear prior override (skips scale convenience; also accepts callable)
-        linear_prior: dist.MultivariateNormal | eqx.Module | None = None,
+        linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None,
         offsets: dict[str, dist.Normal | None] | None = None,
     ) -> "RejectionPrior":
         """Create default prior for radial velocity data.
@@ -157,10 +158,11 @@ class RejectionPrior(eqx.Module):
             Override the phase-at-periastron prior.
         arg_peri : dist.Distribution, optional
             Override the argument-of-periastron prior.
-        linear_prior : dist.MultivariateNormal or eqx.Module, optional
+        linear_prior : dist.MultivariateNormal or LinearPriorCallable, optional
             Override the full linear prior (skips ``linear_prior_scale``).
             May be a fixed ``dist.MultivariateNormal`` **or** a callable
-            ``eqx.Module`` whose ``__call__(params) -> dist.MultivariateNormal``
+            satisfying :class:`~harv.likelihood.helpers.LinearPriorCallable`
+            whose ``__call__(params) -> dist.MultivariateNormal``
             returns the prior as a function of the nonlinear orbital parameters.
             The callable form enables physically motivated priors such as a
             uniform companion-mass prior, where K depends on period and

@@ -31,7 +31,7 @@ from harv.likelihood._params import (
 )
 from harv.likelihood.combined import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
-from harv.likelihood.helpers import _IndexedCallable
+from harv.likelihood.helpers import _IndexedCallable, _sub_mvn
 from harv.likelihood.rv import RVLikelihood
 
 if TYPE_CHECKING:
@@ -463,16 +463,8 @@ class _CombinedStrategy(_DataTypeStrategy):
         rv_idx = tuple(range(n, n + 2))  # K, v0
         lp = prior.linear_prior
         if isinstance(lp, dist.MultivariateNormal):
-            astro_lp = dist.MultivariateNormal(
-                loc=lp.loc[list(astro_idx)],
-                scale_tril=lp.scale_tril[
-                    jnp.ix_(jnp.array(astro_idx), jnp.array(astro_idx))
-                ],
-            )
-            rv_lp = dist.MultivariateNormal(
-                loc=lp.loc[list(rv_idx)],
-                scale_tril=lp.scale_tril[jnp.ix_(jnp.array(rv_idx), jnp.array(rv_idx))],
-            )
+            astro_lp = _sub_mvn(lp, astro_idx)
+            rv_lp = _sub_mvn(lp, rv_idx)
         else:
             astro_lp = _IndexedCallable(lp, astro_idx)
             rv_lp = _IndexedCallable(lp, rv_idx)

@@ -39,7 +39,11 @@ from harv.likelihood._params import (
     MarginalizedParameters,
 )
 from harv.likelihood.base import AbstractLikelihood
-from harv.likelihood.helpers import _resolve_linear_prior, _solve_kepler
+from harv.likelihood.helpers import (
+    LinearPriorCallable,
+    _resolve_linear_prior,
+    _solve_kepler,
+)
 
 __all__ = ("GaiaAstrometryLikelihood",)
 
@@ -120,7 +124,7 @@ class GaiaAstrometryLikelihood(
     ----------
     data : GaiaAstrometryData
         Gaia epoch astrometry observations.
-    linear_prior : dist.MultivariateNormal or eqx.Module or None
+    linear_prior : dist.MultivariateNormal or LinearPriorCallable or None
         Gaussian prior over the marginalized linear parameters.  ``None``
         for explicit evaluation.
 
@@ -138,7 +142,7 @@ class GaiaAstrometryLikelihood(
     """
 
     data: GaiaAstrometryData
-    linear_prior: dist.MultivariateNormal | eqx.Module | None = None
+    linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None
 
     param_names = (
         "period",
