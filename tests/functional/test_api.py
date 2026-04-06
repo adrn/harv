@@ -21,8 +21,6 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
 
     # Fixed orbital parameters
     period = 100.0  # days
-    eccentricity = 0.3
-    t_peri = 0.0
     semimajor_axis = 1.0  # mas
 
     # Observation times
@@ -184,24 +182,24 @@ class TestSamplesContainer:
         samples = sampler.run(data, n_prior_samples=10_000, seed=50)
 
         # Test nonlinear parameter access
-        assert "log_period" in samples.keys()
-        assert "eccentricity" in samples.keys()
-        assert "phase_peri" in samples.keys()
-        assert "cos_i" in samples.keys()
-        assert "arg_peri" in samples.keys()
-        assert "lon_asc_node" in samples.keys()
+        assert "log_period" in samples
+        assert "eccentricity" in samples
+        assert "phase_peri" in samples
+        assert "cos_i" in samples
+        assert "arg_peri" in samples
+        assert "lon_asc_node" in samples
 
         # Test linear parameter access
-        assert "ra0" in samples.keys()
-        assert "dec0" in samples.keys()
-        assert "pmra" in samples.keys()
-        assert "pmdec" in samples.keys()
-        assert "parallax" in samples.keys()
-        assert "semi_major_axis" in samples.keys()
+        assert "ra0" in samples
+        assert "dec0" in samples
+        assert "pmra" in samples
+        assert "pmdec" in samples
+        assert "parallax" in samples
+        assert "semi_major_axis" in samples
 
         # Test derived quantity access
-        assert "period" in samples.keys()
-        assert "log_period" in samples.keys()
+        assert "period" in samples
+        assert "log_period" in samples
         period = samples["period"]
         log_period = samples["log_period"]
         np.testing.assert_allclose(period.to_value("day"), 10.0**log_period, rtol=1e-5)
@@ -339,4 +337,3 @@ class TestAcceptanceRate:
         assert samples.n_samples >= 0  # At minimum, should complete without error
         assert acceptance_rate <= 1.0  # Should never accept everything
 
-        print(f"Acceptance rate: {acceptance_rate:.4f} ({samples.n_samples}/{n_prior})")

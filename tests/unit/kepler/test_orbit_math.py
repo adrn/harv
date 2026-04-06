@@ -154,13 +154,13 @@ class TestThieleInnesABFG:
         assert jnp.allclose(a_val * G, ustrip("mas", G_ref), atol=1e-10)
 
     def test_jit(self) -> None:
-        A, B, F, G = jax.jit(thiele_innes_ABFG)(1.0, 0.0, 1.0, 0.0, 1.0)
+        A, _B, _F, _G = jax.jit(thiele_innes_ABFG)(1.0, 0.0, 1.0, 0.0, 1.0)
         assert jnp.isfinite(A)
 
     def test_vmap(self) -> None:
         cos_ws = jnp.array([1.0, 0.0, -1.0])
         sin_ws = jnp.array([0.0, 1.0, 0.0])
-        As, Bs, Fs, Gs = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))(
+        As, _Bs, _Fs, _Gs = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))(
             cos_ws, sin_ws, 1.0, 0.0, 1.0
         )
         assert As.shape == (3,)

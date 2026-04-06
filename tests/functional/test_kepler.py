@@ -44,7 +44,7 @@ def test_full_orbit_workflow() -> None:
         v1 = system.velocity_barycentric(t, 1)
         return r0, r1, v0, v1
 
-    r0, r1, v0, v1 = compute_state(times)
+    r0, _r1, v0, v1 = compute_state(times)
     assert r0.shape == (20, 3)
 
     # Check momentum conservation at every time step
