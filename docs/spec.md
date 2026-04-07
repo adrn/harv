@@ -165,7 +165,7 @@ src/harv/
 ├── custom_types.py          # Unit-dimension Literal aliases
 ├── data.py                  # Observation data classes
 ├── kepler/                  # Orbit mechanics (JAX)
-│   ├── _orbit_math.py       # Low-level building blocks (raw arrays)
+│   ├── _orbit_math.py       # Low-level building blocks
 │   ├── body.py              # KeplerianBody
 │   ├── orientation.py       # KeplerianOrientation + Thiele-Innes
 │   ├── helpers.py           # compute_true_anomaly_components
@@ -308,20 +308,24 @@ ______________________________________________________________________
 
 ### Shared building blocks (`harv.kepler._orbit_math`)
 
-Four pure functions on raw JAX arrays (no Quantity, no eqx.Module) that provide
-the canonical implementations of core orbit computations. All three consumers
-(`harv.kepler`, `harv.likelihood`, `harv.simulate`) call these building blocks
-instead of duplicating the math.
+Four functions that provide the canonical implementations of core orbit
+computations. All three consumers (`harv.kepler`, `harv.likelihood`,
+`harv.simulate`) call these building blocks instead of duplicating the math.
 
-- `mean_anomaly(dt, period)` — `M = 2π · dt / period`
-- `true_anomaly_from_mean(M, eccentricity)` — solve Kepler's equation → (sin f, cos f)
+`mean_anomaly` and `true_anomaly_from_mean` accept and return `Quantity` objects
+so callers never need to strip units themselves:
+
+- `mean_anomaly(dt: BatchableQTime, period: ScalarQTime) -> BatchableQAngle` — `M = 2π · dt / period`
+- `true_anomaly_from_mean(M: BatchableQAngle, eccentricity: ScalarFloat) -> (sin f, cos f)` — solve Kepler's equation
+
+`rv_shape` and `thiele_innes_ABFG` remain pure functions on raw JAX arrays
+because their inputs are always already dimensionless at every call site:
+
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
 - `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
 
-Callers strip Quantities to a common unit before calling, and wrap results back
-into Quantities if needed. The building blocks are shape-agnostic: they work for
-both scalar inputs (`KeplerianBody`) and batched inputs (`jax.vmap` over
-parameter structs).
+The building blocks are shape-agnostic: they work for both scalar inputs
+(`KeplerianBody`) and batched inputs (`jax.vmap` over parameter structs).
 
 ### `KeplerianOrientation`
 
@@ -423,7 +427,7 @@ days; if it is in years it will be in years. The likelihood is also unit-agnosti
 because `_solve_kepler` computes the mean anomaly via the shared building block:
 
 ```
-M = mean_anomaly(ustrip(unit, dt), ustrip(unit, params.period))
+M = mean_anomaly(dt, params.period)
 ```
 
 The ratio `dt / period` is dimensionless regardless of units.
