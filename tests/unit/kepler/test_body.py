@@ -114,8 +114,8 @@ class TestFromMasses:
         body = KeplerianBody.from_masses(
             period=Quantity(1.0, "yr"),
             eccentricity=0.1,
-            m_companion=m_comp,
-            m_primary=m_prim,
+            m_total=m_prim + m_comp,
+            m_body=m_comp,
             t_peri=Quantity(0.0, "yr"),
         )
         recovered = body.get_mass(m_prim)
@@ -133,8 +133,8 @@ class TestFromMasses:
         body = KeplerianBody.from_masses(
             period=Quantity(1.0, "yr"),
             eccentricity=0.0,
-            m_companion=Quantity(1.0, "Mjup"),
-            m_primary=Quantity(1.0, "Msun"),
+            m_total=Quantity(1.0, "Msun") + Quantity(1.0, "Mjup"),
+            m_body=Quantity(1.0, "Mjup"),
             t_peri=Quantity(0.0, "yr"),
             orientation=o,
         )

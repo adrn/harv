@@ -22,8 +22,8 @@ def test_full_orbit_workflow() -> None:
     companion = KeplerianBody.from_masses(
         period=period,
         eccentricity=0.1,
-        m_companion=m_planet,
-        m_primary=m_star,
+        m_total=m_star + m_planet,
+        m_body=m_planet,
         t_peri=Quantity(0.0, "yr"),
         orientation=orientation,
     )
@@ -63,8 +63,8 @@ def test_jit_full_pipeline() -> None:
     companion = KeplerianBody.from_masses(
         period=Quantity(1.0, "yr"),
         eccentricity=0.2,
-        m_companion=Quantity(1.0, "Mjup"),
-        m_primary=m_star,
+        m_total=m_star + Quantity(1.0, "Mjup"),
+        m_body=Quantity(1.0, "Mjup"),
         t_peri=Quantity(0.0, "yr"),
     )
     system = TwoBodySystem(m_primary=m_star, companion=companion)

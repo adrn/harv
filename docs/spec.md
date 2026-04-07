@@ -165,10 +165,9 @@ src/harv/
 ├── custom_types.py          # Unit-dimension Literal aliases
 ├── data.py                  # Observation data classes
 ├── kepler/                  # Orbit mechanics (JAX)
-│   ├── _orbit_math.py       # Low-level building blocks
+│   ├── orbits.py            # Low-level building blocks and orbit functions
 │   ├── body.py              # KeplerianBody
 │   ├── orientation.py       # KeplerianOrientation + Thiele-Innes
-│   ├── helpers.py           # compute_true_anomaly_components
 │   └── constants.py         # G
 ├── likelihood/              # Log-likelihood evaluators
 │   ├── base.py              # AbstractLikelihood[ParamT]
@@ -306,7 +305,7 @@ ______________________________________________________________________
 
 ## Kepler mechanics (`harv.kepler`)
 
-### Shared building blocks (`harv.kepler._orbit_math`)
+### Shared building blocks (`harv.kepler.orbits`)
 
 Four functions that provide the canonical implementations of core orbit
 computations. All three consumers (`harv.kepler`, `harv.likelihood`,
@@ -348,8 +347,8 @@ combination of `a · (A sin ψ + B cos ψ)` and `a · (F sin ψ + G cos ψ)`. Th
 A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `t_peri`, and an
 optional `KeplerianOrientation`. Provides `get_position(time)` and `get_velocity(time)`
 in 3D, accounting for the orbit orientation. Alternative constructor:
-`from_masses(period, e, m_companion, m_primary, t_peri)` — uses Kepler's 3rd law to
-derive the barycentric semi-major axis from the component masses.
+`from_masses(period, e, m_total, m_body, t_peri)` — uses Kepler's 3rd law to
+derive the barycentric semi-major axis from the total system mass and this body's mass.
 
 `KeplerianBody` is the *physical* orbit model. The likelihood layer uses its own
 lighter-weight parameter structs (see §Parameter structs) that are shaped to the

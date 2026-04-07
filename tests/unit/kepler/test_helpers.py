@@ -1,9 +1,9 @@
-"""Unit tests for :mod:`harv.kepler.helpers`."""
+"""Unit tests for :mod:`harv.kepler.orbits`."""
 
 import quaxed.numpy as jnp
 from unxt import Quantity
 
-from harv.kepler.helpers import compute_true_anomaly_components
+from harv.kepler.orbits import compute_true_anomaly_components
 
 
 class TestComputeTrueAnomalyComponents:

@@ -23,8 +23,8 @@ def _make_system(
     companion = KeplerianBody.from_masses(
         period=Quantity(period, "yr"),
         eccentricity=eccentricity,
-        m_companion=Quantity(m_companion, "Msun"),
-        m_primary=Quantity(m_primary, "Msun"),
+        m_total=Quantity(m_primary + m_companion, "Msun"),
+        m_body=Quantity(m_companion, "Msun"),
         t_peri=Quantity(0.0, "yr"),
     )
     return TwoBodySystem(

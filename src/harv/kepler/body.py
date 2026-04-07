@@ -24,7 +24,7 @@ from harv.kepler.orientation import KeplerianOrientation
 
 
 class KeplerianBody(eqx.Module):
-    """Orbital parameters of a Keplerian body (companion).
+    """Orbital parameters of a Keplerian body (companion, i.e. body 2).
 
     This class represents the orbital parameters of a companion or second body (relative
     to some barycenter). So, all parameters represent the orbital elements of a specific
@@ -95,16 +95,16 @@ class KeplerianBody(eqx.Module):
         cls,
         period: ScalarQTime,
         eccentricity: ScalarFloat,
-        m_companion: ScalarQMass,
-        m_primary: ScalarQMass,
+        m_total: ScalarQMass,
+        m_body: ScalarQMass,
         t_peri: ScalarQTime,
         **kwargs: Any,
     ) -> "KeplerianBody":
-        r"""Construct companion's barycentric orbit from masses and period.
+        r"""Construct body's barycentric orbit from masses and period.
 
-        Computes the companion's barycentric semi-major axis from Kepler's 3rd law:
-        1. Compute relative orbit: a_rel = (G (m_1 + m_2) P^2 / 4 \pi^2)^(1/3)
-        2. Convert to barycentric: a_body = a_rel * m_1 / (m_1 + m_2)
+        Computes this body's barycentric semi-major axis from Kepler's 3rd law:
+        1. Compute relative orbit: a_rel = (G m_total P^2 / 4 \pi^2)^(1/3)
+        2. Convert to barycentric: a_body = a_rel * (1 - m_body / m_total)
 
         Parameters
         ----------
@@ -112,10 +112,10 @@ class KeplerianBody(eqx.Module):
             Orbital period.
         eccentricity
             Orbital eccentricity.
-        m_companion
-            Companion mass (this body).
-        m_primary
-            Primary (central body) mass.
+        m_total
+            Total system mass.
+        m_body
+            Mass of this body.
         t_peri
             Time of pericenter passage.
         orientation
@@ -126,12 +126,11 @@ class KeplerianBody(eqx.Module):
         Returns
         -------
         orbit: KeplerianBody
-            The companion's orbit about the barycenter
+            The body's orbit about the system barycenter.
         """
         period = Quantity["time"].from_(period)
-        m_tot = m_primary + m_companion
-        a_rel = jnp.cbrt((G * m_tot * period**2) / (4 * jnp.pi**2))
-        a_body = a_rel * (m_primary / m_tot)
+        a_rel = jnp.cbrt((G * m_total * period**2) / (4 * jnp.pi**2))
+        a_body = a_rel * (1 - m_body / m_total)
 
         return cls(
             period=period,
@@ -144,6 +143,8 @@ class KeplerianBody(eqx.Module):
     # ========================================================================
     # Other methods
     #
+
+    # TODO: what's the point of this method?
     def get_mass(self, m_primary: ScalarQMass) -> ScalarQMass:
         """Compute companion mass given primary mass and barycentric semi-major axis."""
         num = G * m_primary**3 * self.period**2

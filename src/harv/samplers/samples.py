@@ -17,7 +17,7 @@ from numpyro import infer as _numpyro_infer
 from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
-from harv.kepler.helpers import astrometric_orbit_at_times, rv_at_times
+from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     RVParameters,

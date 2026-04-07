@@ -15,7 +15,7 @@ from numpyro import infer
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
-from harv.kepler.helpers import astrometric_orbit_at_times, rv_at_times
+from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     RVParameters,
@@ -299,9 +299,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (
-                num_chains,
-            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            assert arr.shape == (num_chains,), (
+                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            )
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""

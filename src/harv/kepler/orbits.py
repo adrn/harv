@@ -157,7 +157,7 @@ def rv_at_times(
     Examples
     --------
     >>> from unxt import Quantity
-    >>> from harv.kepler.helpers import rv_at_times
+    >>> from harv.kepler.orbits import rv_at_times
     >>> times = Quantity([0.0, 50.0, 100.0], "day")
     >>> rv = rv_at_times(
     ...     times,
@@ -226,7 +226,7 @@ def astrometric_orbit_at_times(
     Examples
     --------
     >>> from unxt import Quantity
-    >>> from harv.kepler.helpers import astrometric_orbit_at_times
+    >>> from harv.kepler.orbits import astrometric_orbit_at_times
     >>> times = Quantity([0.0, 100.0, 200.0], "day")
     >>> dra, ddec = astrometric_orbit_at_times(
     ...     times,
