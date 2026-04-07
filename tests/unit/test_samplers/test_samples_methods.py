@@ -6,8 +6,12 @@ using the constructor.
 """
 
 import jax.numpy as jnp
+import jax.random as jr
 import numpy as np
+import numpyro
+import numpyro.distributions as ndist
 import pytest
+from numpyro import infer
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
@@ -18,6 +22,13 @@ from harv.likelihood._params import (
 from harv.priors.rejection import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.samples import Samples, _WarmStartMCMC, _kepler_plot
+
+try:
+    import matplotlib.pyplot as plt
+
+    HAS_MPL = True
+except ImportError:
+    HAS_MPL = False
 
 # ---------------------------------------------------------------------------
 # Fixtures: minimal Samples objects for each data type
@@ -230,9 +241,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (num_chains,), (
-                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
-            )
+            assert arr.shape == (
+                num_chains,
+            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""
@@ -278,8 +289,6 @@ class TestInitMcmc:
 
     def test_default_kernel_is_nuts(self, rv_samples, rv_sampler_and_data):
         """When kernel is omitted the default is NUTS."""
-        from numpyro import infer
-
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples, data, num_warmup=10, num_samples=10, num_chains=2
@@ -288,8 +297,6 @@ class TestInitMcmc:
 
     def test_run_produces_posterior_samples(self, rv_samples, rv_sampler_and_data):
         """mcmc.run() completes and get_samples() returns the expected keys."""
-        import jax.random as jr
-
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
@@ -304,7 +311,7 @@ class TestInitMcmc:
         # The auto-generated model samples all keys from prior.nonlinear_priors.
         for key in sampler.prior.nonlinear_priors:
             assert key in posterior, f"Missing site '{key}' in posterior"
-        assert posterior["period"].shape == (10,)  # 2 chains × 5 samples
+        assert posterior["period"].shape == (10,)  # 2 chains x 5 samples
 
 
 class TestInitMcmcFull:
@@ -356,8 +363,6 @@ class TestInitMcmcFull:
 
     def test_run_produces_named_linear_params(self, rv_samples, rv_sampler_and_data):
         """mcmc.run() produces named deterministic sites K, v0, etc."""
-        import jax.random as jr
-
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
@@ -402,8 +407,6 @@ class TestInitMcmcExtraModel:
 
     def _make_extra_model(self):
         """Return a minimal extra_model that fixes K to a constant."""
-        import numpyro
-        import numpyro.distributions as ndist
 
         def extra_model(pars):
             # Sample a dummy physical parameter, compute K from it.
@@ -458,8 +461,6 @@ class TestInitMcmcExtraModel:
 
     def test_run_extra_model_marginalized(self, rv_samples, rv_sampler_and_data):
         """extra_model + marginalized=True runs and returns expected sites."""
-        import jax.random as jr
-
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
@@ -489,9 +490,6 @@ class TestInitMcmcExtraModel:
         self, rv_samples, rv_sampler_and_data
     ):
         """extra_model returning an unknown linear param name raises ValueError."""
-        import jax.random as jr
-        import numpyro
-        import numpyro.distributions as ndist
 
         def bad_extra_model(pars):
             x = numpyro.sample("x", ndist.Normal(0.0, 1.0))
@@ -516,32 +514,25 @@ class TestInitMcmcExtraModel:
 # Tests: Samples.plot (D4)
 # ---------------------------------------------------------------------------
 
-pytest.importorskip("matplotlib", reason="matplotlib not installed")
 
-
+@pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
 class TestPlotRV:
     """Tests for Samples.plot with data_type='rv'."""
 
     def test_returns_figure(self, rv_samples):
         """plot() returns a matplotlib Figure."""
-        import matplotlib.pyplot as plt
-
         fig = rv_samples.plot()
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_figure_has_one_axes(self, rv_samples):
         """RV plot produces exactly one Axes."""
-        import matplotlib.pyplot as plt
-
         fig = rv_samples.plot()
         assert len(fig.axes) == 1
         plt.close("all")
 
     def test_plot_with_rv_data(self, rv_samples):
         """plot(data=rv_data) plots data points without error."""
-        import matplotlib.pyplot as plt
-
         times = Quantity(jnp.linspace(0.0, 100.0, 20), "day")
         rv = Quantity(jnp.zeros(20), "km/s")
         rv_err = Quantity(jnp.ones(20) * 2.0, "km/s")
@@ -552,8 +543,6 @@ class TestPlotRV:
 
     def test_n_samples_limits_model_curves(self, rv_samples):
         """n_samples controls how many posterior curves are drawn."""
-        import matplotlib.pyplot as plt
-
         fig = rv_samples.plot(n_samples=3)
         ax = fig.axes[0]
         model_lines = [
@@ -571,64 +560,52 @@ class TestPlotRV:
 
     def test_xlabel_is_phase(self, rv_samples):
         """X-axis label mentions orbital phase."""
-        import matplotlib.pyplot as plt
-
         fig = rv_samples.plot()
         assert "phase" in fig.axes[0].get_xlabel().lower()
         plt.close("all")
 
 
+@pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
 class TestPlotAstrometry:
     """Tests for Samples.plot with data_type='astrometry'."""
 
     def test_returns_figure(self, astro_samples):
         """plot() returns a matplotlib Figure."""
-        import matplotlib.pyplot as plt
-
         fig = astro_samples.plot()
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_figure_has_one_axes(self, astro_samples):
         """Astrometry plot produces exactly one Axes."""
-        import matplotlib.pyplot as plt
-
         fig = astro_samples.plot()
         assert len(fig.axes) == 1
         plt.close("all")
 
     def test_axes_equal_aspect(self, astro_samples):
         """On-sky plot uses equal aspect ratio (not 'auto')."""
-        import matplotlib.pyplot as plt
-
         fig = astro_samples.plot()
         assert fig.axes[0].get_aspect() != "auto"
         plt.close("all")
 
     def test_data_argument_ignored(self, astro_samples):
         """Astrometry plot accepts data=None without error."""
-        import matplotlib.pyplot as plt
-
         fig = astro_samples.plot(data=None)
         assert fig is not None
         plt.close("all")
 
 
+@pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
 class TestPlotCombined:
     """Tests for Samples.plot with data_type='combined'."""
 
     def test_returns_figure(self, combined_samples):
         """plot() returns a matplotlib Figure."""
-        import matplotlib.pyplot as plt
-
         fig = combined_samples.plot()
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_figure_has_two_axes(self, combined_samples):
         """Combined plot produces exactly two Axes (RV + sky orbit)."""
-        import matplotlib.pyplot as plt
-
         fig = combined_samples.plot()
         assert len(fig.axes) == 2
         plt.close("all")

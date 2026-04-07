@@ -21,7 +21,8 @@ class CompositeLikelihood(eqx.Module):
     required fields satisfies every component simultaneously.
 
     For combined astrometry + RV data the natural params struct is
-    a ``MarginalizedParameters`` wrapping ``GaiaAstrometryParameters`` (6 nonlinear params).
+    a ``MarginalizedParameters`` wrapping ``GaiaAstrometryParameters``
+    (6 nonlinear params).
     ``RVLikelihood`` only reads ``period``, ``eccentricity``,
     ``phase_peri``, and ``arg_peri`` from it; the extra ``cos_i`` and
     ``lon_asc_node`` fields are silently ignored.  This means ``period`` (and

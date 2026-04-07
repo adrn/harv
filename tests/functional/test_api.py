@@ -336,4 +336,3 @@ class TestAcceptanceRate:
         # (acceptance rate can be very low for complex models)
         assert samples.n_samples >= 0  # At minimum, should complete without error
         assert acceptance_rate <= 1.0  # Should never accept everything
-

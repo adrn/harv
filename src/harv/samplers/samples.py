@@ -4,18 +4,38 @@ This module provides the Samples class which stores posterior samples from
 rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
 import equinox as eqx
+import h5py
 import numpy as np
 import quaxed.numpy as jnp
+from jaxoplanet.core.kepler import kepler as _kepler
+from numpyro import infer as _numpyro_infer
 from unxt import Quantity, ustrip
 
+from harv.data import RadialVelocityData, SourceData
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
+
+try:
+    import arviz as az
+
+    HAS_ARVIZ = True
+except ImportError:
+    HAS_ARVIZ = False
+
+try:
+    import matplotlib.pyplot as plt
+
+    HAS_MPL = True
+except ImportError:
+    HAS_MPL = False
 
 __all__ = ["Samples"]
 
@@ -43,9 +63,7 @@ def _kepler_plot(M: np.ndarray, ecc: float) -> tuple[np.ndarray, np.ndarray]:
     sin_f, cos_f : np.ndarray
         Sine and cosine of the true anomaly.
     """
-    from jaxoplanet.core.kepler import kepler
-
-    sin_f, cos_f = kepler(jnp.asarray(M), float(ecc))
+    sin_f, cos_f = _kepler(jnp.asarray(M), float(ecc))
     return np.asarray(sin_f), np.asarray(cos_f)
 
 
@@ -75,12 +93,7 @@ class _WarmStartMCMC:
         _init_params: dict[str, Any],
         **mcmc_kwargs: Any,
     ) -> None:
-        try:
-            from numpyro import infer
-        except ImportError as e:
-            msg = "numpyro is required. Install with: pip install numpyro"
-            raise ImportError(msg) from e
-        self._mcmc = infer.MCMC(sampler, **mcmc_kwargs)
+        self._mcmc = _numpyro_infer.MCMC(sampler, **mcmc_kwargs)
         self._init_params = _init_params
 
     def run(
@@ -229,6 +242,9 @@ class Samples(eqx.Module):
             derived_keys.append("inclination")
 
         return base_keys + derived_keys
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.keys()
 
     def __getitem__(self, key: str) -> Quantity[Any] | jnp.ndarray:
         """Get parameter samples with units restored.
@@ -431,15 +447,6 @@ class Samples(eqx.Module):
         --------
         >>> samples.to_hdf5("posterior_samples.h5")
         """
-        try:
-            import h5py
-        except ImportError as e:
-            msg = (
-                "h5py is required for HDF5 serialization. "
-                "Install with: pip install h5py"
-            )
-            raise ImportError(msg) from e
-
         filename = Path(filename)
 
         with h5py.File(filename, "w") as f:
@@ -489,15 +496,6 @@ class Samples(eqx.Module):
         --------
         >>> samples = Samples.from_hdf5("posterior_samples.h5")
         """
-        try:
-            import h5py
-        except ImportError as e:
-            msg = (
-                "h5py is required for HDF5 serialization. "
-                "Install with: pip install h5py"
-            )
-            raise ImportError(msg) from e
-
         filename = Path(filename)
 
         with h5py.File(filename, "r") as f:
@@ -602,14 +600,9 @@ class Samples(eqx.Module):
         >>> axes = samples.plot_corner(params=["period", "eccentricity", "parallax"])
         >>> axes = samples.plot_corner(truths={"period": Quantity(100, "day")})
         """
-        try:
-            import arviz as az
-        except ImportError as e:
-            msg = (
-                "arviz and matplotlib required for plotting. "
-                "Install with: pip install arviz matplotlib"
-            )
-            raise ImportError(msg) from e
+        if not HAS_ARVIZ:
+            msg = "arviz is required for corner plots."
+            raise ImportError(msg)
 
         # Select default parameters based on data type
         if params is None:
@@ -726,14 +719,9 @@ class Samples(eqx.Module):
         >>> fig = samples.plot(data=source_data, n_samples=100)
         >>> fig = samples.plot()  # astrometry only, no data points needed
         """
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError as e:
-            msg = (
-                "matplotlib is required for plotting. "
-                "Install with: pip install matplotlib"
-            )
-            raise ImportError(msg) from e
+        if not HAS_MPL:
+            msg = "matplotlib is required for plotting. "
+            raise ImportError(msg)
 
         dt = self.data_type
         if dt == "rv":
@@ -769,8 +757,6 @@ class Samples(eqx.Module):
         plt: Any,
     ) -> None:
         """Phase-folded RV curve drawn into *ax*."""
-        from harv.data import RadialVelocityData, SourceData
-
         median_period = float(np.median(np.asarray(self._nonlinear["period"])))
         t_ref = float(self._metadata.get("t_ref", 0.0))
 

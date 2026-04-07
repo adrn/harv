@@ -12,6 +12,7 @@ These tests are marked xfail(strict=True) so that:
 """
 
 import jax.numpy as jnp
+import jax.random as jr
 import numpyro.distributions as dist
 import pytest
 from unxt import Quantity
@@ -23,8 +24,6 @@ from harv.samplers.rejection import RejectionSampler
 
 def _minimal_rv_data(seed: int, n: int = 5) -> RadialVelocityData:
     """Tiny RV dataset for structural tests (not statistically meaningful)."""
-    import jax.random as jr
-
     key = jr.PRNGKey(seed)
     times = Quantity(jnp.linspace(0.0, 100.0, n), "day")
     rv = Quantity(jr.normal(key, (n,)) * 2.0, "km/s")

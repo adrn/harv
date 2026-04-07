@@ -25,6 +25,8 @@ For the SB1 model the RV model is:
 For the SB2 case, see :func:`_get_design_matrix_sb2`.
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -161,8 +163,8 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         presence of ``linear_prior``.
         """
         if self.linear_prior is None:
-            return self._log_prob_explicit(params)
-        return self._log_prob_marginalized(params)
+            return self._log_prob_explicit(cast("RVParameters", params))
+        return self._log_prob_marginalized(cast("MarginalizedParameters", params))
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array

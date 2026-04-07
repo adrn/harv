@@ -8,19 +8,23 @@ measurements similar to Gaia DR3/DR4 epoch data. The simulated data includes:
 - Measurement uncertainties
 
 The astrometric model includes:
-- 5-parameter astrometry (α₀, δ₀, μ_α, μ_δ, ϖ)
+- 5-parameter astrometry (a0, d0, mu_a, mu_d, parallax)
 - Keplerian orbital motion parameterized by Thiele-Innes constants
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import Quantity, uconvert, ustrip
 
-from harv.custom_types import AngularSpeed
 from harv.data import GaiaAstrometryData
 from harv.kepler import KeplerianOrientation, compute_true_anomaly_components
+
+if TYPE_CHECKING:
+    from harv.custom_types import AngularSpeed
 
 __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
 
@@ -131,7 +135,7 @@ def simulate_gaia_epoch_astrometry(
     parallax : Quantity["angle"], optional
         Parallax. If None, randomly drawn from Exp(10 mas).
     al_error : Quantity["angle"], optional
-        Along-scan measurement errors (1σ). If None, randomly drawn from
+        Along-scan measurement errors (1-sigma). If None, randomly drawn from
         U(0.02, 0.1) mas for each observation.
     t_ref : Quantity["time"], optional
         Reference time for astrometry. If None, randomly chosen.

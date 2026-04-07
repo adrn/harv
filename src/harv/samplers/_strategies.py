@@ -23,6 +23,7 @@ from harv.data import (
     SourceData,
 )
 from harv.likelihood._params import (
+    AbstractParameters,
     GaiaAstrometryParameters,
     MarginalizedParameters,
     RVParameters,
@@ -144,7 +145,7 @@ class _DataTypeStrategy(ABC):
 
     @property
     @abstractmethod
-    def nonlinear_cls(self) -> type:
+    def nonlinear_cls(self) -> type[AbstractParameters]:
         """The full parameter class used to create marginalized params.
 
         For single-data-type strategies this is the single full class.
@@ -155,7 +156,7 @@ class _DataTypeStrategy(ABC):
 
     @property
     @abstractmethod
-    def full_cls(self) -> tuple[type, ...]: ...
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]: ...
 
     @property
     @abstractmethod
@@ -174,10 +175,7 @@ class _DataTypeStrategy(ABC):
     @property
     def n_linear(self) -> int:
         """Total linear parameters, summed from ``full_cls.linear_param_names``."""
-        return sum(
-            len(cls.linear_param_names)  # type: ignore[attr-defined]
-            for cls in self.full_cls
-        )
+        return sum(len(cls.linear_param_names) for cls in self.full_cls)
 
     @abstractmethod
     def extract_data(
@@ -242,7 +240,7 @@ class _DataTypeStrategy(ABC):
     ) -> tuple[str, ...]:
         """All linear parameter names including multi-survey offsets."""
         names: tuple[str, ...] = sum(
-            (cls.linear_param_names for cls in self.full_cls),  # type: ignore[attr-defined]
+            (cls.linear_param_names for cls in self.full_cls),
             (),
         )
         if (
@@ -279,11 +277,11 @@ class _RVStrategy(_DataTypeStrategy):
         return "rv"
 
     @property
-    def nonlinear_cls(self) -> type:
+    def nonlinear_cls(self) -> type[AbstractParameters]:
         return RVParameters
 
     @property
-    def full_cls(self) -> tuple[type, ...]:
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]:
         return (RVParameters,)
 
     def extract_data(
@@ -395,11 +393,11 @@ class _AstrometryStrategy(_DataTypeStrategy):
         return "astrometry"
 
     @property
-    def nonlinear_cls(self) -> type:
+    def nonlinear_cls(self) -> type[AbstractParameters]:
         return GaiaAstrometryParameters
 
     @property
-    def full_cls(self) -> tuple[type, ...]:
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]:
         return (GaiaAstrometryParameters,)
 
     def extract_data(
@@ -494,11 +492,11 @@ class _CombinedStrategy(_DataTypeStrategy):
         return "combined"
 
     @property
-    def nonlinear_cls(self) -> type:
+    def nonlinear_cls(self) -> type[AbstractParameters]:
         return GaiaAstrometryParameters
 
     @property
-    def full_cls(self) -> tuple[type, ...]:
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]:
         return (GaiaAstrometryParameters, RVParameters)
 
     def extract_data(

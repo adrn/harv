@@ -160,7 +160,6 @@ class TestThieleInnesABFG:
     def test_vmap(self) -> None:
         cos_ws = jnp.array([1.0, 0.0, -1.0])
         sin_ws = jnp.array([0.0, 1.0, 0.0])
-        As, _Bs, _Fs, _Gs = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))(
-            cos_ws, sin_ws, 1.0, 0.0, 1.0
-        )
+        vmap_ti = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))
+        As, _Bs, _Fs, _Gs = vmap_ti(cos_ws, sin_ws, 1.0, 0.0, 1.0)
         assert As.shape == (3,)

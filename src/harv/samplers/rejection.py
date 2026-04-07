@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+from numpyro import infer as _numpyro_infer
 from unxt import Quantity, ustrip
 
 from harv.data import (
@@ -392,12 +393,6 @@ class RejectionSampler(eqx.Module):
         >>> # Deterministic site: K  (computed from m1, m2, inc, P, e)
         >>> # Marginalized:       v0 (analytically integrated out)
         """
-        try:
-            from numpyro import infer as _infer
-        except ImportError as e:
-            msg = "numpyro is required. Install with: pip install numpyro"
-            raise ImportError(msg) from e
-
         if samples.n_samples == 0:
             msg = "Cannot initialise MCMC: no posterior samples available."
             raise ValueError(msg)
@@ -417,7 +412,7 @@ class RejectionSampler(eqx.Module):
             raise ValueError(msg)
 
         if kernel is None:
-            kernel = _infer.NUTS
+            kernel = _numpyro_infer.NUTS
 
         # Take the first num_chains posterior samples as starting positions.
         indices = list(range(num_chains))

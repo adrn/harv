@@ -24,6 +24,8 @@ For the marginalized model, the astrometric model is:
 where A, B, F, G are Thiele-Innes constants and f is the true anomaly.
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -109,7 +111,9 @@ def _get_design_matrix(
 class GaiaAstrometryLikelihood(
     AbstractLikelihood[MarginalizedParameters | GaiaAstrometryParameters],
 ):
-    """Unified Gaia astrometry likelihood supporting marginalized and explicit evaluation.
+    """Unified Gaia astrometry likelihood.
+
+    Supports marginalized and explicit evaluation.
 
     When ``linear_prior`` is provided and ``params`` is a
     :class:`MarginalizedParameters` instance, the likelihood analytically
@@ -168,8 +172,8 @@ class GaiaAstrometryLikelihood(
         presence of ``linear_prior``.
         """
         if self.linear_prior is None:
-            return self._log_prob_explicit(params)
-        return self._log_prob_marginalized(params)
+            return self._log_prob_explicit(cast("GaiaAstrometryParameters", params))
+        return self._log_prob_marginalized(cast("MarginalizedParameters", params))
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array

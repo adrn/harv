@@ -8,19 +8,22 @@ setup logic.
 
 import dataclasses
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
+import numpyro
 import numpyro.distributions as dist
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity
 
 from harv.data import InputData
-from harv.likelihood._params import MarginalizedParameters
+from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 from harv.likelihood.helpers import _resolve_linear_prior
-from harv.priors.rejection import RejectionPrior
 from harv.samplers._strategies import _ComponentSlice, _DataTypeStrategy
+
+if TYPE_CHECKING:
+    from harv.priors.rejection import RejectionPrior
 
 # ---------------------------------------------------------------------------
 # Shared pre-computed context
@@ -39,7 +42,7 @@ class _ModelContext:
     prior: "RejectionPrior"
     strategy: _DataTypeStrategy
     time_unit: str
-    nonlinear_cls: type
+    nonlinear_cls: type[AbstractParameters]
     nonlinear_priors: dict[str, Any]
     lik: Any  # AbstractLikelihood or CompositeLikelihood
     components: tuple[_ComponentSlice, ...]
@@ -91,8 +94,6 @@ def _sample_nonlinear(
     sampled values dict *and* a ``MarginalizedParameters`` instance suitable
     for passing to ``lik.design_matrix()`` or ``lik.log_prob()``.
     """
-    import numpyro
-
     values: dict[str, Any] = {}
     for name, d in ctx.nonlinear_priors.items():
         values[name] = numpyro.sample(name, d)
@@ -133,8 +134,6 @@ def _build_marginalized_numpyro_model(
         A numpyro model with no required arguments.  Sample sites: the keys of
         ``sampler.prior.nonlinear_priors`` (e.g. ``"period"``, ``"eccentricity"``).
     """
-    import numpyro
-
     ctx = _build_model_context(sampler, data)
 
     def model() -> None:
@@ -173,8 +172,6 @@ def _build_full_numpyro_model(
         vector).  Deterministic sites: individual linear parameter names (e.g.
         ``"K"``, ``"v0"``, ``"semi_major_axis"``).
     """
-    import numpyro
-
     ctx = _build_model_context(sampler, data)
 
     def model() -> None:
@@ -316,8 +313,6 @@ def _build_extra_numpyro_model(
     ``get_samples()``; ``v0`` is analytically marginalized (if
     ``marginalized=True``) or sampled from its marginal prior.
     """
-    import numpyro
-
     ctx = _build_model_context(sampler, data)
 
     def model() -> None:
@@ -361,7 +356,7 @@ def _build_extra_numpyro_model(
             c_free_global = [i for i in free_idx if i in global_idx_set]
 
             # Map global linear-vector indices to local DM column indices.
-            g2l = {g: l for l, g in enumerate(comp.global_col_indices)}
+            g2l = {g: lc for lc, g in enumerate(comp.global_col_indices)}
             c_fixed_local = [g2l[i] for i in c_fixed_global]
             c_free_local = [g2l[i] for i in c_free_global]
 

@@ -36,8 +36,19 @@ class AbstractSource(eqx.Module):
         """
         return self.vel0
 
-    def offset_sky(self, times: Quantity["time"], ref_pos: cx.vecs.AbstractPos) -> Any:
+    def offset_sky(
+        self,
+        times: Quantity["time"],
+        ref_pos: cx.vecs.AbstractPos,  # noqa: ARG002
+    ) -> Any:
         """Compute (d_ra * cos(dec), d_dec) offset from reference position at times.
+
+        Parameters
+        ----------
+        times
+            Times at which to compute the offset.
+        ref_pos
+            Reference sky position.
 
         Returns
         -------
@@ -47,6 +58,8 @@ class AbstractSource(eqx.Module):
             Latitude offset, in angular units
         """
         self.pos_at_time(times)
+
+        raise NotImplementedError("offset_sky not implemented for this source type")
 
         # TODO: convert to offset class with origin at ref_pos
         # Rotate to ref_pos, convert to lon/lat
@@ -92,11 +105,15 @@ class LinearMotion3DSource(AbstractSource):
 class LinearMotionSmallAngleSource(AbstractSource):
     """Source with linear motion (small-angle approximation, single star)."""
 
-    # TODO:
-    # pos0: cx.vecs.TwoSphereLonLatPos = eqx.field(converter=lambda x: cx.vconvert(cx.vecs.TwoSphereLonLatPos, x)))
+    # TODO: convert pos0/vel0 to proper spherical types
+    # pos0: cx.vecs.TwoSphereLonLatPos = eqx.field(
+    #     converter=lambda x: cx.vconvert(
+    #         cx.vecs.TwoSphereLonLatPos, x
+    #     )
+    # )
     # vel0: cx.vecs.TwoSphereLonCosLatVel
 
-    # TODO:
+    # TODO: implement pos_at_time for small-angle source
     def pos_at_time(self, times: Quantity["time"]) -> cx.vecs.AbstractPos3D:
         """Compute position at given times.
 
@@ -120,14 +137,19 @@ class LinearMotionSmallAngleSource(AbstractSource):
         )
 
     # TODO: simple small-angle offset implementation
-    def offset_sky(self, times: Quantity["time"], ref_pos: cx.vecs.AbstractPos) -> Any:
+    def offset_sky(
+        self,
+        times: Quantity["time"],  # noqa: ARG002
+        ref_pos: cx.vecs.AbstractPos,  # noqa: ARG002
+    ) -> Any:
         """Compute sky offset via 2D linear propagation (small-angle approx).
 
         Parameters
         ----------
         times
-            Times at which to compute sky offset. This should be in the same time format
-            and system as ``ref_epoch``.
+            Times at which to compute sky offset.
+        ref_pos
+            Reference sky position.
         """
         # Project back to spherical
         pos_t = xyz_t.represent_as(cx.SphericalPos)

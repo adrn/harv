@@ -4,6 +4,8 @@ This module provides utilities for generating synthetic RV measurements
 for single-lined (SB1) and double-lined (SB2) spectroscopic binaries.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
@@ -164,7 +166,7 @@ def simulate_rv_sb1_data(
     return data, true_params
 
 
-def simulate_rv_multisurv_data(
+def simulate_rv_multisurv_data(  # noqa: C901
     instruments: dict[str, Quantity["speed"] | None],
     seed: int = 42,
     n_obs_per_instrument: int = 30,
