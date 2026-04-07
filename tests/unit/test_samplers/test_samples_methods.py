@@ -15,13 +15,14 @@ from numpyro import infer
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
+from harv.kepler.helpers import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
 from harv.priors.rejection import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.samples import Samples, _WarmStartMCMC, _kepler_plot
+from harv.samplers.samples import Samples, _WarmStartMCMC
 
 try:
     import matplotlib.pyplot as plt
@@ -177,34 +178,91 @@ def rv_sampler_and_data():
 
 
 # ---------------------------------------------------------------------------
-# Tests: _kepler_plot (module-level helper)
+# Tests: rv_at_times and astrometric_orbit_at_times
 # ---------------------------------------------------------------------------
 
 
-class TestKeplerPlot:
-    """Unit tests for _kepler_plot, which delegates to jaxoplanet.core.kepler."""
+class TestRvAtTimes:
+    """Unit tests for rv_at_times."""
 
-    def test_circular_orbit(self):
-        """For e=0 the true anomaly equals the mean anomaly."""
-        M = np.linspace(0.0, 2 * np.pi, 100)
-        sin_f, cos_f = _kepler_plot(M, 0.0)
-        np.testing.assert_allclose(sin_f, np.sin(M), atol=1e-6)
-        np.testing.assert_allclose(cos_f, np.cos(M), atol=1e-6)
+    def test_circular_orbit_shape(self):
+        """Output has the same shape as the input times."""
+        times = Quantity(np.linspace(0.0, 200.0, 50), "day")
+        rv = rv_at_times(
+            times,
+            period=Quantity(200.0, "day"),
+            eccentricity=0.0,
+            t_peri=Quantity(0.0, "day"),
+            arg_peri=Quantity(0.0, "rad"),
+            K=Quantity(10.0, "km/s"),
+            v0=Quantity(0.0, "km/s"),
+        )
+        assert rv.shape == (50,)
 
-    def test_identity_sin2_cos2(self):
-        """sin²f + cos²f == 1 for all M and e."""
-        M = np.linspace(0.0, 2 * np.pi, 200)
-        sin_f, cos_f = _kepler_plot(M, 0.4)
-        np.testing.assert_allclose(sin_f**2 + cos_f**2, 1.0, atol=1e-6)
+    def test_unit_preserved(self):
+        """Output unit matches K and v0 unit."""
+        times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
+        rv = rv_at_times(
+            times,
+            period=Quantity(200.0, "day"),
+            eccentricity=0.3,
+            t_peri=Quantity(50.0, "day"),
+            arg_peri=Quantity(1.2, "rad"),
+            K=Quantity(8.0, "km/s"),
+            v0=Quantity(-5.0, "km/s"),
+        )
+        assert rv.unit.physical_type == "speed"
 
-    def test_returns_arrays(self):
-        """Output shapes match input shape and values are plain numpy arrays."""
-        M = np.linspace(0.0, np.pi, 50)
-        sin_f, cos_f = _kepler_plot(M, 0.3)
-        assert isinstance(sin_f, np.ndarray)
-        assert isinstance(cos_f, np.ndarray)
-        assert sin_f.shape == M.shape
-        assert cos_f.shape == M.shape
+    def test_v0_offset(self):
+        """Systemic velocity shifts every sample by v0."""
+        times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
+        kwargs = dict(
+            period=Quantity(200.0, "day"),
+            eccentricity=0.0,
+            t_peri=Quantity(0.0, "day"),
+            arg_peri=Quantity(0.0, "rad"),
+            K=Quantity(10.0, "km/s"),
+        )
+        rv0 = rv_at_times(times, v0=Quantity(0.0, "km/s"), **kwargs)
+        rv5 = rv_at_times(times, v0=Quantity(5.0, "km/s"), **kwargs)
+        np.testing.assert_allclose(np.asarray(rv5.value - rv0.value), 5.0, atol=1e-6)
+
+
+class TestAstrometricOrbitAtTimes:
+    """Unit tests for astrometric_orbit_at_times."""
+
+    def test_output_shape_and_unit(self):
+        """Both outputs have the input shape and semi_major_axis unit."""
+        times = Quantity(np.linspace(0.0, 300.0, 40), "day")
+        dra, ddec = astrometric_orbit_at_times(
+            times,
+            period=Quantity(300.0, "day"),
+            eccentricity=0.3,
+            t_peri=Quantity(0.0, "day"),
+            arg_peri=Quantity(1.2, "rad"),
+            cos_i=0.5,
+            lon_asc_node=Quantity(0.8, "rad"),
+            semi_major_axis=Quantity(3.0, "mas"),
+        )
+        assert dra.shape == (40,)
+        assert ddec.shape == (40,)
+        assert dra.unit.physical_type == "angle"
+
+    def test_circular_face_on_orbit_is_circle(self):
+        """Face-on circular orbit traces a circle: Δra²+Δdec² = const."""
+        times = Quantity(np.linspace(0.0, 1.0, 500), "day")
+        dra, ddec = astrometric_orbit_at_times(
+            times,
+            period=Quantity(1.0, "day"),
+            eccentricity=0.0,
+            t_peri=Quantity(0.0, "day"),
+            arg_peri=Quantity(0.0, "rad"),
+            cos_i=1.0,  # face-on
+            lon_asc_node=Quantity(0.0, "rad"),
+            semi_major_axis=Quantity(1.0, "mas"),
+        )
+        r2 = np.asarray(dra.value) ** 2 + np.asarray(ddec.value) ** 2
+        np.testing.assert_allclose(r2, 1.0, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -559,9 +617,15 @@ class TestPlotRV:
             rv_samples.plot(data="not_a_data_object")
 
     def test_xlabel_is_phase(self, rv_samples):
-        """X-axis label mentions orbital phase."""
-        fig = rv_samples.plot()
+        """X-axis label mentions orbital phase when phase_fold=True."""
+        fig = rv_samples.plot(phase_fold=True)
         assert "phase" in fig.axes[0].get_xlabel().lower()
+        plt.close("all")
+
+    def test_xlabel_is_time_by_default(self, rv_samples):
+        """Default (phase_fold=False) x-axis label mentions time."""
+        fig = rv_samples.plot()
+        assert "time" in fig.axes[0].get_xlabel().lower()
         plt.close("all")
 
 

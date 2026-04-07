@@ -124,6 +124,11 @@ def simulate_rv_sb1_data(
 
     if rv_err is None:
         rv_err = Quantity(rngs[7].uniform(0.01, 0.5, n_obs), "km/s")
+    else:
+        # Broadcast scalar rv_err to per-observation array
+        rv_err = Quantity(
+            jnp.broadcast_to(ustrip(rv_err.unit, rv_err), (n_obs,)), rv_err.unit
+        )
 
     if t_ref is None:
         t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)

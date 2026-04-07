@@ -13,11 +13,11 @@ import equinox as eqx
 import h5py
 import numpy as np
 import quaxed.numpy as jnp
-from jaxoplanet.core.kepler import kepler as _kepler
 from numpyro import infer as _numpyro_infer
 from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
+from harv.kepler.helpers import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     RVParameters,
@@ -43,28 +43,6 @@ __all__ = ["Samples"]
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _kepler_plot(M: np.ndarray, ecc: float) -> tuple[np.ndarray, np.ndarray]:
-    """Solve Kepler's equation for plotting; return (sin_f, cos_f).
-
-    Delegates to ``jaxoplanet.core.kepler`` (the project's authoritative solver)
-    and converts the JAX output to plain numpy arrays for matplotlib.
-
-    Parameters
-    ----------
-    M : np.ndarray
-        Mean anomaly in radians.
-    ecc : float
-        Orbital eccentricity in [0, 1).
-
-    Returns
-    -------
-    sin_f, cos_f : np.ndarray
-        Sine and cosine of the true anomaly.
-    """
-    sin_f, cos_f = _kepler(jnp.asarray(M), float(ecc))
-    return np.asarray(sin_f), np.asarray(cos_f)
 
 
 class _WarmStartMCMC:
@@ -278,13 +256,18 @@ class Samples(eqx.Module):
         if key == "log_period":
             return jnp.log10(self._nonlinear["period"])
         if key == "t_peri":
-            period = self._nonlinear["period"]
-            t_ref = self._metadata.get("t_ref", 0.0)
+            # Express t_peri in absolute time: t_ref + phase_peri * period.
+            # phase_peri encodes the fractional orbital phase at t=0, so
+            # phase_peri * period is the periastron time relative to t=0, and
+            # adding t_ref converts it to the same absolute coordinate as data.time.
+            t_ref_raw = self._metadata.get("t_ref", 0.0)
             t_ref_val = (
-                ustrip(self._time_unit, t_ref) if isinstance(t_ref, Quantity) else t_ref
+                float(ustrip(self._time_unit, t_ref_raw))
+                if isinstance(t_ref_raw, Quantity)
+                else (float(t_ref_raw) if t_ref_raw is not None else 0.0)
             )
             return Quantity(
-                self._nonlinear["phase_peri"] * period + t_ref_val,
+                t_ref_val + self._nonlinear["phase_peri"] * self._nonlinear["period"],
                 self._time_unit,
             )
         if key == "inclination":
@@ -676,14 +659,16 @@ class Samples(eqx.Module):
         data: Any = None,
         *,
         n_samples: int = 50,
+        phase_fold: bool = False,
+        apply_mean_offsets: bool = True,
         **kwargs: Any,
     ) -> Any:
-        """Phase-folded RV curve and/or astrometric orbit on sky.
+        """RV curve and/or astrometric orbit on sky.
 
         Selects panels automatically based on ``data_type``:
 
-        - ``"rv"`` — phase-folded RV curve; ``data`` must be a
-          ``RadialVelocityData`` or ``SourceData`` containing RV datasets.
+        - ``"rv"`` — RV curve (time-domain or phase-folded); ``data`` must be
+          a ``RadialVelocityData`` or ``SourceData`` containing RV datasets.
         - ``"astrometry"`` — on-sky orbital ellipses drawn from posterior
           samples; ``data`` is not required (orbit shape comes from samples).
         - ``"combined"`` — both panels side by side; ``data`` must be a
@@ -697,6 +682,16 @@ class Samples(eqx.Module):
             and ``"combined"`` data types; optional for ``"astrometry"``.
         n_samples : int, optional
             Number of posterior orbit curves to draw.  Default: 50.
+        phase_fold : bool, optional
+            If ``True``, fold the RV data and model curves to orbital phase
+            using the median posterior period.  The mean v0 is subtracted from
+            the data so the y-axis shows the intrinsic RV variation.
+            If ``False`` (default), plot RV vs time in the reference frame.
+        apply_mean_offsets : bool, optional
+            When ``True`` (default), shift each non-reference instrument's data
+            points by the posterior mean offset so they land in the reference
+            frame and can be compared directly to the model curves.  Has no
+            effect when there are no multi-instrument offsets.
         **kwargs :
             Additional keyword arguments forwarded to
             ``matplotlib.pyplot.subplots``.
@@ -717,6 +712,7 @@ class Samples(eqx.Module):
         --------
         >>> fig = samples.plot(data=rv_data)
         >>> fig = samples.plot(data=source_data, n_samples=100)
+        >>> fig = samples.plot(data=source_data, phase_fold=True)
         >>> fig = samples.plot()  # astrometry only, no data points needed
         """
         if not HAS_MPL:
@@ -726,7 +722,14 @@ class Samples(eqx.Module):
         dt = self.data_type
         if dt == "rv":
             fig, ax = plt.subplots(**kwargs)
-            self._draw_rv(data, ax=ax, n_samples=n_samples, plt=plt)
+            self._draw_rv(
+                data,
+                ax=ax,
+                n_samples=n_samples,
+                plt=plt,
+                phase_fold=phase_fold,
+                apply_mean_offsets=apply_mean_offsets,
+            )
             fig.tight_layout()
             return fig
         if dt == "astrometry":
@@ -737,7 +740,14 @@ class Samples(eqx.Module):
         if dt == "combined":
             figsize = kwargs.pop("figsize", (12, 5))
             fig, axes = plt.subplots(1, 2, figsize=figsize, **kwargs)
-            self._draw_rv(data, ax=axes[0], n_samples=n_samples, plt=plt)
+            self._draw_rv(
+                data,
+                ax=axes[0],
+                n_samples=n_samples,
+                plt=plt,
+                phase_fold=phase_fold,
+                apply_mean_offsets=apply_mean_offsets,
+            )
             self._draw_astrometry(ax=axes[1], n_samples=n_samples)
             fig.tight_layout()
             return fig
@@ -755,10 +765,36 @@ class Samples(eqx.Module):
         ax: Any,
         n_samples: int,
         plt: Any,
+        phase_fold: bool = False,
+        apply_mean_offsets: bool = True,
     ) -> None:
-        """Phase-folded RV curve drawn into *ax*."""
-        median_period = float(np.median(np.asarray(self._nonlinear["period"])))
-        t_ref = float(self._metadata.get("t_ref", 0.0))
+        """RV curve (time-domain or phase-folded) drawn into *ax*.
+
+        Parameters
+        ----------
+        phase_fold :
+            When ``True`` fold data and model to orbital phase using the median
+            period and subtract the mean v0 so the y-axis shows only the
+            intrinsic RV variation.  The mean anomaly is computed correctly
+            even when individual samples have periods that differ from the
+            median folding period.
+        apply_mean_offsets :
+            When ``True``, shift each non-reference instrument's data points
+            by the posterior mean offset so they fall in the reference frame.
+        """
+        period_samples = self._nonlinear["period"]  # dimensionless JAX array
+        ecc_samples = self._nonlinear["eccentricity"]
+        phase_peri_samples = self._nonlinear["phase_peri"]
+        arg_peri_samples = self._nonlinear["arg_peri"]
+
+        median_period = Quantity(float(jnp.median(period_samples)), self._time_unit)
+
+        t_ref_raw = self._metadata.get("t_ref", 0.0)
+        t_ref = (
+            t_ref_raw
+            if isinstance(t_ref_raw, Quantity)
+            else Quantity(t_ref_raw, self._time_unit)
+        )
 
         # Collect per-instrument datasets (multi-survey support).
         if isinstance(data, SourceData):
@@ -773,53 +809,151 @@ class Samples(eqx.Module):
             msg = "data must be RadialVelocityData or SourceData for data_type='rv'."
             raise ValueError(msg)
 
-        # Infer RV unit from the K column (first linear parameter).
-        rv_unit = self._linear_param_units[0] if self._linear_param_units else "km/s"
+        # Resolve column indices for K, v0, and any per-instrument offsets.
+        names = self._linear_param_names
+        k_idx = names.index("K")
+        v0_idx = names.index("v0")
+        rv_unit = self._linear_param_units[k_idx]
+
+        # Per-instrument mean offsets (extra linear params beyond K and v0).
+        mean_offsets: dict[str, Quantity] = {
+            name: Quantity(float(jnp.mean(self._linear[:, names.index(name)])), rv_unit)
+            for name in self._extra_linear_names
+        }
+
+        # Mean v0 used to centre phase-folded plots on zero.
+        mean_v0 = Quantity(float(jnp.mean(self._linear[:, v0_idx])), rv_unit)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+        # --- Data points ---
         for color_idx, (instr_name, rv_data) in enumerate(rv_datasets.items()):
-            t_obs = np.asarray(ustrip(self._time_unit, rv_data.time))
-            phase_obs = ((t_obs - t_ref) / median_period) % 1.0
-            rv_obs = np.asarray(ustrip(rv_unit, rv_data.rv))
-            rv_err = np.asarray(ustrip(rv_unit, rv_data.rv_err))
+            rv_obs = rv_data.rv
+            rv_err = rv_data.rv_err
+
+            # Shift non-reference instrument data into the reference frame.
+            if apply_mean_offsets and instr_name in mean_offsets:
+                rv_obs = rv_obs - mean_offsets[instr_name]
+
+            if phase_fold:
+                x_data = ustrip(
+                    "",
+                    ((rv_data.time - t_ref) / median_period) % Quantity(1.0, ""),
+                )
+                rv_obs = rv_obs - mean_v0
+            else:
+                x_data = ustrip(self._time_unit, rv_data.time)
+
             color = colors[color_idx % len(colors)]
             label = instr_name if len(rv_datasets) > 1 else "data"
             ax.errorbar(
-                phase_obs,
-                rv_obs,
-                yerr=rv_err,
+                x_data,
+                ustrip(rv_unit, rv_obs),
+                yerr=ustrip(rv_unit, rv_err),
                 fmt="o",
                 color=color,
                 label=label,
                 zorder=3,
             )
 
-        # Posterior model curves.
-        phi_grid = np.linspace(0.0, 1.0, 500)
-        linear = np.asarray(self._linear)
+        # --- Posterior model curves ---
         n_draw = min(n_samples, self.n_samples)
-        for i in range(n_draw):
-            ecc = float(np.asarray(self._nonlinear["eccentricity"])[i])
-            phase_peri = float(np.asarray(self._nonlinear["phase_peri"])[i])
-            arg_peri = float(np.asarray(self._nonlinear["arg_peri"])[i])
-            K = float(linear[i, 0]) if linear.ndim == 2 else float(linear[0])
-            M = 2.0 * np.pi * (phi_grid - phase_peri)
-            sin_f, cos_f = _kepler_plot(M, ecc)
-            rv_model = K * (
-                np.cos(arg_peri) * cos_f
-                - np.sin(arg_peri) * sin_f
-                + ecc * np.cos(arg_peri)
-            )
-            ax.plot(phi_grid, rv_model, color="C0", alpha=0.15, lw=0.8)
 
-        ax.set_xlabel("Orbital phase")
-        ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
-        ax.set_xlim(0.0, 1.0)
+        if phase_fold:
+            # For each sample, evaluate the model in the sample's OWN orbital phase
+            # frame (times = t_peri_i + phi * P_i) and then convert those times to
+            # the DATA's display phase ((t - t_ref) / P_median mod 1).
+            # This guarantees the model curve is x-aligned with every data point,
+            # even when the sample's period differs from the reference period.
+            phi_grid = np.linspace(0.0, 1.0, 500)
+            for i in range(n_draw):
+                period_i = Quantity(float(period_samples[i]), self._time_unit)
+                ecc_i = float(ecc_samples[i])
+                phase_peri_i = float(phase_peri_samples[i])
+                arg_peri_i = Quantity(float(arg_peri_samples[i]), "rad")
+                K_i = Quantity(float(self._linear[i, k_idx]), rv_unit)
+                t_peri_i = Quantity(
+                    phase_peri_i * float(period_samples[i]), self._time_unit
+                )
+                # Times in sample i's own frame: one complete orbit from periastron.
+                t_model = t_peri_i + Quantity(phi_grid, "") * period_i
+                rv_model = rv_at_times(
+                    t_model,
+                    period_i,
+                    ecc_i,
+                    t_peri_i,
+                    arg_peri_i,
+                    K_i,
+                    Quantity(0.0, rv_unit),
+                )
+                # Map model times to data display phase.
+                x_model = np.asarray(
+                    ustrip("", (t_model - t_ref) / median_period % Quantity(1.0, ""))
+                )
+                rv_vals = np.asarray(ustrip(rv_unit, rv_model))
+                # Sort by display phase; insert NaN breaks at wrap-around jumps
+                # so matplotlib does not draw a line across the plot.
+                idx_sort = np.argsort(x_model)
+                x_sorted = x_model[idx_sort]
+                rv_sorted = rv_vals[idx_sort]
+                gaps = np.where(np.diff(x_sorted) < -0.5)[0] + 1
+                x_plot = np.insert(x_sorted.astype(float), gaps, np.nan)
+                rv_plot = np.insert(rv_sorted.astype(float), gaps, np.nan)
+                ax.plot(x_plot, rv_plot, color="C0", alpha=0.15, lw=0.8)
+
+            ax.set_xlabel("Orbital phase")
+            ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
+            ax.set_xlim(0.0, 1.0)
+            ax.set_title(
+                f"Phase-folded RV  (median P = {float(median_period.value):.1f} {self._time_unit})"
+            )
+        else:
+            # Time-domain: dense grid spanning all observations.
+            if rv_datasets:
+                all_times = jnp.concatenate(
+                    [rv_data.time.value for rv_data in rv_datasets.values()]
+                )
+                t_grid = Quantity(
+                    np.linspace(
+                        float(jnp.min(all_times)), float(jnp.max(all_times)), 500
+                    ),
+                    self._time_unit,
+                )
+            else:
+                t_grid = (
+                    t_ref + Quantity(np.linspace(0.0, 1.0, 500), "") * median_period
+                )
+
+            for i in range(n_draw):
+                period_i = Quantity(float(period_samples[i]), self._time_unit)
+                ecc_i = float(ecc_samples[i])
+                phase_peri_i = float(phase_peri_samples[i])
+                arg_peri_i = Quantity(float(arg_peri_samples[i]), "rad")
+                K_i = Quantity(float(self._linear[i, k_idx]), rv_unit)
+                v0_i = Quantity(float(self._linear[i, v0_idx]), rv_unit)
+                # t_peri matches _solve_kepler convention: phase_peri * period (no t_ref)
+                t_peri_i = Quantity(
+                    phase_peri_i * float(period_samples[i]), self._time_unit
+                )
+                rv_model = rv_at_times(
+                    t_grid, period_i, ecc_i, t_peri_i, arg_peri_i, K_i, v0_i
+                )
+                ax.plot(
+                    ustrip(self._time_unit, t_grid),
+                    ustrip(rv_unit, rv_model),
+                    color="C0",
+                    alpha=0.15,
+                    lw=0.8,
+                )
+
+            ax.set_xlabel(f"Time [{self._time_unit}]")
+            ax.set_ylabel(f"RV [{rv_unit}]")
+            ax.set_title(
+                f"RV (median P = {float(median_period.value):.1f} {self._time_unit})"
+            )
+
         if rv_datasets:
             ax.legend(loc="best")
-        ax.set_title(
-            f"Phase-folded RV  (median P = {median_period:.1f} {self._time_unit})"
-        )
 
     def _draw_astrometry(self, *, ax: Any, n_samples: int) -> None:
         """On-sky orbital ellipses drawn into *ax* for each posterior sample.
@@ -827,40 +961,62 @@ class Samples(eqx.Module):
         Gaia along-scan measurements are 1-D projections and cannot be plotted
         directly as 2-D sky positions, so only the model orbit curves are shown.
         """
-        phi_grid = np.linspace(0.0, 1.0, 500)
-        linear = np.asarray(self._linear)
         names = self._linear_param_names
-
         sma_idx = names.index("semi_major_axis") if "semi_major_axis" in names else -1
         sma_unit = self._linear_param_units[sma_idx] if sma_idx >= 0 else "mas"
 
+        t_ref_raw = self._metadata.get("t_ref", 0.0)
+        t_ref = (
+            t_ref_raw
+            if isinstance(t_ref_raw, Quantity)
+            else Quantity(t_ref_raw, self._time_unit)
+        )
+
         n_draw = min(n_samples, self.n_samples)
         for i in range(n_draw):
-            ecc = float(np.asarray(self._nonlinear["eccentricity"])[i])
-            phase_peri = float(np.asarray(self._nonlinear["phase_peri"])[i])
-            arg_peri = float(np.asarray(self._nonlinear["arg_peri"])[i])
-            cos_i = float(np.asarray(self._nonlinear["cos_i"])[i])
-            lon_asc = float(np.asarray(self._nonlinear["lon_asc_node"])[i])
-            sma = (
-                float(linear[i, sma_idx] if linear.ndim == 2 else linear[sma_idx])
+            period_i = Quantity(float(self._nonlinear["period"][i]), self._time_unit)
+            ecc_i = float(self._nonlinear["eccentricity"][i])
+            phase_peri_i = float(self._nonlinear["phase_peri"][i])
+            arg_peri_i = Quantity(float(self._nonlinear["arg_peri"][i]), "rad")
+            cos_i_i = float(self._nonlinear["cos_i"][i])
+            lon_asc_i = Quantity(float(self._nonlinear["lon_asc_node"][i]), "rad")
+            sma_i = Quantity(
+                float(
+                    self._linear[i, sma_idx]
+                    if self._linear.ndim == 2
+                    else self._linear[sma_idx]
+                )
                 if sma_idx >= 0
-                else 1.0
+                else 1.0,
+                sma_unit,
+            )
+            # t_peri matches _solve_kepler convention: phase_peri * period (no t_ref)
+            t_peri_i = Quantity(
+                phase_peri_i * float(self._nonlinear["period"][i]), self._time_unit
             )
 
-            M = 2.0 * np.pi * (phi_grid - phase_peri)
-            sin_f, cos_f = _kepler_plot(M, ecc)
+            # One full orbit: phi in [0, 1] → times spanning exactly one period.
+            # Use t_ref as origin so the ellipse is centered near the observations.
+            phi_grid = np.linspace(0.0, 1.0, 500)
+            times_grid = t_ref + Quantity(phi_grid, "") * period_i
 
-            # Thiele-Innes constants.
-            ca, sa = np.cos(arg_peri), np.sin(arg_peri)
-            cO, sO = np.cos(lon_asc), np.sin(lon_asc)
-            A = ca * cO - sa * sO * cos_i
-            B = ca * sO + sa * cO * cos_i
-            F = -sa * cO - ca * sO * cos_i
-            G = -sa * sO + ca * cO * cos_i
-
-            delta_ra = (A * cos_f + F * sin_f) * sma
-            delta_dec = (B * cos_f + G * sin_f) * sma
-            ax.plot(delta_ra, delta_dec, color="C0", alpha=0.15, lw=0.8)
+            delta_ra, delta_dec = astrometric_orbit_at_times(
+                times_grid,
+                period_i,
+                ecc_i,
+                t_peri_i,
+                arg_peri_i,
+                cos_i_i,
+                lon_asc_i,
+                sma_i,
+            )
+            ax.plot(
+                np.asarray(ustrip(sma_unit, delta_ra)),
+                np.asarray(ustrip(sma_unit, delta_dec)),
+                color="C0",
+                alpha=0.15,
+                lw=0.8,
+            )
 
         ax.set_xlabel(f"\u0394RA [{sma_unit}]")
         ax.set_ylabel(f"\u0394Dec [{sma_unit}]")

@@ -140,9 +140,14 @@ class RejectionPrior(eqx.Module):
         Parameters
         ----------
         period_min : float
-            Lower bound for the log-uniform period prior (days). Default: 0.1.
+            Lower bound for the log-uniform period prior.  The value is a
+            dimensionless float that the sampler interprets in **the same time
+            unit as** ``data.time`` at run time.  For example, if your data
+            times are in days, ``period_min=50`` means 50 days; if in years,
+            it means 50 years.  Default: 0.1.
         period_max : float
-            Upper bound for the log-uniform period prior (days). Default: 1e4.
+            Upper bound for the log-uniform period prior (same unit as
+            ``data.time``). Default: 1e4.
         ecc_alpha : float
             Alpha parameter for Beta eccentricity prior. Default: 0.867 (Kipping 2013).
         ecc_beta : float
@@ -262,9 +267,12 @@ class RejectionPrior(eqx.Module):
         Parameters
         ----------
         period_min : float
-            Lower bound for the log-uniform period prior (days). Default: 0.1.
+            Lower bound for the log-uniform period prior.  The value is a
+            dimensionless float interpreted in the same time unit as
+            ``data.time`` at run time.  Default: 0.1.
         period_max : float
-            Upper bound for the log-uniform period prior (days). Default: 1e4.
+            Upper bound for the log-uniform period prior (same unit as
+            ``data.time``). Default: 1e4.
         ecc_alpha : float
             Alpha parameter for Beta eccentricity prior. Default: 0.867 (Kipping 2013).
         ecc_beta : float
@@ -338,9 +346,12 @@ class RejectionPrior(eqx.Module):
         Parameters
         ----------
         period_min : float
-            Lower bound for the log-uniform period prior (days). Default: 0.1.
+            Lower bound for the log-uniform period prior.  The value is a
+            dimensionless float interpreted in the same time unit as
+            ``data.time`` at run time.  Default: 0.1.
         period_max : float
-            Upper bound for the log-uniform period prior (days). Default: 1e4.
+            Upper bound for the log-uniform period prior (same unit as
+            ``data.time``). Default: 1e4.
         ecc_alpha : float
             Alpha parameter for Beta eccentricity prior. Default: 0.867 (Kipping 2013).
         ecc_beta : float
@@ -433,9 +444,12 @@ class RejectionPrior(eqx.Module):
         Parameters
         ----------
         period_min : float
-            Lower bound for the log-uniform period prior (days). Default: 0.1.
+            Lower bound for the log-uniform period prior.  The value is a
+            dimensionless float interpreted in the same time unit as
+            ``data.time`` at run time.  Default: 0.1.
         period_max : float
-            Upper bound for the log-uniform period prior (days). Default: 1e4.
+            Upper bound for the log-uniform period prior (same unit as
+            ``data.time``). Default: 1e4.
         ecc_alpha : float
             Alpha parameter for Beta eccentricity prior. Default: 0.867 (Kipping 2013).
         ecc_beta : float
