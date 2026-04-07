@@ -162,15 +162,13 @@ class KeplerianBody(eqx.Module):
         relative to the system barycenter, accounting for the orbit orientation.
         """
         # Mean anomaly
-        M = mean_anomaly(
-            ustrip(self.period.unit, time - self.t_peri),
-            ustrip(self.period.unit, self.period),
-        )
+        M = mean_anomaly(time - self.t_peri, self.period)
+        M_raw = ustrip("rad", M)
 
         # True anomaly; circular shortcut avoids Kepler solver for e ≈ 0
         sin_cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
-            lambda: (jnp.sin(M), jnp.cos(M)),
+            lambda: (jnp.sin(M_raw), jnp.cos(M_raw)),
             lambda: true_anomaly_from_mean(M, self.eccentricity),
         )
 
@@ -199,16 +197,14 @@ class KeplerianBody(eqx.Module):
         self, time: ScalarQTime, orientation: KeplerianOrientation | None = None
     ) -> Vec3QSpeed:
         """Get 3D velocity of the body relative to the system barycenter."""
-        # Mean anomaly (dimensionless)
-        M = mean_anomaly(
-            ustrip(self.period.unit, time - self.t_peri),
-            ustrip(self.period.unit, self.period),
-        )
+        # Mean anomaly
+        M = mean_anomaly(time - self.t_peri, self.period)
+        M_raw = ustrip("rad", M)
 
         # True anomaly (sin f, cos f); circular shortcut consistent with get_position
         sin_f, cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
-            lambda: (jnp.sin(M), jnp.cos(M)),
+            lambda: (jnp.sin(M_raw), jnp.cos(M_raw)),
             lambda: true_anomaly_from_mean(M, self.eccentricity),
         )
 

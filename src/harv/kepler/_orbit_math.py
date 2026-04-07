@@ -1,12 +1,12 @@
 """Low-level orbit math building blocks.
 
-Pure functions on raw JAX arrays — no Quantity, no eqx.Module. These are the
-canonical implementations of the core orbit computations used by ``harv.kepler``,
-``harv.likelihood``, and ``harv.simulate``. Higher-level wrappers handle unit
-stripping and Quantity construction.
+Canonical implementations of core orbit computations used by ``harv.kepler``,
+``harv.likelihood``, and ``harv.simulate``.
 
-All inputs and outputs are dimensionless JAX arrays (or Python floats that JAX
-will promote). Callers must ensure consistent units before stripping.
+``mean_anomaly`` and ``true_anomaly_from_mean`` accept and return
+:class:`unxt.Quantity` objects so that callers never need to strip units
+themselves. ``rv_shape`` and ``thiele_innes_ABFG`` remain pure functions on raw
+JAX arrays because their inputs are always already dimensionless.
 """
 
 __all__ = (
@@ -16,38 +16,46 @@ __all__ = (
     "true_anomaly_from_mean",
 )
 
-from typing import Any
-
-import jax.numpy as jnp
+import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
+from unxt import Quantity
+from unxt.quantity import ustrip
 
-#: Permissive array-like type so callers don't need explicit casts from ustrip etc.
-ArrayLike = Any
+from harv.custom_types import (
+    BatchableFloat,
+    BatchableQAngle,
+    BatchableQTime,
+    ScalarFloat,
+    ScalarQTime,
+)
 
 
-def mean_anomaly(dt: ArrayLike, period: ArrayLike) -> Any:
+def mean_anomaly(dt: BatchableQTime, period: ScalarQTime) -> BatchableQAngle:
     """Compute mean anomaly from elapsed time and period.
 
-    ``M = 2π · dt / period``. Inputs must be in consistent units (both in days,
-    both in years, etc.) — the ratio is dimensionless.
+    ``M = 2π · dt / period``, returned as a :class:`~unxt.Quantity` with angle
+    units (radians).
     """
-    return 2 * jnp.pi * dt / period
+    return Quantity.from_(ustrip("", 2 * jnp.pi * dt / period), "rad")
 
 
-def true_anomaly_from_mean(M: ArrayLike, eccentricity: ArrayLike) -> tuple[Any, Any]:
+def true_anomaly_from_mean(
+    M: BatchableQAngle, eccentricity: ScalarFloat
+) -> tuple[BatchableFloat, BatchableFloat]:
     """Solve Kepler's equation: mean anomaly → (sin f, cos f).
 
-    Wraps ``jaxoplanet.core.kepler.kepler``.
+    Wraps ``jaxoplanet.core.kepler.kepler``. The mean anomaly is stripped to
+    radians internally.
     """
-    return kepler(M, eccentricity)
+    return kepler(ustrip("rad", M), eccentricity)
 
 
 def rv_shape(
-    sin_f: ArrayLike,
-    cos_f: ArrayLike,
-    eccentricity: ArrayLike,
-    arg_peri: ArrayLike,
-) -> Any:
+    sin_f: BatchableFloat,
+    cos_f: BatchableFloat,
+    eccentricity: ScalarFloat,
+    arg_peri: ScalarFloat,
+) -> BatchableFloat:
     """RV shape function: cos(ω + f) + e·cos(ω).
 
     Returns the dimensionless RV amplitude factor for each observation.
@@ -58,12 +66,12 @@ def rv_shape(
 
 
 def thiele_innes_ABFG(
-    cos_arg_peri: ArrayLike,
-    sin_arg_peri: ArrayLike,
-    cos_lon_asc_node: ArrayLike,
-    sin_lon_asc_node: ArrayLike,
-    cos_i: ArrayLike,
-) -> tuple[Any, Any, Any, Any]:
+    cos_arg_peri: ScalarFloat,
+    sin_arg_peri: ScalarFloat,
+    cos_lon_asc_node: ScalarFloat,
+    sin_lon_asc_node: ScalarFloat,
+    cos_i: ScalarFloat,
+) -> tuple[ScalarFloat, ScalarFloat, ScalarFloat, ScalarFloat]:
     """Compute unit Thiele-Innes constants (A, B, F, G).
 
     Returns the constants with an implicit semi-major axis of 1. Multiply each

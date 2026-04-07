@@ -8,7 +8,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt import ustrip
 
 from harv.data import AbstractData
 from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
@@ -123,6 +122,5 @@ def _solve_kepler(
     """Solve Kepler's equation; return (sin_f, cos_f)."""
     t_peri = params.phase_peri * params.period
     dt = data.time - t_peri
-    _pu = params.period.unit
-    M = mean_anomaly(ustrip(_pu, dt), ustrip(_pu, params.period))
+    M = mean_anomaly(dt, params.period)
     return true_anomaly_from_mean(M, params.eccentricity)

@@ -136,8 +136,7 @@ def simulate_rv_sb1_data(
     times = dt + t_ref
 
     # Compute RV model: RV(t) = K·[cos(ω + f) + e·cos(ω)] + v₀
-    _pu = period.unit
-    M = mean_anomaly(ustrip(_pu, times - t_peri), ustrip(_pu, period))
+    M = mean_anomaly(times - t_peri, period)
     sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
     rv_amplitude = rv_shape(sin_f, cos_f, eccentricity, ustrip("rad", arg_peri))
 
@@ -299,8 +298,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
         )
         times = dt + t_ref
 
-        _pu = period.unit
-        M = mean_anomaly(ustrip(_pu, times - t_peri), ustrip(_pu, period))
+        M = mean_anomaly(times - t_peri, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         rv_amp = rv_shape(sin_f, cos_f, eccentricity, arg_peri_rad)
         rv_true = K * rv_amp + v0 + eff_offset

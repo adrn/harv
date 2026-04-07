@@ -1,7 +1,6 @@
-"""Helpers for Keplerian orbits."""
+"""Helper for Keplerian orbits."""
 
 from jaxtyping import Array, Float
-from unxt import ustrip
 
 from harv.custom_types import ScalarFloat, ScalarQTime
 from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
@@ -31,6 +30,5 @@ def compute_true_anomaly_components(
     sin_f, cos_f
         True anomaly components, each shape (n,)
     """
-    # Strip to the same unit so the ratio in mean_anomaly is dimensionless
-    M = mean_anomaly(ustrip(period.unit, time - t_peri), ustrip(period.unit, period))
+    M = mean_anomaly(time - t_peri, period)
     return true_anomaly_from_mean(M, eccentricity)
