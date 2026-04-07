@@ -35,7 +35,7 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.data import RadialVelocityData
-from harv.kepler._orbit_math import rv_shape as _rv_shape
+from harv.kepler.orbits import rv_shape as _rv_shape
 from harv.likelihood._params import (
     AbstractParameters,
     MarginalizedParameters,

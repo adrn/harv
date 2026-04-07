@@ -18,8 +18,8 @@ from harv.custom_types import (
     Vec3QSpeed,
     float_converter,
 )
-from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
 from harv.kepler.constants import G
+from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.kepler.orientation import KeplerianOrientation
 
 
@@ -58,8 +58,6 @@ class KeplerianBody(eqx.Module):
 
     """
 
-    # Note: the annotations below are the _input_ types, which pass through the
-    # converters and get stored internally with stricter type rules.
     period: ScalarQTime
     eccentricity: ScalarFloat = eqx.field(converter=float_converter)
     semi_major_axis: ScalarQLength

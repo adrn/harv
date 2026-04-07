@@ -34,7 +34,7 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.data import GaiaAstrometryData
-from harv.kepler._orbit_math import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_ABFG
 from harv.likelihood._params import (
     GaiaAstrometryParameters,
     MarginalizedParameters,

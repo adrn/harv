@@ -1,11 +1,11 @@
-"""Tests for harv.kepler._orbit_math building blocks."""
+"""Tests for harv.kepler.orbits building blocks."""
 
 import jax
 import jax.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.kepler import KeplerianOrientation
-from harv.kepler._orbit_math import (
+from harv.kepler.orbits import (
     mean_anomaly,
     rv_shape,
     thiele_innes_ABFG,

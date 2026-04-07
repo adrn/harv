@@ -13,7 +13,7 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
-from harv.kepler._orbit_math import mean_anomaly, rv_shape, true_anomaly_from_mean
+from harv.kepler.orbits import mean_anomaly, rv_shape, true_anomaly_from_mean
 
 __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
 

@@ -8,7 +8,7 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
-from harv.kepler._orbit_math import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_ABFG
 
 
 class KeplerianOrientation(eqx.Module):

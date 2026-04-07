@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 
 from harv.data import AbstractData
-from harv.kepler._orbit_math import mean_anomaly, true_anomaly_from_mean
+from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 
 # ---------------------------------------------------------------------------
