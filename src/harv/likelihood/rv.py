@@ -11,26 +11,26 @@ and the presence of ``linear_prior`` / ``indicator_matrix``:
    parameters. Supports partial marginalization (e.g., only marginalizing over K and not
    v0) via ``params.marginalized_names``.  For multi-survey data (``indicator_matrix``
    provided), the per-instrument offset columns are always appended to the marginalized
-   design matrix — partial marginalization of the named parameters (K, v0) works
+   design matrix -- partial marginalization of the named parameters (K, v0) works
    simultaneously with multi-survey offset columns.
 
 2. **Explicit** (``linear_prior`` is ``None``, ``params`` is :class:`RVParameters`):
-   evaluates the Gaussian data log-likelihood directly at the provided K and v₀.
+   evaluates the Gaussian data log-likelihood directly at the provided K and v0.
    For multi-survey data (``indicator_matrix`` present), per-instrument offsets are
    included when ``params.offsets`` is provided, giving the full model
-   ``K·rv_shape(t) + v₀ + δⱼ·I(j)``.  If ``offsets`` is ``None`` with multi-survey
-   data, offset corrections are omitted — pre-correct the data externally or use
+   ``K * rv_shape(t) + v0 + dj * I(j)``.  If ``offsets`` is ``None`` with multi-survey
+   data, offset corrections are omitted -- pre-correct the data externally or use
    mode 1 to marginalize offsets analytically.
 
 For the SB1 model the RV model is:
 
-    RV(t) = K · [cos(ω + f(t)) + e·cos(ω)] + v0
-           = K · rv_shape(t) + v0
+    RV(t) = K * [cos(w + f(t)) + e * cos(w)] + v0
+           = K * rv_shape(t) + v0
 
 Note on SB2: :func:`_get_design_matrix_sb2` provides the (n_obs, 3) design matrix
-for double-lined spectroscopic binaries (columns [K₁, K₂, v₀]), but no likelihood
+for double-lined spectroscopic binaries (columns [K1, K2, v0]), but no likelihood
 class uses it yet.  SB2 support requires a dedicated ``SystemData`` container that
-does not yet exist — see §Planned in docs/spec.md.
+does not yet exist -- see the Planned section in docs/spec.md.
 """
 
 from typing import cast
@@ -43,6 +43,7 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
 
+from harv.custom_types import ScalarQSpeed
 from harv.data import RadialVelocityData, SourceData
 from harv.kepler.orbits import rv_shape as _rv_shape
 from harv.likelihood.base import AbstractLikelihood
@@ -73,7 +74,7 @@ def stack_rv_datasets(
     Parameters
     ----------
     rv_datasets : dict[str, RadialVelocityData]
-        Ordered mapping of instrument name → dataset.  Dict order determines
+        Ordered mapping of instrument name -> dataset.  Dict order determines
         the row order in the stacked output; it must match the order used when
         building the indicator matrix (see :func:`build_rv_indicator_matrix`).
 
@@ -108,7 +109,7 @@ def build_rv_indicator_matrix(
     Parameters
     ----------
     rv_datasets : dict[str, RadialVelocityData]
-        Ordered mapping of instrument name → dataset.  Dict order must match
+        Ordered mapping of instrument name -> dataset.  Dict order must match
         the order used when stacking (see :func:`stack_rv_datasets`).
     reference : str or None
         Name of the reference instrument (its observations get no offset
@@ -165,8 +166,8 @@ def _get_design_matrix_sb2(
 
     For primary: [X(t), 0, 1].  For secondary: [0, -X(t), 1].
 
-    Not yet called by any likelihood class — SB2 support requires
-    ``SystemData`` (not yet implemented).  See §Planned in docs/spec.md.
+    Not yet called by any likelihood class -- SB2 support requires
+    ``SystemData`` (not yet implemented).  See the Planned section in docs/spec.md.
     """
     arg_peri = ustrip(AllowValue, "", params.arg_peri)
     rv_shape = _rv_shape(sin_f, cos_f, params.eccentricity, arg_peri)
@@ -190,6 +191,9 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
     When ``linear_prior`` is ``None``, ``params`` must be a full :class:`RVParameters`
     and the likelihood is evaluated explicitly.
+
+    If you have multi-survey data, you probably want to use
+    :func:`RVLikelihood.from_source_data` to construct the likelihood instance.
 
     Parameters
     ----------
@@ -227,7 +231,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     >>> lik = RVLikelihood(data=rv_data, linear_prior=linear_prior)
     >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
 
-    **Partial marginalization** — fix K, marginalize v0 only:
+    **Partial marginalization** -- fix K, marginalize v0 only:
 
     >>> params = RVParameters.marginalized(
     ...     "v0",                              # only v0 is integrated out
@@ -241,7 +245,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     >>> lik = RVLikelihood(data=rv_data, linear_prior=linear_prior_1d)
     >>> lp = lik.log_prob(params)
 
-    **Multi-survey marginalized** — two instruments, joint prior on [K, v0, δ]:
+    **Multi-survey marginalized** -- two instruments, joint prior on [K, v0, d]:
 
     >>> ind = jnp.zeros((n_obs_total, 1))
     >>> ind = ind.at[[3, 7, 11], 0].set(1.0)   # B observations at these rows
@@ -254,7 +258,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     ... )
     >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
 
-    **Multi-survey, fix K, marginalize v0 and δ** — (1+k)-D prior:
+    **Multi-survey, fix K, marginalize v0 and d** -- (1+k)-D prior:
 
     >>> params = RVParameters.marginalized(
     ...     "v0",
@@ -271,7 +275,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     ... )
     >>> lp = lik.log_prob(params)
 
-    **Explicit multi-survey** — named offsets per instrument:
+    **Explicit multi-survey** -- named offsets per instrument:
 
     >>> params = RVParameters(
     ...     period=Quantity(200.0, "day"), eccentricity=0.3,
@@ -305,7 +309,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         For single-instrument data this is equivalent to
         ``RVLikelihood(data=data, linear_prior=linear_prior)``.  For
         ``SourceData`` with multiple RV datasets the observations are stacked
-        in dict order and an indicator matrix is built automatically — the
+        in dict order and an indicator matrix is built automatically -- the
         caller never needs to touch :func:`stack_rv_datasets` or
         :func:`build_rv_indicator_matrix` directly.
 
@@ -392,7 +396,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array
-    ) -> dict[str, Quantity]:
+    ) -> dict[str, ScalarQSpeed]:
         """Sample linear parameters from the conditional posterior.
 
         Builds a ``MarginalizedLinear`` from the full design matrix (including
@@ -409,7 +413,7 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
         Returns
         -------
-        dict[str, Quantity]
+        dict[str, ScalarQSpeed]
             Sampled linear parameters as a dict.  Keys follow
             ``RVParameters.linear_param_names`` (``"K"``, ``"v0"``) plus any
             instrument names from ``self.instrument_names`` for multi-survey
@@ -447,7 +451,11 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         rv_obs = jnp.asarray(ustrip(rv_unit, self.data.rv))
         rv_err = jnp.asarray(ustrip(rv_unit, self.data.rv_err))
         return self._marginalize_partial(
-            params, X, rv_obs, rv_err, rv_unit,
+            params,
+            X,
+            rv_obs,
+            rv_err,
+            rv_unit,
             cast("dist.MultivariateNormal", self.linear_prior),
             indicator_matrix=self.indicator_matrix,
         )
@@ -455,11 +463,11 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     def _log_prob_explicit(self, params: RVParameters) -> jax.Array:
         """Explicit log-likelihood with all parameters specified.
 
-        Evaluates the Gaussian data log-likelihood at the provided K, v₀, and
+        Evaluates the Gaussian data log-likelihood at the provided K, v0, and
         (optionally) per-instrument offsets.  When ``params.offsets`` is not
         ``None`` and ``indicator_matrix`` is present on the likelihood, the
-        full multi-survey model ``K·rv_shape(t) + v₀ + δⱼ·I(j)`` is
-        evaluated.  Otherwise only the base SB1 model ``K·X(t) + v₀`` is used.
+        full multi-survey model ``K * rv_shape(t) + v0 + dj * I(j)`` is
+        evaluated.  Otherwise only the base SB1 model ``K * X(t) + v0`` is used.
         """
         sin_f, cos_f = _solve_kepler(self.data, params)
         X = _get_design_matrix_sb1(params, sin_f, cos_f)
@@ -476,8 +484,10 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
             and self.instrument_names is not None
         ):
             offset_vals = jnp.array(
-                [ustrip(AllowValue, rv_unit, params.offsets[name])
-                 for name in self.instrument_names]
+                [
+                    ustrip(AllowValue, rv_unit, params.offsets[name])
+                    for name in self.instrument_names
+                ]
             )
             X = jnp.concatenate([X, self.indicator_matrix], axis=-1)
             linear_params = jnp.concatenate([jnp.array([K, v0]), offset_vals])

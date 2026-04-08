@@ -50,7 +50,7 @@ class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
         Named parameters come from ``params.source_cls.linear_param_names``
         and may be partially or fully marginalized.  Indicator columns (when
         present) are always appended to the marginalized design matrix after
-        the named columns — they are always marginalized, never held fixed.
+        the named columns -- they are always marginalized, never held fixed.
 
         The prior must be dimensioned to match the number of marginalized
         columns: ``len(marg_names) + n_indicator_cols``.

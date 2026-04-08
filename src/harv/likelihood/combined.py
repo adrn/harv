@@ -17,7 +17,7 @@ class CompositeLikelihood(eqx.Module):
     Parameters with the same name across components are automatically shared
     via duck typing: ``log_prob`` passes the same params struct to every
     component, and each component reads only the fields it needs.  There is
-    no explicit sharing mechanism — a struct that carries the union of all
+    no explicit sharing mechanism -- a struct that carries the union of all
     required fields satisfies every component simultaneously.
 
     For combined astrometry + RV data the natural params struct is
@@ -42,7 +42,7 @@ class CompositeLikelihood(eqx.Module):
     --------
     Combining astrometry and RV likelihoods.  Both components share
     ``period``, ``eccentricity``, ``phase_peri``, and ``arg_peri``
-    automatically — pass a ``MarginalizedParameters`` and each component
+    automatically -- pass a ``MarginalizedParameters`` and each component
     reads what it needs::
 
         import numpyro.distributions as dist
@@ -70,7 +70,7 @@ class CompositeLikelihood(eqx.Module):
         composite.n_params
         # 6
 
-        # Evaluate at a single point — MarginalizedParameters satisfies both
+        # Evaluate at a single point -- MarginalizedParameters satisfies both
         # components via duck typing
         log_lik = composite.log_prob(params)  # params: MarginalizedParameters
 

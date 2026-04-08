@@ -1,4 +1,4 @@
-"""Likelihood functions for Gaia epoch astrometry data.
+r"""Likelihood functions for Gaia epoch astrometry data.
 
 This module implements the unified :class:`GaiaAstrometryLikelihood` for Gaia
 along-scan astrometry.  The class supports two evaluation modes via the same
@@ -6,8 +6,8 @@ along-scan astrometry.  The class supports two evaluation modes via the same
 
 1. **Marginalized** (``params`` is :class:`MarginalizedParameters`,
    ``linear_prior`` provided): analytically marginalizes over some or all of
-   the 6 linear astrometric parameters (α₀, δ₀, μ_α, μ_δ, ϖ, a) given a
-   Gaussian prior.  Supports partial marginalization via
+   the 6 linear astrometric parameters (ra0, dec0, pmra, pmdec, parallax, a)
+   given a Gaussian prior.  Supports partial marginalization via
    ``params.marginalized_names``.
 
 2. **Explicit** (``params`` is :class:`GaiaAstrometryParameters`,
@@ -16,12 +16,16 @@ along-scan astrometry.  The class supports two evaluation modes via the same
 
 For the marginalized model, the astrometric model is:
 
-    y_AL = α₀·cos(ψ) + δ₀·sin(ψ)
-         + (μ_α·cos(ψ) + μ_δ·sin(ψ))·dt
-         + ϖ·H_ϖ(t)
-         + a·[(A·sin(ψ) + B·cos(ψ))·cos(f) + (F·sin(ψ) + G·cos(ψ))·sin(f)]
+.. math::
 
-where A, B, F, G are Thiele-Innes constants and f is the true anomaly.
+    y_\mathrm{AL} &= \alpha_0 \cos\psi + \delta_0 \sin\psi \\
+        &+ (\mu_\alpha \cos\psi + \mu_\delta \sin\psi) \, dt \\
+        &+ \varpi \, H_\varpi(t) \\
+        &+ a \, [(A \sin\psi + B \cos\psi) \cos f
+        + (F \sin\psi + G \cos\psi) \sin f]
+
+where :math:`A, B, F, G` are Thiele-Innes constants and :math:`f` is the
+true anomaly.
 """
 
 from typing import cast
@@ -53,7 +57,7 @@ __all__ = ("GaiaAstrometryLikelihood",)
 # ---------------------------------------------------------------------------
 
 
-def _get_design_matrix(
+def _get_design_matrix_gaia_ast(
     data: GaiaAstrometryData,
     params: MarginalizedParameters | GaiaAstrometryParameters,
     sin_f: jax.Array,
@@ -61,7 +65,7 @@ def _get_design_matrix(
 ) -> jax.Array:
     """Build the (n_obs, 6) Gaia along-scan design matrix.
 
-    Columns: [α₀, δ₀, μ_α, μ_δ, ϖ, a].
+    Columns: [ra0, dec0, pmra, pmdec, parallax, a].
     See Appendix A of https://arxiv.org/abs/2206.05726.
     """
     dt_yr = ustrip("yr", data.time - data.t_ref)
@@ -149,7 +153,7 @@ class GaiaAstrometryLikelihood(
     ) -> jax.Array:
         """Build the (n_obs, 6) design matrix for the given parameters."""
         sin_f, cos_f = _solve_kepler(self.data, params)
-        return _get_design_matrix(self.data, params, sin_f, cos_f)
+        return _get_design_matrix_gaia_ast(self.data, params, sin_f, cos_f)
 
     def log_prob(
         self, params: MarginalizedParameters | GaiaAstrometryParameters
@@ -214,18 +218,22 @@ class GaiaAstrometryLikelihood(
     def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:
         """Marginalized log-likelihood."""
         sin_f, cos_f = _solve_kepler(self.data, params)
-        X = _get_design_matrix(self.data, params, sin_f, cos_f)
+        X = _get_design_matrix_gaia_ast(self.data, params, sin_f, cos_f)
         y_obs = jnp.asarray(ustrip("mas", self.data.al_position))
         y_err = jnp.asarray(ustrip("mas", self.data.al_position_err))
         return self._marginalize_partial(
-            params, X, y_obs, y_err, "mas",
+            params,
+            X,
+            y_obs,
+            y_err,
+            "mas",
             cast("dist.MultivariateNormal", self.linear_prior),
         )
 
     def _log_prob_explicit(self, params: GaiaAstrometryParameters) -> jax.Array:
         """Explicit log-likelihood with all parameters specified."""
         sin_f, cos_f = _solve_kepler(self.data, params)
-        design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
+        design_matrix = _get_design_matrix_gaia_ast(self.data, params, sin_f, cos_f)
 
         linear_params = jnp.array(
             [
