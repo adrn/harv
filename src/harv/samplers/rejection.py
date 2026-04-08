@@ -219,8 +219,7 @@ class RejectionSampler(eqx.Module):
             "lon_asc_node": "rad",
         }
         nonlinear_q: dict[str, Quantity] = {
-            k: Quantity(v, _nl_units.get(k, ""))
-            for k, v in accepted_nonlinear.items()
+            k: Quantity(v, _nl_units.get(k, "")) for k, v in accepted_nonlinear.items()
         }
 
         # Build linear dict as Quantities: one named Quantity per parameter.

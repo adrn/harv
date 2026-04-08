@@ -147,15 +147,6 @@ class GaiaAstrometryLikelihood(
     data: GaiaAstrometryData
     linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None
 
-    param_names = (
-        "period",
-        "eccentricity",
-        "phase_peri",
-        "cos_i",
-        "arg_peri",
-        "lon_asc_node",
-    )
-
     def design_matrix(
         self, params: MarginalizedParameters | GaiaAstrometryParameters
     ) -> jax.Array:

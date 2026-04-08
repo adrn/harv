@@ -169,7 +169,7 @@ class _DataTypeStrategy(ABC):
         return tuple(
             f.name
             for f in dataclasses.fields(self.nonlinear_cls)
-            if f.name not in linear
+            if f.name not in linear and f.default is dataclasses.MISSING
         )
 
     @property

@@ -9,7 +9,7 @@ from harv.data import RadialVelocityData
 from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import (
     RVLikelihood,
-    _get_design_matrix,
+    _get_design_matrix_sb1 as _get_design_matrix,
     _get_design_matrix_sb2,
 )
 
@@ -238,3 +238,103 @@ class TestBatchLikelihoodRV:
         )
 
         assert jnp.allclose(log_liks_batch, log_liks_serial, rtol=1e-5)
+
+
+class TestExplicitLikelihoodRV:
+    """Tests for the explicit (non-marginalized) RV likelihood path."""
+
+    def _make_params(self, K=10.0, v0=0.0, offsets=None):
+        """offsets: dict like {"ESPRESSO": Quantity(val, "km/s")} or None."""
+        return RVParameters(
+            period=Quantity(100.0, "day"),
+            eccentricity=0.3,
+            phase_peri=0.0,
+            arg_peri=1.0,
+            K=Quantity(K, "km/s"),
+            v0=Quantity(v0, "km/s"),
+            offsets=offsets,
+        )
+
+    def test_single_survey_explicit_finite(self):
+        """Explicit single-survey log-prob is finite."""
+        data = _make_rv_data()
+        lik = RVLikelihood(data=data)
+        params = self._make_params()
+
+        log_lik = lik.log_prob(params)
+
+        assert jnp.isfinite(log_lik)
+
+    def test_multi_survey_explicit_with_offsets_finite(self):
+        """Multi-survey explicit with named offsets returns a finite value."""
+        n_obs = 20
+        data = _make_rv_data(n_obs)
+        ind = jnp.zeros((n_obs, 1))
+        ind = ind.at[10:, 0].set(1.0)
+        lik = RVLikelihood(
+            data=data, indicator_matrix=ind, instrument_names=("ESPRESSO",)
+        )
+        params = self._make_params(offsets={"ESPRESSO": Quantity(5.0, "km/s")})
+
+        log_lik = lik.log_prob(params)
+
+        assert jnp.isfinite(log_lik)
+
+    def test_multi_survey_explicit_offsets_change_result(self):
+        """Non-zero offsets produce a different log-prob than zero offsets."""
+        n_obs = 20
+        data = _make_rv_data(n_obs)
+        ind = jnp.zeros((n_obs, 1))
+        ind = ind.at[10:, 0].set(1.0)
+        lik = RVLikelihood(
+            data=data, indicator_matrix=ind, instrument_names=("ESPRESSO",)
+        )
+
+        log_lik_zero = lik.log_prob(
+            self._make_params(offsets={"ESPRESSO": Quantity(0.0, "km/s")})
+        )
+        log_lik_nonzero = lik.log_prob(
+            self._make_params(offsets={"ESPRESSO": Quantity(20.0, "km/s")})
+        )
+
+        assert not jnp.allclose(log_lik_zero, log_lik_nonzero)
+
+    def test_multi_survey_explicit_no_offsets_ignores_indicator(self):
+        """offsets=None falls back to base SB1 model even with indicator_matrix."""
+        n_obs = 20
+        data = _make_rv_data(n_obs)
+        ind = jnp.zeros((n_obs, 1))
+        ind = ind.at[10:, 0].set(1.0)
+        lik_with_ind = RVLikelihood(
+            data=data, indicator_matrix=ind, instrument_names=("ESPRESSO",)
+        )
+        lik_no_ind = RVLikelihood(data=data)
+        params = self._make_params()  # offsets=None
+
+        assert jnp.allclose(lik_with_ind.log_prob(params), lik_no_ind.log_prob(params))
+
+    def test_explicit_vmap_with_offsets(self):
+        """vmap over explicit params with named offsets works correctly."""
+        n_obs = 20
+        n_samples = 5
+        data = _make_rv_data(n_obs)
+        ind = jnp.zeros((n_obs, 1))
+        ind = ind.at[10:, 0].set(1.0)
+        lik = RVLikelihood(
+            data=data, indicator_matrix=ind, instrument_names=("ESPRESSO",)
+        )
+
+        params_batch = RVParameters(
+            period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
+            eccentricity=jnp.ones(n_samples) * 0.3,
+            phase_peri=jnp.zeros(n_samples),
+            arg_peri=jnp.ones(n_samples) * 1.0,
+            K=Quantity(jnp.ones(n_samples) * 10.0, "km/s"),
+            v0=Quantity(jnp.zeros(n_samples), "km/s"),
+            offsets={"ESPRESSO": Quantity(jnp.linspace(0.0, 10.0, n_samples), "km/s")},
+        )
+
+        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+        assert log_liks.shape == (n_samples,)
+        assert jnp.all(jnp.isfinite(log_liks))

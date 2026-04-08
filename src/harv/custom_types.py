@@ -39,12 +39,11 @@ BatchVec3QSpeed = Real[Quantity["speed"], "3 *batch"]
 
 BatchQAngle = Real[Quantity["angle"], "*batch"]
 BatchQAngularSpeed = Real[Quantity["angular speed"], "*batch"]
+BatchQDimless = Real[Quantity["dimensionless"], "*batch"]
 BatchQLength = Real[Quantity["length"], "*batch"]
 BatchQSpeed = Real[Quantity["speed"], "*batch"]
 BatchQTime = Real[Quantity["time"], "*batch"]
-BatchFloat = (
-    Float[jax.Array, "*batch"] | np.floating[Any] | float | int | ScalarQDimless
-)
+BatchFloat = Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
 
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 

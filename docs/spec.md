@@ -359,7 +359,7 @@ specific inference problem.
 
 ______________________________________________________________________
 
-## Parameter structs (`harv.likelihood._params`)
+## Parameter structs (`harv.likelihood.params`)
 
 These are the objects passed to `likelihood.log_prob(params)`. Each struct is an
 `eqx.Module` and therefore a JAX pytree, which is what makes
@@ -381,7 +381,7 @@ a **marginalized wrapper** (created on-the-fly via `.marginalize()` or `.margina
 
 | Struct                     | Additional fields                                                              | `linear_param_names`                                              |
 | -------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `RVParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`                                | `("K", "v0")`                                                     |
+| `RVParameters`             | `K: Quantity["speed"]`, `v0: Quantity["speed"]`, `offsets: dict[str, Quantity["speed"]] \| None` | `("K", "v0")`                                                     |
 | `GaiaAstrometryParameters` | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis` (all `Quantity`) | `("ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis")` |
 
 `linear_param_names` is a `ClassVar[tuple[str, ...]]` on the full structs. It names
@@ -469,14 +469,19 @@ with leading batch dimension).
 1. **Multi-survey marginalized** (`indicator_matrix` provided): appends
    instrument-offset columns and marginalizes \[K, v₀, δ₁, …, δₖ\] jointly.
 1. **Explicit** (`linear_prior` is `None`, `params` is `RVParameters`): evaluates the
-   Gaussian data log-likelihood directly.
+   Gaussian data log-likelihood directly at K, v₀, and (optionally) per-instrument
+   offsets. When `params.offsets` is a dict and `instrument_names` is set on the
+   likelihood, evaluates the full model `K·rv_shape(t) + v₀ + δⱼ·I(j)`. If
+   `params.offsets` is `None`, evaluates the base SB1 model only.
 
 For each nonlinear parameter sample it:
 
 1. Solves Kepler's equation for (sin f, cos f) via `_solve_kepler`.
 1. Builds the (n_obs, 2) design matrix `[rv_amplitude, 1]`.
 1. If marginalized, constructs a `MarginalizedLinear` distribution (numpyro-ext) and
-   calls `.log_prob()`. If explicit, evaluates `dm @ [K, v₀]` + Gaussian log-prob.
+   calls `.log_prob()`. If explicit, evaluates `dm @ [K, v₀, δ₁, …]` + Gaussian
+   log-prob (offset columns appended when `params.offsets` and `instrument_names` are
+   present).
 
 The `design_matrix(params)` method exposes the full design matrix (including indicator
 columns for multi-survey) for reuse by MCMC builders and other consumers.

@@ -3,7 +3,10 @@
 Each likelihood class has a corresponding parameter struct. Structs are
 equinox Modules and therefore JAX pytrees, so batching is simply::
 
+    params_batch = RVParameters(period=..., eccentricity=..., ...)
     jax.vmap(likelihood.log_prob)(params_batch)
+
+where the batch axis is automatically sliced by vmap.
 
 Two levels of parameterization exist for each data type:
 
@@ -36,6 +39,7 @@ from harv.custom_types import (
     BatchQLength,
     BatchQSpeed,
     BatchQTime,
+    ScalarQSpeed,
 )
 
 # ---------------------------------------------------------------------------
@@ -202,14 +206,35 @@ class AbstractParameters(eqx.Module):
 class RVParameters(AbstractParameters):
     """Full parameter set for the RV likelihood.
 
-    Includes both nonlinear orbital parameters and the linear RV parameters
-    (semi-amplitude K and systemic velocity v0).
+    Includes both nonlinear orbital parameters, the linear RV parameters
+    (semi-amplitude K and systemic velocity v0), and an optional array of
+    per-instrument velocity offsets for multi-survey data.
+
+    Parameters
+    ----------
+    period, eccentricity, phase_peri, arg_peri
+        Nonlinear orbital parameters (inherited from ``AbstractParameters``).
+    K : BatchQSpeed
+        RV semi-amplitude.
+    v0 : BatchQSpeed
+        Systemic velocity (for the reference instrument).
+    offsets : dict[str, Quantity["speed"]] or None
+        Per-instrument velocity offsets, keyed by instrument name. Example:
+        ``{"ESPRESSO": Quantity(5.0, "km/s"), "HARPS": Quantity(-2.0, "km/s")}``.
+        The keys must match the names passed as ``instrument_names`` to
+        ``RVLikelihood`` (which maps names to columns in ``indicator_matrix``).
+        ``None`` for single-instrument data.  Not included in
+        ``linear_param_names`` because the count is data-dependent; the
+        explicit likelihood path reads this field directly.
     """
 
     linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
 
     K: BatchQSpeed  # RV semi-amplitude
-    v0: BatchQSpeed  # systemic velocity
+    v0: BatchQSpeed  # systemic velocity (reference instrument)
+    offsets: dict[str, ScalarQSpeed] | None = (
+        None  # per-instrument offsets {name: Quantity}
+    )
 
 
 @final
