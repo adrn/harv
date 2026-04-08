@@ -18,9 +18,9 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity
 
 from harv.data import InputData
-from harv.likelihood._params import AbstractParameters, MarginalizedParameters
 from harv.likelihood.helpers import _resolve_linear_prior
-from harv.samplers._strategies import _ComponentSlice, _DataTypeStrategy
+from harv.likelihood.params import AbstractParameters, MarginalizedParameters
+from harv.samplers.strategies import _ComponentSlice, _DataTypeStrategy
 
 if TYPE_CHECKING:
     from harv.priors.rejection import RejectionPrior

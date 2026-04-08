@@ -18,7 +18,7 @@ from unxt import Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
-from harv.likelihood._params import (
+from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )

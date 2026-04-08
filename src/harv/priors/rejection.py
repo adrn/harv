@@ -175,7 +175,7 @@ class RejectionPrior(eqx.Module):
                 import equinox as eqx
                 import numpyro.distributions as dist
                 import jax.numpy as jnp
-                from harv.likelihood._params import MarginalizedParameters
+                from harv.likelihood.params import MarginalizedParameters
                 from harv.priors.rejection import RejectionPrior
                 from unxt import ustrip
 

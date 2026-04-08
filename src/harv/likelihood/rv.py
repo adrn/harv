@@ -36,16 +36,16 @@ from unxt.quantity import AllowValue
 
 from harv.data import RadialVelocityData
 from harv.kepler.orbits import rv_shape as _rv_shape
-from harv.likelihood._params import (
-    AbstractParameters,
-    MarginalizedParameters,
-    RVParameters,
-)
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import (
     LinearPriorCallable,
     _resolve_linear_prior,
     _solve_kepler,
+)
+from harv.likelihood.params import (
+    AbstractParameters,
+    MarginalizedParameters,
+    RVParameters,
 )
 
 __all__ = ("RVLikelihood",)

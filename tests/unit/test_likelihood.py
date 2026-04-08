@@ -6,11 +6,11 @@ import numpyro.distributions as dist
 from unxt import Quantity
 
 from harv.data import GaiaAstrometryData
-from harv.likelihood._params import GaiaAstrometryParameters
 from harv.likelihood.gaia_astrometry import (
     GaiaAstrometryLikelihood,
     _get_design_matrix,
 )
+from harv.likelihood.params import GaiaAstrometryParameters
 
 
 def _make_astro_data(n_obs=50):

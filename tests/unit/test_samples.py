@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 from unxt import Quantity
 
-from harv.likelihood._params import (
+from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )

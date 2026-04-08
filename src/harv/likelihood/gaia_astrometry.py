@@ -35,15 +35,15 @@ from unxt.quantity import AllowValue
 
 from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import thiele_innes_ABFG
-from harv.likelihood._params import (
-    GaiaAstrometryParameters,
-    MarginalizedParameters,
-)
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import (
     LinearPriorCallable,
     _resolve_linear_prior,
     _solve_kepler,
+)
+from harv.likelihood.params import (
+    GaiaAstrometryParameters,
+    MarginalizedParameters,
 )
 
 __all__ = ("GaiaAstrometryLikelihood",)

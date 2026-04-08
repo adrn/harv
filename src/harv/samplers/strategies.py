@@ -22,15 +22,15 @@ from harv.data import (
     RadialVelocityData,
     SourceData,
 )
-from harv.likelihood._params import (
+from harv.likelihood.combined import CompositeLikelihood
+from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
+from harv.likelihood.helpers import _IndexedCallable, _sub_mvn
+from harv.likelihood.params import (
     AbstractParameters,
     GaiaAstrometryParameters,
     MarginalizedParameters,
     RVParameters,
 )
-from harv.likelihood.combined import CompositeLikelihood
-from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
-from harv.likelihood.helpers import _IndexedCallable, _sub_mvn
 from harv.likelihood.rv import RVLikelihood
 from harv.priors.rejection import RejectionPrior
 

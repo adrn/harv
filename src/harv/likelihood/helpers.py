@@ -11,7 +11,7 @@ import numpyro.distributions as dist
 
 from harv.data import AbstractData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
-from harv.likelihood._params import AbstractParameters, MarginalizedParameters
+from harv.likelihood.params import AbstractParameters, MarginalizedParameters
 
 # ---------------------------------------------------------------------------
 # Linear prior Protocol

@@ -28,16 +28,16 @@ from harv.data import (
     SourceData,
 )
 from harv.priors.rejection import RejectionPrior
-from harv.samplers._numpyro import (
+from harv.samplers.numpyro import (
     _build_extra_numpyro_model,
     _build_full_numpyro_model,
     _build_marginalized_numpyro_model,
 )
-from harv.samplers._strategies import (
+from harv.samplers.samples import Samples, _WarmStartMCMC
+from harv.samplers.strategies import (
     _STRATEGIES,
     _DataTypeStrategy,
 )
-from harv.samplers.samples import Samples, _WarmStartMCMC
 
 __all__ = ["RejectionSampler"]
 

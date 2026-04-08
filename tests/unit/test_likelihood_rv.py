@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
-from harv.likelihood._params import RVParameters
+from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import (
     RVLikelihood,
     _get_design_matrix,

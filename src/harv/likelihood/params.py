@@ -56,31 +56,31 @@ class MarginalizedParameters(eqx.Module):
 
     Parameters
     ----------
-    _values : dict[str, Any]
+    values : dict[str, Any]
         Mapping from field name to value for every *non-marginalized* field.
         These are the pytree leaves that JAX traces through.
     marginalized_names : tuple[str, ...]
         Names of the linear parameters that have been marginalized out.
         Static (not a pytree leaf).
-    _source_cls : type or None
+    source_cls : type or None
         The full parameter class this was derived from, or ``None`` for
         combined (multi-source-class) wrappers.  Static.
     """
 
-    _values: dict[str, Any]
+    values: dict[str, Any]
     marginalized_names: tuple[str, ...] = eqx.field(static=True)
-    _source_cls: type | None = eqx.field(static=True, default=None)
+    source_cls: type | None = eqx.field(static=True, default=None)
 
     @property
     def nonlinear_names(self) -> tuple[str, ...]:
         """Names of the non-marginalized fields present in this wrapper."""
-        return tuple(self._values.keys())
+        return tuple(self.values.keys())
 
     def __getattr__(self, name: str) -> Any:
         # eqx.Module uses __getattr__ only as a fallback, so this won't
-        # intercept normal Module attribute access (_values, etc.).
+        # intercept normal Module attribute access (values, etc.).
         try:
-            return self._values[name]
+            return self.values[name]
         except KeyError:
             raise AttributeError(  # noqa: B904
                 f"{type(self).__name__!r} object has no attribute {name!r}"
@@ -146,9 +146,9 @@ class AbstractParameters(eqx.Module):
             if f.name not in names
         }
         return MarginalizedParameters(
-            _values=keep,
+            values=keep,
             marginalized_names=tuple(names),
-            _source_cls=cls,
+            source_cls=cls,
         )
 
     @classmethod
@@ -187,9 +187,9 @@ class AbstractParameters(eqx.Module):
             raise ValueError(msg)
 
         return MarginalizedParameters(
-            _values=kwargs,
+            values=kwargs,
             marginalized_names=tuple(names),
-            _source_cls=cls,
+            source_cls=cls,
         )
 
 

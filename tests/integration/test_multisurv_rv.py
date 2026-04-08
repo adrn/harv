@@ -13,11 +13,11 @@ import pytest
 from unxt import Quantity
 
 from harv.data import RadialVelocityData
-from harv.likelihood._params import RVParameters
+from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import RVLikelihood
 from harv.priors.rejection import RejectionPrior
-from harv.samplers._strategies import _build_indicator_matrix, _stack_rv_datasets
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.strategies import _build_indicator_matrix, _stack_rv_datasets
 from harv.simulate.rv import simulate_rv_multisurv_data
 
 

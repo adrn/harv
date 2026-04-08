@@ -50,7 +50,7 @@ class CompositeLikelihood(eqx.Module):
         from harv.likelihood.combined import CompositeLikelihood
         from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
         from harv.likelihood.rv import RVLikelihood
-        from harv.likelihood._params import GaiaAstrometryParameters
+        from harv.likelihood.params import GaiaAstrometryParameters
 
         astro_prior = dist.MultivariateNormal(
             loc=jnp.zeros(6), covariance_matrix=jnp.eye(6) * 1000.0**2
