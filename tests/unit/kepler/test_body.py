@@ -118,7 +118,7 @@ class TestFromMasses:
             m_body=m_comp,
             t_peri=Quantity(0.0, "yr"),
         )
-        recovered = body.get_mass(m_prim)
+        recovered = body.get_mass(m_prim + m_comp)
         assert jnp.allclose(
             ustrip("Mjup", recovered), ustrip("Mjup", m_comp), rtol=5e-4
         )

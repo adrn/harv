@@ -26,10 +26,10 @@ from unxt import Quantity
 from unxt.quantity import ustrip
 
 from harv.custom_types import (
-    BatchableFloat,
-    BatchableQAngle,
-    BatchableQSpeed,
-    BatchableQTime,
+    BatchFloat,
+    BatchQAngle,
+    BatchQSpeed,
+    BatchQTime,
     ScalarFloat,
     ScalarQAngle,
     ScalarQSpeed,
@@ -37,7 +37,7 @@ from harv.custom_types import (
 )
 
 
-def mean_anomaly(dt: BatchableQTime, period: ScalarQTime) -> BatchableQAngle:
+def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
     """Compute mean anomaly from elapsed time and period.
 
     ``M = 2π · dt / period``, returned as a :class:`~unxt.Quantity` with angle
@@ -47,8 +47,8 @@ def mean_anomaly(dt: BatchableQTime, period: ScalarQTime) -> BatchableQAngle:
 
 
 def true_anomaly_from_mean(
-    M: BatchableQAngle, eccentricity: ScalarFloat
-) -> tuple[BatchableFloat, BatchableFloat]:
+    M: BatchQAngle, eccentricity: ScalarFloat
+) -> tuple[BatchFloat, BatchFloat]:
     """Solve Kepler's equation: mean anomaly → (sin f, cos f).
 
     Wraps ``jaxoplanet.core.kepler.kepler``. The mean anomaly is stripped to
@@ -58,11 +58,11 @@ def true_anomaly_from_mean(
 
 
 def rv_shape(
-    sin_f: BatchableFloat,
-    cos_f: BatchableFloat,
+    sin_f: BatchFloat,
+    cos_f: BatchFloat,
     eccentricity: ScalarFloat,
     arg_peri: ScalarFloat,
-) -> BatchableFloat:
+) -> BatchFloat:
     """RV shape function: cos(ω + f) + e·cos(ω).
 
     Returns the dimensionless RV amplitude factor for each observation.
@@ -94,7 +94,7 @@ def thiele_innes_ABFG(
 
 
 def compute_true_anomaly_components(
-    time: BatchableQTime,
+    time: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
     t_peri: ScalarQTime,
@@ -122,14 +122,14 @@ def compute_true_anomaly_components(
 
 
 def rv_at_times(
-    times: BatchableQTime,
+    times: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
     t_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
     K: ScalarQSpeed,
     v0: ScalarQSpeed,
-) -> BatchableQSpeed:
+) -> BatchQSpeed:
     """Compute the RV model: K·[cos(ω + f(t)) + e·cos(ω)] + v₀.
 
     Parameters
@@ -177,7 +177,7 @@ def rv_at_times(
 
 
 def astrometric_orbit_at_times(
-    times: BatchableQTime,
+    times: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
     t_peri: ScalarQTime,
@@ -185,7 +185,7 @@ def astrometric_orbit_at_times(
     cos_i: ScalarFloat,
     lon_asc_node: ScalarQAngle,
     semi_major_axis: ScalarQAngle,
-) -> tuple[BatchableQAngle, BatchableQAngle]:
+) -> tuple[BatchQAngle, BatchQAngle]:
     """Compute sky-plane astrometric orbit (Δra, Δdec) at given times.
 
     TODO: needs a different name - this is computing what? Tangent plane offsets? Or

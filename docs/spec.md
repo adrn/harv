@@ -80,6 +80,8 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 | `ScalarQDimless`      | `Real[Quantity["dimensionless"], ""]`                                   | Scalar dimensionless quantities               |
 | `Vec3QLength`         | `Real[Quantity["length"], "3"]`                                         | 3-vector position returns                     |
 | `Vec3QSpeed`          | `Real[Quantity["speed"], "3"]`                                          | 3-vector velocity returns                     |
+| `BatchVec3QLength`    | `Real[Quantity["length"], "3 *batch"]`                                  | Batched 3-vector positions                    |
+| `BatchVec3QSpeed`     | `Real[Quantity["speed"], "3 *batch"]`                                   | Batched 3-vector velocities                   |
 | `NTime`, `NAngle`, …  | `Real[Quantity[dim], "n"]`                                              | 1-d arrays of observations                    |
 | `NFloatArray`         | `Float[jax.Array, "n"]`                                                 | Plain JAX float arrays                        |
 | `ScalarFloat`         | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
@@ -314,8 +316,8 @@ computations. All three consumers (`harv.kepler`, `harv.likelihood`,
 `mean_anomaly` and `true_anomaly_from_mean` accept and return `Quantity` objects
 so callers never need to strip units themselves:
 
-- `mean_anomaly(dt: BatchableQTime, period: ScalarQTime) -> BatchableQAngle` — `M = 2π · dt / period`
-- `true_anomaly_from_mean(M: BatchableQAngle, eccentricity: ScalarFloat) -> (sin f, cos f)` — solve Kepler's equation
+- `mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle` — `M = 2π · dt / period`
+- `true_anomaly_from_mean(M: BatchQAngle, eccentricity: ScalarFloat) -> (sin f, cos f)` — solve Kepler's equation
 
 `rv_shape` and `thiele_innes_ABFG` remain pure functions on raw JAX arrays
 because their inputs are always already dimensionless at every call site:
@@ -346,7 +348,8 @@ combination of `a · (A sin ψ + B cos ψ)` and `a · (F sin ψ + G cos ψ)`. Th
 
 A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `t_peri`, and an
 optional `KeplerianOrientation`. Provides `get_position(time)` and `get_velocity(time)`
-in 3D, accounting for the orbit orientation. Alternative constructor:
+in 3D, accounting for the orbit orientation. Both accept `BatchQTime` and return
+`BatchVec3QLength` / `BatchVec3QSpeed` respectively. Alternative constructor:
 `from_masses(period, e, m_total, m_body, t_peri)` — uses Kepler's 3rd law to
 derive the barycentric semi-major axis from the total system mass and this body's mass.
 

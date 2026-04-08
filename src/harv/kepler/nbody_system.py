@@ -3,6 +3,7 @@
 from typing import cast
 
 import equinox as eqx
+import quaxed.numpy as jnp
 
 from harv.custom_types import (
     ScalarQMass,
@@ -11,6 +12,7 @@ from harv.custom_types import (
     Vec3QSpeed,
 )
 from harv.kepler.body import KeplerianBody
+from harv.kepler.constants import G
 
 
 class AbstractNBodySystem(eqx.Module):
@@ -48,14 +50,28 @@ class TwoBodySystem(AbstractNBodySystem):
         return 2
 
     @property
-    def m_companion(self) -> ScalarQMass:
-        """Companion mass."""
-        return self.companion.get_mass(self.m_primary)
+    def m_total(self) -> ScalarQMass:
+        """Total system mass, derived from Kepler's 3rd law.
+
+        The companion's semi-major axis is defined relative to the system barycenter, so
+        we can use Kepler's 3rd law to derive the total mass from the companion's
+        orbital parameters and the primary mass:
+        a_body = a_rel * m_primary / m_total
+        a_rel^3 = G * m_total * P^2 / 4 π^2
+        a_body^3 = G * m_primary^3 * P^2 / (4 π^2 * m_total^2)
+        (solve for m_total)
+        """
+        a_body = self.companion.semi_major_axis
+        P = self.companion.period
+        return cast(
+            "ScalarQMass",
+            jnp.sqrt(G * self.m_primary**3 * P**2 / (4 * jnp.pi**2 * a_body**3)),
+        )
 
     @property
-    def m_total(self) -> ScalarQMass:
-        """Total system mass."""
-        return self.m_primary + self.m_companion
+    def m_companion(self) -> ScalarQMass:
+        """Companion mass."""
+        return cast("ScalarQMass", self.m_total - self.m_primary)
 
     # ========================================================================
     # Methods

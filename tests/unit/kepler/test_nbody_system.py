@@ -52,8 +52,10 @@ class TestProperties:
         """m_companion property matches KeplerianBody.get_mass."""
         sys = _make_system(m_companion=1e-3)
         m_from_prop = ustrip("Msun", sys.m_companion)
-        m_from_method = ustrip("Msun", sys.companion.get_mass(sys.m_primary))
-        assert jnp.allclose(m_from_prop, m_from_method, rtol=1e-8)
+        m_from_method = ustrip("Msun", sys.companion.get_mass(sys.m_total))
+        # Loose tolerance: both paths suffer float32 catastrophic subtraction
+        # when m_body << m_total
+        assert jnp.allclose(m_from_prop, m_from_method, rtol=1e-3)
 
 
 # =============================================================================

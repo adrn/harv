@@ -10,6 +10,9 @@ import quaxed.numpy as jnp
 from unxt import Quantity, ustrip
 
 from harv.custom_types import (
+    BatchQTime,
+    BatchVec3QLength,
+    BatchVec3QSpeed,
     ScalarFloat,
     ScalarQLength,
     ScalarQMass,
@@ -144,17 +147,34 @@ class KeplerianBody(eqx.Module):
     # Other methods
     #
 
-    # TODO: what's the point of this method?
-    def get_mass(self, m_primary: ScalarQMass) -> ScalarQMass:
-        """Compute companion mass given primary mass and barycentric semi-major axis."""
-        num = G * m_primary**3 * self.period**2
-        den = 4 * jnp.pi**2 * self.semi_major_axis**3
-        m_tot = jnp.sqrt(num / den)
-        return cast("ScalarQMass", m_tot - m_primary)
+    def get_mass(self, m_total: ScalarQMass) -> ScalarQMass:
+        r"""Recover this body's mass from the total system mass.
+
+        This inverts `from_masses`: given the total system mass and the stored
+        barycentric semi-major axis, it recovers the body mass via
+
+        .. math::
+
+            a_\mathrm{rel} = \left(\frac{G\, m_\mathrm{total}\, P^2}{4\pi^2}\right)^{1/3}
+
+            m_\mathrm{body} = m_\mathrm{total}\left(1 - \frac{a_\mathrm{body}}{a_\mathrm{rel}}\right)
+
+        Parameters
+        ----------
+        m_total
+            Total system mass (sum of all bodies).
+
+        Returns
+        -------
+        m_body : ScalarQMass
+            The mass of this body.
+        """
+        a_rel = jnp.cbrt((G * m_total * self.period**2) / (4 * jnp.pi**2))
+        return cast("ScalarQMass", m_total * (1 - self.semi_major_axis / a_rel))
 
     def get_position(
-        self, time: ScalarQTime, orientation: KeplerianOrientation | None = None
-    ) -> Vec3QLength:
+        self, time: BatchQTime, orientation: KeplerianOrientation | None = None
+    ) -> BatchVec3QLength:
         """Get 3D position of the body in its orbit at given time(s).
 
         By definition and convention of this class, this is the position of the body
@@ -193,8 +213,8 @@ class KeplerianBody(eqx.Module):
         )
 
     def get_velocity(
-        self, time: ScalarQTime, orientation: KeplerianOrientation | None = None
-    ) -> Vec3QSpeed:
+        self, time: BatchQTime, orientation: KeplerianOrientation | None = None
+    ) -> BatchVec3QSpeed:
         """Get 3D velocity of the body relative to the system barycenter."""
         # Mean anomaly
         M = mean_anomaly(time - self.t_peri, self.period)
