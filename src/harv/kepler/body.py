@@ -155,9 +155,11 @@ class KeplerianBody(eqx.Module):
 
         .. math::
 
-            a_\mathrm{rel} = \left(\frac{G\, m_\mathrm{total}\, P^2}{4\pi^2}\right)^{1/3}
+            a_\mathrm{rel} = \left(
+                \frac{G\, m_\mathrm{total}\, P^2}{4\pi^2}\right)^{1/3}
 
-            m_\mathrm{body} = m_\mathrm{total}\left(1 - \frac{a_\mathrm{body}}{a_\mathrm{rel}}\right)
+            m_\mathrm{body} = m_\mathrm{total}\left(
+                1 - \frac{a_\mathrm{body}}{a_\mathrm{rel}}\right)
 
         Parameters
         ----------
