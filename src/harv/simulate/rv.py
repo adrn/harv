@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 import quaxed.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import AbstractQuantity, Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
 from harv.kepler.orbits import mean_anomaly, rv_shape, true_anomaly_from_mean
@@ -134,7 +134,7 @@ def simulate_rv_sb1_data(
         t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
-    dt: Quantity[Any] = Quantity(
+    dt: AbstractQuantity = Quantity(
         jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
         baseline.unit,
     )
@@ -148,7 +148,7 @@ def simulate_rv_sb1_data(
     rv_true = K * rv_amplitude + v0
 
     # Add noise
-    noise: Quantity[Any] = Quantity.from_(rng.normal(size=n_obs), "")
+    noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
     rv = rv_true + rv_err * noise
 
     # Store true parameters
@@ -293,7 +293,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
         if offset is not None:
             true_params[f"offset_{name}"] = offset
 
-        dt: Quantity[Any] = Quantity(
+        dt: AbstractQuantity = Quantity(
             jnp.sort(
                 inst_rng.uniform(
                     0.0, ustrip(baseline.unit, baseline), n_obs_per_instrument
@@ -309,7 +309,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
         rv_true = K * rv_amp + v0 + eff_offset
 
         n_obs = n_obs_per_instrument
-        noise: Quantity[Any] = Quantity.from_(inst_rng.normal(size=n_obs), "")
+        noise: AbstractQuantity = Quantity.from_(inst_rng.normal(size=n_obs), "")
         rv_obs = rv_true + rv_err * noise
 
         datasets[name] = RadialVelocityData(

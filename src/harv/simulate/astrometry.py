@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import quaxed.numpy as jnp
-from unxt import Quantity, uconvert, ustrip
+from unxt import AbstractQuantity, Quantity, uconvert, ustrip
 
 from harv.data import GaiaAstrometryData
 from harv.kepler import KeplerianOrientation, compute_true_anomaly_components
@@ -58,7 +58,7 @@ def fake_parallax_factor(
         Dimensionless parallax factor for each observation.
     """
     # Simple sinusoidal model assuming 1-year period
-    ang: Quantity[Any] = Quantity(2 * jnp.pi * ustrip("yr", time), "rad")
+    ang: AbstractQuantity = Quantity(2 * jnp.pi * ustrip("yr", time), "rad")
     P_alpha = jnp.sin(ang - ra)
     P_delta = -jnp.sin(dec) * jnp.cos(ang - ra)
     return P_alpha * jnp.cos(scan_angle) + P_delta * jnp.sin(scan_angle)
@@ -225,14 +225,14 @@ def simulate_gaia_epoch_astrometry(
         t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
-    dt: Quantity[Any] = Quantity(
+    dt: AbstractQuantity = Quantity(
         jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
         baseline.unit,
     )
     times = dt + t_ref
 
     # Random scan angles
-    scan_angle: Quantity[Any] = Quantity(rng.uniform(0, 2 * np.pi, n_obs), "rad")
+    scan_angle: AbstractQuantity = Quantity(rng.uniform(0, 2 * np.pi, n_obs), "rad")
 
     # Fudged parallax factor (uses absolute sky position)
     parallax_factor = fake_parallax_factor(times, ra, dec, scan_angle)
@@ -264,7 +264,7 @@ def simulate_gaia_epoch_astrometry(
         "mas", sin_psi * (A * cos_f + F * sin_f) + cos_psi * (B * cos_f + G * sin_f)
     )
 
-    noise: Quantity[Any] = Quantity.from_(rng.normal(size=n_obs), "")
+    noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
     y_al = y_astro + y_orbit + al_error * noise
 
     # Store true parameters with units

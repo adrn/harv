@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import quaxed.numpy as jnp
 from numpyro import infer as _numpyro_infer
-from unxt import Quantity, ustrip
+from unxt import AbstractQuantity, Quantity, ustrip
 
 from harv.data import RadialVelocityData, SourceData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -203,7 +203,7 @@ class Samples(eqx.Module):
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
 
-    def __getitem__(self, key: str) -> Quantity[Any] | jnp.ndarray:
+    def __getitem__(self, key: str) -> AbstractQuantity | jnp.ndarray:
         """Get parameter samples with units restored.
 
         Parameters
@@ -272,7 +272,7 @@ class Samples(eqx.Module):
 
     def median(
         self, key: str | None = None
-    ) -> dict[str, Quantity[Any] | jnp.ndarray] | Quantity[Any] | jnp.ndarray:
+    ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
@@ -294,7 +294,7 @@ class Samples(eqx.Module):
         if key is not None:
             return jnp.median(self[key])
 
-        result: dict[str, Quantity[Any] | jnp.ndarray] = {}
+        result: dict[str, AbstractQuantity | jnp.ndarray] = {}
         for param_key in self.keys():
             try:
                 result[param_key] = jnp.median(self[param_key])
@@ -304,7 +304,7 @@ class Samples(eqx.Module):
 
     def percentile(
         self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
-    ) -> list[Quantity[Any] | jnp.ndarray]:
+    ) -> list[AbstractQuantity | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters

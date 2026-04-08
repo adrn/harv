@@ -28,13 +28,13 @@ where :math:`A, B, F, G` are Thiele-Innes constants and :math:`f` is the
 true anomaly.
 """
 
-from typing import Any, cast
+from typing import cast
 
 import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
-from unxt import Quantity, ustrip
+from unxt import AbstractQuantity, Quantity, ustrip
 from unxt.quantity import AllowValue
 
 from harv.data import GaiaAstrometryData
@@ -184,7 +184,7 @@ class GaiaAstrometryLikelihood(
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array
-    ) -> dict[str, Quantity[Any]]:
+    ) -> dict[str, AbstractQuantity]:
         """Sample linear parameters from the conditional posterior.
 
         Builds a ``MarginalizedLinear`` from the design matrix, the resolved

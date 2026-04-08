@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import coordinax as cx
 import equinox as eqx
 import quaxed.numpy as jnp
-from unxt import Quantity
+from unxt import AbstractQuantity, Quantity
 
 if TYPE_CHECKING:
     from harv.custom_types import ScalarQTime
@@ -173,7 +173,7 @@ class Accelerating3DSource(AbstractSource):
 
     def offset_sky(  # type: ignore[override]
         self, times: Quantity["time"]
-    ) -> tuple[Quantity[Any], Quantity[Any]]:
+    ) -> tuple[AbstractQuantity, AbstractQuantity]:
         """Compute sky offset of primary star.
 
         Parameters

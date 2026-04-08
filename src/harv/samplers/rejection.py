@@ -218,7 +218,7 @@ class RejectionSampler(eqx.Module):
             "cos_i": "",
             "lon_asc_node": "rad",
         }
-        nonlinear_q: dict[str, Quantity] = {
+        nonlinear_q: dict[str, AbstractQuantity] = {
             k: Quantity(v, _nl_units.get(k, "")) for k, v in accepted_nonlinear.items()
         }
 

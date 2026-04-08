@@ -5,6 +5,7 @@ __all__ = ["_solve_kepler"]
 from typing import Any, Protocol, runtime_checkable
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
 from unxt.quantity import AllowValue, ustrip
