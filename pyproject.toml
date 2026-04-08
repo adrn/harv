@@ -34,7 +34,6 @@ dependencies = [
     "h5py>=3.15.1",
     "coordinax>=0.23.1",
     "numpyro-ext>=0.0.4",
-    "arviz>=0.22.0", # TODO: pinned because I had kernel issues
     "jedi==0.19.1",
 ]
 
@@ -49,6 +48,8 @@ override-dependencies = [
 extra = [
     "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
     "setuptools",  # needed for gaiaunlimited for pkg_resources...
+    "arviz>=0.22.0", # TODO: pinned because I had kernel issues
+    "matplotlib>=3.10.7",
 ]
 dev = [
     {include-group = "extra"},
@@ -73,7 +74,6 @@ docs = [
     "sphinx-copybutton>=0.5.2",
     "corner>=2.2.3",
     "ipykernel>=7.1.0",
-    "matplotlib>=3.10.7",
 ]
 test = [
     "pytest",
@@ -82,6 +82,7 @@ test = [
     "pytest-randomly",
     "pytest-xdist",
     "beartype",
+    "matplotlib>=3.10.7"
 ]
 
 [project.urls]
