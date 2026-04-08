@@ -71,7 +71,7 @@ class TwoBodySystem(AbstractNBodySystem):
     @property
     def m_companion(self) -> ScalarQMass:
         """Companion mass."""
-        return cast("ScalarQMass", self.m_total - self.m_primary)
+        return self.m_total - self.m_primary
 
     # ========================================================================
     # Methods
