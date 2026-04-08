@@ -261,7 +261,3 @@ class GaiaAstrometryLikelihood(
         y_err = ustrip("mas", self.data.al_position_err)
 
         return dist.Normal(y_pred, y_err).log_prob(y_obs).sum()
-
-
-# Backward-compatibility alias (deprecated)
-MarginalizedGaiaAstrometryLikelihood = GaiaAstrometryLikelihood

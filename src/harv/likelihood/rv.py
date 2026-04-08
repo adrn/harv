@@ -254,8 +254,3 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         rv_err = ustrip(rv_unit, self.data.rv_err)
 
         return dist.Normal(rv_pred, rv_err).log_prob(rv_obs).sum()
-
-
-# Backward-compatibility aliases (deprecated)
-MarginalizedRVLikelihood = RVLikelihood
-MarginalizedMultiSurveyRVLikelihood = RVLikelihood

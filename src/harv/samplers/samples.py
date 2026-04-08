@@ -119,19 +119,10 @@ class _WarmStartMCMC:
 _ORBIT_CLS_BY_NAME: dict[str, type] = {
     "RVParameters": RVParameters,
     "GaiaAstrometryParameters": GaiaAstrometryParameters,
-    # Backward compat: old HDF5 files stored these names
-    "RVMarginalizedParameters": RVParameters,
-    "GaiaAstrometryMarginalizedParameters": GaiaAstrometryParameters,
-    "RVOrbitParameters": RVParameters,
-    "GaiaAstrometryOrbitParameters": GaiaAstrometryParameters,
-    "CombinedOrbitParameters": GaiaAstrometryParameters,
 }
 _FULL_CLS_BY_NAME: dict[str, type] = {
     "RVParameters": RVParameters,
     "GaiaAstrometryParameters": GaiaAstrometryParameters,
-    # Backward compat: old HDF5 files stored these names
-    "RVFullParameters": RVParameters,
-    "GaiaAstrometryFullParameters": GaiaAstrometryParameters,
 }
 
 
