@@ -42,27 +42,22 @@ N = 10  # number of mock posterior samples
 def rv_samples() -> Samples:
     """Minimal RV Samples with N draws."""
     nonlinear = {
-        "period": jnp.linspace(90.0, 110.0, N),
-        "eccentricity": jnp.linspace(0.0, 0.3, N),
-        "phase_peri": jnp.linspace(0.0, 1.0, N),
-        "arg_peri": jnp.linspace(0.0, 3.14, N),
+        "period": Quantity(jnp.linspace(90.0, 110.0, N), "day"),
+        "eccentricity": Quantity(jnp.linspace(0.0, 0.3, N), ""),
+        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
     }
-    # linear columns: [K, v0]
-    linear = jnp.column_stack(
-        [
-            jnp.linspace(3.0, 7.0, N),  # K  (km/s)
-            jnp.linspace(-1.0, 1.0, N),  # v0 (km/s)
-        ]
-    )
+    linear = {
+        "K": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v0": Quantity(jnp.linspace(-1.0, 1.0, N), "km/s"),
+    }
     return Samples(
-        _nonlinear=nonlinear,
-        _linear=linear,
-        _orbit_cls=RVParameters,
-        _full_cls=(RVParameters,),
-        _linear_param_units=("km/s", "km/s"),
-        _time_unit="day",
-        _data_type="rv",
-        _metadata={"t_ref": 0.0},
+        nonlinear=nonlinear,
+        linear=linear,
+        orbit_cls=RVParameters,
+        full_cls=(RVParameters,),
+        data_type="rv",
+        metadata={"t_ref": 0.0},
     )
 
 
@@ -70,33 +65,28 @@ def rv_samples() -> Samples:
 def astro_samples() -> Samples:
     """Minimal astrometry Samples with N draws."""
     nonlinear = {
-        "period": jnp.linspace(250.0, 350.0, N),
-        "eccentricity": jnp.linspace(0.0, 0.3, N),
-        "phase_peri": jnp.linspace(0.0, 1.0, N),
-        "arg_peri": jnp.linspace(0.0, 3.14, N),
-        "cos_i": jnp.linspace(0.2, 0.8, N),
-        "lon_asc_node": jnp.linspace(0.0, 6.28, N),
+        "period": Quantity(jnp.linspace(250.0, 350.0, N), "day"),
+        "eccentricity": Quantity(jnp.linspace(0.0, 0.3, N), ""),
+        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
+        "cos_i": Quantity(jnp.linspace(0.2, 0.8, N), ""),
+        "lon_asc_node": Quantity(jnp.linspace(0.0, 6.28, N), "rad"),
     }
-    # linear columns: [ra0, dec0, pmra, pmdec, parallax, semi_major_axis]
-    linear = jnp.column_stack(
-        [
-            jnp.zeros(N),
-            jnp.zeros(N),
-            jnp.ones(N) * 10.0,
-            jnp.ones(N) * -5.0,
-            jnp.ones(N) * 5.0,
-            jnp.linspace(1.0, 3.0, N),
-        ]
-    )
+    linear = {
+        "ra0": Quantity(jnp.zeros(N), "mas"),
+        "dec0": Quantity(jnp.zeros(N), "mas"),
+        "pmra": Quantity(jnp.ones(N) * 10.0, "mas/yr"),
+        "pmdec": Quantity(jnp.ones(N) * -5.0, "mas/yr"),
+        "parallax": Quantity(jnp.ones(N) * 5.0, "mas"),
+        "semi_major_axis": Quantity(jnp.linspace(1.0, 3.0, N), "mas"),
+    }
     return Samples(
-        _nonlinear=nonlinear,
-        _linear=linear,
-        _orbit_cls=GaiaAstrometryParameters,
-        _full_cls=(GaiaAstrometryParameters,),
-        _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
-        _time_unit="day",
-        _data_type="astrometry",
-        _metadata={"t_ref": 0.0},
+        nonlinear=nonlinear,
+        linear=linear,
+        orbit_cls=GaiaAstrometryParameters,
+        full_cls=(GaiaAstrometryParameters,),
+        data_type="astrometry",
+        metadata={"t_ref": 0.0},
     )
 
 
@@ -104,44 +94,30 @@ def astro_samples() -> Samples:
 def combined_samples() -> Samples:
     """Minimal combined (astrometry + RV) Samples with N draws."""
     nonlinear = {
-        "period": jnp.linspace(250.0, 350.0, N),
-        "eccentricity": jnp.linspace(0.0, 0.2, N),
-        "phase_peri": jnp.linspace(0.0, 1.0, N),
-        "arg_peri": jnp.linspace(0.0, 3.14, N),
-        "cos_i": jnp.linspace(0.2, 0.8, N),
-        "lon_asc_node": jnp.linspace(0.0, 6.28, N),
+        "period": Quantity(jnp.linspace(250.0, 350.0, N), "day"),
+        "eccentricity": Quantity(jnp.linspace(0.0, 0.2, N), ""),
+        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
+        "cos_i": Quantity(jnp.linspace(0.2, 0.8, N), ""),
+        "lon_asc_node": Quantity(jnp.linspace(0.0, 6.28, N), "rad"),
     }
-    # linear columns: [ra0, dec0, pmra, pmdec, parallax, a, K, v0]
-    linear = jnp.column_stack(
-        [
-            jnp.zeros(N),
-            jnp.zeros(N),
-            jnp.ones(N) * 10.0,
-            jnp.ones(N) * -5.0,
-            jnp.ones(N) * 5.0,
-            jnp.linspace(1.0, 3.0, N),
-            jnp.linspace(3.0, 7.0, N),
-            jnp.zeros(N),
-        ]
-    )
+    linear = {
+        "ra0": Quantity(jnp.zeros(N), "mas"),
+        "dec0": Quantity(jnp.zeros(N), "mas"),
+        "pmra": Quantity(jnp.ones(N) * 10.0, "mas/yr"),
+        "pmdec": Quantity(jnp.ones(N) * -5.0, "mas/yr"),
+        "parallax": Quantity(jnp.ones(N) * 5.0, "mas"),
+        "semi_major_axis": Quantity(jnp.linspace(1.0, 3.0, N), "mas"),
+        "K": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v0": Quantity(jnp.zeros(N), "km/s"),
+    }
     return Samples(
-        _nonlinear=nonlinear,
-        _linear=linear,
-        _orbit_cls=GaiaAstrometryParameters,
-        _full_cls=(GaiaAstrometryParameters, RVParameters),
-        _linear_param_units=(
-            "mas",
-            "mas",
-            "mas/yr",
-            "mas/yr",
-            "mas",
-            "mas",
-            "km/s",
-            "km/s",
-        ),
-        _time_unit="day",
-        _data_type="combined",
-        _metadata={"t_ref": 0.0},
+        nonlinear=nonlinear,
+        linear=linear,
+        orbit_cls=GaiaAstrometryParameters,
+        full_cls=(GaiaAstrometryParameters, RVParameters),
+        data_type="combined",
+        metadata={"t_ref": 0.0},
     )
 
 
@@ -149,19 +125,20 @@ def combined_samples() -> Samples:
 def empty_rv_samples() -> Samples:
     """RV Samples with zero accepted draws."""
     return Samples(
-        _nonlinear={
-            "period": jnp.array([]),
-            "eccentricity": jnp.array([]),
-            "phase_peri": jnp.array([]),
-            "arg_peri": jnp.array([]),
+        nonlinear={
+            "period": Quantity(jnp.array([]), "day"),
+            "eccentricity": Quantity(jnp.array([]), ""),
+            "phase_peri": Quantity(jnp.array([]), ""),
+            "arg_peri": Quantity(jnp.array([]), "rad"),
         },
-        _linear=jnp.empty((0, 2)),
-        _orbit_cls=RVParameters,
-        _full_cls=(RVParameters,),
-        _linear_param_units=("km/s", "km/s"),
-        _time_unit="day",
-        _data_type="rv",
-        _metadata={},
+        linear={
+            "K": Quantity(jnp.array([]), "km/s"),
+            "v0": Quantity(jnp.array([]), "km/s"),
+        },
+        orbit_cls=RVParameters,
+        full_cls=(RVParameters,),
+        data_type="rv",
+        metadata={},
     )
 
 
@@ -288,7 +265,7 @@ class TestInitMcmc:
             rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
         )
         params = mcmc._init_params
-        for key in rv_samples._nonlinear:
+        for key in rv_samples.nonlinear:
             assert key in params, f"Missing key '{key}' in init_params"
 
     def test_init_params_shape_equals_num_chains(self, rv_samples, rv_sampler_and_data):
@@ -299,9 +276,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (num_chains,), (
-                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
-            )
+            assert arr.shape == (
+                num_chains,
+            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""
@@ -309,7 +286,7 @@ class TestInitMcmc:
         mcmc = sampler.init_mcmc(
             rv_samples, data, num_chains=3, num_warmup=10, num_samples=10
         )
-        expected = np.asarray(rv_samples._nonlinear["period"])[:3]
+        expected = np.asarray(rv_samples.nonlinear["period"].value)[:3]
         np.testing.assert_array_equal(np.asarray(mcmc._init_params["period"]), expected)
 
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
@@ -416,7 +393,7 @@ class TestInitMcmcFull:
             num_warmup=10,
             num_samples=10,
         )
-        n_linear = rv_samples._linear.shape[-1]
+        n_linear = len(rv_samples.linear)
         assert mcmc._init_params["_linear"].shape == (num_chains, n_linear)
 
     def test_run_produces_named_linear_params(self, rv_samples, rv_sampler_and_data):
@@ -437,7 +414,7 @@ class TestInitMcmcFull:
         for key in sampler.prior.nonlinear_priors:
             assert key in posterior, f"Missing nonlinear site '{key}'"
         # Named linear deterministic sites must be present.
-        for name in rv_samples._linear_param_names:
+        for name in rv_samples.linear:
             assert name in posterior, f"Missing linear site '{name}'"
 
     def test_marginalized_true_has_no_linear_site(
@@ -681,19 +658,20 @@ class TestPlotUnknownDataType:
     def test_raises_for_unknown_data_type(self):
         """plot() raises ValueError for an unknown data_type."""
         bad_samples = Samples(
-            _nonlinear={
-                "period": jnp.ones(5) * 100.0,
-                "eccentricity": jnp.zeros(5),
-                "phase_peri": jnp.zeros(5),
-                "arg_peri": jnp.zeros(5),
+            nonlinear={
+                "period": Quantity(jnp.ones(5) * 100.0, "day"),
+                "eccentricity": Quantity(jnp.zeros(5), ""),
+                "phase_peri": Quantity(jnp.zeros(5), ""),
+                "arg_peri": Quantity(jnp.zeros(5), "rad"),
             },
-            _linear=jnp.zeros((5, 2)),
-            _orbit_cls=RVParameters,
-            _full_cls=(RVParameters,),
-            _linear_param_units=("km/s", "km/s"),
-            _time_unit="day",
-            _data_type="unknown",
-            _metadata={},
+            linear={
+                "K": Quantity(jnp.zeros(5), "km/s"),
+                "v0": Quantity(jnp.zeros(5), "km/s"),
+            },
+            orbit_cls=RVParameters,
+            full_cls=(RVParameters,),
+            data_type="unknown",
+            metadata={},
         )
         with pytest.raises(ValueError, match="Unknown data_type"):
             bad_samples.plot()

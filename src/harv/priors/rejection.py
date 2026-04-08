@@ -116,6 +116,18 @@ class RejectionPrior(eqx.Module):
     # Default constructors
     # ------------------------------------------------------------------
 
+    """
+    TODO:
+    - Remove ecc_alpha, ecc_beta - if a user wants a different eccentricity prior,
+      they can just pass it in directly.
+    - The default linear parameter prior should be the same as in thejoker - it should
+      keep the scaling with period so that it is constant in companion mass at fixed
+      primary mass. We should also show examples of making it more complex or tailored.
+      We can take in a scale parameter, like in thejoker, that sets the overall scale of
+      the K prior (and show setting this for a binary star and exoplanet context).
+    - Input parameters (period_min, period_max) must be Quantity instances.
+    """
+
     @classmethod
     def default_rv(
         cls,

@@ -193,9 +193,9 @@ class RejectionSampler(eqx.Module):
         time_unit = str(_ref.time.unit)
 
         # Convert t_ref to a plain Python float (in time_unit) so it can be stored
-        # safely in the static _metadata dict without "JAX array set as static"
-        # warnings. Samples.__getitem__ reads _metadata["t_ref"] as a scalar in
-        # _time_unit when computing t_peri.
+        # safely in the static metadata dict without "JAX array set as static"
+        # warnings. Samples.__getitem__ reads metadata["t_ref"] as a scalar in
+        # the period's unit when computing t_peri.
         if isinstance(t_ref, Quantity):
             t_ref_stored: float | None = float(ustrip(time_unit, t_ref))
         elif t_ref is not None:
@@ -209,16 +209,36 @@ class RejectionSampler(eqx.Module):
                 k for k, v in self.prior.offsets.items() if v is not None
             )
 
+        # Build nonlinear dict as Quantities with units baked in.
+        _nl_units: dict[str, str] = {
+            "period": time_unit,
+            "eccentricity": "",
+            "phase_peri": "",
+            "arg_peri": "rad",
+            "cos_i": "",
+            "lon_asc_node": "rad",
+        }
+        nonlinear_q: dict[str, Quantity] = {
+            k: Quantity(v, _nl_units.get(k, ""))
+            for k, v in accepted_nonlinear.items()
+        }
+
+        # Build linear dict as Quantities: one named Quantity per parameter.
+        lin_names = strategy.all_linear_names(self.prior, data)
+        lin_units = strategy.linear_param_units(datasets, self.prior)
+        linear_q: dict[str, Quantity] = {
+            name: Quantity(linear_samples[:, i], unit)
+            for i, (name, unit) in enumerate(zip(lin_names, lin_units, strict=False))
+        }
+
         return Samples(
-            _nonlinear=accepted_nonlinear,
-            _linear=linear_samples,
-            _orbit_cls=strategy.nonlinear_cls,
-            _full_cls=strategy.full_cls,
-            _linear_param_units=strategy.linear_param_units(datasets, self.prior),
-            _time_unit=time_unit,
-            _data_type=strategy.data_type,
-            _metadata={"t_ref": t_ref_stored},
-            _extra_linear_names=extra_linear_names,
+            nonlinear=nonlinear_q,
+            linear=linear_q,
+            orbit_cls=strategy.nonlinear_cls,
+            full_cls=strategy.full_cls,
+            data_type=strategy.data_type,
+            metadata={"t_ref": t_ref_stored},
+            extra_linear_names=extra_linear_names,
         )
 
     def init_mcmc(
@@ -415,10 +435,12 @@ class RejectionSampler(eqx.Module):
             kernel = _numpyro_infer.NUTS
 
         # Take the first num_chains posterior samples as starting positions.
+        # Strip units from each nonlinear Quantity to get the raw array that
+        # matches what numpyro's prior model sampled (unit-free floats).
         indices = list(range(num_chains))
         init_params: dict[str, Any] = {
-            key_name: jnp.stack([arr[i] for i in indices])
-            for key_name, arr in samples._nonlinear.items()
+            key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
+            for key_name, qty in samples.nonlinear.items()
         }
 
         if extra_model is not None:
@@ -430,10 +452,14 @@ class RejectionSampler(eqx.Module):
         else:
             model = _build_full_numpyro_model(self, data)
             # Warm-start the joint linear site from the rejection-sampler draws.
-            linear = np.asarray(samples._linear)
-            if linear.ndim == 2 and linear.shape[-1] > 0:
+            # Stack linear params into a 2D array (n_chains, n_linear).
+            lin_names = list(samples.linear.keys())
+            if lin_names:
+                lin_arr = np.column_stack(
+                    [np.asarray(samples.linear[n].value) for n in lin_names]
+                )
                 init_params["_linear"] = jnp.stack(
-                    [jnp.asarray(linear[i]) for i in indices]
+                    [jnp.asarray(lin_arr[i]) for i in indices]
                 )
 
         kernel_instance = kernel(model)

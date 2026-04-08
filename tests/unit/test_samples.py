@@ -12,32 +12,31 @@ from harv.likelihood.params import (
 from harv.samplers.samples import Samples
 
 
-def _make_astro_samples():
+def _make_astro_samples() -> Samples:
     """Helper: astrometry Samples with 3 draws."""
     nonlinear = {
-        "period": jnp.array([10.0, 100.0, 1000.0]),  # days
-        "eccentricity": jnp.array([0.1, 0.2, 0.3]),
-        "phase_peri": jnp.array([0.0, 0.25, 0.5]),
-        "cos_i": jnp.array([0.5, 0.6, 0.7]),
-        "arg_peri": jnp.array([0.5, 1.0, 1.5]),
-        "lon_asc_node": jnp.array([1.0, 2.0, 3.0]),
+        "period": Quantity(jnp.array([10.0, 100.0, 1000.0]), "day"),
+        "eccentricity": Quantity(jnp.array([0.1, 0.2, 0.3]), ""),
+        "phase_peri": Quantity(jnp.array([0.0, 0.25, 0.5]), ""),
+        "cos_i": Quantity(jnp.array([0.5, 0.6, 0.7]), ""),
+        "arg_peri": Quantity(jnp.array([0.5, 1.0, 1.5]), "rad"),
+        "lon_asc_node": Quantity(jnp.array([1.0, 2.0, 3.0]), "rad"),
     }
-    linear = jnp.array(
-        [
-            [10.0, 20.0, 5.0, -3.0, 10.0, 1.0],
-            [11.0, 21.0, 6.0, -2.0, 11.0, 1.1],
-            [12.0, 22.0, 7.0, -1.0, 12.0, 1.2],
-        ]
-    )
+    linear = {
+        "ra0": Quantity(jnp.array([10.0, 11.0, 12.0]), "mas"),
+        "dec0": Quantity(jnp.array([20.0, 21.0, 22.0]), "mas"),
+        "pmra": Quantity(jnp.array([5.0, 6.0, 7.0]), "mas/yr"),
+        "pmdec": Quantity(jnp.array([-3.0, -2.0, -1.0]), "mas/yr"),
+        "parallax": Quantity(jnp.array([10.0, 11.0, 12.0]), "mas"),
+        "semi_major_axis": Quantity(jnp.array([1.0, 1.1, 1.2]), "mas"),
+    }
     return Samples(
-        _nonlinear=nonlinear,
-        _linear=linear,
-        _orbit_cls=GaiaAstrometryParameters,
-        _full_cls=(GaiaAstrometryParameters,),
-        _linear_param_units=("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
-        _time_unit="day",
-        _data_type="astrometry",
-        _metadata={"t_ref": 0.0},
+        nonlinear=nonlinear,
+        linear=linear,
+        orbit_cls=GaiaAstrometryParameters,
+        full_cls=(GaiaAstrometryParameters,),
+        data_type="astrometry",
+        metadata={"t_ref": 0.0},
     )
 
 
@@ -54,22 +53,23 @@ class TestSamplesCreation:
     def test_n_samples_property(self):
         """Test that n_samples returns correct value."""
         nonlinear = {
-            "period": jnp.array([100.0, 200.0]),
-            "eccentricity": jnp.array([0.1, 0.2]),
-            "phase_peri": jnp.array([0.0, 0.5]),
-            "arg_peri": jnp.array([1.0, 2.0]),
+            "period": Quantity(jnp.array([100.0, 200.0]), "day"),
+            "eccentricity": Quantity(jnp.array([0.1, 0.2]), ""),
+            "phase_peri": Quantity(jnp.array([0.0, 0.5]), ""),
+            "arg_peri": Quantity(jnp.array([1.0, 2.0]), "rad"),
         }
-        linear = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+        linear = {
+            "K": Quantity(jnp.array([1.0, 3.0]), "km/s"),
+            "v0": Quantity(jnp.array([2.0, 4.0]), "km/s"),
+        }
 
         samples = Samples(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _orbit_cls=RVParameters,
-            _full_cls=(RVParameters,),
-            _linear_param_units=("km/s", "km/s"),
-            _time_unit="day",
-            _data_type="rv",
-            _metadata={},
+            nonlinear=nonlinear,
+            linear=linear,
+            orbit_cls=RVParameters,
+            full_cls=(RVParameters,),
+            data_type="rv",
+            metadata={},
         )
 
         assert samples.n_samples == 2
@@ -85,11 +85,11 @@ class TestSamplesAccess:
         return _make_astro_samples()
 
     def test_getitem_nonlinear(self, astrometry_samples):
-        """Test accessing nonlinear parameters."""
+        """Test accessing nonlinear parameters returns Quantity."""
         ecc = astrometry_samples["eccentricity"]
-        assert isinstance(ecc, jnp.ndarray)
+        assert isinstance(ecc, Quantity)
         assert ecc.shape == (3,)
-        assert jnp.allclose(ecc, jnp.array([0.1, 0.2, 0.3]))
+        assert jnp.allclose(ecc.value, jnp.array([0.1, 0.2, 0.3]))
 
     def test_getitem_linear(self, astrometry_samples):
         """Test accessing linear parameters."""
@@ -126,23 +126,24 @@ class TestSamplesAccess:
     def test_unit_conversion_angles(self):
         """Test that angles are returned with correct units."""
         nonlinear = {
-            "period": jnp.array([100.0]),
-            "eccentricity": jnp.array([0.1]),
-            "phase_peri": jnp.array([0.0]),
-            "arg_peri": jnp.array([1.57]),  # ~π/2 radians
-            "lon_asc_node": jnp.array([3.14]),  # ~π radians
+            "period": Quantity(jnp.array([100.0]), "day"),
+            "eccentricity": Quantity(jnp.array([0.1]), ""),
+            "phase_peri": Quantity(jnp.array([0.0]), ""),
+            "arg_peri": Quantity(jnp.array([1.57]), "rad"),
+            "lon_asc_node": Quantity(jnp.array([3.14]), "rad"),
         }
-        linear = jnp.array([[1.0, 2.0]])
+        linear = {
+            "K": Quantity(jnp.array([1.0]), "km/s"),
+            "v0": Quantity(jnp.array([2.0]), "km/s"),
+        }
 
         samples = Samples(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _orbit_cls=RVParameters,
-            _full_cls=(RVParameters,),
-            _linear_param_units=("km/s", "km/s"),
-            _time_unit="day",
-            _data_type="rv",
-            _metadata={},
+            nonlinear=nonlinear,
+            linear=linear,
+            orbit_cls=RVParameters,
+            full_cls=(RVParameters,),
+            data_type="rv",
+            metadata={},
         )
 
         arg_peri = samples["arg_peri"]
@@ -156,22 +157,23 @@ class TestSamplesRepr:
     def test_repr(self):
         """Test __repr__ method."""
         nonlinear = {
-            "period": jnp.array([100.0, 200.0]),
-            "eccentricity": jnp.array([0.1, 0.2]),
-            "phase_peri": jnp.array([0.0, 0.5]),
-            "arg_peri": jnp.array([1.0, 2.0]),
+            "period": Quantity(jnp.array([100.0, 200.0]), "day"),
+            "eccentricity": Quantity(jnp.array([0.1, 0.2]), ""),
+            "phase_peri": Quantity(jnp.array([0.0, 0.5]), ""),
+            "arg_peri": Quantity(jnp.array([1.0, 2.0]), "rad"),
         }
-        linear = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+        linear = {
+            "K": Quantity(jnp.array([1.0, 3.0]), "km/s"),
+            "v0": Quantity(jnp.array([2.0, 4.0]), "km/s"),
+        }
 
         samples = Samples(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _orbit_cls=RVParameters,
-            _full_cls=(RVParameters,),
-            _linear_param_units=("km/s", "km/s"),
-            _time_unit="day",
-            _data_type="rv",
-            _metadata={},
+            nonlinear=nonlinear,
+            linear=linear,
+            orbit_cls=RVParameters,
+            full_cls=(RVParameters,),
+            data_type="rv",
+            metadata={},
         )
 
         repr_str = repr(samples)
@@ -189,4 +191,6 @@ class TestSamplesJAX:
         leaves, treedef = jax.tree_util.tree_flatten(samples)
         reconstructed = jax.tree_util.tree_unflatten(treedef, leaves)
         assert reconstructed.n_samples == samples.n_samples
-        assert jnp.allclose(reconstructed["eccentricity"], samples["eccentricity"])
+        assert jnp.allclose(
+            reconstructed["eccentricity"].value, samples["eccentricity"].value
+        )

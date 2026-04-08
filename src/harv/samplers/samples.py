@@ -125,91 +125,79 @@ _FULL_CLS_BY_NAME: dict[str, type] = {
     "GaiaAstrometryParameters": GaiaAstrometryParameters,
 }
 
+# Nonlinear parameter units (fixed by physics).
+_NONLINEAR_UNITS: dict[str, str] = {
+    "period": "",  # filled from data at construction time
+    "eccentricity": "",
+    "phase_peri": "",
+    "arg_peri": "rad",
+    "cos_i": "",
+    "lon_asc_node": "rad",
+}
+
 
 class Samples(eqx.Module):
     """Container for rejection sampler posterior samples.
 
-    Stores both nonlinear and linear parameter samples with metadata.
-    Provides dict-like access with automatic unit conversion, statistical
-    summaries, and visualization tools.
+    Stores both nonlinear and linear parameter samples as :class:`~unxt.Quantity`
+    objects with units baked in. Provides dict-like access, statistical summaries,
+    and visualization tools.
 
     Parameters
     ----------
-    _nonlinear : dict[str, jnp.ndarray]
-        Nonlinear parameter samples.
-        Keys: "period" (days), "eccentricity", "phase_peri", and optionally
-        "cos_i", "arg_peri", "lon_asc_node" depending on data type.
-    _linear : jnp.ndarray
-        Linear parameter samples, shape (n_samples, n_linear_params).
-    _orbit_cls : type
-        Nonlinear parameter class (e.g. RVParameters). Its
-        ``data_type`` class variable gives the data type string.
-    _full_cls : tuple[type, ...]
-        Ordered tuple of full parameter classes (e.g. ``(RVParameters,)``
-        or ``(GaiaAstrometryParameters, RVParameters)`` for combined).
-        Linear parameter names are concatenated from each class's
-        ``linear_param_names`` class variable.
-    _linear_param_units : tuple[str, ...]
-        Units of each linear parameter column, derived from the actual data
-        at sampling time (e.g. ``rv_data.rv.unit`` for K and v0). Order
-        matches the concatenated ``linear_param_names``.
-    _metadata : dict[str, Any], optional
-        Additional metadata (t_ref, acceptance rate, etc.).
+    nonlinear : dict[str, Quantity]
+        Nonlinear parameter samples, one Quantity per parameter.
+        Keys: ``"period"``, ``"eccentricity"``, ``"phase_peri"``,
+        and optionally ``"arg_peri"``, ``"cos_i"``, ``"lon_asc_node"``.
+        Units: period has time units; angles have ``"rad"``; dimensionless
+        parameters have unit ``""``.
+    linear : dict[str, Quantity]
+        Linear parameter samples, one Quantity per parameter.
+        Keys: e.g. ``"K"``, ``"v0"`` for RV; ``"ra0"``, ``"dec0"``,
+        ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"`` for
+        astrometry.  Units are data-driven (e.g. ``"km/s"`` for RV).
+    orbit_cls : type
+        Nonlinear parameter class (e.g. ``RVParameters``).
+    full_cls : tuple[type, ...]
+        Ordered tuple of full parameter classes.
+    metadata : dict[str, Any], optional
+        Additional metadata (``t_ref``, acceptance rate, etc.).
+    extra_linear_names : tuple[str, ...]
+        Names of per-instrument RV offset parameters beyond the base linear
+        set (e.g. ``("instr2_offset",)`` for multi-survey data).
+    data_type : str
+        One of ``"rv"``, ``"astrometry"``, or ``"combined"``.
 
     Examples
     --------
-    >>> samples["period"]  # Returns Quantity in days
-    >>> samples["eccentricity"]  # Returns dimensionless array
-    >>> samples.n_samples  # Number of posterior samples
+    >>> samples["period"]        # Quantity with time units
+    >>> samples["eccentricity"]  # Quantity (dimensionless)
+    >>> samples.n_samples        # number of posterior draws
     """
 
-    # Internal storage (dimensionless arrays)
-    _nonlinear: dict[str, jnp.ndarray]
-    _linear: jnp.ndarray
+    # Pytree leaves — Quantity arrays with units baked in
+    nonlinear: dict[str, Quantity]
+    linear: dict[str, Quantity]
 
-    # Class-driven metadata (static fields)
-    _orbit_cls: type = eqx.field(static=True)
-    _full_cls: tuple[type, ...] = eqx.field(static=True)
-    _linear_param_units: tuple[str, ...] = eqx.field(static=True)
-    # Time unit string for the period and t_peri derived quantities.
-    # Must match the unit of the data used during sampling (e.g. "day", "yr").
-    _time_unit: str = eqx.field(static=True)
-    _metadata: dict[str, Any] = eqx.field(static=True)
-    # Extra linear parameter names beyond those in _full_cls (e.g. per-instrument
-    # RV offsets for multi-survey data).  Empty by default.
-    _extra_linear_names: tuple[str, ...] = eqx.field(static=True, default=())
-    # Data type string ("rv", "astrometry", or "combined").
-    _data_type: str = eqx.field(static=True, default="")
+    # Static fields — not JAX leaves
+    orbit_cls: type = eqx.field(static=True)
+    full_cls: tuple[type, ...] = eqx.field(static=True)
+    metadata: dict[str, Any] = eqx.field(static=True)
+    # Names of per-instrument offsets stored in `linear` beyond the base set.
+    extra_linear_names: tuple[str, ...] = eqx.field(static=True, default=())
+    data_type: str = eqx.field(static=True, default="")
 
     @property
     def n_samples(self) -> int:
         """Number of posterior samples."""
-        return len(next(iter(self._nonlinear.values())))
-
-    @property
-    def data_type(self) -> str:
-        """Data type these samples correspond to."""
-        return self._data_type
-
-    @property
-    def _linear_param_names(self) -> tuple[str, ...]:
-        """Linear parameter names, derived from _full_cls plus any extras."""
-        base: tuple[str, ...] = sum(
-            (cls.linear_param_names for cls in self._full_cls),  # type: ignore[attr-defined]
-            (),
-        )
-        return base + self._extra_linear_names
+        return int(next(iter(self.nonlinear.values())).shape[0])
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
-        base_keys = list(self._nonlinear.keys()) + list(self._linear_param_names)
-        # Add derived quantities ("period" is now in _nonlinear; log_period is derived)
+        base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
         derived_keys = ["log_period", "t_peri"]
-
-        # Add inclination if cos_i is available
-        if "cos_i" in self._nonlinear:
+        if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
-
         return base_keys + derived_keys
 
     def __contains__(self, key: object) -> bool:
@@ -230,68 +218,45 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> samples["period"]  # Returns Quantity in days
-        >>> samples["eccentricity"]  # Returns dimensionless array
+        >>> samples["period"]        # Quantity with time units
+        >>> samples["eccentricity"]  # Quantity (dimensionless)
         """
-        # Check nonlinear parameters
-        if key in self._nonlinear:
-            return self._get_nonlinear_with_units(key)
+        if key in self.nonlinear:
+            return self.nonlinear[key]
 
-        # Check linear parameters
-        names = self._linear_param_names
-        if key in names:
-            idx = names.index(key)
-            return self._get_linear_with_units(idx)
+        if key in self.linear:
+            return self.linear[key]
 
-        # Check derived quantities
         if key == "log_period":
-            return jnp.log10(self._nonlinear["period"])
+            period = self.nonlinear["period"]
+            return jnp.log10(ustrip(str(period.unit), period))
+
         if key == "t_peri":
             # Express t_peri in absolute time: t_ref + phase_peri * period.
             # phase_peri encodes the fractional orbital phase at t=0, so
             # phase_peri * period is the periastron time relative to t=0, and
             # adding t_ref converts it to the same absolute coordinate as data.time.
-            t_ref_raw = self._metadata.get("t_ref", 0.0)
+            period = self.nonlinear["period"]
+            time_unit = str(period.unit)
+            t_ref_raw = self.metadata.get("t_ref", 0.0)
             t_ref_val = (
-                float(ustrip(self._time_unit, t_ref_raw))
+                float(ustrip(time_unit, t_ref_raw))
                 if isinstance(t_ref_raw, Quantity)
                 else (float(t_ref_raw) if t_ref_raw is not None else 0.0)
             )
-            return Quantity(
-                t_ref_val + self._nonlinear["phase_peri"] * self._nonlinear["period"],
-                self._time_unit,
-            )
+            phase_peri = ustrip("", self.nonlinear["phase_peri"])
+            period_val = ustrip(time_unit, period)
+            return Quantity(t_ref_val + phase_peri * period_val, time_unit)
+
         if key == "inclination":
-            if "cos_i" in self._nonlinear:
-                return Quantity(jnp.arccos(self._nonlinear["cos_i"]), "rad")
+            if "cos_i" in self.nonlinear:
+                cos_i = ustrip("", self.nonlinear["cos_i"])
+                return Quantity(jnp.arccos(cos_i), "rad")
             msg = "Inclination only available for astrometry/combined data"
             raise KeyError(msg)
 
         msg = f"Parameter '{key}' not found"
         raise KeyError(msg)
-
-    def _get_nonlinear_with_units(self, key: str) -> Quantity[Any] | jnp.ndarray:
-        """Get nonlinear parameter with appropriate units."""
-        value = self._nonlinear[key]
-
-        # Return dimensionless for most parameters
-        if key in ["eccentricity", "phase_peri", "cos_i"]:
-            return value
-
-        if key == "period":
-            return Quantity(value, self._time_unit)
-
-        # Angles in radians
-        if key in ["arg_peri", "lon_asc_node"]:
-            return Quantity(value, "rad")
-
-        return value
-
-    def _get_linear_with_units(self, idx: int) -> Quantity[Any]:
-        """Get linear parameter by column index with appropriate units."""
-        value = self._linear[idx] if self._linear.ndim == 1 else self._linear[:, idx]
-        unit = self._linear_param_units[idx]
-        return Quantity(value, unit)
 
     def __len__(self) -> int:
         """Number of samples."""
@@ -424,28 +389,30 @@ class Samples(eqx.Module):
         filename = Path(filename)
 
         with h5py.File(filename, "w") as f:
-            # Store nonlinear parameters
+            # Store nonlinear parameters — each as a dataset with a unit attr.
             nl_group = f.create_group("nonlinear")
-            for key, value in self._nonlinear.items():
-                nl_group.create_dataset(key, data=np.asarray(value))
+            for key, qty in self.nonlinear.items():
+                ds = nl_group.create_dataset(key, data=np.asarray(qty.value))
+                ds.attrs["unit"] = str(qty.unit)
 
-            # Store linear parameters
-            f.create_dataset("linear", data=np.asarray(self._linear))
+            # Store linear parameters — each as a dataset with a unit attr.
+            lin_group = f.create_group("linear")
+            for key, qty in self.linear.items():
+                ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
+                ds.attrs["unit"] = str(qty.unit)
 
             # Store class references and metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["orbit_cls"] = self._orbit_cls.__name__
-            meta_group.attrs["data_type"] = self._data_type
+            meta_group.attrs["orbit_cls"] = self.orbit_cls.__name__
+            meta_group.attrs["data_type"] = self.data_type
             meta_group.attrs["full_cls"] = ",".join(
-                cls.__name__ for cls in self._full_cls
+                cls.__name__ for cls in self.full_cls
             )
-            meta_group.attrs["linear_param_units"] = ",".join(self._linear_param_units)
-            meta_group.attrs["time_unit"] = self._time_unit
-            meta_group.attrs["extra_linear_names"] = ",".join(self._extra_linear_names)
+            meta_group.attrs["extra_linear_names"] = ",".join(self.extra_linear_names)
             meta_group.attrs["n_samples"] = self.n_samples
 
             # Store custom metadata
-            for key, value in self._metadata.items():
+            for key, value in self.metadata.items():
                 if isinstance(value, int | float | str):
                     meta_group.attrs[key] = value
                 elif hasattr(value, "value"):  # Quantity
@@ -473,14 +440,6 @@ class Samples(eqx.Module):
         filename = Path(filename)
 
         with h5py.File(filename, "r") as f:
-            # Load nonlinear parameters
-            nonlinear = {}
-            for key in f["nonlinear"]:
-                nonlinear[key] = jnp.array(f["nonlinear"][key][:])
-
-            # Load linear parameters
-            linear = jnp.array(f["linear"][:])
-
             # Load class references
             meta = f["metadata"]
             orbit_cls_name = meta.attrs["orbit_cls"]
@@ -488,7 +447,6 @@ class Samples(eqx.Module):
 
             orbit_cls = _ORBIT_CLS_BY_NAME[orbit_cls_name]
             full_cls = tuple(_FULL_CLS_BY_NAME[n] for n in full_cls_names)
-            linear_param_units = tuple(meta.attrs["linear_param_units"].split(","))
 
             # data_type: read from file, or infer for old files
             _DATA_TYPE_BY_OLD_CLS = {
@@ -501,8 +459,7 @@ class Samples(eqx.Module):
             data_type: str = meta.attrs.get(
                 "data_type", _DATA_TYPE_BY_OLD_CLS.get(orbit_cls_name, "")
             )
-            # Fall back to "day" when loading files written before _time_unit was added.
-            time_unit: str = meta.attrs.get("time_unit", "day")
+
             raw_extra = meta.attrs.get("extra_linear_names", "")
             extra_linear_names: tuple[str, ...] = (
                 tuple(raw_extra.split(",")) if raw_extra else ()
@@ -514,18 +471,17 @@ class Samples(eqx.Module):
                 if key in [
                     "orbit_cls",
                     "full_cls",
-                    "linear_param_units",
-                    "time_unit",
                     "extra_linear_names",
                     "n_samples",
                     "data_type",
+                    # old-format keys — skip, handled separately
+                    "linear_param_units",
+                    "time_unit",
                 ]:
                     continue
                 if key.endswith("_value"):
-                    # Skip, will be reconstructed with unit
                     continue
                 if key.endswith("_unit"):
-                    # Reconstruct Quantity
                     base_key = key[:-5]
                     value = meta.attrs[f"{base_key}_value"]
                     unit = meta.attrs[key]
@@ -533,16 +489,26 @@ class Samples(eqx.Module):
                 else:
                     metadata[key] = meta.attrs[key]
 
+            nonlinear: dict[str, Quantity] = {}
+            for key in f["nonlinear"]:
+                ds = f["nonlinear"][key]
+                unit = ds.attrs.get("unit", "")
+                nonlinear[key] = Quantity(jnp.array(ds[:]), unit)
+
+            linear: dict[str, Quantity] = {}
+            for key in f["linear"]:
+                ds = f["linear"][key]
+                unit = ds.attrs.get("unit", "")
+                linear[key] = Quantity(jnp.array(ds[:]), unit)
+
         return cls(
-            _nonlinear=nonlinear,
-            _linear=linear,
-            _orbit_cls=orbit_cls,
-            _full_cls=full_cls,
-            _linear_param_units=linear_param_units,
-            _time_unit=time_unit,
-            _extra_linear_names=extra_linear_names,
-            _data_type=data_type,
-            _metadata=metadata,
+            nonlinear=nonlinear,
+            linear=linear,
+            orbit_cls=orbit_cls,
+            full_cls=full_cls,
+            extra_linear_names=extra_linear_names,
+            data_type=data_type,
+            metadata=metadata,
         )
 
     def plot_corner(  # noqa: C901
@@ -773,18 +739,28 @@ class Samples(eqx.Module):
             When ``True``, shift each non-reference instrument's data points
             by the posterior mean offset so they fall in the reference frame.
         """
-        period_samples = self._nonlinear["period"]  # dimensionless JAX array
-        ecc_samples = self._nonlinear["eccentricity"]
-        phase_peri_samples = self._nonlinear["phase_peri"]
-        arg_peri_samples = self._nonlinear["arg_peri"]
+        period_qty = self.nonlinear["period"]
+        ecc_qty = self.nonlinear["eccentricity"]
+        phase_peri_qty = self.nonlinear["phase_peri"]
+        arg_peri_qty = self.nonlinear["arg_peri"]
 
-        median_period = Quantity(float(jnp.median(period_samples)), self._time_unit)
+        time_unit = str(period_qty.unit)
+        period_vals = np.asarray(period_qty.value)  # plain (n,) for indexing
 
-        t_ref_raw = self._metadata.get("t_ref", 0.0)
+        K_qty = self.linear["K"]
+        v0_qty = self.linear["v0"]
+        rv_unit = str(K_qty.unit)
+        K_vals = np.asarray(K_qty.value)
+        v0_vals = np.asarray(v0_qty.value)
+
+        median_period_val = float(np.median(period_vals))
+        median_period = Quantity(median_period_val, time_unit)
+
+        t_ref_raw = self.metadata.get("t_ref", 0.0)
         t_ref = (
             t_ref_raw
             if isinstance(t_ref_raw, Quantity)
-            else Quantity(t_ref_raw, self._time_unit)
+            else Quantity(t_ref_raw, time_unit)
         )
 
         # Collect per-instrument datasets (multi-survey support).
@@ -800,20 +776,14 @@ class Samples(eqx.Module):
             msg = "data must be RadialVelocityData or SourceData for data_type='rv'."
             raise ValueError(msg)
 
-        # Resolve column indices for K, v0, and any per-instrument offsets.
-        names = self._linear_param_names
-        k_idx = names.index("K")
-        v0_idx = names.index("v0")
-        rv_unit = self._linear_param_units[k_idx]
-
         # Per-instrument mean offsets (extra linear params beyond K and v0).
         mean_offsets: dict[str, Quantity] = {
-            name: Quantity(float(jnp.mean(self._linear[:, names.index(name)])), rv_unit)
-            for name in self._extra_linear_names
+            name: Quantity(float(np.mean(np.asarray(self.linear[name].value))), rv_unit)
+            for name in self.extra_linear_names
         }
 
         # Mean v0 used to centre phase-folded plots on zero.
-        mean_v0 = Quantity(float(jnp.mean(self._linear[:, v0_idx])), rv_unit)
+        mean_v0 = Quantity(float(np.mean(v0_vals)), rv_unit)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
@@ -833,7 +803,7 @@ class Samples(eqx.Module):
                 )
                 rv_obs = rv_obs - mean_v0
             else:
-                x_data = ustrip(self._time_unit, rv_data.time)
+                x_data = ustrip(time_unit, rv_data.time)
 
             color = colors[color_idx % len(colors)]
             label = instr_name if len(rv_datasets) > 1 else "data"
@@ -849,6 +819,9 @@ class Samples(eqx.Module):
 
         # --- Posterior model curves ---
         n_draw = min(n_samples, self.n_samples)
+        ecc_vals = np.asarray(ecc_qty.value)
+        phase_peri_vals = np.asarray(phase_peri_qty.value)
+        arg_peri_vals = np.asarray(arg_peri_qty.value)
 
         if phase_fold:
             # For each sample, evaluate the model in the sample's OWN orbital phase
@@ -858,14 +831,13 @@ class Samples(eqx.Module):
             # even when the sample's period differs from the reference period.
             phi_grid = np.linspace(0.0, 1.0, 500)
             for i in range(n_draw):
-                period_i = Quantity(float(period_samples[i]), self._time_unit)
-                ecc_i = float(ecc_samples[i])
-                phase_peri_i = float(phase_peri_samples[i])
-                arg_peri_i = Quantity(float(arg_peri_samples[i]), "rad")
-                K_i = Quantity(float(self._linear[i, k_idx]), rv_unit)
-                t_peri_i = Quantity(
-                    phase_peri_i * float(period_samples[i]), self._time_unit
-                )
+                period_i = Quantity(float(period_vals[i]), time_unit)
+                ecc_i = float(ecc_vals[i])
+                phase_peri_i = float(phase_peri_vals[i])
+                arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
+                K_i = Quantity(float(K_vals[i]), rv_unit)
+                # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
+                t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
                 # Times in sample i's own frame: one complete orbit from periastron.
                 t_model = t_peri_i + Quantity(phi_grid, "") * period_i
                 rv_model = rv_at_times(
@@ -896,7 +868,7 @@ class Samples(eqx.Module):
             ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
             ax.set_xlim(0.0, 1.0)
             ax.set_title(
-                f"Phase-folded RV  (median P = {float(median_period.value):.1f} {self._time_unit})"
+                f"Phase-folded RV  (median P = {median_period_val:.1f} {time_unit})"
             )
         else:
             # Time-domain: dense grid spanning all observations.
@@ -908,7 +880,7 @@ class Samples(eqx.Module):
                     np.linspace(
                         float(jnp.min(all_times)), float(jnp.max(all_times)), 500
                     ),
-                    self._time_unit,
+                    time_unit,
                 )
             else:
                 t_grid = (
@@ -916,32 +888,28 @@ class Samples(eqx.Module):
                 )
 
             for i in range(n_draw):
-                period_i = Quantity(float(period_samples[i]), self._time_unit)
-                ecc_i = float(ecc_samples[i])
-                phase_peri_i = float(phase_peri_samples[i])
-                arg_peri_i = Quantity(float(arg_peri_samples[i]), "rad")
-                K_i = Quantity(float(self._linear[i, k_idx]), rv_unit)
-                v0_i = Quantity(float(self._linear[i, v0_idx]), rv_unit)
-                # t_peri matches _solve_kepler convention: phase_peri * period (no t_ref)
-                t_peri_i = Quantity(
-                    phase_peri_i * float(period_samples[i]), self._time_unit
-                )
+                period_i = Quantity(float(period_vals[i]), time_unit)
+                ecc_i = float(ecc_vals[i])
+                phase_peri_i = float(phase_peri_vals[i])
+                arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
+                K_i = Quantity(float(K_vals[i]), rv_unit)
+                v0_i = Quantity(float(v0_vals[i]), rv_unit)
+                # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
+                t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
                 rv_model = rv_at_times(
                     t_grid, period_i, ecc_i, t_peri_i, arg_peri_i, K_i, v0_i
                 )
                 ax.plot(
-                    ustrip(self._time_unit, t_grid),
+                    ustrip(time_unit, t_grid),
                     ustrip(rv_unit, rv_model),
                     color="C0",
                     alpha=0.15,
                     lw=0.8,
                 )
 
-            ax.set_xlabel(f"Time [{self._time_unit}]")
+            ax.set_xlabel(f"Time [{time_unit}]")
             ax.set_ylabel(f"RV [{rv_unit}]")
-            ax.set_title(
-                f"RV (median P = {float(median_period.value):.1f} {self._time_unit})"
-            )
+            ax.set_title(f"RV (median P = {median_period_val:.1f} {time_unit})")
 
         if rv_datasets:
             ax.legend(loc="best")
@@ -952,39 +920,38 @@ class Samples(eqx.Module):
         Gaia along-scan measurements are 1-D projections and cannot be plotted
         directly as 2-D sky positions, so only the model orbit curves are shown.
         """
-        names = self._linear_param_names
-        sma_idx = names.index("semi_major_axis") if "semi_major_axis" in names else -1
-        sma_unit = self._linear_param_units[sma_idx] if sma_idx >= 0 else "mas"
+        sma_qty = self.linear.get("semi_major_axis")
+        sma_unit = str(sma_qty.unit) if sma_qty is not None else "mas"
 
-        t_ref_raw = self._metadata.get("t_ref", 0.0)
+        period_qty = self.nonlinear["period"]
+        time_unit = str(period_qty.unit)
+        period_vals = np.asarray(period_qty.value)
+        ecc_vals = np.asarray(self.nonlinear["eccentricity"].value)
+        phase_peri_vals = np.asarray(self.nonlinear["phase_peri"].value)
+        arg_peri_vals = np.asarray(self.nonlinear["arg_peri"].value)
+        cos_i_vals = np.asarray(self.nonlinear["cos_i"].value)
+        lon_asc_vals = np.asarray(self.nonlinear["lon_asc_node"].value)
+        sma_vals = np.asarray(sma_qty.value) if sma_qty is not None else None
+
+        t_ref_raw = self.metadata.get("t_ref", 0.0)
         t_ref = (
             t_ref_raw
             if isinstance(t_ref_raw, Quantity)
-            else Quantity(t_ref_raw, self._time_unit)
+            else Quantity(t_ref_raw, time_unit)
         )
 
         n_draw = min(n_samples, self.n_samples)
         for i in range(n_draw):
-            period_i = Quantity(float(self._nonlinear["period"][i]), self._time_unit)
-            ecc_i = float(self._nonlinear["eccentricity"][i])
-            phase_peri_i = float(self._nonlinear["phase_peri"][i])
-            arg_peri_i = Quantity(float(self._nonlinear["arg_peri"][i]), "rad")
-            cos_i_i = float(self._nonlinear["cos_i"][i])
-            lon_asc_i = Quantity(float(self._nonlinear["lon_asc_node"][i]), "rad")
-            sma_i = Quantity(
-                float(
-                    self._linear[i, sma_idx]
-                    if self._linear.ndim == 2
-                    else self._linear[sma_idx]
-                )
-                if sma_idx >= 0
-                else 1.0,
-                sma_unit,
-            )
-            # t_peri matches _solve_kepler convention: phase_peri * period (no t_ref)
-            t_peri_i = Quantity(
-                phase_peri_i * float(self._nonlinear["period"][i]), self._time_unit
-            )
+            period_i = Quantity(float(period_vals[i]), time_unit)
+            ecc_i = float(ecc_vals[i])
+            phase_peri_i = float(phase_peri_vals[i])
+            arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
+            cos_i_i = float(cos_i_vals[i])
+            lon_asc_i = Quantity(float(lon_asc_vals[i]), "rad")
+            sma_val = float(sma_vals[i]) if sma_vals is not None else 1.0
+            sma_i = Quantity(sma_val, sma_unit)
+            # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
+            t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
 
             # One full orbit: phi in [0, 1] → times spanning exactly one period.
             # Use t_ref as origin so the ellipse is centered near the observations.
