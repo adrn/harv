@@ -1,7 +1,5 @@
 """Abstract base class for likelihood components."""
 
-from typing import Any, cast
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -11,7 +9,7 @@ from unxt import ustrip
 from unxt.quantity import AllowValue
 
 from harv.likelihood.helpers import LinearPriorCallable, _resolve_linear_prior
-from harv.likelihood.params import AbstractParameters, MarginalizedParameters
+from harv.likelihood.params import MarginalizedParameters
 
 
 class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
@@ -35,69 +33,68 @@ class AbstractLikelihood[ParamT: eqx.Module](eqx.Module):
         X: jax.Array,
         obs: jax.Array,
         obs_err: jax.Array,
-        obs_unit: Any,
+        linear_names: tuple[str, ...],
+        linear_units: tuple[str, ...],
         linear_prior: dist.MultivariateNormal | LinearPriorCallable,
-        indicator_matrix: jax.Array | None = None,
     ) -> jax.Array:
         """Partially or fully marginalize linear parameters.
 
         Generic helper shared by all likelihood subclasses.  Subtracts the
-        contribution of any fixed (non-marginalized) named linear parameters
+        contribution of any fixed (non-marginalized) linear parameters
         from the observations, then analytically marginalizes the remaining
-        named parameters plus any indicator (multi-survey offset) columns via
-        ``MarginalizedLinear``.
+        parameters via ``MarginalizedLinear``.
 
-        Named parameters come from ``params.source_cls.linear_param_names``
-        and may be partially or fully marginalized.  Indicator columns (when
-        present) are always appended to the marginalized design matrix after
-        the named columns -- they are always marginalized, never held fixed.
-
-        The prior must be dimensioned to match the number of marginalized
-        columns: ``len(marg_names) + n_indicator_cols``.
+        A linear parameter is considered **fixed** when its name appears as a
+        key in ``params.values`` (i.e. the user provided an explicit value).
+        All other names in ``linear_names`` are marginalized.  This allows
+        data-dependent columns (such as multi-survey offset indicators) to be
+        marginalized automatically without requiring the parameter struct to
+        know their names at class-definition time.
 
         Parameters
         ----------
         params : MarginalizedParameters
-            Nonlinear params; ``source_cls`` must not be ``None``.
+            Nonlinear params plus any fixed linear values.
         X : jax.Array
-            Base design matrix of shape ``(n_obs, n_named_linear)``.
+            Full design matrix of shape ``(n_obs, len(linear_names))``,
+            including any indicator columns for multi-survey offsets.
         obs : jax.Array
-            Observed data in ``obs_unit``, shape ``(n_obs,)``.
+            Observed data (unitless), shape ``(n_obs,)``.
         obs_err : jax.Array
-            Per-observation standard deviations in ``obs_unit``.
-        obs_unit : Any
-            Unit used to strip fixed linear parameter values to bare numbers.
+            Per-observation uncertainties (unitless), shape ``(n_obs,)``.
+        linear_names : tuple[str, ...]
+            Names of all linear parameters, in design-matrix column order.
+        linear_units : tuple[str, ...]
+            Unit strings for each linear parameter, used to strip fixed
+            values to bare numbers.  Must have the same length as
+            ``linear_names``.
         linear_prior : dist.MultivariateNormal or LinearPriorCallable
             Prior over the marginalized parameters.
-        indicator_matrix : jax.Array or None
-            Float indicator matrix of shape ``(n_obs, n_non_ref)`` for
-            multi-survey data; always marginalized.  ``None`` for
-            single-survey.
 
         Returns
         -------
         jax.Array
             Scalar log-marginal-likelihood.
         """
-        if params.source_cls is None:
-            msg = "_marginalize_partial requires params.source_cls to be set"
-            raise ValueError(msg)
-        src_cls = cast("type[AbstractParameters]", params.source_cls)
-        all_names = src_cls.linear_param_names
-        marg_names = tuple(n for n in all_names if n in params.marginalized_names)
-        fixed_names = tuple(n for n in all_names if n not in params.marginalized_names)
+        fixed_names = tuple(n for n in linear_names if n in params.values)
+        marg_names = tuple(n for n in linear_names if n not in fixed_names)
 
         if fixed_names:
             fixed_vals = jnp.array(
-                [ustrip(AllowValue, obs_unit, getattr(params, n)) for n in fixed_names]
+                [
+                    ustrip(
+                        AllowValue,
+                        linear_units[linear_names.index(n)],
+                        getattr(params, n),
+                    )
+                    for n in fixed_names
+                ]
             )
-            fixed_idx = jnp.array([all_names.index(n) for n in fixed_names])
+            fixed_idx = jnp.array([linear_names.index(n) for n in fixed_names])
             obs = obs - X[:, fixed_idx] @ fixed_vals
 
-        marg_idx = jnp.array([all_names.index(n) for n in marg_names])
+        marg_idx = jnp.array([linear_names.index(n) for n in marg_names])
         X_marg = X[:, marg_idx]
-        if indicator_matrix is not None:
-            X_marg = jnp.concatenate([X_marg, indicator_matrix], axis=-1)
 
         lp = _resolve_linear_prior(linear_prior, params)
         return MarginalizedLinear(

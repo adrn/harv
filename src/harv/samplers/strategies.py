@@ -9,9 +9,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from typing import Any, Literal, final
 
-import equinox as eqx
 import jax
-import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
 from unxt import Quantity, ustrip
@@ -216,13 +214,24 @@ class _DataTypeStrategy(ABC):
         cos_i: jax.Array,
         lon_asc: jax.Array,
         time_unit: Any,
-    ) -> eqx.Module:
+    ) -> Any:
         """Build orbit param struct from batch-sliced scalar arrays.
 
         Called inside ``fori_loop``.  The strategy is closed over as a static
         value so this branch is resolved at trace time.
+
+        For single-component strategies this returns a ``MarginalizedParameters``.
+        For combined strategies this returns a ``dict[str, MarginalizedParameters]``.
         """
         ...
+
+    def params_for_log_prob(self, params: MarginalizedParameters) -> Any:
+        """Wrap a single ``MarginalizedParameters`` for ``lik.log_prob``.
+
+        Default implementation returns the params unchanged.  The combined
+        strategy overrides this to build per-component params dicts.
+        """
+        return params
 
 
 @final
@@ -585,15 +594,43 @@ class _CombinedStrategy(_DataTypeStrategy):
         cos_i: jax.Array,
         lon_asc: jax.Array,
         time_unit: Any,
-    ) -> MarginalizedParameters:
-        return GaiaAstrometryParameters.marginalized(
-            period=Quantity(period, time_unit),
-            eccentricity=ecc,
-            phase_peri=phase,
-            arg_peri=arg_peri,
-            cos_i=cos_i,
-            lon_asc_node=lon_asc,
-        )
+    ) -> dict[str, MarginalizedParameters]:
+        p = Quantity(period, time_unit)
+        return {
+            "astro": GaiaAstrometryParameters.marginalized(
+                period=p,
+                eccentricity=ecc,
+                phase_peri=phase,
+                arg_peri=arg_peri,
+                cos_i=cos_i,
+                lon_asc_node=lon_asc,
+            ),
+            "rv": RVParameters.marginalized(
+                period=p,
+                eccentricity=ecc,
+                phase_peri=phase,
+                arg_peri=arg_peri,
+            ),
+        }
+
+    def params_for_log_prob(
+        self, params: MarginalizedParameters
+    ) -> dict[str, MarginalizedParameters]:
+        """Wrap a single ``MarginalizedParameters`` into per-component dict."""
+        orbital = {
+            "period": params.period,
+            "eccentricity": params.eccentricity,
+            "phase_peri": params.phase_peri,
+            "arg_peri": params.arg_peri,
+        }
+        return {
+            "astro": GaiaAstrometryParameters.marginalized(
+                **orbital,
+                cos_i=params.cos_i,
+                lon_asc_node=params.lon_asc_node,
+            ),
+            "rv": RVParameters.marginalized(**orbital),
+        }
 
 
 # SB2 strategy placeholder — requires SystemData (not yet implemented).

@@ -5,9 +5,9 @@ __all__ = ["_solve_kepler"]
 from typing import Any, Protocol, runtime_checkable
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
+from unxt.quantity import AllowValue, ustrip
 
 from harv.data import AbstractData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
@@ -118,9 +118,10 @@ def _resolve_linear_prior(
 def _solve_kepler(
     data: AbstractData,
     params: AbstractParameters | MarginalizedParameters,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array]:  # TODO: improve type to be Float with a batch shape
     """Solve Kepler's equation; return (sin_f, cos_f)."""
     t_peri = params.phase_peri * params.period
     dt = data.time - t_peri
     M = mean_anomaly(dt, params.period)
-    return true_anomaly_from_mean(M, params.eccentricity)
+    sinf, cosf = true_anomaly_from_mean(M, params.eccentricity)
+    return (ustrip(AllowValue, "", sinf), ustrip(AllowValue, "", cosf))

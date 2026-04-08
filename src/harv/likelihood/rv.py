@@ -294,6 +294,24 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     indicator_matrix: jax.Array | None = None
     instrument_names: tuple[str, ...] | None = eqx.field(static=True, default=None)
 
+    @property
+    def linear_names(self) -> tuple[str, ...]:
+        """All linear parameter names in design-matrix column order.
+
+        Includes the base SB1 parameters (K, v0) and, for multi-survey data,
+        one ``offset_<name>`` entry per non-reference instrument.
+        """
+        base = RVParameters.linear_param_names
+        if self.instrument_names is not None:
+            return base + tuple(f"offset_{n}" for n in self.instrument_names)
+        return base
+
+    @property
+    def linear_units(self) -> tuple[str, ...]:
+        """Unit string for each linear parameter (all share the RV data unit)."""
+        rv_unit = str(self.data.rv.unit)
+        return tuple(rv_unit for _ in self.linear_names)
+
     @classmethod
     def from_source_data(
         cls,
@@ -447,6 +465,8 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         """
         sin_f, cos_f = _solve_kepler(self.data, params)
         X = _get_design_matrix_sb1(params, sin_f, cos_f)
+        if self.indicator_matrix is not None:
+            X = jnp.concatenate([X, self.indicator_matrix], axis=-1)
         rv_unit = self.data.rv.unit
         rv_obs = jnp.asarray(ustrip(rv_unit, self.data.rv))
         rv_err = jnp.asarray(ustrip(rv_unit, self.data.rv_err))
@@ -455,9 +475,9 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
             X,
             rv_obs,
             rv_err,
-            rv_unit,
+            self.linear_names,
+            self.linear_units,
             cast("dist.MultivariateNormal", self.linear_prior),
-            indicator_matrix=self.indicator_matrix,
         )
 
     def _log_prob_explicit(self, params: RVParameters) -> jax.Array:

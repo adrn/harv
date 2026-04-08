@@ -28,11 +28,11 @@ where :math:`A, B, F, G` are Thiele-Innes constants and :math:`f` is the
 true anomaly.
 """
 
-from typing import cast
+from typing import Any, cast
 
 import jax
-import jax.numpy as jnp
 import numpyro.distributions as dist
+import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
@@ -148,6 +148,21 @@ class GaiaAstrometryLikelihood(
     data: GaiaAstrometryData
     linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None
 
+    @property
+    def linear_names(self) -> tuple[str, ...]:
+        """All linear parameter names in design-matrix column order."""
+        return GaiaAstrometryParameters.linear_param_names
+
+    @property
+    def linear_units(self) -> tuple[str, ...]:
+        """Unit string for each linear parameter.
+
+        Positions and parallax/semi-major-axis are in ``"mas"``; proper
+        motions are in ``"mas/yr"`` (matching the design-matrix construction
+        where proper-motion columns include ``dt_yr``).
+        """
+        return ("mas", "mas", "mas/yr", "mas/yr", "mas", "mas")
+
     def design_matrix(
         self, params: MarginalizedParameters | GaiaAstrometryParameters
     ) -> jax.Array:
@@ -169,7 +184,7 @@ class GaiaAstrometryLikelihood(
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array
-    ) -> dict[str, Quantity]:
+    ) -> dict[str, Quantity[Any]]:
         """Sample linear parameters from the conditional posterior.
 
         Builds a ``MarginalizedLinear`` from the design matrix, the resolved
@@ -206,11 +221,11 @@ class GaiaAstrometryLikelihood(
         # Units match how the design matrix is constructed: positional cols are
         # dimensionless so the sample is in mas; proper-motion cols include dt_yr
         # (years) so the sample is in mas/yr.
-        names = GaiaAstrometryParameters.linear_param_names
-        units = ("mas", "mas", "mas/yr", "mas/yr", "mas", "mas")
         return {
             name: Quantity(sample[i], unit)
-            for i, (name, unit) in enumerate(zip(names, units, strict=True))
+            for i, (name, unit) in enumerate(
+                zip(self.linear_names, self.linear_units, strict=True)
+            )
         }
 
     # -- private helpers ----------------------------------------------------
@@ -226,7 +241,8 @@ class GaiaAstrometryLikelihood(
             X,
             y_obs,
             y_err,
-            "mas",
+            self.linear_names,
+            self.linear_units,
             cast("dist.MultivariateNormal", self.linear_prior),
         )
 

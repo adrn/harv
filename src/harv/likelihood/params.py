@@ -110,6 +110,16 @@ class AbstractParameters(eqx.Module):
     phase_peri: BatchFloat
     arg_peri: BatchFloat
 
+    @property
+    def nonlinear_param_names(self) -> tuple[str, ...]:
+        """Names of nonlinear parameters (fields minus linear params and offsets)."""
+        linear = type(self).linear_param_names
+        return tuple(
+            f.name
+            for f in dataclasses.fields(self)
+            if f.name not in linear and f.name != "offsets"
+        )
+
     # -- Marginalization helpers ------------------------------------------
 
     def marginalize(self, *names: str) -> MarginalizedParameters:

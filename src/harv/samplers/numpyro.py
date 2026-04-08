@@ -138,7 +138,8 @@ def _build_marginalized_numpyro_model(
 
     def model() -> None:
         _, params = _sample_nonlinear(ctx)
-        numpyro.factor("log_lik", ctx.lik.log_prob(params))
+        log_prob_input = ctx.strategy.params_for_log_prob(params)
+        numpyro.factor("log_lik", ctx.lik.log_prob(log_prob_input))
 
     return model
 
