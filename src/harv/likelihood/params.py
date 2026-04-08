@@ -39,7 +39,6 @@ from harv.custom_types import (
     BatchQLength,
     BatchQSpeed,
     BatchQTime,
-    ScalarQSpeed,
 )
 
 # ---------------------------------------------------------------------------
@@ -218,7 +217,7 @@ class RVParameters(AbstractParameters):
         RV semi-amplitude.
     v0 : BatchQSpeed
         Systemic velocity (for the reference instrument).
-    offsets : dict[str, Quantity["speed"]] or None
+    offsets : dict[str, BatchQSpeed] or None
         Per-instrument velocity offsets, keyed by instrument name. Example:
         ``{"ESPRESSO": Quantity(5.0, "km/s"), "HARPS": Quantity(-2.0, "km/s")}``.
         The keys must match the names passed as ``instrument_names`` to
@@ -232,7 +231,7 @@ class RVParameters(AbstractParameters):
 
     K: BatchQSpeed  # RV semi-amplitude
     v0: BatchQSpeed  # systemic velocity (reference instrument)
-    offsets: dict[str, ScalarQSpeed] | None = (
+    offsets: dict[str, BatchQSpeed] | None = (
         None  # per-instrument offsets {name: Quantity}
     )
 

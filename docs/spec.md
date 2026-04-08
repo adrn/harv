@@ -458,6 +458,12 @@ The design guarantees that `jax.vmap(lik.log_prob)(params_batch)` works out-of-t
 when `params_batch` is a pytree of stacked JAX arrays (i.e. a batch of param structs
 with leading batch dimension).
 
+`AbstractLikelihood` also provides the shared static helper `_marginalize_partial`,
+used by both `RVLikelihood` and `GaiaAstrometryLikelihood`. It handles full and
+partial marginalization of named linear parameters (identified by
+`params.source_cls.linear_param_names`) and optionally appends indicator matrix
+columns for multi-survey offset parameters before passing to `MarginalizedLinear`.
+
 ### `RVLikelihood`
 
 `RVLikelihood` is the unified radial velocity likelihood class. It closes over a
@@ -488,9 +494,26 @@ columns for multi-survey) for reuse by MCMC builders and other consumers.
 
 The `sample_conditional_linear(params, key)` method builds a `MarginalizedLinear`
 from the design matrix, resolved linear prior, and data errors, then draws one sample
-from the posterior conditioned on the observed data. This encapsulates the
-conditional-sampling step used by the rejection sampler's linear parameter sampling
-phase, keeping the strategy code simple.
+from the posterior conditioned on the observed data. It returns a `dict[str, Quantity]`
+keyed by parameter name (`"K"`, `"v0"`, and any instrument names from
+`instrument_names`). This encapsulates the conditional-sampling step used by the
+rejection sampler's linear parameter sampling phase, keeping the strategy code simple.
+
+The `from_source_data(data, linear_prior, *, reference)` classmethod is the recommended
+constructor when starting from a `SourceData` or `RadialVelocityData`. For
+`SourceData` with multiple RV datasets it automatically stacks the observations and
+builds the indicator matrix — the caller never needs to invoke
+`stack_rv_datasets` or `build_rv_indicator_matrix` directly.
+
+Two public helper functions in `harv.likelihood.rv` support manual construction of
+multi-survey likelihoods:
+
+- `stack_rv_datasets(rv_datasets)` — concatenates multiple `RadialVelocityData` objects
+  in dict order into a single stacked dataset.
+- `build_rv_indicator_matrix(rv_datasets, reference)` — returns
+  `(indicator_matrix, instrument_names)` where `indicator_matrix` has shape
+  `(n_obs_total, n_non_ref)` and `instrument_names` is a tuple of non-reference
+  instrument names in column order.
 
 #### Linear prior as a function of nonlinear parameters
 
@@ -531,7 +554,9 @@ The `design_matrix(params)` method exposes the full design matrix for reuse.
 The `sample_conditional_linear(params, key)` method works identically to
 `RVLikelihood.sample_conditional_linear` — builds a `MarginalizedLinear` from the
 design matrix, resolved linear prior, and along-scan data, then draws one conditional
-sample.
+sample. Returns `dict[str, Quantity]` keyed by `GaiaAstrometryParameters.linear_param_names`
+(`"ra0"`, `"dec0"`, `"pmra"`, `"pmdec"`, `"parallax"`, `"semi_major_axis"`), with units
+`("mas", "mas", "mas/yr", "mas/yr", "mas", "mas")`.
 
 ### `CompositeLikelihood`
 
@@ -687,12 +712,12 @@ case are `[K, v₀, δ_espresso]`.
 dimensions when `offsets` is provided. Each non-reference offset prior must be a
 `dist.Normal`; its `loc` and `scale` are incorporated as additional diagonal blocks.
 
-In `SourceData` with multiple RV datasets, the sampler stacks all observations in dict
-order and builds an indicator matrix (constant across parameter samples) that selects
-which rows belong to each non-reference instrument. The indicator matrix is stored on
-`RVLikelihood` and appended to the base `[K, v₀]` design matrix at `log_prob` time.
-Named access to offset samples works via `samples["espresso"]` (the instrument name
-becomes a linear parameter key).
+In `SourceData` with multiple RV datasets, calling `RVLikelihood.from_source_data(data,
+prior, reference=...)` stacks all observations and builds the indicator matrix
+automatically. The indicator matrix is stored on `RVLikelihood` and appended to the
+base `[K, v₀]` design matrix at `log_prob` time. Named access to offset samples works
+via `samples["espresso"]` (the instrument name becomes a linear parameter key in the
+dict returned by `sample_conditional_linear`).
 
 ### SB2 and hierarchical systems
 

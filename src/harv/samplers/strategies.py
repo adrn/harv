@@ -31,7 +31,11 @@ from harv.likelihood.params import (
     MarginalizedParameters,
     RVParameters,
 )
-from harv.likelihood.rv import RVLikelihood
+from harv.likelihood.rv import (
+    RVLikelihood,
+    build_rv_indicator_matrix,
+    stack_rv_datasets,
+)
 from harv.priors.rejection import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
@@ -70,55 +74,6 @@ class _ComponentSlice:
 
 
 # ---------------------------------------------------------------------------
-# Multi-survey RV helpers (private)
-# ---------------------------------------------------------------------------
-
-
-def _stack_rv_datasets(
-    rv_datasets: dict[str, RadialVelocityData],
-) -> RadialVelocityData:
-    """Concatenate multiple RV datasets in dict order into a single one."""
-    ref = next(iter(rv_datasets.values()))
-    time_unit = str(ref.time.unit)
-    rv_unit = str(ref.rv.unit)
-
-    all_time = jnp.concatenate(
-        [ustrip(time_unit, ds.time) for ds in rv_datasets.values()]
-    )
-    all_rv = jnp.concatenate([ustrip(rv_unit, ds.rv) for ds in rv_datasets.values()])
-    all_err = jnp.concatenate(
-        [ustrip(rv_unit, ds.rv_err) for ds in rv_datasets.values()]
-    )
-
-    return RadialVelocityData(
-        time=Quantity(all_time, time_unit),
-        rv=Quantity(all_rv, rv_unit),
-        rv_err=Quantity(all_err, rv_unit),
-    )
-
-
-def _build_indicator_matrix(
-    rv_datasets: dict[str, RadialVelocityData],
-    offsets: dict[str, Any],
-) -> jax.Array:
-    """Build indicator matrix (n_obs_total, n_non_ref) for multi-survey RV.
-
-    ``indicator[i, j] == 1`` when observation *i* belongs to non-reference
-    instrument *j* (i.e. the j-th non-None entry in ``offsets``).
-    Datasets are iterated in ``rv_datasets`` dict order, which must match the
-    order used by ``_stack_rv_datasets``.
-    """
-    non_ref_names = [k for k, v in offsets.items() if v is not None]
-    n_non_ref = len(non_ref_names)
-    rows: list[jax.Array] = []
-    for name, ds in rv_datasets.items():
-        n_obs = len(ds.time)
-        row = jnp.zeros((n_obs, n_non_ref))
-        if name in non_ref_names:
-            j = non_ref_names.index(name)
-            row = row.at[:, j].set(1.0)
-        rows.append(row)
-    return jnp.concatenate(rows, axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +184,7 @@ class _DataTypeStrategy(ABC):
         time_unit: Any,
         data: InputData,
         lik: Any,
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         """Sample linear parameters for one accepted nonlinear sample."""
         ...
 
@@ -294,7 +249,7 @@ class _RVStrategy(_DataTypeStrategy):
             rv_datasets = data.get_datasets_by_type(RadialVelocityData)
             if len(rv_datasets) == 1:
                 return {"rv": next(iter(rv_datasets.values()))}
-            return {"rv": _stack_rv_datasets(rv_datasets)}
+            return {"rv": stack_rv_datasets(rv_datasets)}
         msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
         raise TypeError(msg)
 
@@ -306,18 +261,23 @@ class _RVStrategy(_DataTypeStrategy):
     ) -> Any:
         rv_data = datasets["rv"]
         indicator = None
+        instrument_names = None
         if (
             prior.offsets is not None
             and isinstance(data, SourceData)
             and data.n_rv() > 1
         ):
-            indicator = _build_indicator_matrix(
-                data.get_datasets_by_type(RadialVelocityData), prior.offsets
+            rv_datasets = data.get_datasets_by_type(RadialVelocityData)
+            non_ref = [k for k, v in prior.offsets.items() if v is not None]
+            ref = next(k for k in rv_datasets if k not in non_ref)
+            indicator, instrument_names = build_rv_indicator_matrix(
+                rv_datasets, reference=ref
             )
         return RVLikelihood(
             data=rv_data,
             linear_prior=prior.linear_prior,
             indicator_matrix=indicator,
+            instrument_names=instrument_names,
         )
 
     def build_component_slices(
@@ -359,7 +319,7 @@ class _RVStrategy(_DataTypeStrategy):
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         params = RVParameters.marginalized(
             period=Quantity(sample["period"], time_unit),
             eccentricity=sample["eccentricity"],
@@ -454,7 +414,7 @@ class _AstrometryStrategy(_DataTypeStrategy):
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         params = GaiaAstrometryParameters.marginalized(
             period=Quantity(sample["period"], time_unit),
             eccentricity=sample["eccentricity"],
@@ -602,7 +562,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         time_unit: Any,
         data: InputData,  # noqa: ARG002
         lik: Any,
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         k_astro, k_rv = jr.split(key)
         params = GaiaAstrometryParameters.marginalized(
             period=Quantity(sample["period"], time_unit),
@@ -614,7 +574,7 @@ class _CombinedStrategy(_DataTypeStrategy):
         )
         astro_sample = lik["astro"].sample_conditional_linear(params, k_astro)
         rv_sample = lik["rv"].sample_conditional_linear(params, k_rv)
-        return jnp.concatenate([astro_sample, rv_sample])
+        return {**astro_sample, **rv_sample}
 
     def build_orbit_params(
         self,

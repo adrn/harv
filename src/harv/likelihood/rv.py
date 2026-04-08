@@ -8,44 +8,42 @@ and the presence of ``linear_prior`` / ``indicator_matrix``:
 1. **Marginalized** (``linear_prior`` provided, ``params`` is
    :class:`MarginalizedParameters`): analytically integrates over the linear RV
    parameters (K, v0) given a Gaussian prior. The prior can depend on the nonlinear
-   parameters. This supports partial marginalization (e.g., only marginalizing over K
-   and not v0) via ``params.marginalized_names``.
+   parameters. Supports partial marginalization (e.g., only marginalizing over K and not
+   v0) via ``params.marginalized_names``.  For multi-survey data (``indicator_matrix``
+   provided), the per-instrument offset columns are always appended to the marginalized
+   design matrix — partial marginalization of the named parameters (K, v0) works
+   simultaneously with multi-survey offset columns.
 
-2. **Multi-survey marginalized** (``linear_prior`` provided, ``indicator_matrix``
-   provided): appends per-instrument-offset columns to the design matrix and
-   marginalizes ``[K, v0, d1, ..., dk]`` jointly, where the d1, ..., dk are the
-   per-instrument offsets (for k+1 instruments - one is chosen as the reference).
-   Partial marginalization is not yet supported in the multi-survey case. TODO: support
-   partial marginalization for multi-survey marginalization.
-
-3. **Explicit** (``linear_prior`` is ``None``, ``params`` is :class:`RVParameters`):
+2. **Explicit** (``linear_prior`` is ``None``, ``params`` is :class:`RVParameters`):
    evaluates the Gaussian data log-likelihood directly at the provided K and v₀.
    For multi-survey data (``indicator_matrix`` present), per-instrument offsets are
-   included when ``params.offsets`` is provided (shape ``(n_non_ref,)``), giving the
-   full model ``K·rv_shape(t) + v₀ + δⱼ·I(j)``.  If ``offsets`` is ``None`` with
-   multi-survey data, offset corrections are omitted — pre-correct the data
-   externally or use mode 2 to marginalize offsets analytically.
+   included when ``params.offsets`` is provided, giving the full model
+   ``K·rv_shape(t) + v₀ + δⱼ·I(j)``.  If ``offsets`` is ``None`` with multi-survey
+   data, offset corrections are omitted — pre-correct the data externally or use
+   mode 1 to marginalize offsets analytically.
 
 For the SB1 model the RV model is:
 
     RV(t) = K · [cos(ω + f(t)) + e·cos(ω)] + v0
            = K · rv_shape(t) + v0
 
-Note: SB2 support (two semi-amplitudes K₁, K₂) is not yet available.  It
-requires a dedicated ``SystemData`` container — see §Planned in docs/spec.md.
+Note on SB2: :func:`_get_design_matrix_sb2` provides the (n_obs, 3) design matrix
+for double-lined spectroscopic binaries (columns [K₁, K₂, v₀]), but no likelihood
+class uses it yet.  SB2 support requires a dedicated ``SystemData`` container that
+does not yet exist — see §Planned in docs/spec.md.
 """
 
-from typing import Any, cast
+from typing import cast
 
 import equinox as eqx
 import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
-from unxt import ustrip
+from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
 
-from harv.data import RadialVelocityData
+from harv.data import RadialVelocityData, SourceData
 from harv.kepler.orbits import rv_shape as _rv_shape
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import (
@@ -59,9 +57,91 @@ from harv.likelihood.params import (
     RVParameters,
 )
 
-__all__ = ("RVLikelihood",)
+__all__ = ("RVLikelihood", "build_rv_indicator_matrix", "stack_rv_datasets")
 
-_RV_LINEAR_NAMES: tuple[str, ...] = RVParameters.linear_param_names
+
+# ---------------------------------------------------------------------------
+# Multi-survey RV helpers
+# ---------------------------------------------------------------------------
+
+
+def stack_rv_datasets(
+    rv_datasets: dict[str, RadialVelocityData],
+) -> RadialVelocityData:
+    """Concatenate multiple RV datasets in dict order into a single one.
+
+    Parameters
+    ----------
+    rv_datasets : dict[str, RadialVelocityData]
+        Ordered mapping of instrument name → dataset.  Dict order determines
+        the row order in the stacked output; it must match the order used when
+        building the indicator matrix (see :func:`build_rv_indicator_matrix`).
+
+    Returns
+    -------
+    RadialVelocityData
+        Single dataset containing all observations stacked in dict order.
+    """
+    ref = next(iter(rv_datasets.values()))
+    time_unit = str(ref.time.unit)
+    rv_unit = str(ref.rv.unit)
+    all_time = jnp.concatenate(
+        [ustrip(time_unit, ds.time) for ds in rv_datasets.values()]
+    )
+    all_rv = jnp.concatenate([ustrip(rv_unit, ds.rv) for ds in rv_datasets.values()])
+    all_err = jnp.concatenate(
+        [ustrip(rv_unit, ds.rv_err) for ds in rv_datasets.values()]
+    )
+    return RadialVelocityData(
+        time=Quantity(all_time, time_unit),
+        rv=Quantity(all_rv, rv_unit),
+        rv_err=Quantity(all_err, rv_unit),
+    )
+
+
+def build_rv_indicator_matrix(
+    rv_datasets: dict[str, RadialVelocityData],
+    reference: str | None = None,
+) -> tuple[jax.Array, tuple[str, ...]]:
+    """Build indicator matrix for multi-survey RV data.
+
+    Parameters
+    ----------
+    rv_datasets : dict[str, RadialVelocityData]
+        Ordered mapping of instrument name → dataset.  Dict order must match
+        the order used when stacking (see :func:`stack_rv_datasets`).
+    reference : str or None
+        Name of the reference instrument (its observations get no offset
+        column).  Defaults to the first key in ``rv_datasets``.
+
+    Returns
+    -------
+    indicator_matrix : jax.Array
+        Shape ``(n_obs_total, n_non_ref)``.  ``indicator[i, j] = 1`` when
+        observation ``i`` belongs to non-reference instrument ``j``.
+    instrument_names : tuple[str, ...]
+        Names of the non-reference instruments, in column order.
+
+    Raises
+    ------
+    ValueError
+        If ``reference`` is not found in ``rv_datasets``.
+    """
+    ref_name = reference if reference is not None else next(iter(rv_datasets))
+    if ref_name not in rv_datasets:
+        msg = f"Reference instrument {ref_name!r} not in {list(rv_datasets)}"
+        raise ValueError(msg)
+    non_ref_names = [k for k in rv_datasets if k != ref_name]
+    n_non_ref = len(non_ref_names)
+    rows = []
+    for name, ds in rv_datasets.items():
+        n_obs = len(ds.time)
+        row = jnp.zeros((n_obs, n_non_ref))
+        if name != ref_name:
+            j = non_ref_names.index(name)
+            row = row.at[:, j].set(1.0)
+        rows.append(row)
+    return jnp.concatenate(rows, axis=0), tuple(non_ref_names)
 
 
 def _get_design_matrix_sb1(
@@ -85,7 +165,8 @@ def _get_design_matrix_sb2(
 
     For primary: [X(t), 0, 1].  For secondary: [0, -X(t), 1].
 
-    TODO: SB2 support requires ``SystemData`` (not yet implemented).
+    Not yet called by any likelihood class — SB2 support requires
+    ``SystemData`` (not yet implemented).  See §Planned in docs/spec.md.
     """
     arg_peri = ustrip(AllowValue, "", params.arg_peri)
     rv_shape = _rv_shape(sin_f, cos_f, params.eccentricity, arg_peri)
@@ -121,25 +202,25 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
         For multi-survey RV: float indicator matrix of shape
         ``(n_obs_total, n_non_ref)`` where ``indicator_matrix[i, j] = 1``
         when observation ``i`` belongs to non-reference instrument ``j``.
-        Column order must match ``instrument_names`` when per-instrument
-        offsets are used.  The columns are appended to the design matrix
-        so that ``[K, v₀, δ₁, …, δₖ]`` are marginalized jointly.
-        ``None`` for single-instrument data.
+        Constructed by stacking all observations and marking which rows belong
+        to each non-reference instrument::
+
+            # Instruments A (reference) and B; B observations at rows [3, 7, 11]:
+            ind = jnp.zeros((n_obs_total, 1))
+            ind = ind.at[[3, 7, 11], 0].set(1.0)
+
+        Column order must match ``instrument_names``.  ``None`` for
+        single-instrument data.
     instrument_names : tuple[str, ...] or None
         Names of the non-reference instruments in ``indicator_matrix``
         column order.  Required when ``params.offsets`` is a dict (explicit
-        multi-survey evaluation); unused for marginalized evaluation.
-        ``None`` for single-instrument data or when explicit offsets are
-        not used.
+        multi-survey evaluation).  ``None`` for single-instrument data or
+        when explicit offsets are not used.
 
     Examples
     --------
-    **Single-instrument, fully marginalized linear parameters:**
+    **Single-instrument, fully marginalized:**
 
-    >>> import numpyro.distributions as dist
-    >>> from unxt import Quantity
-    >>> from harv.likelihood.rv import RVLikelihood
-    >>> from harv.likelihood.params import RVParameters
     >>> linear_prior = dist.MultivariateNormal(
     ...     loc=jnp.zeros(2), covariance_matrix=jnp.eye(2) * 100.0
     ... )
@@ -149,29 +230,46 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     **Partial marginalization** — fix K, marginalize v0 only:
 
     >>> params = RVParameters.marginalized(
+    ...     "v0",                              # only v0 is integrated out
     ...     period=Quantity(200.0, "day"),
     ...     eccentricity=0.3,
     ...     phase_peri=0.1,
-    ...     arg_peri=Quantity(1.2, "rad"),
-    ...     marginalized_names=("v0",),  # only v0 is integrated out
-    ...     K=Quantity(10.0, "km/s"),    # K is held fixed
+    ...     arg_peri=1.2,
+    ...     K=Quantity(10.0, "km/s"),          # K held fixed
     ... )
-    >>> linear_prior_1d = dist.Normal(0.0, 100.0)  # prior on v0 alone
+    >>> linear_prior_1d = dist.Normal(0.0, 100.0)  # 1-D prior on v0
     >>> lik = RVLikelihood(data=rv_data, linear_prior=linear_prior_1d)
     >>> lp = lik.log_prob(params)
 
-    **Multi-survey marginalized** — two instruments, one reference:
+    **Multi-survey marginalized** — two instruments, joint prior on [K, v0, δ]:
 
-    >>> # Stack all observations; indicator_matrix marks non-reference rows.
-    >>> # If instrument B has observations at rows [3, 7, 11]:
     >>> ind = jnp.zeros((n_obs_total, 1))
-    >>> ind = ind.at[[3, 7, 11], 0].set(1.0)
+    >>> ind = ind.at[[3, 7, 11], 0].set(1.0)   # B observations at these rows
+    >>> prior_3d = dist.MultivariateNormal(
+    ...     loc=jnp.zeros(3), covariance_matrix=jnp.eye(3) * 100.0
+    ... )
     >>> lik = RVLikelihood(
     ...     data=stacked_rv, linear_prior=prior_3d, indicator_matrix=ind,
-    ...     instrument_names=("ESPRESSO",),
+    ...     instrument_names=("B",),
     ... )
-    >>> # Marginalizes [K, v0, delta_ESPRESSO] jointly.
     >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+
+    **Multi-survey, fix K, marginalize v0 and δ** — (1+k)-D prior:
+
+    >>> params = RVParameters.marginalized(
+    ...     "v0",
+    ...     period=Quantity(200.0, "day"), eccentricity=0.3,
+    ...     phase_peri=0.1, arg_peri=1.2,
+    ...     K=Quantity(10.0, "km/s"),
+    ... )
+    >>> prior_2d = dist.MultivariateNormal(
+    ...     loc=jnp.zeros(2), covariance_matrix=jnp.eye(2) * 100.0
+    ... )
+    >>> lik = RVLikelihood(
+    ...     data=stacked_rv, linear_prior=prior_2d, indicator_matrix=ind,
+    ...     instrument_names=("B",),
+    ... )
+    >>> lp = lik.log_prob(params)
 
     **Explicit multi-survey** — named offsets per instrument:
 
@@ -179,11 +277,10 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     ...     period=Quantity(200.0, "day"), eccentricity=0.3,
     ...     phase_peri=0.0, arg_peri=1.0,
     ...     K=Quantity(30.0, "km/s"), v0=Quantity(0.0, "km/s"),
-    ...     offsets={"ESPRESSO": Quantity(5.0, "km/s")},
+    ...     offsets={"B": Quantity(5.0, "km/s")},
     ... )
     >>> lik = RVLikelihood(
-    ...     data=stacked_rv, indicator_matrix=ind,
-    ...     instrument_names=("ESPRESSO",),
+    ...     data=stacked_rv, indicator_matrix=ind, instrument_names=("B",)
     ... )
     >>> log_lik = lik.log_prob(params)
     """
@@ -192,6 +289,84 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
     linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None
     indicator_matrix: jax.Array | None = None
     instrument_names: tuple[str, ...] | None = eqx.field(static=True, default=None)
+
+    @classmethod
+    def from_source_data(
+        cls,
+        data: SourceData | RadialVelocityData,
+        linear_prior: dist.MultivariateNormal | LinearPriorCallable | None = None,
+        *,
+        reference: str | None = None,
+    ) -> "RVLikelihood":
+        """Construct an ``RVLikelihood`` from a ``SourceData``.
+
+        Handles multi-survey stacking automatically.
+
+        For single-instrument data this is equivalent to
+        ``RVLikelihood(data=data, linear_prior=linear_prior)``.  For
+        ``SourceData`` with multiple RV datasets the observations are stacked
+        in dict order and an indicator matrix is built automatically — the
+        caller never needs to touch :func:`stack_rv_datasets` or
+        :func:`build_rv_indicator_matrix` directly.
+
+        Parameters
+        ----------
+        data : SourceData or RadialVelocityData
+            Input data.  If a ``SourceData`` with more than one
+            ``RadialVelocityData`` dataset, observations are stacked and an
+            indicator matrix is built.
+        linear_prior : MultivariateNormal or LinearPriorCallable or None
+            Gaussian prior over the marginalized linear parameters.  Must be
+            dimensioned for ``2 + n_non_ref`` parameters when
+            ``indicator_matrix`` is present.  ``None`` for explicit
+            evaluation.
+        reference : str or None
+            Name of the reference instrument (receives no offset column).
+            Defaults to the first RV dataset in ``data``.
+
+        Returns
+        -------
+        RVLikelihood
+
+        Examples
+        --------
+        >>> source = SourceData(harps=harps_data, espresso=espresso_data)
+        >>> prior = dist.MultivariateNormal(
+        ...     loc=jnp.zeros(3), covariance_matrix=jnp.eye(3) * 100.0
+        ... )
+        >>> lik = RVLikelihood.from_source_data(
+        ...     source, prior, reference="harps"
+        ... )
+        >>> # Marginalizes [K, v0, delta_espresso] jointly.
+        >>> log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+        """
+        if isinstance(data, RadialVelocityData):
+            return cls(data=data, linear_prior=linear_prior)
+
+        rv_datasets = data.get_datasets_by_type(RadialVelocityData)
+        if not rv_datasets:
+            msg = "SourceData contains no RadialVelocityData datasets"
+            raise ValueError(msg)
+        if len(rv_datasets) == 1:
+            return cls(data=next(iter(rv_datasets.values())), linear_prior=linear_prior)
+
+        # Multi-survey: put the reference instrument first so stacking order
+        # is deterministic, then build the indicator matrix.
+        ref_name = reference if reference is not None else next(iter(rv_datasets))
+        if ref_name not in rv_datasets:
+            msg = f"Reference instrument {ref_name!r} not in {list(rv_datasets)}"
+            raise ValueError(msg)
+        ordered = {ref_name: rv_datasets[ref_name]} | {
+            k: v for k, v in rv_datasets.items() if k != ref_name
+        }
+        stacked = stack_rv_datasets(ordered)
+        indicator, names = build_rv_indicator_matrix(ordered, reference=ref_name)
+        return cls(
+            data=stacked,
+            linear_prior=linear_prior,
+            indicator_matrix=indicator,
+            instrument_names=names,
+        )
 
     def design_matrix(self, params: MarginalizedParameters | RVParameters) -> jax.Array:
         """Build the full design matrix for the given parameters.
@@ -217,12 +392,13 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         """Sample linear parameters from the conditional posterior.
 
-        Builds a ``MarginalizedLinear`` from the design matrix, the resolved
-        linear prior, and the data errors, then draws one sample from the
-        posterior conditioned on the observed data.
+        Builds a ``MarginalizedLinear`` from the full design matrix (including
+        any indicator columns), the resolved linear prior, and the data errors,
+        then draws one sample from the posterior conditioned on the observed
+        data.
 
         Parameters
         ----------
@@ -233,94 +409,48 @@ class RVLikelihood(AbstractLikelihood[MarginalizedParameters | RVParameters]):
 
         Returns
         -------
-        jax.Array
-            Sampled linear parameter vector of length ``n_cols``, ordered
-            ``[K, v₀]`` for single-instrument or ``[K, v₀, δ₁, …]`` for
-            multi-survey.  The vector is unit-free (values in data units).
+        dict[str, Quantity]
+            Sampled linear parameters as a dict.  Keys follow
+            ``RVParameters.linear_param_names`` (``"K"``, ``"v0"``) plus any
+            instrument names from ``self.instrument_names`` for multi-survey
+            data.  Values are :class:`~unxt.Quantity` in the RV data unit.
         """
         X = self.design_matrix(params)
-        lp = _resolve_linear_prior(self.linear_prior, params)
+        lp = _resolve_linear_prior(
+            cast("dist.MultivariateNormal", self.linear_prior), params
+        )
         rv_unit = self.data.rv.unit
         marg = MarginalizedLinear(
             design_matrix=X,
             prior_distribution=lp,
             data_distribution=dist.Normal(0.0, ustrip(rv_unit, self.data.rv_err)),
         )
-        return marg.conditional(ustrip(rv_unit, self.data.rv)).sample(key)
+        sample = marg.conditional(ustrip(rv_unit, self.data.rv)).sample(key)
+
+        names: tuple[str, ...] = RVParameters.linear_param_names
+        if self.indicator_matrix is not None and self.instrument_names is not None:
+            names = names + self.instrument_names
+        return {name: Quantity(sample[i], rv_unit) for i, name in enumerate(names)}
 
     # -- private helpers ----------------------------------------------------
 
     def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:
-        """Marginalized log-likelihood — dispatches to single or multi-survey."""
+        """Marginalized log-likelihood.
+
+        Delegates to ``_marginalize_partial`` (defined on ``AbstractLikelihood``)
+        which handles both partial/full marginalization of named linear
+        parameters and any multi-survey indicator columns.
+        """
         sin_f, cos_f = _solve_kepler(self.data, params)
-        X = _get_design_matrix_sb1(params, sin_f, cos_f)  # (n_obs, 2)
+        X = _get_design_matrix_sb1(params, sin_f, cos_f)
         rv_unit = self.data.rv.unit
         rv_obs = jnp.asarray(ustrip(rv_unit, self.data.rv))
         rv_err = jnp.asarray(ustrip(rv_unit, self.data.rv_err))
-
-        if self.indicator_matrix is not None:
-            return self._marg_multi_survey(params, X, rv_obs, rv_err)
-        return self._marg_single_survey(params, X, rv_obs, rv_err, rv_unit)
-
-    def _marg_single_survey(
-        self,
-        params: MarginalizedParameters,
-        X: jax.Array,
-        rv_obs: jax.Array,
-        rv_err: jax.Array,
-        rv_unit: Any,
-    ) -> jax.Array:
-        """Single-instrument: partial or full marginalization over [K, v0].
-
-        When all linear params are marginalized (the common case), the
-        subtraction step is skipped and the full (n_obs, 2) design matrix is
-        passed to ``MarginalizedLinear``.  When some params are held fixed
-        (partial marginalization), their contribution is subtracted from the
-        data before marginalizing the rest.
-        """
-        marg_names = tuple(
-            n for n in _RV_LINEAR_NAMES if n in params.marginalized_names
+        return self._marginalize_partial(
+            params, X, rv_obs, rv_err, rv_unit,
+            cast("dist.MultivariateNormal", self.linear_prior),
+            indicator_matrix=self.indicator_matrix,
         )
-        fixed_names = tuple(
-            n for n in _RV_LINEAR_NAMES if n not in params.marginalized_names
-        )
-
-        if fixed_names:
-            fixed_vals = jnp.array(
-                [ustrip(AllowValue, rv_unit, getattr(params, n)) for n in fixed_names]
-            )
-            fixed_idx = jnp.array([_RV_LINEAR_NAMES.index(n) for n in fixed_names])
-            rv_obs = rv_obs - X[:, fixed_idx] @ fixed_vals
-
-        marg_idx = jnp.array([_RV_LINEAR_NAMES.index(n) for n in marg_names])
-        lp = _resolve_linear_prior(self.linear_prior, params)
-        return MarginalizedLinear(
-            design_matrix=X[:, marg_idx],
-            prior_distribution=lp,
-            data_distribution=dist.Normal(0.0, rv_err),
-        ).log_prob(rv_obs)
-
-    def _marg_multi_survey(
-        self,
-        params: MarginalizedParameters,
-        X: jax.Array,
-        rv_obs: jax.Array,
-        rv_err: jax.Array,
-    ) -> jax.Array:
-        """Multi-survey: marginalize [K, v0, d1, ..., dk] jointly.
-
-        The indicator columns are appended to the base (n_obs, 2) design
-        matrix and all linear parameters are marginalized in one shot.
-        Partial marginalization is not yet supported in the multi-survey case.
-        """
-        ind = cast("jax.Array", self.indicator_matrix)  # checked by caller
-        X_full = jnp.concatenate([X, ind], axis=-1)
-        lp = _resolve_linear_prior(self.linear_prior, params)
-        return MarginalizedLinear(
-            design_matrix=X_full,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(0.0, rv_err),
-        ).log_prob(rv_obs)
 
     def _log_prob_explicit(self, params: RVParameters) -> jax.Array:
         """Explicit log-likelihood with all parameters specified.

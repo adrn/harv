@@ -30,7 +30,7 @@ import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
 from numpyro_ext.distributions import MarginalizedLinear
-from unxt import ustrip
+from unxt import Quantity, ustrip
 from unxt.quantity import AllowValue
 
 from harv.data import GaiaAstrometryData
@@ -47,9 +47,6 @@ from harv.likelihood.params import (
 )
 
 __all__ = ("GaiaAstrometryLikelihood",)
-
-# Column order in the astrometry design matrix.
-_ASTRO_LINEAR_NAMES: tuple[str, ...] = GaiaAstrometryParameters.linear_param_names
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -168,7 +165,7 @@ class GaiaAstrometryLikelihood(
 
     def sample_conditional_linear(
         self, params: MarginalizedParameters, key: jax.Array
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         """Sample linear parameters from the conditional posterior.
 
         Builds a ``MarginalizedLinear`` from the design matrix, the resolved
@@ -184,8 +181,12 @@ class GaiaAstrometryLikelihood(
 
         Returns
         -------
-        jax.Array
-            Sampled linear parameter vector of length 6.
+        dict[str, Quantity]
+            Sampled linear parameters keyed by name following
+            ``GaiaAstrometryParameters.linear_param_names``.  Units reflect
+            the natural units of each parameter given the design matrix:
+            positions/parallax/semi-major-axis in ``"mas"``, proper motions
+            in ``"mas/yr"``.
         """
         dm = self.design_matrix(params)
         lp = _resolve_linear_prior(self.linear_prior, params)
@@ -196,41 +197,30 @@ class GaiaAstrometryLikelihood(
             prior_distribution=lp,
             data_distribution=dist.Normal(0.0, y_err),
         )
-        return marg.conditional(y_obs).sample(key)
+        sample = marg.conditional(y_obs).sample(key)
+
+        # Units match how the design matrix is constructed: positional cols are
+        # dimensionless so the sample is in mas; proper-motion cols include dt_yr
+        # (years) so the sample is in mas/yr.
+        names = GaiaAstrometryParameters.linear_param_names
+        units = ("mas", "mas", "mas/yr", "mas/yr", "mas", "mas")
+        return {
+            name: Quantity(sample[i], unit)
+            for i, (name, unit) in enumerate(zip(names, units, strict=True))
+        }
 
     # -- private helpers ----------------------------------------------------
 
     def _log_prob_marginalized(self, params: MarginalizedParameters) -> jax.Array:
         """Marginalized log-likelihood."""
         sin_f, cos_f = _solve_kepler(self.data, params)
-        design_matrix = _get_design_matrix(self.data, params, sin_f, cos_f)
-
-        y_obs = ustrip("mas", self.data.al_position)
-        y_err = ustrip("mas", self.data.al_position_err)
-
-        my_marg = tuple(
-            n for n in _ASTRO_LINEAR_NAMES if n in params.marginalized_names
+        X = _get_design_matrix(self.data, params, sin_f, cos_f)
+        y_obs = jnp.asarray(ustrip("mas", self.data.al_position))
+        y_err = jnp.asarray(ustrip("mas", self.data.al_position_err))
+        return self._marginalize_partial(
+            params, X, y_obs, y_err, "mas",
+            cast("dist.MultivariateNormal", self.linear_prior),
         )
-        my_explicit = tuple(
-            n for n in _ASTRO_LINEAR_NAMES if n not in params.marginalized_names
-        )
-        marg_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_marg]
-        explicit_idx = [_ASTRO_LINEAR_NAMES.index(n) for n in my_explicit]
-
-        if explicit_idx:
-            explicit_vals = jnp.array(
-                [ustrip("mas", getattr(params, n)) for n in my_explicit]
-            )
-            y_obs = y_obs - design_matrix[:, jnp.array(explicit_idx)] @ explicit_vals
-
-        dm_marg = design_matrix[:, jnp.array(marg_idx)]
-        lp = _resolve_linear_prior(self.linear_prior, params)
-        marg_dist = MarginalizedLinear(
-            design_matrix=dm_marg,
-            prior_distribution=lp,
-            data_distribution=dist.Normal(0.0, y_err),
-        )
-        return marg_dist.log_prob(y_obs)
 
     def _log_prob_explicit(self, params: GaiaAstrometryParameters) -> jax.Array:
         """Explicit log-likelihood with all parameters specified."""

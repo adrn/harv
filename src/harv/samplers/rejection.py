@@ -186,7 +186,7 @@ class RejectionSampler(eqx.Module):
                     replace=False,
                 )
                 accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
-                linear_samples = linear_samples[idx]
+                linear_samples = {k: v[idx] for k, v in linear_samples.items()}
 
         _ref = next(iter(data.values())) if isinstance(data, SourceData) else data
         t_ref = _ref.t_ref
@@ -222,17 +222,9 @@ class RejectionSampler(eqx.Module):
             k: Quantity(v, _nl_units.get(k, "")) for k, v in accepted_nonlinear.items()
         }
 
-        # Build linear dict as Quantities: one named Quantity per parameter.
-        lin_names = strategy.all_linear_names(self.prior, data)
-        lin_units = strategy.linear_param_units(datasets, self.prior)
-        linear_q: dict[str, Quantity] = {
-            name: Quantity(linear_samples[:, i], unit)
-            for i, (name, unit) in enumerate(zip(lin_names, lin_units, strict=False))
-        }
-
         return Samples(
             nonlinear=nonlinear_q,
-            linear=linear_q,
+            linear=linear_samples,
             orbit_cls=strategy.nonlinear_cls,
             full_cls=strategy.full_cls,
             data_type=strategy.data_type,
@@ -541,7 +533,7 @@ class RejectionSampler(eqx.Module):
         strategy: _DataTypeStrategy,
         data: InputData,
         lik: Any,
-    ) -> jax.Array:
+    ) -> dict[str, Quantity]:
         """Sample linear parameters from conditional posterior using vmap.
 
         For each accepted nonlinear sample, draws from the conditional posterior
@@ -564,22 +556,26 @@ class RejectionSampler(eqx.Module):
 
         Returns
         -------
-        linear_samples
-            Shape ``(n_samples, n_linear)``.
+        dict[str, Quantity]
+            One Quantity per linear parameter, each with shape ``(n_samples,)``.
         """
         n_samples = len(next(iter(nonlinear_samples.values())))
         if n_samples == 0:
-            n_offsets = sum(
-                1 for v in (self.prior.offsets or {}).values() if v is not None
-            )
-            return jnp.zeros((0, strategy.n_linear + n_offsets))
+            names = strategy.all_linear_names(self.prior, data)
+            units = strategy.linear_param_units(datasets, self.prior)
+            return {
+                name: Quantity(jnp.zeros(0), unit)
+                for name, unit in zip(names, units, strict=False)
+            }
 
         _ref = next(iter(datasets.values()))
         time_unit = _ref.time.unit
 
         keys = jr.split(key, n_samples)
 
-        def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> jax.Array:
+        def _sample_one(
+            key: jax.Array, sample: dict[str, jax.Array]
+        ) -> dict[str, Quantity]:
             return strategy.sample_linear_one(
                 key, sample, datasets, self.prior, time_unit, data, lik
             )
