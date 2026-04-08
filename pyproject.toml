@@ -177,6 +177,12 @@ precision = 2
     module = "harv.simulate.*"
 
   [[tool.mypy.overrides]]
+    # cast() calls in orbits.py are required when unxt is installed (standalone
+    # mypy) but appear redundant when unxt is absent (pre-commit environment).
+    disable_error_code = ["redundant-cast"]
+    module = "harv.kepler.orbits"
+
+  [[tool.mypy.overrides]]
     ignore_missing_imports = true
     module = [
       "astropy.*",

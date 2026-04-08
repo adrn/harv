@@ -320,7 +320,7 @@ so callers never need to strip units themselves:
 - `true_anomaly_from_mean(M: BatchQAngle, eccentricity: ScalarFloat) -> (sin f, cos f)` — solve Kepler's equation
 
 `rv_shape` and `thiele_innes_ABFG` remain pure functions on raw JAX arrays
-because their inputs are always already dimensionless at every call site:
+or dimensionless `Quantity` objects, because their inputs are always already dimensionless at every call site:
 
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
 - `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)

@@ -3,10 +3,8 @@
 Implementations of core orbit computations used by ``harv.kepler``, ``harv.likelihood``,
 and ``harv.simulate``.
 
-``mean_anomaly`` and ``true_anomaly_from_mean`` accept and return :class:`unxt.Quantity`
-objects so that callers never need to strip units themselves. ``rv_shape`` and
-``thiele_innes_ABFG`` remain pure functions on raw JAX arrays because their inputs are
-always already dimensionless.
+All functions accept :class:`~unxt.Quantity` objects (including dimensionless ones)
+as well as plain JAX arrays and Python scalars.
 """
 
 __all__ = (
@@ -19,9 +17,10 @@ __all__ = (
     "astrometric_orbit_at_times",
 )
 
+from typing import cast
+
 import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
-from jaxtyping import Array, Float
 from unxt import Quantity
 from unxt.quantity import ustrip
 
@@ -61,15 +60,20 @@ def rv_shape(
     sin_f: BatchFloat,
     cos_f: BatchFloat,
     eccentricity: ScalarFloat,
-    arg_peri: ScalarFloat,
+    arg_peri: ScalarQAngle | ScalarFloat,
 ) -> BatchFloat:
     """RV shape function: cos(ω + f) + e·cos(ω).
 
     Returns the dimensionless RV amplitude factor for each observation.
-    ``arg_peri`` is in radians.
+    ``arg_peri`` may be a plain float/array in radians or a
+    :class:`~unxt.Quantity` with angle units; ``jnp.cos`` handles both via
+    quax dispatch.  ``eccentricity`` may likewise be a dimensionless
+    :class:`~unxt.Quantity` or a plain scalar.
     """
     cos_wf = jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
-    return cos_wf + eccentricity * jnp.cos(arg_peri)
+    # cast: jnp ops on Quantity inputs return AbstractQuantity (quax dispatch),
+    # which mypy cannot verify is a subtype of BatchFloat without the hint.
+    return cast("BatchFloat", cos_wf + eccentricity * jnp.cos(arg_peri))
 
 
 def thiele_innes_ABFG(
@@ -90,7 +94,11 @@ def thiele_innes_ABFG(
     B = cos_arg_peri * sin_lon_asc_node + sin_arg_peri * cos_lon_asc_node * cos_i
     F = -(sin_arg_peri * cos_lon_asc_node + cos_arg_peri * sin_lon_asc_node * cos_i)
     G = -(sin_arg_peri * sin_lon_asc_node - cos_arg_peri * cos_lon_asc_node * cos_i)
-    return A, B, F, G
+    # cast: arithmetic on ScalarFloat inputs may return AbstractQuantity via quax
+    # dispatch; mypy cannot verify that AbstractQuantity satisfies ScalarFloat.
+    return cast(
+        "tuple[ScalarFloat, ScalarFloat, ScalarFloat, ScalarFloat]", (A, B, F, G)
+    )
 
 
 def compute_true_anomaly_components(
@@ -98,7 +106,7 @@ def compute_true_anomaly_components(
     period: ScalarQTime,
     eccentricity: ScalarFloat,
     t_peri: ScalarQTime,
-) -> tuple[Float[Array, "*batch"], Float[Array, "*batch"]]:
+) -> tuple[BatchFloat, BatchFloat]:
     """Compute true anomaly at given times.
 
     Parameters
@@ -172,8 +180,8 @@ def rv_at_times(
     Unit("km / s")
     """
     sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
-    amplitude = rv_shape(sin_f, cos_f, eccentricity, ustrip("rad", arg_peri))
-    return K * amplitude + v0
+    amplitude = rv_shape(sin_f, cos_f, eccentricity, arg_peri)
+    return cast("BatchQSpeed", K * amplitude + v0)
 
 
 def astrometric_orbit_at_times(
@@ -251,4 +259,6 @@ def astrometric_orbit_at_times(
     )
     delta_ra = (A * cos_f + F * sin_f) * semi_major_axis
     delta_dec = (B * cos_f + G * sin_f) * semi_major_axis
-    return delta_ra, delta_dec
+    # cast: multiplication by a Quantity returns AbstractQuantity via quax dispatch;
+    # mypy cannot verify that AbstractQuantity satisfies BatchQAngle.
+    return cast("tuple[BatchQAngle, BatchQAngle]", (delta_ra, delta_dec))

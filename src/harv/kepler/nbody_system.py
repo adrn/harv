@@ -6,10 +6,10 @@ import equinox as eqx
 import quaxed.numpy as jnp
 
 from harv.custom_types import (
+    BatchQTime,
+    BatchVec3QLength,
+    BatchVec3QSpeed,
     ScalarQMass,
-    ScalarQTime,
-    Vec3QLength,
-    Vec3QSpeed,
 )
 from harv.kepler.body import KeplerianBody
 from harv.kepler.constants import G
@@ -77,7 +77,7 @@ class TwoBodySystem(AbstractNBodySystem):
     # Methods
     #
 
-    def position_barycentric(self, time: ScalarQTime, body_idx: int) -> Vec3QLength:
+    def position_barycentric(self, time: BatchQTime, body_idx: int) -> BatchVec3QLength:
         """Get barycentric position of specified body at given time(s).
 
         Parameters
@@ -98,11 +98,11 @@ class TwoBodySystem(AbstractNBodySystem):
             return r2  # companion about barycenter
 
         if body_idx == 0:
-            return cast("Vec3QLength", -(self.m_companion / self.m_primary) * r2)
+            return cast("BatchVec3QLength", -(self.m_companion / self.m_primary) * r2)
 
         raise IndexError("body_idx must be 0 (primary) or 1 (companion)")
 
-    def position_relative(self, time: ScalarQTime) -> Vec3QLength:
+    def position_relative(self, time: BatchQTime) -> BatchVec3QLength:
         """Position of companion relative to primary.
 
         Parameters
@@ -116,9 +116,9 @@ class TwoBodySystem(AbstractNBodySystem):
             3D position vector(s) of companion relative to primary
         """
         r2 = self.position_barycentric(time, 1)
-        return cast("Vec3QLength", r2 * (1 + self.m_companion / self.m_primary))
+        return cast("BatchVec3QLength", r2 * (1 + self.m_companion / self.m_primary))
 
-    def velocity_barycentric(self, time: ScalarQTime, body_idx: int) -> Vec3QSpeed:
+    def velocity_barycentric(self, time: BatchQTime, body_idx: int) -> BatchVec3QSpeed:
         """Get barycentric velocity of specified body at given time(s).
 
         Parameters
@@ -139,11 +139,11 @@ class TwoBodySystem(AbstractNBodySystem):
             return v2
 
         if body_idx == 0:
-            return cast("Vec3QSpeed", -(self.m_companion / self.m_primary) * v2)
+            return cast("BatchVec3QSpeed", -(self.m_companion / self.m_primary) * v2)
 
         raise IndexError("body_idx must be 0 (primary) or 1 (companion)")
 
-    def velocity_relative(self, time: ScalarQTime) -> Vec3QSpeed:
+    def velocity_relative(self, time: BatchQTime) -> BatchVec3QSpeed:
         """Velocity of companion relative to primary.
 
         Parameters
@@ -157,4 +157,4 @@ class TwoBodySystem(AbstractNBodySystem):
             3D velocity vector(s) of companion relative to primary
         """
         v2 = self.velocity_barycentric(time, 1)
-        return cast("Vec3QSpeed", v2 * (1 + self.m_companion / self.m_primary))
+        return cast("BatchVec3QSpeed", v2 * (1 + self.m_companion / self.m_primary))
