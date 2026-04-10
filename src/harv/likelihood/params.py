@@ -41,59 +41,6 @@ from harv.custom_types import (
     BatchQTime,
 )
 
-# ---------------------------------------------------------------------------
-# MarginalizedParameters wrapper
-# ---------------------------------------------------------------------------
-
-
-class MarginalizedParameters(eqx.Module):
-    """Wrapper that holds non-marginalized field values as a pytree.
-
-    Created by ``AbstractParameters.marginalize()`` or
-    ``AbstractParameters.marginalized()``.  The ``marginalized_names`` tuple
-    records which linear parameters have been removed from the pytree and
-    should be analytically integrated out by the likelihood.
-
-    Field access is delegated to the internal ``_values`` dict, so
-    ``params.period`` works as expected.
-
-    Parameters
-    ----------
-    values : dict[str, Any]
-        Mapping from field name to value for every *non-marginalized* field.
-        These are the pytree leaves that JAX traces through.
-    marginalized_names : tuple[str, ...]
-        Names of the linear parameters that have been marginalized out.
-        Static (not a pytree leaf).
-    source_cls : type or None
-        The full parameter class this was derived from, or ``None`` for
-        combined (multi-source-class) wrappers.  Static.
-    """
-
-    values: dict[str, Any]
-    marginalized_names: tuple[str, ...] = eqx.field(static=True)
-    source_cls: type | None = eqx.field(static=True, default=None)
-
-    @property
-    def nonlinear_names(self) -> tuple[str, ...]:
-        """Names of the non-marginalized fields present in this wrapper."""
-        return tuple(self.values.keys())
-
-    def __getattr__(self, name: str) -> Any:
-        # eqx.Module uses __getattr__ only as a fallback, so this won't
-        # intercept normal Module attribute access (values, etc.).
-        try:
-            return self.values[name]
-        except KeyError:
-            raise AttributeError(  # noqa: B904
-                f"{type(self).__name__!r} object has no attribute {name!r}"
-            )
-
-
-# ---------------------------------------------------------------------------
-# Abstract base
-# ---------------------------------------------------------------------------
-
 
 class AbstractParameters(eqx.Module):
     """Abstract base for all parameter structs.
@@ -104,64 +51,19 @@ class AbstractParameters(eqx.Module):
     """
 
     linear_param_names: ClassVar[tuple[str, ...]] = ()
+    nonlinear_param_names: ClassVar[tuple[str, ...]] = ()
 
     period: BatchQTime
     eccentricity: BatchFloat
     phase_peri: BatchFloat
     arg_peri: BatchFloat
 
-    @property
-    def nonlinear_param_names(self) -> tuple[str, ...]:
-        """Names of nonlinear parameters (fields minus linear params and offsets)."""
-        linear = type(self).linear_param_names
-        return tuple(
+    def __init_subclass__(cls) -> None:
+        """Automatically compute nonlinear_param_names for each subclass."""
+        cls.nonlinear_param_names = tuple(
             f.name
-            for f in dataclasses.fields(self)
-            if f.name not in linear and f.name != "offsets"
-        )
-
-    # -- Marginalization helpers ------------------------------------------
-
-    def marginalize(self, *names: str) -> MarginalizedParameters:
-        """Return a ``MarginalizedParameters`` wrapper with *names* removed.
-
-        Parameters
-        ----------
-        *names : str
-            Names of linear parameters to marginalize.  Each must be in
-            ``self.linear_param_names``.  If none are given, **all** linear
-            parameters are marginalized.
-
-        Returns
-        -------
-        MarginalizedParameters
-
-        Raises
-        ------
-        ValueError
-            If any name is not a recognised linear parameter.
-        """
-        cls = type(self)
-        if not names:
-            names = cls.linear_param_names
-
-        bad = set(names) - set(cls.linear_param_names)
-        if bad:
-            msg = (
-                f"Cannot marginalize {bad}: not in "
-                f"{cls.__name__}.linear_param_names = {cls.linear_param_names}"
-            )
-            raise ValueError(msg)
-
-        keep = {
-            f.name: getattr(self, f.name)
-            for f in dataclasses.fields(self)
-            if f.name not in names
-        }
-        return MarginalizedParameters(
-            values=keep,
-            marginalized_names=tuple(names),
-            source_cls=cls,
+            for f in dataclasses.fields(cls)
+            if f.name not in cls.linear_param_names and f.init
         )
 
     @classmethod
@@ -169,7 +71,7 @@ class AbstractParameters(eqx.Module):
         cls,
         *names: str,
         **kwargs: Any,
-    ) -> MarginalizedParameters:
+    ) -> "MarginalizedParameters":
         """Construct a ``MarginalizedParameters`` directly from keyword args.
 
         This is the construction path used by the sampler, which does not have
@@ -216,8 +118,7 @@ class RVParameters(AbstractParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters, the linear RV parameters
-    (semi-amplitude K and systemic velocity v0), and an optional array of
-    per-instrument velocity offsets for multi-survey data.
+    (semi-amplitude K and systemic velocity v0).
 
     Parameters
     ----------
@@ -227,23 +128,12 @@ class RVParameters(AbstractParameters):
         RV semi-amplitude.
     v0 : BatchQSpeed
         Systemic velocity (for the reference instrument).
-    offsets : dict[str, BatchQSpeed] or None
-        Per-instrument velocity offsets, keyed by instrument name. Example:
-        ``{"ESPRESSO": Quantity(5.0, "km/s"), "HARPS": Quantity(-2.0, "km/s")}``.
-        The keys must match the names passed as ``instrument_names`` to
-        ``RVLikelihood`` (which maps names to columns in ``indicator_matrix``).
-        ``None`` for single-instrument data.  Not included in
-        ``linear_param_names`` because the count is data-dependent; the
-        explicit likelihood path reads this field directly.
     """
 
     linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
 
     K: BatchQSpeed  # RV semi-amplitude
     v0: BatchQSpeed  # systemic velocity (reference instrument)
-    offsets: dict[str, BatchQSpeed] | None = (
-        None  # per-instrument offsets {name: Quantity}
-    )
 
 
 @final
@@ -276,3 +166,64 @@ class GaiaAstrometryParameters(AbstractParameters):
     pmdec: BatchQAngularSpeed  # proper motion in Dec
     parallax: BatchQAngle  # parallax
     semi_major_axis: BatchQLength  # photocentric semi-major axis
+
+
+@final
+class MarginalizedParameters(eqx.Module):
+    """Wrapper that holds non-marginalized field values as a pytree.
+
+    Created by ``AbstractParameters.marginalize()`` or
+    ``AbstractParameters.marginalized()``.  The ``marginalized_names`` tuple
+    records which linear parameters have been removed from the pytree and
+    should be analytically integrated out by the likelihood.
+
+    Field access is delegated to the internal ``_values`` dict, so
+    ``params.period`` works as expected.
+
+    Parameters
+    ----------
+    values : dict[str, Any]
+        Mapping from field name to value for every *non-marginalized* field.
+        These are the pytree leaves that JAX traces through.
+    marginalized_names : tuple[str, ...]
+        Names of the linear parameters that have been marginalized out.
+    source_cls : type[AbstractParameters]
+        The full parameter class this was derived from.
+    """
+
+    values: dict[str, Any]
+    marginalized_names: tuple[str, ...] = eqx.field(static=True)
+    source_cls: type[AbstractParameters] = eqx.field(static=True)
+
+    def __check_init__(self) -> None:
+        for name in self.marginalized_names:
+            if name not in self.source_cls.linear_param_names:
+                raise ValueError(
+                    f"Cannot marginalize {name}: not in "
+                    f"{self.source_cls.__name__}.linear_param_names = "
+                    f"{self.source_cls.linear_param_names}"
+                )
+
+        # TODO: validate that all of the nonlinear parameters are present in values
+        for name in self.source_cls.nonlinear_param_names:
+            if name not in self.values:
+                raise ValueError(
+                    f"Missing value for nonlinear parameter {name} "
+                    f"in marginalized parameters. Expected keys: "
+                    f"{self.source_cls.nonlinear_param_names}"
+                )
+
+    @property
+    def nonlinear_param_names(self) -> tuple[str, ...]:
+        """Names of the non-marginalized fields present in this wrapper."""
+        return tuple(self.values.keys())
+
+    def __getattr__(self, name: str) -> Any:
+        # eqx.Module uses __getattr__ only as a fallback, so this won't
+        # intercept normal Module attribute access (values, etc.).
+        try:
+            return self.values[name]
+        except KeyError:
+            raise AttributeError(  # noqa: B904
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            )

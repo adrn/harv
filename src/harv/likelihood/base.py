@@ -83,7 +83,7 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
 
     @property
     def _has_marginalized(self) -> bool:
-        """TODO."""
+        """Whether any linear parameters have marginalized priors."""
         return (
             len(self.linear_marginalized_prior or {})
             + len(self.offsets_marginalized_prior or {})
@@ -94,7 +94,7 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
     @property
     @abstractmethod
     def linear_param_units(self) -> dict[str, str]:
-        """TODO."""
+        """Map from linear parameter name to its physical unit string."""
 
     @abstractmethod
     def design_matrix(self, params: MarginalizedParameters | ParamT) -> jax.Array:
@@ -316,13 +316,11 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
     def _log_prob_explicit(
         self, params: ParamT, offsets: dict[str, AbstractQuantity]
     ) -> jax.Array:
-        """Explicit log-likelihood with all parameters specified.
+        """Explicit (non-marginalized) Gaussian log-likelihood.
 
-        Evaluates the Gaussian data log-likelihood at the provided K, v0, and
-        (optionally) per-instrument offsets.  When ``params.offsets`` is not
-        ``None`` and ``indicator_matrix`` is present on the likelihood, the
-        full multi-survey model ``K * rv_shape(t) + v0 + dj * I(j)`` is
-        evaluated.  Otherwise only the base SB1 model ``K * X(t) + v0`` is used.
+        Computes ``Normal(X @ y, obs_err).log_prob(obs)`` where ``X`` is the
+        full design matrix and ``y`` is the vector of all linear parameter
+        values (base parameters + any per-instrument offsets).
         """
         X = self.design_matrix(params)
         linear_params = self.linear_unmarginalized_param_values(params, offsets)

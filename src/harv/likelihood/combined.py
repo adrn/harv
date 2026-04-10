@@ -61,12 +61,12 @@ class CompositeLikelihood(eqx.Module):
         log_lik = composite.log_prob({"astro": astro_params, "rv": rv_params})
     """
 
-    components: dict[str, AbstractLikelihood[Any]]
+    components: dict[str, AbstractLikelihood[Any, Any]]
 
-    def __init__(self, **components: AbstractLikelihood[Any]) -> None:
+    def __init__(self, **components: AbstractLikelihood[Any, Any]) -> None:
         self.components = components
 
-    def __getitem__(self, key: str) -> AbstractLikelihood[Any]:
+    def __getitem__(self, key: str) -> AbstractLikelihood[Any, Any]:
         return self.components[key]
 
     def __len__(self) -> int:
