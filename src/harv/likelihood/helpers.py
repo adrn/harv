@@ -2,120 +2,92 @@
 
 __all__ = ["_solve_kepler"]
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
-import equinox as eqx
 import jax
-import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt.quantity import AllowValue, ustrip
+import quaxed.numpy as jnp
+from unxt.quantity import AllowValue, Quantity, ustrip
 
 from harv.data import AbstractData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood.params import AbstractParameters, MarginalizedParameters
+from harv.quantity_distribution import QuantityDistribution
 
-# ---------------------------------------------------------------------------
-# Linear prior Protocol
-# ---------------------------------------------------------------------------
+type PriorDist = dist.Distribution | QuantityDistribution
+type LinearPriorDist = (
+    dict[str, PriorDist | LinearPriorCallable]
+    # QuantityDistribution
+    # | dist.MultivariateNormal
+    # | LinearPriorCallable
+    # | dict[str, PriorDist | LinearPriorCallable]
+    # | dict[
+    #     tuple[str, ...], PriorDist | LinearPriorCallable
+    # ]  # TODO: we could also implement - e.g., ("K", "v0") -> MultivariateNormal
+)
 
 
 @runtime_checkable
 class LinearPriorCallable(Protocol):
-    """Callable that returns a ``MultivariateNormal`` given nonlinear params.
+    """Returns a ``Normal`` given nonlinear params.
 
-    Any ``eqx.Module`` (or other callable) whose ``__call__`` matches this
-    signature satisfies the protocol.  The rejection sampler and likelihood
-    classes accept either a fixed ``dist.MultivariateNormal`` *or* a
-    ``LinearPriorCallable`` for the ``linear_prior`` field.
+    Any ``eqx.Module`` (or other callable) whose ``__call__`` matches this signature
+    satisfies the protocol.  The rejection sampler and likelihood classes accept either
+    a fixed ``dist.Normal`` *or* a ``LinearPriorCallable`` for each ``linear_prior``
+    field.
     """
 
-    def __call__(self, params: Any) -> dist.MultivariateNormal: ...
+    def __call__(
+        self, params: AbstractParameters | MarginalizedParameters
+    ) -> dist.Normal: ...
 
 
-# ---------------------------------------------------------------------------
-# Sub-distribution extraction
-# ---------------------------------------------------------------------------
-
-
-def _sub_mvn(
-    mvn: dist.MultivariateNormal,
-    indices: tuple[int, ...],
+def _resolve_linear_prior_mvn(
+    linear_prior: LinearPriorDist,
+    params: AbstractParameters | MarginalizedParameters,
+    expected_units: dict[str, str],
 ) -> dist.MultivariateNormal:
-    """Extract a sub-block from a block-diagonal ``MultivariateNormal``.
+    """Build a diagonal MVN from per-parameter priors, converting units as needed."""
+    locs = []
+    scales = []
+    for name, prior in linear_prior.items():
+        target_u = expected_units.get(name, "")
+        resolved = None
 
-    Selects the given rows/columns of ``loc`` and ``scale_tril`` via fancy
-    indexing.  This is correct when the joint distribution is block-diagonal
-    with respect to the selected indices (i.e. the selected parameters are
-    independent from the unselected ones).
+        # 1. Resolve callables (param-dependent priors)
+        if isinstance(prior, (dist.Distribution, QuantityDistribution)):
+            resolved = prior
+        elif callable(prior):
+            resolved = prior(params)
 
-    Parameters
-    ----------
-    mvn :
-        Joint multivariate normal distribution.
-    indices :
-        Parameter indices to retain.  Static at JAX trace time.
+        # 2. Unwrap QuantityDistribution -> bare Normal + unit conversion
+        expected_msg = (
+            f"Expected Normal inside QuantityDistribution for {name}, got "
+            f"{type(resolved)}"
+        )
+        if isinstance(resolved, QuantityDistribution):
+            prior_unit = cast("str", resolved.unit)
+            inner = resolved.distribution
+            if not isinstance(inner, dist.Normal):
+                raise TypeError(expected_msg)
+            loc = ustrip(AllowValue, target_u, Quantity(inner.loc, prior_unit))
+            scale = ustrip(AllowValue, target_u, Quantity(inner.scale, prior_unit))
+        elif isinstance(resolved, dist.Normal):
+            loc = resolved.loc
+            scale = resolved.scale
+        else:
+            raise TypeError(expected_msg)
 
-    Returns
-    -------
-    dist.MultivariateNormal
-        Sub-distribution over the selected parameters.
-    """
-    idx = jnp.array(indices)
+        locs.append(loc)
+        scales.append(scale)
+
     return dist.MultivariateNormal(
-        loc=mvn.loc[idx],
-        scale_tril=mvn.scale_tril[jnp.ix_(idx, idx)],
+        loc=jnp.array(locs), scale_tril=jnp.diag(jnp.array(scales))
     )
 
 
-# ---------------------------------------------------------------------------
-# Indexed callable & resolve helper
-# ---------------------------------------------------------------------------
-
-
-class _IndexedCallable(eqx.Module):
-    """Wraps a joint callable prior, selecting a subset of parameters by index.
-
-    Used when a single callable prior covers multiple likelihood components
-    (e.g. combined astrometry + RV) and each component needs its own sub-prior.
-    The ``indices`` tuple may be non-contiguous, so the covariance sub-block is
-    extracted via fancy indexing rather than slicing.
-
-    Parameters
-    ----------
-    wrapped : LinearPriorCallable
-        Callable returning a ``dist.MultivariateNormal`` given orbit params.
-    indices : tuple[int, ...]
-        Indices of the linear parameters for this component within the full
-        joint prior. Static so JAX can trace through without recompilation.
-    """
-
-    wrapped: LinearPriorCallable
-    indices: tuple[int, ...] = eqx.field(static=True)
-
-    def __call__(self, params: Any) -> dist.MultivariateNormal:
-        full = self.wrapped(params)
-        return _sub_mvn(full, self.indices)
-
-
-def _resolve_linear_prior(
-    linear_prior: dist.MultivariateNormal | LinearPriorCallable,
-    params: Any,
-) -> dist.MultivariateNormal:
-    """Resolve a fixed or callable linear prior.
-
-    If *linear_prior* is already a ``dist.MultivariateNormal`` it is returned
-    unchanged. If it is a callable ``LinearPriorCallable`` it is called with
-    *params* and must return a ``dist.MultivariateNormal``.
-
-    This check is a static Python isinstance test; it is evaluated at JAX
-    trace time (not at runtime of the compiled function) so it is safe inside
-    ``jax.vmap`` and ``jax.jit``.
-    """
-    if isinstance(linear_prior, dist.MultivariateNormal):
-        return linear_prior
-    return linear_prior(params)
-
-
+# TODO: this shouldn't be here! why is it here? we should be able to import this from
+# the kepler module
 def _solve_kepler(
     data: AbstractData,
     params: AbstractParameters | MarginalizedParameters,
