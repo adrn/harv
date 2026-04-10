@@ -5,8 +5,10 @@ from typing import Any
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
+from unxt import AbstractQuantity
 
 from harv.likelihood.base import AbstractLikelihood
+from harv.likelihood.params import AbstractParameters, MarginalizedParameters
 
 __all__ = ("CompositeLikelihood",)
 
@@ -30,24 +32,35 @@ class CompositeLikelihood(eqx.Module):
     Combining astrometry and RV likelihoods::
 
         import numpyro.distributions as dist
-        import jax.numpy as jnp
         from harv.likelihood.combined import CompositeLikelihood
         from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
         from harv.likelihood.rv import RVLikelihood
         from harv.likelihood.params import (
             GaiaAstrometryParameters, RVParameters,
         )
-
-        astro_prior = dist.MultivariateNormal(
-            loc=jnp.zeros(6), covariance_matrix=jnp.eye(6) * 1000.0**2
-        )
-        rv_prior = dist.MultivariateNormal(
-            loc=jnp.zeros(2), covariance_matrix=jnp.eye(2) * 100.0**2
-        )
+        from harv.quantity_distribution import QuantityDistribution
 
         composite = CompositeLikelihood(
-            astro=GaiaAstrometryLikelihood(gaia_data, astro_prior),
-            rv=RVLikelihood(rv_data, rv_prior),
+            astro=GaiaAstrometryLikelihood(
+                data=gaia_data,
+                linear_marginalized_prior={
+                    "ra0": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
+                    "dec0": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
+                    "pmra": QuantityDistribution(dist.Normal(0., 1e3), "mas/yr"),
+                    "pmdec": QuantityDistribution(dist.Normal(0., 1e3), "mas/yr"),
+                    "parallax": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
+                    "semi_major_axis": QuantityDistribution(
+                        dist.Normal(0., 1e3), "mas"
+                    ),
+                },
+            ),
+            rv=RVLikelihood(
+                data=rv_data,
+                linear_marginalized_prior={
+                    "K": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+                    "v0": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+                },
+            ),
         )
 
         # Build per-component params (orbital params shared by construction)
@@ -84,7 +97,11 @@ class CompositeLikelihood(eqx.Module):
         """Return (name, component) pairs."""
         return self.components.items()
 
-    def log_prob(self, params: dict[str, eqx.Module]) -> jax.Array:
+    def log_prob(
+        self,
+        params: dict[str, AbstractParameters | MarginalizedParameters],
+        offsets: dict[str, dict[str, AbstractQuantity]] | None = None,
+    ) -> jax.Array:
         """Sum log-likelihoods from all components.
 
         Parameters
@@ -92,8 +109,15 @@ class CompositeLikelihood(eqx.Module):
         params : dict[str, eqx.Module]
             Per-component parameter structs, keyed by component name.
             Each component's ``log_prob`` is called with its own params.
+        offsets : dict[str, dict[str, AbstractQuantity]] or None
+            Per-component, per-instrument offsets.  Outer keys are component
+            names matching ``params``; inner dicts are passed to the
+            corresponding component's ``log_prob``.  ``None`` (or missing
+            keys) means no offsets for that component.
         """
+        _offsets = offsets or {}
         log_probs = [
-            comp.log_prob(params[name]) for name, comp in self.components.items()
+            comp.log_prob(params[name], _offsets.get(name))
+            for name, comp in self.components.items()
         ]
         return jnp.sum(jnp.stack(log_probs))
