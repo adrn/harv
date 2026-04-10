@@ -1,6 +1,6 @@
 """Helper functions shared across the likelihood modules."""
 
-__all__ = ["_solve_kepler"]
+__all__ = ("LinearPriorCallable", "_solve_kepler", "_resolve_linear_prior_mvn")
 
 from typing import Protocol, cast, runtime_checkable
 
@@ -39,7 +39,8 @@ class LinearPriorCallable(Protocol):
 
     def __call__(
         self, params: AbstractParameters | MarginalizedParameters
-    ) -> dist.Normal: ...
+    ) -> QuantityDistribution | dist.Normal:
+        """Returns a Normal distribution given nonlinear parameters."""
 
 
 def _resolve_linear_prior_mvn(
@@ -55,7 +56,7 @@ def _resolve_linear_prior_mvn(
         resolved = None
 
         # 1. Resolve callables (param-dependent priors)
-        if isinstance(prior, (dist.Distribution, QuantityDistribution)):
+        if isinstance(prior, dist.Distribution | QuantityDistribution):
             resolved = prior
         elif callable(prior):
             resolved = prior(params)
@@ -86,8 +87,6 @@ def _resolve_linear_prior_mvn(
     )
 
 
-# TODO: this shouldn't be here! why is it here? we should be able to import this from
-# the kepler module
 def _solve_kepler(
     data: AbstractData,
     params: AbstractParameters | MarginalizedParameters,
