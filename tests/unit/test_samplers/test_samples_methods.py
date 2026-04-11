@@ -14,7 +14,7 @@ import pytest
 from numpyro import infer
 from unxt import Quantity
 
-from harv.data import RadialVelocityData
+from harv.data import RVData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood.params import (
     GaiaAstrometryParameters,
@@ -48,8 +48,8 @@ def rv_samples() -> Samples:
         "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
     }
     linear = {
-        "K": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
-        "v0": Quantity(jnp.linspace(-1.0, 1.0, N), "km/s"),
+        "rv_semiamp": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v_sys": Quantity(jnp.linspace(-1.0, 1.0, N), "km/s"),
     }
     return Samples(
         nonlinear=nonlinear,
@@ -108,8 +108,8 @@ def combined_samples() -> Samples:
         "pmdec": Quantity(jnp.ones(N) * -5.0, "mas/yr"),
         "parallax": Quantity(jnp.ones(N) * 5.0, "mas"),
         "semi_major_axis": Quantity(jnp.linspace(1.0, 3.0, N), "mas"),
-        "K": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
-        "v0": Quantity(jnp.zeros(N), "km/s"),
+        "rv_semiamp": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v_sys": Quantity(jnp.zeros(N), "km/s"),
     }
     return Samples(
         nonlinear=nonlinear,
@@ -132,8 +132,8 @@ def empty_rv_samples() -> Samples:
             "arg_peri": Quantity(jnp.array([]), "rad"),
         },
         linear={
-            "K": Quantity(jnp.array([]), "km/s"),
-            "v0": Quantity(jnp.array([]), "km/s"),
+            "rv_semiamp": Quantity(jnp.array([]), "km/s"),
+            "v_sys": Quantity(jnp.array([]), "km/s"),
         },
         orbit_cls=RVParameters,
         full_cls=(RVParameters,),
@@ -144,12 +144,17 @@ def empty_rv_samples() -> Samples:
 
 @pytest.fixture
 def rv_sampler_and_data():
-    """RejectionSampler + RadialVelocityData used for init_mcmc tests."""
+    """RejectionSampler + RVData used for init_mcmc tests."""
     times = Quantity(jnp.linspace(0.0, 100.0, 20), "day")
     rv = Quantity(jnp.zeros(20), "km/s")
     rv_err = Quantity(jnp.ones(20) * 2.0, "km/s")
-    data = RadialVelocityData(time=times, rv=rv, rv_err=rv_err)
-    prior = RejectionPrior.default_rv(period_min=50.0, period_max=200.0)
+    data = RVData(time=times, rv=rv, rv_err=rv_err)
+    prior = RejectionPrior.default_rv(
+        period_min=Quantity(50.0, "day"),
+        period_max=Quantity(200.0, "day"),
+        sigma_K0=Quantity(30.0, "km/s"),
+        sigma_v0=Quantity(30.0, "km/s"),
+    )
     sampler = RejectionSampler(prior)
     return sampler, data
 
@@ -171,13 +176,13 @@ class TestRvAtTimes:
             eccentricity=0.0,
             t_peri=Quantity(0.0, "day"),
             arg_peri=Quantity(0.0, "rad"),
-            K=Quantity(10.0, "km/s"),
-            v0=Quantity(0.0, "km/s"),
+            rv_semiamp=Quantity(10.0, "km/s"),
+            v_sys=Quantity(0.0, "km/s"),
         )
         assert rv.shape == (50,)
 
     def test_unit_preserved(self):
-        """Output unit matches K and v0 unit."""
+        """Output unit matches rv_semiamp and v_sys unit."""
         times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
         rv = rv_at_times(
             times,
@@ -185,23 +190,23 @@ class TestRvAtTimes:
             eccentricity=0.3,
             t_peri=Quantity(50.0, "day"),
             arg_peri=Quantity(1.2, "rad"),
-            K=Quantity(8.0, "km/s"),
-            v0=Quantity(-5.0, "km/s"),
+            rv_semiamp=Quantity(8.0, "km/s"),
+            v_sys=Quantity(-5.0, "km/s"),
         )
         assert rv.unit.physical_type == "speed"
 
-    def test_v0_offset(self):
-        """Systemic velocity shifts every sample by v0."""
+    def test_v_sys_offset(self):
+        """Systemic velocity shifts every sample by v_sys."""
         times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
         kwargs = dict(
             period=Quantity(200.0, "day"),
             eccentricity=0.0,
             t_peri=Quantity(0.0, "day"),
             arg_peri=Quantity(0.0, "rad"),
-            K=Quantity(10.0, "km/s"),
+            rv_semiamp=Quantity(10.0, "km/s"),
         )
-        rv0 = rv_at_times(times, v0=Quantity(0.0, "km/s"), **kwargs)
-        rv5 = rv_at_times(times, v0=Quantity(5.0, "km/s"), **kwargs)
+        rv0 = rv_at_times(times, v_sys=Quantity(0.0, "km/s"), **kwargs)
+        rv5 = rv_at_times(times, v_sys=Quantity(5.0, "km/s"), **kwargs)
         np.testing.assert_allclose(np.asarray(rv5.value - rv0.value), 5.0, atol=1e-6)
 
 
@@ -276,9 +281,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (
-                num_chains,
-            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            assert arr.shape == (num_chains,), (
+                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            )
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""
@@ -341,7 +346,7 @@ class TestInitMcmc:
             num_samples=5,
             chain_method="sequential",
         )
-        mcmc.run(jr.PRNGKey(0))
+        mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
         # The auto-generated model samples all keys from prior.nonlinear_priors.
         for key in sampler.prior.nonlinear_priors:
@@ -378,8 +383,8 @@ class TestInitMcmcFull:
         )
         assert "_linear" in mcmc._init_params
         # Named linear params are deterministic sites, not init_params entries.
-        assert "K" not in mcmc._init_params
-        assert "v0" not in mcmc._init_params
+        assert "rv_semiamp" not in mcmc._init_params
+        assert "v_sys" not in mcmc._init_params
 
     def test_linear_init_shape(self, rv_samples, rv_sampler_and_data):
         """'_linear' init has shape (num_chains, n_linear)."""
@@ -408,7 +413,7 @@ class TestInitMcmcFull:
             num_samples=5,
             chain_method="sequential",
         )
-        mcmc.run(jr.PRNGKey(0))
+        mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
         # Nonlinear sites must be present.
         for key in sampler.prior.nonlinear_priors:
@@ -446,7 +451,7 @@ class TestInitMcmcExtraModel:
         def extra_model(pars):
             # Sample a dummy physical parameter, compute K from it.
             K_scale = numpyro.sample("K_scale", ndist.HalfNormal(10.0))
-            return {"K": K_scale}
+            return {"rv_semiamp": K_scale}
 
         return extra_model
 
@@ -508,7 +513,7 @@ class TestInitMcmcExtraModel:
             num_samples=5,
             chain_method="sequential",
         )
-        mcmc.run(jr.PRNGKey(42))
+        mcmc.run(jr.key(42))
         posterior = mcmc.get_samples()
 
         # Nonlinear sites must be present.
@@ -517,9 +522,9 @@ class TestInitMcmcExtraModel:
         # The extra-model site is present.
         assert "K_scale" in posterior
         # K is exposed as a deterministic site.
-        assert "K" in posterior
-        # v0 is analytically marginalized — not a sample site.
-        assert "v0" not in posterior
+        assert "rv_semiamp" in posterior
+        # v_sys is analytically marginalized — not a sample site.
+        assert "v_sys" not in posterior
 
     def test_extra_model_raises_for_unknown_param(
         self, rv_samples, rv_sampler_and_data
@@ -542,7 +547,7 @@ class TestInitMcmcExtraModel:
             chain_method="sequential",
         )
         with pytest.raises(ValueError, match="unknown linear parameter name"):
-            mcmc.run(jr.PRNGKey(0))
+            mcmc.run(jr.key(0))
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +576,7 @@ class TestPlotRV:
         times = Quantity(jnp.linspace(0.0, 100.0, 20), "day")
         rv = Quantity(jnp.zeros(20), "km/s")
         rv_err = Quantity(jnp.ones(20) * 2.0, "km/s")
-        rv_data = RadialVelocityData(time=times, rv=rv, rv_err=rv_err)
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
         fig = rv_samples.plot(data=rv_data)
         assert fig is not None
         plt.close("all")
@@ -665,8 +670,8 @@ class TestPlotUnknownDataType:
                 "arg_peri": Quantity(jnp.zeros(5), "rad"),
             },
             linear={
-                "K": Quantity(jnp.zeros(5), "km/s"),
-                "v0": Quantity(jnp.zeros(5), "km/s"),
+                "rv_semiamp": Quantity(jnp.zeros(5), "km/s"),
+                "v_sys": Quantity(jnp.zeros(5), "km/s"),
             },
             orbit_cls=RVParameters,
             full_cls=(RVParameters,),

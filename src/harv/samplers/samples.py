@@ -16,12 +16,13 @@ import quaxed.numpy as jnp
 from numpyro import infer as _numpyro_infer
 from unxt import AbstractQuantity, Quantity, ustrip
 
-from harv.data import RadialVelocityData, SourceData
+from harv.data import RVData, SourceData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
+from harv.plot import get_t_grid
 
 try:
     import arviz as az
@@ -86,7 +87,7 @@ class _WarmStartMCMC:
         Parameters
         ----------
         rng_key :
-            JAX PRNGKey passed to the underlying ``numpyro.infer.MCMC.run``.
+            JAX key passed to the underlying ``numpyro.infer.MCMC.run``.
         *args :
             Positional arguments forwarded to ``MCMC.run``.
         init_params : dict, optional
@@ -153,7 +154,7 @@ class Samples(eqx.Module):
         parameters have unit ``""``.
     linear : dict[str, Quantity]
         Linear parameter samples, one Quantity per parameter.
-        Keys: e.g. ``"K"``, ``"v0"`` for RV; ``"ra0"``, ``"dec0"``,
+        Keys: e.g. ``"rv_semiamp"``, ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``,
         ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"`` for
         astrometry.  Units are data-driven (e.g. ``"km/s"`` for RV).
     orbit_cls : type
@@ -549,9 +550,15 @@ class Samples(eqx.Module):
             if self.data_type == "astrometry":
                 params = ["period", "eccentricity", "parallax", "semi_major_axis"]
             elif self.data_type == "rv":
-                params = ["period", "eccentricity", "K", "v0"]
+                params = ["period", "eccentricity", "rv_semiamp", "v_sys"]
             elif self.data_type == "combined":
-                params = ["period", "eccentricity", "parallax", "semi_major_axis", "K"]
+                params = [
+                    "period",
+                    "eccentricity",
+                    "parallax",
+                    "semi_major_axis",
+                    "rv_semiamp",
+                ]
             else:
                 # Fallback: use first 4 available parameters
                 params = self.keys()[:4]
@@ -618,6 +625,8 @@ class Samples(eqx.Module):
         n_samples: int = 50,
         phase_fold: bool = False,
         apply_mean_offsets: bool = True,
+        plot_kwargs: dict[str, Any] | None = None,
+        data_plot_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         """RV curve and/or astrometric orbit on sky.
@@ -625,30 +634,36 @@ class Samples(eqx.Module):
         Selects panels automatically based on ``data_type``:
 
         - ``"rv"`` — RV curve (time-domain or phase-folded); ``data`` must be
-          a ``RadialVelocityData`` or ``SourceData`` containing RV datasets.
+          a ``RVData`` or ``SourceData`` containing RV datasets.
         - ``"astrometry"`` — on-sky orbital ellipses drawn from posterior
           samples; ``data`` is not required (orbit shape comes from samples).
         - ``"combined"`` — both panels side by side; ``data`` must be a
           ``SourceData`` containing both ``GaiaAstrometryData`` and at least
-          one ``RadialVelocityData``.
+          one ``RVData``.
 
         Parameters
         ----------
-        data : RadialVelocityData or SourceData, optional
+        data : RVData or SourceData, optional
             Observed data to overplot on the RV panel.  Required for ``"rv"``
             and ``"combined"`` data types; optional for ``"astrometry"``.
         n_samples : int, optional
             Number of posterior orbit curves to draw.  Default: 50.
         phase_fold : bool, optional
             If ``True``, fold the RV data and model curves to orbital phase
-            using the median posterior period.  The mean v0 is subtracted from
-            the data so the y-axis shows the intrinsic RV variation.
+            using the median posterior period.  The mean v_sys is subtracted
+            from the data so the y-axis shows the intrinsic RV variation.
             If ``False`` (default), plot RV vs time in the reference frame.
         apply_mean_offsets : bool, optional
             When ``True`` (default), shift each non-reference instrument's data
             points by the posterior mean offset so they land in the reference
             frame and can be compared directly to the model curves.  Has no
             effect when there are no multi-instrument offsets.
+        plot_kwargs : dict, optional
+            Style overrides for orbit model curves (passed to
+            ``ax.plot()``).  Defaults: thin grey lines with no markers.
+        data_plot_kwargs : dict, optional
+            Style overrides for data points (passed to ``ax.errorbar()``).
+            Defaults: filled circles with error bars.
         **kwargs :
             Additional keyword arguments forwarded to
             ``matplotlib.pyplot.subplots``.
@@ -671,10 +686,16 @@ class Samples(eqx.Module):
         >>> fig = samples.plot(data=source_data, n_samples=100)
         >>> fig = samples.plot(data=source_data, phase_fold=True)
         >>> fig = samples.plot()  # astrometry only, no data points needed
+        >>> fig = samples.plot(plot_kwargs={"color": "C3", "alpha": 0.3})
         """
         if not HAS_MPL:
             msg = "matplotlib is required for plotting. "
             raise ImportError(msg)
+
+        if plot_kwargs is None:
+            plot_kwargs = {}
+        if data_plot_kwargs is None:
+            data_plot_kwargs = {}
 
         dt = self.data_type
         if dt == "rv":
@@ -686,12 +707,18 @@ class Samples(eqx.Module):
                 plt=plt,
                 phase_fold=phase_fold,
                 apply_mean_offsets=apply_mean_offsets,
+                plot_kwargs=plot_kwargs,
+                data_plot_kwargs=data_plot_kwargs,
             )
             fig.tight_layout()
             return fig
         if dt == "astrometry":
             fig, ax = plt.subplots(**kwargs)
-            self._draw_astrometry(ax=ax, n_samples=n_samples)
+            self._draw_astrometry(
+                ax=ax,
+                n_samples=n_samples,
+                plot_kwargs=plot_kwargs,
+            )
             fig.tight_layout()
             return fig
         if dt == "combined":
@@ -704,8 +731,14 @@ class Samples(eqx.Module):
                 plt=plt,
                 phase_fold=phase_fold,
                 apply_mean_offsets=apply_mean_offsets,
+                plot_kwargs=plot_kwargs,
+                data_plot_kwargs=data_plot_kwargs,
             )
-            self._draw_astrometry(ax=axes[1], n_samples=n_samples)
+            self._draw_astrometry(
+                ax=axes[1],
+                n_samples=n_samples,
+                plot_kwargs=plot_kwargs,
+            )
             fig.tight_layout()
             return fig
         msg = f"Unknown data_type '{dt}' for plot()."
@@ -724,6 +757,8 @@ class Samples(eqx.Module):
         plt: Any,
         phase_fold: bool = False,
         apply_mean_offsets: bool = True,
+        plot_kwargs: dict[str, Any] | None = None,
+        data_plot_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """RV curve (time-domain or phase-folded) drawn into *ax*.
 
@@ -731,14 +766,36 @@ class Samples(eqx.Module):
         ----------
         phase_fold :
             When ``True`` fold data and model to orbital phase using the median
-            period and subtract the mean v0 so the y-axis shows only the
+            period and subtract the mean v_sys so the y-axis shows only the
             intrinsic RV variation.  The mean anomaly is computed correctly
             even when individual samples have periods that differ from the
             median folding period.
         apply_mean_offsets :
             When ``True``, shift each non-reference instrument's data points
             by the posterior mean offset so they fall in the reference frame.
+        plot_kwargs :
+            Style overrides for orbit model curves (passed to ``ax.plot()``).
+        data_plot_kwargs :
+            Style overrides for data points (passed to ``ax.errorbar()``).
         """
+        # Orbit curve style defaults (thin lines, no markers)
+        orbit_style = (plot_kwargs or {}).copy()
+        orbit_style.setdefault("linestyle", "-")
+        orbit_style.setdefault("linewidth", 0.5)
+        orbit_style.setdefault("alpha", 0.15)
+        orbit_style.setdefault("marker", "")
+        orbit_style.setdefault("color", "#555555")
+        orbit_style.setdefault("rasterized", True)
+
+        # Data style defaults (error bars with filled circles)
+        data_style = (data_plot_kwargs or {}).copy()
+        data_style.setdefault("linestyle", "none")
+        data_style.setdefault("marker", "o")
+        data_style.setdefault("markersize", 4.0)
+        data_style.setdefault("elinewidth", 1.0)
+        data_style.setdefault("capsize", 0)
+        data_style.setdefault("zorder", 10)
+
         period_qty = self.nonlinear["period"]
         ecc_qty = self.nonlinear["eccentricity"]
         phase_peri_qty = self.nonlinear["phase_peri"]
@@ -747,8 +804,8 @@ class Samples(eqx.Module):
         time_unit = str(period_qty.unit)
         period_vals = np.asarray(period_qty.value)  # plain (n,) for indexing
 
-        K_qty = self.linear["K"]
-        v0_qty = self.linear["v0"]
+        K_qty = self.linear["rv_semiamp"]
+        v0_qty = self.linear["v_sys"]
         rv_unit = str(K_qty.unit)
         K_vals = np.asarray(K_qty.value)
         v0_vals = np.asarray(v0_qty.value)
@@ -765,24 +822,22 @@ class Samples(eqx.Module):
 
         # Collect per-instrument datasets (multi-survey support).
         if isinstance(data, SourceData):
-            rv_datasets: dict[str, RadialVelocityData] = data.get_datasets_by_type(
-                RadialVelocityData
-            )
-        elif isinstance(data, RadialVelocityData):
+            rv_datasets: dict[str, RVData] = data.get_datasets_by_type(RVData)
+        elif isinstance(data, RVData):
             rv_datasets = {"data": data}
         elif data is None:
             rv_datasets = {}
         else:
-            msg = "data must be RadialVelocityData or SourceData for data_type='rv'."
+            msg = "data must be RVData or SourceData for data_type='rv'."
             raise ValueError(msg)
 
-        # Per-instrument mean offsets (extra linear params beyond K and v0).
+        # Per-instrument mean offsets (extra linear params beyond rv_semiamp and v_sys).
         mean_offsets: dict[str, Quantity] = {
             name: Quantity(float(np.mean(np.asarray(self.linear[name].value))), rv_unit)
             for name in self.extra_linear_names
         }
 
-        # Mean v0 used to centre phase-folded plots on zero.
+        # Mean v_sys used to centre phase-folded plots on zero.
         mean_v0 = Quantity(float(np.mean(v0_vals)), rv_unit)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -805,16 +860,18 @@ class Samples(eqx.Module):
             else:
                 x_data = ustrip(time_unit, rv_data.time)
 
-            color = colors[color_idx % len(colors)]
+            # Per-instrument style: start from data_style defaults, then
+            # set color from the color cycle for multi-instrument plots.
+            instr_style = data_style.copy()
+            if "color" not in data_plot_kwargs:
+                instr_style["color"] = colors[color_idx % len(colors)]
             label = instr_name if len(rv_datasets) > 1 else "data"
+            instr_style.setdefault("label", label)
             ax.errorbar(
                 x_data,
                 ustrip(rv_unit, rv_obs),
                 yerr=ustrip(rv_unit, rv_err),
-                fmt="o",
-                color=color,
-                label=label,
-                zorder=3,
+                **instr_style,
             )
 
         # --- Posterior model curves ---
@@ -862,7 +919,7 @@ class Samples(eqx.Module):
                 gaps = np.where(np.diff(x_sorted) < -0.5)[0] + 1
                 x_plot = np.insert(x_sorted.astype(float), gaps, np.nan)
                 rv_plot = np.insert(rv_sorted.astype(float), gaps, np.nan)
-                ax.plot(x_plot, rv_plot, color="C0", alpha=0.15, lw=0.8)
+                ax.plot(x_plot, rv_plot, **orbit_style)
 
             ax.set_xlabel("Orbital phase")
             ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
@@ -873,15 +930,13 @@ class Samples(eqx.Module):
         else:
             # Time-domain: dense grid spanning all observations.
             if rv_datasets:
-                all_times = jnp.concatenate(
-                    [rv_data.time.value for rv_data in rv_datasets.values()]
-                )
-                t_grid = Quantity(
-                    np.linspace(
-                        float(jnp.min(all_times)), float(jnp.max(all_times)), 500
+                all_times = Quantity(
+                    jnp.concatenate(
+                        [rv_data.time.value for rv_data in rv_datasets.values()]
                     ),
                     time_unit,
                 )
+                t_grid = get_t_grid(all_times, median_period)
             else:
                 t_grid = (
                     t_ref + Quantity(np.linspace(0.0, 1.0, 500), "") * median_period
@@ -902,9 +957,7 @@ class Samples(eqx.Module):
                 ax.plot(
                     ustrip(time_unit, t_grid),
                     ustrip(rv_unit, rv_model),
-                    color="C0",
-                    alpha=0.15,
-                    lw=0.8,
+                    **orbit_style,
                 )
 
             ax.set_xlabel(f"Time [{time_unit}]")
@@ -914,12 +967,25 @@ class Samples(eqx.Module):
         if rv_datasets:
             ax.legend(loc="best")
 
-    def _draw_astrometry(self, *, ax: Any, n_samples: int) -> None:
+    def _draw_astrometry(
+        self,
+        *,
+        ax: Any,
+        n_samples: int,
+        plot_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """On-sky orbital ellipses drawn into *ax* for each posterior sample.
 
         Gaia along-scan measurements are 1-D projections and cannot be plotted
         directly as 2-D sky positions, so only the model orbit curves are shown.
         """
+        orbit_style = (plot_kwargs or {}).copy()
+        orbit_style.setdefault("linestyle", "-")
+        orbit_style.setdefault("linewidth", 0.5)
+        orbit_style.setdefault("alpha", 0.15)
+        orbit_style.setdefault("marker", "")
+        orbit_style.setdefault("color", "#555555")
+        orbit_style.setdefault("rasterized", True)
         sma_qty = self.linear.get("semi_major_axis")
         sma_unit = str(sma_qty.unit) if sma_qty is not None else "mas"
 
@@ -971,9 +1037,7 @@ class Samples(eqx.Module):
             ax.plot(
                 np.asarray(ustrip(sma_unit, delta_ra)),
                 np.asarray(ustrip(sma_unit, delta_dec)),
-                color="C0",
-                alpha=0.15,
-                lw=0.8,
+                **orbit_style,
             )
 
         ax.set_xlabel(f"\u0394RA [{sma_unit}]")

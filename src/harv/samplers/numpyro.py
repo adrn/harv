@@ -14,13 +14,13 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Quantity
+from unxt.quantity import ustrip
 
 from harv.data import InputData
-from harv.likelihood.helpers import _resolve_linear_prior
-from harv.likelihood.params import AbstractParameters, MarginalizedParameters
-from harv.samplers.strategies import _ComponentSlice, _DataTypeStrategy
+from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
+from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.strategies import DataTypeStrategy
 
 if TYPE_CHECKING:
     from harv.priors.rejection import RejectionPrior
@@ -30,23 +30,35 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _iter_sub_likelihoods(lik: Any) -> tuple[tuple[str, Any], ...]:
+    """Return ``(name, sub_lik)`` pairs for any likelihood.
+
+    For a ``CompositeLikelihood`` this yields one entry per sub-likelihood.
+    For a single-component likelihood it yields one ``("primary", lik)`` pair.
+    """
+    from harv.likelihood.composite import CompositeLikelihood
+
+    if isinstance(lik, CompositeLikelihood):
+        return tuple(lik.components.items())
+    return (("primary", lik),)
+
+
 @dataclasses.dataclass(frozen=True)
 class _ModelContext:
     """Pre-computed shared state used by all numpyro model builders.
 
-    Component-generic: data-type-specific details live in
-    ``components`` (a tuple of ``_ComponentSlice``), not in named fields.
-    Adding a new data type requires only a new strategy — no changes here.
+    Component-generic: data-type-specific details live in the likelihood
+    object itself.  Adding a new data type requires only a new strategy —
+    no changes here.
     """
 
     prior: "RejectionPrior"
-    strategy: _DataTypeStrategy
+    strategy: DataTypeStrategy
     time_unit: str
-    nonlinear_cls: type[AbstractParameters]
     nonlinear_priors: dict[str, Any]
     lik: Any  # AbstractLikelihood or CompositeLikelihood
-    components: tuple[_ComponentSlice, ...]
     all_linear_names: tuple[str, ...]
+    linear_param_units: dict[str, str]
 
 
 def _build_model_context(
@@ -55,52 +67,79 @@ def _build_model_context(
 ) -> _ModelContext:
     """Pre-compute shared state for numpyro model builders.
 
-    Extracts the prior, strategy, data splits, time unit, likelihood
-    components, linear parameter names, and unit-stripped data arrays — all
-    the setup that every builder needs (or a superset thereof).
+    Extracts the prior, strategy, data splits, time unit, likelihood,
+    component infos, linear parameter names, and unit info — all the setup
+    that every builder needs (or a superset thereof).
     """
     prior = sampler.prior
     strategy = sampler._infer_strategy(data)
     datasets = strategy.extract_data(data)
     _ref = next(iter(datasets.values()))
     time_unit = str(_ref.time.unit)
-    nonlinear_cls = strategy.nonlinear_cls
     nonlinear_priors = prior.nonlinear_priors
 
     all_linear_names = strategy.all_linear_names(prior, data)
 
-    # Build likelihood + component slices for the model builders.
+    # Build likelihood and derive linear-param units for the model builders.
     lik = strategy.build_likelihood(datasets, prior, data)
-    components = strategy.build_component_slices(lik, datasets, prior, data)
+    lp_units = lik.linear_param_units
 
     return _ModelContext(
         prior=prior,
         strategy=strategy,
         time_unit=time_unit,
-        nonlinear_cls=nonlinear_cls,
         nonlinear_priors=nonlinear_priors,
         lik=lik,
-        components=components,
         all_linear_names=all_linear_names,
+        linear_param_units=lp_units,
     )
 
 
 def _sample_nonlinear(
     ctx: _ModelContext,
-) -> tuple[dict[str, Any], MarginalizedParameters]:
+) -> tuple[dict[str, Any], Any]:
     """Sample nonlinear parameters inside a numpyro model closure.
 
     Must be called within an active numpyro model context.  Returns the raw
-    sampled values dict *and* a ``MarginalizedParameters`` instance suitable
-    for passing to ``lik.design_matrix()`` or ``lik.log_prob()``.
+    sampled values dict *and* params suitable for passing to
+    ``lik.log_prob()``.  For single-component strategies this is a
+    ``MarginalizedParameters``; for composite strategies it is a
+    ``dict[str, MarginalizedParameters]``.
+
+    When ``prior.marginalize_names`` is not ``None``, any linear params
+    **not** listed are sampled explicitly from their numpyro priors and
+    included in ``values``.
     """
     values: dict[str, Any] = {}
     for name, d in ctx.nonlinear_priors.items():
-        values[name] = numpyro.sample(name, d)
+        values[name] = numpyro.sample(name, _unwrap_dist(d))
 
-    orbit_kwargs = {k: v for k, v in values.items() if k != "period"}
-    orbit_kwargs["period"] = Quantity(values["period"], ctx.time_unit)
-    params = ctx.nonlinear_cls.marginalized(**orbit_kwargs)
+    # Convert period from prior unit to data time unit (when the prior
+    # carries an explicit unit).  Bare-float priors are assumed to be
+    # in the data's time unit already.
+    _p_prior = ctx.prior.nonlinear_priors.get("period")
+    if isinstance(_p_prior, QuantityDistribution):
+        period_in_data_unit = ustrip(
+            ctx.time_unit, Quantity(values["period"], str(_p_prior.unit))
+        )
+        values["period"] = period_in_data_unit
+
+    # Sample explicit linear params (those not being marginalized).
+    marg_names = ctx.prior.marginalize_names
+    if isinstance(ctx.prior.linear_prior, dict) and marg_names is not None:
+        marg_set = set(marg_names)
+        for name, d in ctx.prior.linear_prior.items():
+            if name not in marg_set:
+                raw = numpyro.sample(name, _unwrap_dist(d))
+                # Convert to data units if the prior carries a unit.
+                target_u = ctx.linear_param_units.get(name, "")
+                if isinstance(d, QuantityDistribution) and target_u:
+                    raw = ustrip(target_u, Quantity(raw, str(d.unit)))
+                values[name] = raw
+
+    params = ctx.strategy.build_marginalized_params(
+        values, ctx.time_unit, ctx.prior.marginalize_names, ctx.linear_param_units
+    )
     return values, params
 
 
@@ -117,7 +156,7 @@ def _build_marginalized_numpyro_model(
 
     The returned callable samples each nonlinear parameter from its prior and
     evaluates the analytically-marginalized log-likelihood via ``numpyro.factor``.
-    Linear parameters (K, v0, astrometric solution, etc.) are integrated out
+    Linear parameters (rv_semiamp, v_sys, astrometric solution, etc.) are integrated out
     analytically; MCMC explores only the nonlinear subspace.
 
     Parameters
@@ -138,8 +177,7 @@ def _build_marginalized_numpyro_model(
 
     def model() -> None:
         _, params = _sample_nonlinear(ctx)
-        log_prob_input = ctx.strategy.params_for_log_prob(params)
-        numpyro.factor("log_lik", ctx.lik.log_prob(log_prob_input))
+        numpyro.factor("log_lik", ctx.lik.log_prob(params))
 
     return model
 
@@ -154,7 +192,7 @@ def _build_full_numpyro_model(
     Linear parameters are sampled jointly as a single latent site ``"_linear"``
     from the prior's ``MultivariateNormal`` (so the correlation structure of the
     prior is preserved), then exposed as named ``deterministic`` sites (e.g.
-    ``"K"``, ``"v0"``) for convenient access via ``get_samples()``.  The
+    ``"rv_semiamp"``, ``"v_sys"``) for convenient access via ``get_samples()``.  The
     Gaussian data log-likelihood is evaluated directly at the sampled values.
 
     Parameters
@@ -171,7 +209,7 @@ def _build_full_numpyro_model(
         A numpyro model with no required arguments.  Sample sites: keys of
         ``sampler.prior.nonlinear_priors`` plus ``"_linear"`` (the joint linear
         vector).  Deterministic sites: individual linear parameter names (e.g.
-        ``"K"``, ``"v0"``, ``"semi_major_axis"``).
+        ``"rv_semiamp"``, ``"v_sys"``, ``"semi_major_axis"``).
     """
     ctx = _build_model_context(sampler, data)
 
@@ -180,7 +218,9 @@ def _build_full_numpyro_model(
 
         # --- linear parameters ---
         # Sample the full vector jointly to preserve the prior's covariance.
-        resolved_lp = _resolve_linear_prior(ctx.prior.linear_prior, params)
+        resolved_lp = _resolve_linear_prior_mvn(
+            ctx.prior.linear_prior, params, ctx.linear_param_units
+        )
         linear_vec = numpyro.sample("_linear", resolved_lp)
         # Expose each column as a named deterministic site.
         for i, lname in enumerate(ctx.all_linear_names):
@@ -189,44 +229,20 @@ def _build_full_numpyro_model(
         # --- data log-likelihood (component loop) ---
         log_lik: jax.Array = jnp.zeros(())
 
-        for comp in ctx.components:
-            dm = comp.lik.design_matrix(params)
-            idx = jnp.array(comp.global_col_indices)
-            prediction = dm @ linear_vec[idx]
-            log_lik = (
-                log_lik + dist.Normal(prediction, comp.err).log_prob(comp.obs).sum()
+        for _comp_name, comp_lik in _iter_sub_likelihoods(ctx.lik):
+            comp_names = tuple(comp_lik.linear_param_units.keys())
+            global_indices = jnp.array(
+                [ctx.all_linear_names.index(n) for n in comp_names]
             )
+            dm = comp_lik.design_matrix(params)
+            prediction = dm @ linear_vec[global_indices]
+            obs = ustrip(comp_lik.data._get_obs())
+            err = ustrip(comp_lik.data._get_obs_err())
+            log_lik = log_lik + dist.Normal(prediction, err).log_prob(obs).sum()
 
         numpyro.factor("log_lik", log_lik)
 
     return model
-
-
-def _marginal_mvn(
-    mvn: dist.MultivariateNormal,
-    indices: list[int],
-) -> dist.MultivariateNormal:
-    """Extract the marginal ``MultivariateNormal`` for the given column indices.
-
-    Parameters
-    ----------
-    mvn :
-        Joint multivariate normal distribution.
-    indices :
-        Column indices of the parameters to retain.  Must be a Python list
-        (static at JAX trace time) so the indexing is resolved at trace time.
-
-    Returns
-    -------
-    dist.MultivariateNormal
-        Marginal distribution over the selected parameters.
-    """
-    idx = jnp.array(indices)
-    cov = mvn.scale_tril @ mvn.scale_tril.T
-    return dist.MultivariateNormal(
-        loc=mvn.loc[idx],
-        covariance_matrix=cov[idx][:, idx],
-    )
 
 
 def _build_extra_numpyro_model(
@@ -237,7 +253,7 @@ def _build_extra_numpyro_model(
 ) -> Callable[[], None]:
     """Build a numpyro model with an ``extra_model`` reparameterization.
 
-    Allows users to replace specific linear parameters (e.g. ``K``) with
+    Allows users to replace specific linear parameters (e.g. ``rv_semiamp``) with
     deterministic functions of additional physically-motivated parameters
     (e.g. stellar masses and inclination).  ``extra_model_fn`` is called
     inside the numpyro model after the nonlinear parameters have been
@@ -267,7 +283,7 @@ def _build_extra_numpyro_model(
         ``pars["eccentricity"]``, …).  The callable may call
         ``numpyro.sample`` internally.  It must return a dict whose keys
         are a subset of the linear parameter names for this data type
-        (e.g. ``"K"`` or ``"v0"`` for RV data).
+        (e.g. ``"rv_semiamp"`` or ``"v_sys"`` for RV data).
     marginalized :
         If ``True``, analytically marginalize the free linear parameters.
         If ``False``, sample them explicitly from their marginal prior.
@@ -283,13 +299,13 @@ def _build_extra_numpyro_model(
     the same units as the prior.  In particular, ``pars["period"]`` is in the
     time unit of the input data (e.g. days if ``data.time`` is in days).
 
-    Example — replace ``K`` with a mass-function reparameterization::
+    Example — replace ``rv_semiamp`` with a mass-function reparameterization::
 
         import jax.numpy as jnp
         import numpyro
         import numpyro.distributions as dist
 
-        # Semi-amplitude constant: K [km/s] = K_FACTOR * f(masses, inc, P, e)
+        # Semi-amplitude constant: rv_semiamp [km/s] = K_FACTOR * f(masses, inc, P, e)
         # (Lovis & Fischer 2010, converted to km/s with period in days)
         _K_FACTOR = 28.4329  # km/s · day^(1/3) · M_sun^(-1/3)
 
@@ -308,17 +324,17 @@ def _build_extra_numpyro_model(
             inc = numpyro.sample("inc", dist.Uniform(0.0, jnp.pi / 2))
             K   = K_from_masses(m1, m2, inc,
                                  pars["period"], pars["eccentricity"])
-            return {"K": K}
+            return {"rv_semiamp": K}
 
-    With this ``extra_model_fn``, ``K`` becomes a deterministic site in
-    ``get_samples()``; ``v0`` is analytically marginalized (if
+    With this ``extra_model_fn``, ``rv_semiamp`` becomes a deterministic site in
+    ``get_samples()``; ``v_sys`` is analytically marginalized (if
     ``marginalized=True``) or sampled from its marginal prior.
     """
     ctx = _build_model_context(sampler, data)
 
     def model() -> None:
         # --- nonlinear parameters ---
-        values, params = _sample_nonlinear(ctx)
+        values, base_params = _sample_nonlinear(ctx)
 
         # --- extra model: sample physical params, get fixed linear values ---
         # ``values`` contains raw scalar nonlinear parameters; period is in
@@ -337,48 +353,67 @@ def _build_extra_numpyro_model(
         for name, val in fixed_linear.items():
             numpyro.deterministic(name, val)
 
-        # Determine fixed/free column split (static Python-level at trace time).
+        free_names = tuple(n for n in ctx.all_linear_names if n not in fixed_linear)
+
+        if marginalized and free_names:
+            # Analytically marginalize free linear params by delegating to
+            # the likelihood's _build_marginalized_linear infrastructure.
+            # Fixed values are stored as non-marginalized fields (Quantities);
+            # the likelihood classifies them as "explicit" and subtracts
+            # their contribution before building MarginalizedLinear.
+            params = ctx.strategy.build_params_with_fixed_linear(
+                values, fixed_linear, ctx.linear_param_units, ctx.time_unit
+            )
+            numpyro.factor("log_lik", ctx.lik.log_prob(params))
+            return
+
+        # --- Component-loop fallback ---
+        # Used when marginalized=False (sample free params explicitly) or
+        # when all linear params are fixed (no marginalization needed).
         fixed_idx = [i for i, n in enumerate(ctx.all_linear_names) if n in fixed_linear]
         free_idx = [
             i for i, n in enumerate(ctx.all_linear_names) if n not in fixed_linear
         ]
 
-        # Resolve the linear prior once (may depend on orbit params if callable).
-        resolved_lp = _resolve_linear_prior(ctx.prior.linear_prior, params)
-
         log_lik: jax.Array = jnp.zeros(())
 
-        # --- per-component likelihood (generic loop) ---
-        for comp in ctx.components:
-            dm = comp.lik.design_matrix(params)
-            global_idx_set = set(comp.global_col_indices)
+        for comp_name, comp_lik in _iter_sub_likelihoods(ctx.lik):
+            comp_names = tuple(comp_lik.linear_param_units.keys())
+            global_indices = [ctx.all_linear_names.index(n) for n in comp_names]
 
-            c_fixed_global = [i for i in fixed_idx if i in global_idx_set]
-            c_free_global = [i for i in free_idx if i in global_idx_set]
+            c_fixed_global = [i for i in global_indices if i in set(fixed_idx)]
+            c_free_global = [i for i in global_indices if i in set(free_idx)]
 
-            # Map global linear-vector indices to local DM column indices.
-            g2l = {g: lc for lc, g in enumerate(comp.global_col_indices)}
+            g2l = {g: lc for lc, g in enumerate(global_indices)}
             c_fixed_local = [g2l[i] for i in c_fixed_global]
             c_free_local = [g2l[i] for i in c_free_global]
 
-            y = comp.obs
+            dm = comp_lik.design_matrix(base_params)
+            obs = ustrip(comp_lik.data._get_obs())
+            err = ustrip(comp_lik.data._get_obs_err())
+
+            y = obs
             if c_fixed_local:
                 fv = jnp.stack(
                     [fixed_linear[ctx.all_linear_names[i]] for i in c_fixed_global]
                 )
                 y = y - dm[:, jnp.array(c_fixed_local)] @ fv
 
-            if c_free_local and marginalized:
-                marg = MarginalizedLinear(
-                    design_matrix=dm[:, jnp.array(c_free_local)],
-                    prior_distribution=_marginal_mvn(resolved_lp, c_free_global),
-                    data_distribution=dist.Normal(0.0, comp.err),
+            if c_free_local:
+                # Build the marginal prior for this component's free params.
+                c_free_names = [ctx.all_linear_names[i] for i in c_free_global]
+                filtered_prior = {
+                    k: v for k, v in ctx.prior.linear_prior.items() if k in c_free_names
+                }
+                filtered_units = {
+                    k: v for k, v in ctx.linear_param_units.items() if k in c_free_names
+                }
+                free_mvn = _resolve_linear_prior_mvn(
+                    filtered_prior, base_params, filtered_units
                 )
-                log_lik = log_lik + marg.log_prob(y)
-            elif c_free_local:
                 free_vals = numpyro.sample(
-                    f"_{comp.name}_linear_free",
-                    _marginal_mvn(resolved_lp, c_free_global),
+                    f"_{comp_name}_linear_free",
+                    free_mvn,
                 )
                 for j, col in enumerate(c_free_global):
                     numpyro.deterministic(ctx.all_linear_names[col], free_vals[j])
@@ -388,13 +423,10 @@ def _build_extra_numpyro_model(
                         [fixed_linear[ctx.all_linear_names[i]] for i in c_fixed_global]
                     )
                     prediction = prediction + dm[:, jnp.array(c_fixed_local)] @ fv
-                log_lik = (
-                    log_lik + dist.Normal(prediction, comp.err).log_prob(comp.obs).sum()
-                )
+                log_lik = log_lik + dist.Normal(prediction, err).log_prob(obs).sum()
             else:
                 log_lik = (
-                    log_lik
-                    + dist.Normal(jnp.zeros_like(comp.obs), comp.err).log_prob(y).sum()
+                    log_lik + dist.Normal(jnp.zeros_like(obs), err).log_prob(y).sum()
                 )
 
         numpyro.factor("log_lik", log_lik)

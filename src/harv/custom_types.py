@@ -45,6 +45,19 @@ BatchQSpeed = Real[Quantity["speed"], "*batch"]
 BatchQTime = Real[Quantity["time"], "*batch"]
 BatchFloat = Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
 
+# Set of all Batch-level Quantity types that carry physical dimensions.
+# Used by AbstractParameters.__init_subclass__ to auto-detect which fields
+# require a QuantityDistribution prior.
+DIMENSIONED_BATCH_TYPES: frozenset = frozenset(
+    {
+        BatchQAngle,
+        BatchQAngularSpeed,
+        BatchQLength,
+        BatchQSpeed,
+        BatchQTime,
+    }
+)
+
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 
 

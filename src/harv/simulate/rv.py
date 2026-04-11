@@ -12,7 +12,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Quantity, ustrip
 
-from harv.data import RadialVelocityData, SourceData
+from harv.data import RVData, SourceData
 from harv.kepler.orbits import mean_anomaly, rv_shape, true_anomaly_from_mean
 
 __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
@@ -28,15 +28,15 @@ def simulate_rv_sb1_data(
     t_peri: Quantity["time"] | None = None,
     arg_peri: Quantity["angle"] | None = None,
     # RV parameters
-    K: Quantity["speed"] | None = None,
-    v0: Quantity["speed"] | None = None,
+    rv_semiamp: Quantity["speed"] | None = None,
+    v_sys: Quantity["speed"] | None = None,
     # Uncertainty
     rv_err: Quantity["speed"] | None = None,
     # Reference time
     t_ref: Quantity["time"] | None = None,
     # Instrument
     instrument: str = "default",
-) -> tuple[RadialVelocityData, dict[str, Any]]:
+) -> tuple[RVData, dict[str, Any]]:
     """Simulate radial velocity data for a single-lined binary (SB1).
 
     This function generates synthetic RV measurements following the model:
@@ -60,9 +60,9 @@ def simulate_rv_sb1_data(
         Time of periastron passage. If None, randomly drawn from [0, period].
     arg_peri : Quantity["angle"], optional
         Argument of periastron ω. If None, randomly drawn from [0, 2π].
-    K : Quantity["speed"], optional
+    rv_semiamp : Quantity["speed"], optional
         RV semi-amplitude. If None, randomly drawn from [1, 50] km/s.
-    v0 : Quantity["speed"], optional
+    v_sys : Quantity["speed"], optional
         Systemic velocity. If None, randomly drawn ~ N(0, 20) km/s.
     rv_err : Quantity["speed"], optional
         RV measurement uncertainties (1-sigma). If None, randomly drawn from
@@ -74,7 +74,7 @@ def simulate_rv_sb1_data(
 
     Returns
     -------
-    data : RadialVelocityData
+    data : RVData
         Simulated RV data container.
     true_params : dict
         Dictionary of true parameter values used in simulation.
@@ -88,11 +88,11 @@ def simulate_rv_sb1_data(
     ...     n_obs=30,
     ...     period=Quantity(100.0, "day"),
     ...     eccentricity=0.3,
-    ...     K=Quantity(10.0, "km/s"),
+    ...     rv_semiamp=Quantity(10.0, "km/s"),
     ... )
     >>> data.time.shape
     (30,)
-    >>> true_params["K"]
+    >>> true_params["rv_semiamp"]
     Quantity['speed'](Array(10., dtype=float64), unit='km / s')
     """
     ss = np.random.SeedSequence(seed)
@@ -116,11 +116,11 @@ def simulate_rv_sb1_data(
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
 
-    if K is None:
-        K = Quantity(rngs[5].uniform(1.0, 50.0), "km/s")
+    if rv_semiamp is None:
+        rv_semiamp = Quantity(rngs[5].uniform(1.0, 50.0), "km/s")
 
-    if v0 is None:
-        v0 = Quantity(rngs[6].normal(0, 20), "km/s")
+    if v_sys is None:
+        v_sys = Quantity(rngs[6].normal(0, 20), "km/s")
 
     if rv_err is None:
         rv_err = Quantity(rngs[7].uniform(0.01, 0.5, n_obs), "km/s")
@@ -145,7 +145,7 @@ def simulate_rv_sb1_data(
     sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
     rv_amplitude = rv_shape(sin_f, cos_f, eccentricity, ustrip("rad", arg_peri))
 
-    rv_true = K * rv_amplitude + v0
+    rv_true = rv_semiamp * rv_amplitude + v_sys
 
     # Add noise
     noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
@@ -157,11 +157,11 @@ def simulate_rv_sb1_data(
         "eccentricity": eccentricity,
         "t_peri": t_peri,
         "arg_peri": arg_peri,
-        "K": K,
-        "v0": v0,
+        "rv_semiamp": rv_semiamp,
+        "v_sys": v_sys,
     }
 
-    data = RadialVelocityData(
+    data = RVData(
         time=times,
         rv=rv,
         rv_err=rv_err,
@@ -181,15 +181,15 @@ def simulate_rv_multisurv_data(  # noqa: C901
     t_peri: Quantity["time"] | None = None,
     arg_peri: Quantity["angle"] | None = None,
     # Shared RV amplitude and systemic velocity
-    K: Quantity["speed"] | None = None,
-    v0: Quantity["speed"] | None = None,
+    rv_semiamp: Quantity["speed"] | None = None,
+    v_sys: Quantity["speed"] | None = None,
     rv_err: Quantity["speed"] | None = None,
     t_ref: Quantity["time"] | None = None,
 ) -> tuple[SourceData, dict[str, Any]]:
     """Simulate multi-survey RV data with per-instrument zero-point offsets.
 
     Generates a :class:`~harv.data.SourceData` containing one
-    :class:`~harv.data.RadialVelocityData` per instrument, all sharing the
+    :class:`~harv.data.RVData` per instrument, all sharing the
     same orbital solution but with different per-instrument zero-point offsets.
 
     Parameters
@@ -214,9 +214,9 @@ def simulate_rv_multisurv_data(  # noqa: C901
         Time of periastron passage. Randomly drawn if None.
     arg_peri : Quantity["angle"], optional
         Argument of periastron. Randomly drawn if None.
-    K : Quantity["speed"], optional
+    rv_semiamp : Quantity["speed"], optional
         RV semi-amplitude. Randomly drawn if None.
-    v0 : Quantity["speed"], optional
+    v_sys : Quantity["speed"], optional
         Systemic velocity of the reference instrument. Randomly drawn if None.
     rv_err : Quantity["speed"], optional
         Measurement uncertainty (same for all instruments and observations).
@@ -230,7 +230,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
         Multi-instrument RV data container.
     true_params : dict
         True parameter values: ``period``, ``eccentricity``, ``t_peri``,
-        ``arg_peri``, ``K``, ``v0``, and one entry per non-reference
+        ``arg_peri``, ``rv_semiamp``, ``v_sys``, and one entry per non-reference
         instrument named ``"offset_{name}"``.
 
     Examples
@@ -242,7 +242,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
     ...     seed=0,
     ...     n_obs_per_instrument=20,
     ...     period=Quantity(200.0, "day"),
-    ...     K=Quantity(15.0, "km/s"),
+    ...     rv_semiamp=Quantity(15.0, "km/s"),
     ... )
     >>> list(source_data.keys())
     ['keck', 'espresso']
@@ -265,10 +265,10 @@ def simulate_rv_multisurv_data(  # noqa: C901
         )
     if arg_peri is None:
         arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
-    if K is None:
-        K = Quantity(rngs[5].uniform(1.0, 50.0), "km/s")
-    if v0 is None:
-        v0 = Quantity(rngs[6].normal(0, 20), "km/s")
+    if rv_semiamp is None:
+        rv_semiamp = Quantity(rngs[5].uniform(1.0, 50.0), "km/s")
+    if v_sys is None:
+        v_sys = Quantity(rngs[6].normal(0, 20), "km/s")
     if rv_err is None:
         rv_err = Quantity(rngs[7].uniform(0.01, 0.5), "km/s")
     if t_ref is None:
@@ -277,19 +277,19 @@ def simulate_rv_multisurv_data(  # noqa: C901
     # Pre-compute RV model constants
     arg_peri_rad = ustrip("rad", arg_peri)
 
-    datasets: dict[str, RadialVelocityData] = {}
+    datasets: dict[str, RVData] = {}
     true_params: dict[str, Any] = {
         "period": period,
         "eccentricity": eccentricity,
         "t_peri": t_peri,
         "arg_peri": arg_peri,
-        "K": K,
-        "v0": v0,
+        "rv_semiamp": rv_semiamp,
+        "v_sys": v_sys,
     }
 
     for i, (name, offset) in enumerate(instruments.items()):
         inst_rng = rngs[8 + i]
-        eff_offset = offset if offset is not None else Quantity(0.0, v0.unit)
+        eff_offset = offset if offset is not None else Quantity(0.0, v_sys.unit)
         if offset is not None:
             true_params[f"offset_{name}"] = offset
 
@@ -306,13 +306,13 @@ def simulate_rv_multisurv_data(  # noqa: C901
         M = mean_anomaly(times - t_peri, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         rv_amp = rv_shape(sin_f, cos_f, eccentricity, arg_peri_rad)
-        rv_true = K * rv_amp + v0 + eff_offset
+        rv_true = rv_semiamp * rv_amp + v_sys + eff_offset
 
         n_obs = n_obs_per_instrument
         noise: AbstractQuantity = Quantity.from_(inst_rng.normal(size=n_obs), "")
         rv_obs = rv_true + rv_err * noise
 
-        datasets[name] = RadialVelocityData(
+        datasets[name] = RVData(
             time=times,
             rv=rv_obs,
             rv_err=Quantity(jnp.full(n_obs, ustrip(rv_err.unit, rv_err)), rv_err.unit),

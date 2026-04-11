@@ -72,9 +72,9 @@ def _check_thiele_innes_round_trip(
             atol=atol,
         )
 
-        assert (
-            match_primary or match_sym
-        ), "Recovered orientation does not match original or symmetric solution."
+        assert match_primary or match_sym, (
+            "Recovered orientation does not match original or symmetric solution."
+        )
     else:
         # For specific expected orientation (e.g., symmetry tests), compare components
         assert jnp.allclose(
@@ -150,7 +150,7 @@ def test_thiele_innes_round_trip_random_low_inclination(seed: int, dtype: str) -
     rtol = 2e-2 if dtype == "float32" else 1e-6
     atol = 2e-2 if dtype == "float32" else 1e-8
 
-    key = jax.random.PRNGKey(seed)
+    key = jax.random.key(seed)
 
     # Test multiple random configurations
     for _ in range(5):
@@ -185,7 +185,7 @@ def test_thiele_innes_round_trip_random_high_inclination(seed: int, dtype: str) 
     # Note: Multiple arctan2 operations accumulate numerical errors
     rtol = 5e-4 if dtype == "float32" else 1e-6
 
-    key = jax.random.PRNGKey(seed)
+    key = jax.random.key(seed)
 
     # Test multiple random configurations with i > π/2
     for _ in range(5):

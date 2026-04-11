@@ -59,8 +59,8 @@ class TestSamplesCreation:
             "arg_peri": Quantity(jnp.array([1.0, 2.0]), "rad"),
         }
         linear = {
-            "K": Quantity(jnp.array([1.0, 3.0]), "km/s"),
-            "v0": Quantity(jnp.array([2.0, 4.0]), "km/s"),
+            "rv_semiamp": Quantity(jnp.array([1.0, 3.0]), "km/s"),
+            "v_sys": Quantity(jnp.array([2.0, 4.0]), "km/s"),
         }
 
         samples = Samples(
@@ -133,8 +133,8 @@ class TestSamplesAccess:
             "lon_asc_node": Quantity(jnp.array([3.14]), "rad"),
         }
         linear = {
-            "K": Quantity(jnp.array([1.0]), "km/s"),
-            "v0": Quantity(jnp.array([2.0]), "km/s"),
+            "rv_semiamp": Quantity(jnp.array([1.0]), "km/s"),
+            "v_sys": Quantity(jnp.array([2.0]), "km/s"),
         }
 
         samples = Samples(
@@ -163,8 +163,8 @@ class TestSamplesRepr:
             "arg_peri": Quantity(jnp.array([1.0, 2.0]), "rad"),
         }
         linear = {
-            "K": Quantity(jnp.array([1.0, 3.0]), "km/s"),
-            "v0": Quantity(jnp.array([2.0, 4.0]), "km/s"),
+            "rv_semiamp": Quantity(jnp.array([1.0, 3.0]), "km/s"),
+            "v_sys": Quantity(jnp.array([2.0, 4.0]), "km/s"),
         }
 
         samples = Samples(

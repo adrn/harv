@@ -1,18 +1,41 @@
 """Unit tests for rejection sampling priors."""
 
-import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
+from unxt import Quantity
 
+from harv.priors.custom import (
+    ParallaxDependentProperMotionPrior,
+    PeriodDependentSemiMajorAxisPrior,
+)
 from harv.priors.rejection import RejectionPrior
+from harv.quantity_distribution import QuantityDistribution
+
+# Common default_rv kwargs used throughout tests
+_DEFAULT_RV_KWARGS = dict(
+    period_min=Quantity(50.0, "day"),
+    period_max=Quantity(200.0, "day"),
+    sigma_K0=Quantity(30.0, "km/s"),
+    sigma_v0=Quantity(30.0, "km/s"),
+)
+
+# Common default_gaia_astrometry kwargs used throughout tests
+_DEFAULT_ASTRO_KWARGS = dict(
+    period_min=Quantity(50.0, "day"),
+    period_max=Quantity(200.0, "day"),
+    sigma_a0=Quantity(1e3, "AU"),
+    sigma_parallax=Quantity(100.0, "mas"),
+    sigma_pos=Quantity(1e3, "mas"),
+    sigma_vtan=Quantity(200.0, "km/s"),
+)
 
 
 class TestRejectionPriorAstrometry:
     """Tests for astrometry-only priors."""
 
-    def test_default_astrometry_creation(self):
-        """Test creating default astrometry prior."""
-        prior = RejectionPrior.default_astrometry()
+    def test_default_gaia_astrometry_creation(self):
+        """Test creating default Gaia astrometry prior."""
+        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
 
         assert (
             prior.n_nonlinear == 6
@@ -23,8 +46,8 @@ class TestRejectionPriorAstrometry:
 
     def test_astrometry_prior_sampling(self):
         """Test sampling from astrometry prior."""
-        prior = RejectionPrior.default_astrometry()
-        key = jr.PRNGKey(42)
+        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
+        key = jr.key(42)
 
         samples = prior.sample_nonlinear(key, n_samples=100)
 
@@ -49,25 +72,51 @@ class TestRejectionPriorAstrometry:
 
     def test_custom_period_bounds(self):
         """Test custom period bounds."""
-        prior = RejectionPrior.default_astrometry(period_min=1.0, period_max=1000.0)
-        key = jr.PRNGKey(123)
+        prior = RejectionPrior.default_gaia_astrometry(
+            period_min=Quantity(1.0, "day"),
+            period_max=Quantity(1000.0, "day"),
+            sigma_a0=Quantity(1e3, "AU"),
+            sigma_parallax=Quantity(100.0, "mas"),
+            sigma_pos=Quantity(1e3, "mas"),
+            sigma_vtan=Quantity(200.0, "km/s"),
+        )
+        key = jr.key(123)
 
         samples = prior.sample_nonlinear(key, n_samples=1000)
 
         assert (samples["period"] >= 1.0).all()
         assert (samples["period"] <= 1000.0).all()
 
-    def test_linear_prior_distribution(self):
-        """Test linear prior is a MultivariateNormal."""
-        prior = RejectionPrior.default_astrometry(linear_prior_scale=500.0)
+    def test_linear_prior_structure(self):
+        """Test linear prior is a dict with correct keys and types."""
+        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
 
-        assert isinstance(prior.linear_prior, dist.MultivariateNormal)
-        # Astrometry has 6 linear parameters
-        assert prior.linear_prior.loc.shape == (6,)
-        # Sample from it to verify it works
-        key = jr.PRNGKey(42)
-        linear_samples = prior.linear_prior.sample(key, (10,))
-        assert linear_samples.shape == (10, 6)
+        assert isinstance(prior.linear_prior, dict)
+        assert set(prior.linear_prior.keys()) == {
+            "ra0",
+            "dec0",
+            "pmra",
+            "pmdec",
+            "parallax",
+            "semi_major_axis",
+        }
+        # parallax should be HalfNormal (explicit)
+        assert isinstance(prior.linear_prior["parallax"], QuantityDistribution)
+        # semi_major_axis should be PeriodDependentSemiMajorAxisPrior (callable)
+        assert isinstance(
+            prior.linear_prior["semi_major_axis"],
+            PeriodDependentSemiMajorAxisPrior,
+        )
+        # ra0/dec0 should be QuantityDistribution wrapping Normal
+        for key in ("ra0", "dec0"):
+            assert isinstance(prior.linear_prior[key], QuantityDistribution)
+            assert isinstance(prior.linear_prior[key].distribution, dist.Normal)
+        # pmra/pmdec should be ParallaxDependentProperMotionPrior (callable)
+        for key in ("pmra", "pmdec"):
+            assert isinstance(
+                prior.linear_prior[key],
+                ParallaxDependentProperMotionPrior,
+            )
 
 
 class TestRejectionPriorRV:
@@ -75,7 +124,7 @@ class TestRejectionPriorRV:
 
     def test_default_rv_creation(self):
         """Test creating default RV prior."""
-        prior = RejectionPrior.default_rv()
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
 
         assert prior.n_nonlinear == 4  # period, ecc, arg_peri, phase_peri
         assert "arg_peri" in prior.nonlinear_priors
@@ -86,21 +135,23 @@ class TestRejectionPriorRV:
         """Test RV prior with multi-instrument offsets."""
         offsets = {
             "keck": None,  # Reference instrument
-            "espresso": dist.Normal(0, 5.0),
-            "harps": dist.Normal(0, 10.0),
+            "espresso": QuantityDistribution(dist.Normal(0, 5.0), "km/s"),
+            "harps": QuantityDistribution(dist.Normal(0, 10.0), "km/s"),
         }
-        prior = RejectionPrior.default_rv(offsets=offsets)
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, offsets=offsets)
 
         assert prior.offsets is not None
-        assert len(prior.offsets) == 3
+        # offsets is now {"rv": {...}}
+        rv_offsets = prior.offsets["rv"]
+        assert len(rv_offsets) == 3
         # Count non-None offsets (reference instrument has None)
-        n_offsets = sum(1 for v in prior.offsets.values() if v is not None)
+        n_offsets = sum(1 for v in rv_offsets.values() if v is not None)
         assert n_offsets == 2  # espresso and harps
 
     def test_rv_prior_sampling(self):
         """Test sampling from RV prior."""
-        prior = RejectionPrior.default_rv()
-        key = jr.PRNGKey(42)
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        key = jr.key(42)
 
         samples = prior.sample_nonlinear(key, n_samples=100)
 
@@ -113,47 +164,62 @@ class TestRejectionPriorRV:
         assert samples["arg_peri"].shape == (100,)
 
 
-class TestRejectionPriorCombined:
-    """Tests for combined astrometry + RV priors."""
+class TestParameterOverrides:
+    """Tests for overriding nonlinear and linear priors via **kwargs."""
 
-    def test_default_combined_creation(self):
-        """Test creating default combined prior."""
-        prior = RejectionPrior.default_combined()
+    def test_rv_override_nonlinear(self):
+        """Nonlinear prior can be overridden via kwargs."""
+        custom_ecc = dist.Uniform(0.0, 0.5)
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, eccentricity=custom_ecc)
+        assert prior.nonlinear_priors["eccentricity"] is custom_ecc
 
-        assert prior.n_nonlinear == 6  # All 6 parameters
-        assert "cos_i" in prior.nonlinear_priors
-        assert "arg_peri" in prior.nonlinear_priors
-        assert "lon_asc_node" in prior.nonlinear_priors
+    def test_rv_override_linear(self):
+        """Linear prior can be overridden via kwargs."""
+        custom_K = QuantityDistribution(dist.Normal(0.0, 50.0), "km/s")
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, rv_semiamp=custom_K)
+        assert prior.linear_prior["rv_semiamp"] is custom_K
 
-    def test_combined_prior_sampling(self):
-        """Test sampling from combined prior."""
-        prior = RejectionPrior.default_combined()
-        key = jr.PRNGKey(42)
+    def test_rv_override_both(self):
+        """Nonlinear and linear overrides can be combined."""
+        custom_ecc = dist.Uniform(0.0, 0.3)
+        custom_v0 = QuantityDistribution(dist.Normal(0.0, 5.0), "km/s")
+        prior = RejectionPrior.default_rv(
+            **_DEFAULT_RV_KWARGS, eccentricity=custom_ecc, v_sys=custom_v0
+        )
+        assert prior.nonlinear_priors["eccentricity"] is custom_ecc
+        assert prior.linear_prior["v_sys"] is custom_v0
 
-        samples = prior.sample_nonlinear(key, n_samples=50)
+    def test_rv_invalid_kwarg_raises(self):
+        """Unknown kwarg name raises TypeError."""
+        import pytest
 
-        assert set(samples.keys()) == {
-            "period",
-            "eccentricity",
-            "phase_peri",
-            "cos_i",
-            "arg_peri",
-            "lon_asc_node",
-        }
+        with pytest.raises(TypeError, match="unexpected keyword argument 'bogus'"):
+            RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, bogus=dist.Normal(0, 1))
 
+    def test_astro_override_nonlinear(self):
+        """Nonlinear prior can be overridden in astrometry constructor."""
+        custom_cos_i = dist.Uniform(0.0, 1.0)
+        prior = RejectionPrior.default_gaia_astrometry(
+            **_DEFAULT_ASTRO_KWARGS, cos_i=custom_cos_i
+        )
+        assert prior.nonlinear_priors["cos_i"] is custom_cos_i
 
-class TestRejectionPriorSB2:
-    """Tests for SB2 (double-lined) priors."""
+    def test_astro_override_linear(self):
+        """Linear prior can be overridden in astrometry constructor."""
+        custom_parallax = QuantityDistribution(dist.Normal(5.0, 0.5), "mas")
+        prior = RejectionPrior.default_gaia_astrometry(
+            **_DEFAULT_ASTRO_KWARGS, parallax=custom_parallax
+        )
+        assert prior.linear_prior["parallax"] is custom_parallax
 
-    def test_default_sb2_creation(self):
-        """Test creating default SB2 prior."""
-        prior = RejectionPrior.default_sb2()
+    def test_astro_invalid_kwarg_raises(self):
+        """Unknown kwarg name raises TypeError in astrometry constructor."""
+        import pytest
 
-        # SB2 has same nonlinear params as RV (no orientation)
-        assert prior.n_nonlinear == 4  # period, ecc, phase_peri, arg_peri
-        assert "arg_peri" in prior.nonlinear_priors
-        assert "cos_i" not in prior.nonlinear_priors
-        assert "lon_asc_node" not in prior.nonlinear_priors
+        with pytest.raises(TypeError, match="unexpected keyword argument 'fake'"):
+            RejectionPrior.default_gaia_astrometry(
+                **_DEFAULT_ASTRO_KWARGS, fake=dist.Normal(0, 1)
+            )
 
 
 class TestPriorValidation:
@@ -171,9 +237,10 @@ class TestPriorValidation:
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0, 1),
             },
-            linear_prior=dist.MultivariateNormal(
-                loc=jnp.zeros(2), covariance_matrix=jnp.eye(2) * 1000.0**2
-            ),
+            linear_prior={
+                "rv_semiamp": dist.Normal(0.0, 1000.0),
+                "v_sys": dist.Normal(0.0, 1000.0),
+            },
         )
         assert prior.n_nonlinear == 3  # Only the 3 provided params
 
@@ -188,41 +255,129 @@ class TestPriorValidation:
                 "arg_peri": dist.Uniform(0, 6.28),
                 "lon_asc_node": dist.Uniform(0, 6.28),
             },
-            linear_prior=dist.MultivariateNormal(
-                loc=jnp.zeros(6), covariance_matrix=jnp.eye(6) * 1000.0**2
-            ),
+            linear_prior={
+                "ra0": dist.Normal(0.0, 1000.0),
+                "dec0": dist.Normal(0.0, 1000.0),
+                "pmra": dist.Normal(0.0, 1000.0),
+                "pmdec": dist.Normal(0.0, 1000.0),
+                "parallax": dist.Normal(0.0, 1000.0),
+                "semi_major_axis": dist.Normal(0.0, 1000.0),
+            },
         )
         assert prior.n_nonlinear == 6
+
+
+class TestDictLinearPrior:
+    """Tests for dict-form linear prior."""
+
+    def test_dict_linear_prior_is_dict(self):
+        """Dict with all Normal entries is stored as dict."""
+        prior = RejectionPrior(
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+                "arg_peri": dist.Uniform(0, 6.28),
+            },
+            linear_prior={
+                "rv_semiamp": dist.Normal(0.0, 100.0),
+                "v_sys": dist.Normal(0.0, 50.0),
+            },
+        )
+        assert isinstance(prior.linear_prior, dict)
+        assert set(prior.linear_prior.keys()) == {"rv_semiamp", "v_sys"}
+
+    def test_dict_with_delta(self):
+        """Delta entries are accepted in dict-form linear prior."""
+        prior = RejectionPrior(
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+                "arg_peri": dist.Uniform(0, 6.28),
+            },
+            linear_prior={
+                "rv_semiamp": dist.Delta(10.0),
+                "v_sys": dist.Normal(0.0, 50.0),
+            },
+        )
+        assert isinstance(prior.linear_prior, dict)
+
+    def test_dict_with_mixed_types(self):
+        """All three categories (Gaussian, Delta, explicit) in one dict."""
+        prior = RejectionPrior(
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+                "cos_i": dist.Uniform(-1, 1),
+                "arg_peri": dist.Uniform(0, 6.28),
+                "lon_asc_node": dist.Uniform(0, 6.28),
+            },
+            linear_prior={
+                "ra0": dist.Normal(0.0, 1000.0),
+                "dec0": dist.Normal(0.0, 1000.0),
+                "pmra": dist.Normal(0.0, 100.0),
+                "pmdec": dist.Normal(0.0, 100.0),
+                "parallax": dist.Delta(5.0),
+                "semi_major_axis": dist.HalfNormal(10.0),
+            },
+        )
+        assert isinstance(prior.linear_prior, dict)
+        assert len(prior.linear_prior) == 6
+
+    def test_default_rv_has_dict_linear_prior(self):
+        """default_rv returns a prior with dict-form linear_prior."""
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        assert isinstance(prior.linear_prior, dict)
+
+    def test_dict_with_quantity_distribution(self):
+        """QuantityDistribution entries in dict are accepted."""
+        prior = RejectionPrior(
+            nonlinear_priors={
+                "period": dist.LogUniform(1.0, 1000.0),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0, 1),
+                "arg_peri": dist.Uniform(0, 6.28),
+            },
+            linear_prior={
+                "rv_semiamp": QuantityDistribution(dist.HalfNormal(100.0), "km/s"),
+                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+            },
+        )
+        assert isinstance(prior.linear_prior, dict)
+        assert set(prior.linear_prior.keys()) == {"rv_semiamp", "v_sys"}
 
 
 class TestPriorProperties:
     """Tests for prior property methods."""
 
-    def test_parameter_counting(self):
-        """Test that parameter counting is correct."""
-        # Astrometry - 6 nonlinear params
-        astro_prior = RejectionPrior.default_astrometry()
-        assert astro_prior.n_nonlinear == 6
-
-        # RV - 4 nonlinear params
-        rv_prior = RejectionPrior.default_rv()
+    def test_parameter_counting_rv(self):
+        """Test that RV prior has 4 nonlinear parameters."""
+        rv_prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
         assert rv_prior.n_nonlinear == 4
 
-        # RV with offsets
+    def test_parameter_counting_rv_with_offsets(self):
+        """Test that RV with offsets still has 4 nonlinear parameters."""
         rv_prior_offsets = RejectionPrior.default_rv(
-            offsets={"inst1": None, "inst2": dist.Normal(0, 5)}
+            **_DEFAULT_RV_KWARGS,
+            offsets={
+                "inst1": None,
+                "inst2": QuantityDistribution(dist.Normal(0, 5), "km/s"),
+            },
         )
         assert rv_prior_offsets.n_nonlinear == 4
         assert rv_prior_offsets.offsets is not None
-        n_offsets = sum(1 for v in rv_prior_offsets.offsets.values() if v is not None)
+        rv_offsets = rv_prior_offsets.offsets["rv"]
+        n_offsets = sum(1 for v in rv_offsets.values() if v is not None)
         assert n_offsets == 1
 
     def test_reproducible_sampling(self):
         """Test that sampling is reproducible with same seed."""
-        prior = RejectionPrior.default_astrometry()
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
 
-        samples1 = prior.sample_nonlinear(jr.PRNGKey(42), n_samples=100)
-        samples2 = prior.sample_nonlinear(jr.PRNGKey(42), n_samples=100)
+        samples1 = prior.sample_nonlinear(jr.key(42), n_samples=100)
+        samples2 = prior.sample_nonlinear(jr.key(42), n_samples=100)
 
         # Should be identical
         assert (samples1["period"] == samples2["period"]).all()

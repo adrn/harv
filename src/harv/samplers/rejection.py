@@ -6,7 +6,7 @@ nonlinear parameters, evaluates the marginalized likelihood, and performs
 rejection sampling to obtain posterior samples.
 
 Data-type-specific logic (param struct construction, likelihood building,
-linear sampling) is encapsulated in ``_DataTypeStrategy`` descriptors in
+linear sampling) is encapsulated in ``DataTypeStrategy`` descriptors in
 ``_strategies.py``; numpyro model builder helpers live in ``_numpyro.py``.
 """
 
@@ -18,16 +18,19 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
 from unxt import Quantity, ustrip
 
 from harv.data import (
     AbstractAstrometryData,
     InputData,
-    RadialVelocityData,
+    RVData,
     SourceData,
 )
+from harv.likelihood.helpers import _unwrap_dist
 from harv.priors.rejection import RejectionPrior
+from harv.quantity_distribution import QuantityDistribution
 from harv.samplers.numpyro import (
     _build_extra_numpyro_model,
     _build_full_numpyro_model,
@@ -36,7 +39,7 @@ from harv.samplers.numpyro import (
 from harv.samplers.samples import Samples, _WarmStartMCMC
 from harv.samplers.strategies import (
     _STRATEGIES,
-    _DataTypeStrategy,
+    DataTypeStrategy,
 )
 
 __all__ = ["RejectionSampler"]
@@ -64,7 +67,7 @@ class RejectionSampler(eqx.Module):
 
     Examples
     --------
-    >>> prior = RejectionPrior.default_astrometry()
+    >>> prior = RejectionPrior.default_gaia_astrometry(...)
     >>> sampler = RejectionSampler(prior)
     >>> samples = sampler.run(data, n_prior_samples=100_000)
     """
@@ -72,7 +75,7 @@ class RejectionSampler(eqx.Module):
     prior: RejectionPrior
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def _infer_strategy(self, data: InputData) -> _DataTypeStrategy:
+    def _infer_strategy(self, data: InputData) -> DataTypeStrategy:
         """Infer data type from ``data`` and return the matching strategy.
 
         Also validates that the prior has all required parameters for the
@@ -86,8 +89,8 @@ class RejectionSampler(eqx.Module):
             If prior is missing required parameters for the data type.
         """
         if isinstance(data, SourceData):
-            has_rv = data.n_rv() > 0
-            has_astro = data.n_astrometry() > 0
+            has_rv = data._n_rv() > 0
+            has_astro = data._n_astrometry() > 0
             if has_astro and has_rv:
                 data_type = "combined"
             elif has_astro:
@@ -99,7 +102,7 @@ class RejectionSampler(eqx.Module):
                 raise ValueError(msg)
         elif isinstance(data, AbstractAstrometryData):
             data_type = "astrometry"
-        elif isinstance(data, RadialVelocityData):
+        elif isinstance(data, RVData):
             data_type = "rv"
         else:
             msg = f"Unsupported data type: {type(data)}"
@@ -108,10 +111,14 @@ class RejectionSampler(eqx.Module):
         strategy = _STRATEGIES[data_type]
 
         # Validate prior — required params derived from orbit param class fields
+        # TODO: audit how we do this validation
+        all_prior_keys = set(self.prior.nonlinear_priors)
+        if isinstance(self.prior.linear_prior, dict):
+            all_prior_keys |= set(self.prior.linear_prior)
         missing = [
             p
-            for p in strategy.required_prior_params
-            if p not in self.prior.nonlinear_priors
+            for p in strategy.required_prior_params(self.prior)
+            if p not in all_prior_keys
         ]
         if missing:
             msg = (
@@ -119,6 +126,36 @@ class RejectionSampler(eqx.Module):
                 f"Use RejectionPrior.default_{data_type}() or provide these parameters."
             )
             raise ValueError(msg)
+
+        # Validate that dimensioned parameters use QuantityDistribution.
+        # Bare numpyro distributions lack unit metadata and can cause silent
+        # unit-mismatch bugs downstream.
+        dimensioned: set[str] = set()
+        for param_cls in strategy.full_cls:
+            dimensioned.update(param_cls._dimensioned_param_names)
+
+        bad: list[str] = []
+        for name in dimensioned:
+            d = self.prior.nonlinear_priors.get(name)
+            if d is None and isinstance(self.prior.linear_prior, dict):
+                d = self.prior.linear_prior.get(name)
+            if d is None:
+                continue
+            # QuantityDistribution and callables (LinearPriorCallable) are OK.
+            if isinstance(d, QuantityDistribution):
+                continue
+            if callable(d) and not isinstance(d, dist.Distribution):
+                continue
+            bad.append(name)
+
+        if bad:
+            msg = (
+                f"Parameters {sorted(bad)} have physical dimensions and require "
+                f"a QuantityDistribution prior, but received bare "
+                f"numpyro distributions. Wrap each in "
+                f"QuantityDistribution(dist, unit_str)."
+            )
+            raise TypeError(msg)
 
         return strategy
 
@@ -160,7 +197,7 @@ class RejectionSampler(eqx.Module):
         datasets = strategy.extract_data(data)
         lik = strategy.build_likelihood(datasets, self.prior, data)
 
-        key = jr.PRNGKey(seed)
+        key = jr.key(seed)
         sample_key, rej_key = jr.split(key)
 
         prior_samples, log_likelihoods = self._sample_prior_and_evaluate_batched(
@@ -210,6 +247,8 @@ class RejectionSampler(eqx.Module):
             )
 
         # Build nonlinear dict as Quantities with units baked in.
+        # Only include actual nonlinear parameters (not explicit-linear ones
+        # that may also be in accepted_nonlinear due to partial marginalization).
         _nl_units: dict[str, str] = {
             "period": time_unit,
             "eccentricity": "",
@@ -218,14 +257,17 @@ class RejectionSampler(eqx.Module):
             "cos_i": "",
             "lon_asc_node": "rad",
         }
+        _nl_keys = set(self.prior.nonlinear_priors)
         nonlinear_q: dict[str, AbstractQuantity] = {
-            k: Quantity(v, _nl_units.get(k, "")) for k, v in accepted_nonlinear.items()
+            k: Quantity(v, _nl_units.get(k, ""))
+            for k, v in accepted_nonlinear.items()
+            if k in _nl_keys
         }
 
         return Samples(
             nonlinear=nonlinear_q,
             linear=linear_samples,
-            orbit_cls=strategy.nonlinear_cls,
+            orbit_cls=strategy.full_cls[0],
             full_cls=strategy.full_cls,
             data_type=strategy.data_type,
             metadata={"t_ref": t_ref_stored},
@@ -283,7 +325,7 @@ class RejectionSampler(eqx.Module):
             data's time unit, ``pars["eccentricity"]``, …).  The function may
             call ``numpyro.sample`` for any number of new sites (e.g. stellar
             masses, inclination) and must return a dict mapping linear
-            parameter names (e.g. ``"K"``) to their computed values.  Any
+            parameter names (e.g. ``"rv_semiamp"``) to their computed values.  Any
             linear parameter not in the returned dict is handled by
             ``marginalized``.
 
@@ -300,12 +342,12 @@ class RejectionSampler(eqx.Module):
                     K   = _K_FACTOR * (m2 * jnp.sin(inc)) * (m1 + m2) ** (-2/3) \
                           * (pars["period"] / 365.25) ** (-1/3) \
                           / jnp.sqrt(1 - pars["eccentricity"] ** 2)
-                    return {"K": K}
+                    return {"rv_semiamp": K}
 
         extra_init_params : dict, optional
             Initial values for the parameters introduced by ``extra_model``,
             one entry per chain.  Required when ``extra_model`` is provided,
-            since harv cannot automatically invert K → (m1, m2, inc).
+            since harv cannot automatically invert rv_semiamp → (m1, m2, inc).
             Each value must be a 1-D array of length ``num_chains``::
 
                 extra_init_params={
@@ -325,7 +367,7 @@ class RejectionSampler(eqx.Module):
         Returns
         -------
         mcmc : _WarmStartMCMC
-            Configured MCMC wrapper.  Call ``mcmc.run(jr.PRNGKey(seed))`` to
+            Configured MCMC wrapper.  Call ``mcmc.run(jr.key(seed))`` to
             begin sampling.
 
         Raises
@@ -339,16 +381,16 @@ class RejectionSampler(eqx.Module):
         Examples
         --------
         **Marginalized (default)** — MCMC over nonlinear parameters only,
-        ``K`` and ``v0`` analytically marginalized:
+        ``rv_semiamp`` and ``v_sys`` analytically marginalized:
 
         >>> import jax.random as jr
-        >>> prior = RejectionPrior.default_rv(period_min=50, period_max=200)
+        >>> prior = RejectionPrior.default_rv(TODO)
         >>> sampler = RejectionSampler(prior)
         >>> samples = sampler.run(rv_data, n_prior_samples=500_000)
         >>> mcmc = sampler.init_mcmc(samples, rv_data,
         ...                          num_chains=4, num_warmup=500,
         ...                          num_samples=2000)
-        >>> mcmc.run(jr.PRNGKey(0))
+        >>> mcmc.run(jr.key(0))
         >>> posterior = mcmc.get_samples()
         >>> # Keys: period, eccentricity, phase_peri, arg_peri
 
@@ -357,12 +399,12 @@ class RejectionSampler(eqx.Module):
         >>> mcmc = sampler.init_mcmc(samples, rv_data, marginalized=False,
         ...                          num_chains=4, num_warmup=500,
         ...                          num_samples=2000)
-        >>> mcmc.run(jr.PRNGKey(0))
+        >>> mcmc.run(jr.key(0))
         >>> posterior = mcmc.get_samples()
-        >>> # Adds K and v0 (as deterministic sites) to the above
+        >>> # Adds rv_semiamp and v_sys (as deterministic sites) to the above
 
-        **Physical reparameterization** — replace ``K`` with stellar masses
-        and inclination; ``v0`` is analytically marginalized:
+        **Physical reparameterization** — replace ``rv_semiamp`` with stellar masses
+        and inclination; ``v_sys`` is analytically marginalized:
 
         >>> import jax.numpy as jnp
         >>> import numpyro
@@ -386,7 +428,7 @@ class RejectionSampler(eqx.Module):
         ...     inc = numpyro.sample("inc", dist.Uniform(0.0, jnp.pi / 2))
         ...     K   = K_from_masses(m1, m2, inc,
         ...                         pars["period"], pars["eccentricity"])
-        ...     return {"K": K}
+        ...     return {"rv_semiamp": K}
         >>>
         >>> mcmc = sampler.init_mcmc(
         ...     samples, rv_data,
@@ -398,11 +440,11 @@ class RejectionSampler(eqx.Module):
         ...     },
         ...     num_chains=4, num_warmup=500, num_samples=2000,
         ... )
-        >>> mcmc.run(jr.PRNGKey(0))
+        >>> mcmc.run(jr.key(0))
         >>> posterior = mcmc.get_samples()
         >>> # Sampled sites:      period, eccentricity, …, m1, m2, inc
-        >>> # Deterministic site: K  (computed from m1, m2, inc, P, e)
-        >>> # Marginalized:       v0 (analytically integrated out)
+        >>> # Deterministic site: rv_semiamp  (computed from m1, m2, inc, P, e)
+        >>> # Marginalized:       v_sys (analytically integrated out)
         """
         if samples.n_samples == 0:
             msg = "Cannot initialise MCMC: no posterior samples available."
@@ -468,54 +510,92 @@ class RejectionSampler(eqx.Module):
         data: InputData,
         n_prior_samples: int,
         lik: Any,
-        strategy: _DataTypeStrategy,
+        strategy: DataTypeStrategy,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Sample prior and evaluate likelihoods in batches.
 
         The pre-built ``lik`` (a single marginalized likelihood or a
         ``CompositeLikelihood``) is evaluated with ``jax.vmap`` inside a
         ``fori_loop`` over batches of ``batch_size`` samples.  ``strategy`` is
-        a static value (hashed by class identity) so ``build_orbit_params``
+        a static value (hashed by class identity) so ``build_marginalized_params``
         dispatches to the correct param type at trace time.
+
+        The likelihood handles all linear parameter classification (Gaussian,
+        Delta, explicit) internally via ``_build_marginalized_linear``.
+
+        Instead of zero-padding the last batch, we oversample so that every
+        evaluation uses a real prior draw.  The returned arrays are trimmed to
+        ``n_prior_samples``.
         """
-        prior_samples = self.prior.sample_nonlinear(key, n_prior_samples)
-
         n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
-        total_size = n_batches * self.batch_size
-        pad_size = total_size - n_prior_samples
+        n_total = n_batches * self.batch_size
 
-        def pad_batch(arr: jax.Array) -> jax.Array:
-            return jnp.pad(arr, (0, pad_size)).reshape(n_batches, self.batch_size)
+        key, nl_key = jr.split(key)
+        prior_samples = self.prior.sample_nonlinear(nl_key, n_total)
 
         _ref = next(iter(data.values())) if isinstance(data, SourceData) else data
         time_unit = _ref.time.unit
 
-        period_batched = pad_batch(prior_samples["period"])
-        ecc_batched = pad_batch(prior_samples["eccentricity"])
-        phase_batched = pad_batch(prior_samples["phase_peri"])
-        arg_peri_batched = pad_batch(prior_samples["arg_peri"])
+        # Convert period samples from the prior's unit to the data's time
+        # unit.  When the period prior is a bare distribution (not wrapped in
+        # QuantityDistribution), assume values are already in time_unit.
+        _p_prior = self.prior.nonlinear_priors.get("period")
+        _p_unit = (
+            str(_p_prior.unit) if isinstance(_p_prior, QuantityDistribution) else ""
+        )
+        if _p_unit:
+            period_converted = ustrip(
+                time_unit, Quantity(prior_samples["period"], _p_unit)
+            )
+            prior_samples["period"] = period_converted
 
-        # Pad optional params with zeros (unused values are ignored by the builder).
-        _zeros = jnp.zeros(n_prior_samples)
-        cos_i_batched = pad_batch(prior_samples.get("cos_i", _zeros))
-        lon_asc_batched = pad_batch(prior_samples.get("lon_asc_node", _zeros))
+        # Sample explicit linear params (those not being marginalized).
+        marg_names = self.prior.marginalize_names
+        if isinstance(self.prior.linear_prior, dict) and marg_names is not None:
+            marg_set = set(marg_names)
+            explicit_linear = {
+                name: d
+                for name, d in self.prior.linear_prior.items()
+                if name not in marg_set
+            }
+            if explicit_linear:
+                key, lin_key = jr.split(key)
+                lin_keys = jr.split(lin_key, len(explicit_linear))
+                lp_units = lik.linear_param_units
+                for (name, d), k in zip(explicit_linear.items(), lin_keys, strict=True):
+                    raw = _unwrap_dist(d).sample(k, (n_total,))
+                    # Convert to data units if the prior carries a unit.
+                    target_u = lp_units.get(name, "")
+                    if isinstance(d, QuantityDistribution) and target_u:
+                        raw = ustrip(target_u, Quantity(raw, str(d.unit)))
+                    prior_samples[name] = raw
+
+        # Reshape all parameter arrays into (n_batches, batch_size).
+        _zeros = jnp.zeros(n_total)
+        batched: dict[str, jax.Array] = {
+            k: prior_samples.get(k, _zeros).reshape(n_batches, self.batch_size)
+            for k in strategy.required_prior_params(self.prior)
+        }
+
+        # Static list of keys for dict reconstruction inside the fori_loop.
+        _keys = tuple(batched.keys())
+        _marg_names = self.prior.marginalize_names
+        _lp_units = lik.linear_param_units
 
         def body_fn(i: int, acc: jax.Array) -> jax.Array:
-            params = strategy.build_orbit_params(
-                period_batched[i],
-                ecc_batched[i],
-                phase_batched[i],
-                arg_peri_batched[i],
-                cos_i_batched[i],
-                lon_asc_batched[i],
-                time_unit,
+            values = {k: batched[k][i] for k in _keys}
+            params = strategy.build_marginalized_params(
+                values, time_unit, _marg_names, _lp_units
             )
             return acc.at[i].set(jax.vmap(lik.log_prob)(params))
 
         log_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
-        return prior_samples, log_liks_batched.flatten()[:n_prior_samples]
+
+        # Trim oversampled entries to match the requested count.
+        trimmed = {k: v[:n_prior_samples] for k, v in prior_samples.items()}
+        return trimmed, log_liks_batched.flatten()[:n_prior_samples]
 
     @staticmethod
     @jax.jit
@@ -530,7 +610,7 @@ class RejectionSampler(eqx.Module):
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
         datasets: dict[str, Any],
-        strategy: _DataTypeStrategy,
+        strategy: DataTypeStrategy,
         data: InputData,
         lik: Any,
     ) -> dict[str, Quantity]:
@@ -538,37 +618,13 @@ class RejectionSampler(eqx.Module):
 
         For each accepted nonlinear sample, draws from the conditional posterior
         of the linear parameters given the nonlinear parameters and data.
-
-        Parameters
-        ----------
-        key
-            Random key.
-        nonlinear_samples
-            Accepted nonlinear parameter samples.
-        datasets
-            Extracted data objects keyed by component name.
-        strategy
-            Data-type strategy for building params and design matrices.
-        data
-            Original input data (needed for multi-survey instrument ordering).
-        lik
-            Pre-built likelihood (or CompositeLikelihood) for DM construction.
-
-        Returns
-        -------
-        dict[str, Quantity]
-            One Quantity per linear parameter, each with shape ``(n_samples,)``.
         """
         n_samples = len(next(iter(nonlinear_samples.values())))
         if n_samples == 0:
             names = strategy.all_linear_names(self.prior, data)
-            units = strategy.linear_param_units(datasets, self.prior)
-            return {
-                name: Quantity(jnp.zeros(0), unit)
-                for name, unit in zip(names, units, strict=False)
-            }
+            return {name: Quantity(jnp.zeros(0), "") for name in names}
 
-        _ref = next(iter(datasets.values()))
+        _ref = next(iter(data.values())) if isinstance(data, SourceData) else data
         time_unit = _ref.time.unit
 
         keys = jr.split(key, n_samples)
@@ -576,8 +632,6 @@ class RejectionSampler(eqx.Module):
         def _sample_one(
             key: jax.Array, sample: dict[str, jax.Array]
         ) -> dict[str, Quantity]:
-            return strategy.sample_linear_one(
-                key, sample, datasets, self.prior, time_unit, data, lik
-            )
+            return strategy.sample_linear_one(key, sample, self.prior, time_unit, lik)
 
         return jax.vmap(_sample_one)(keys, nonlinear_samples)

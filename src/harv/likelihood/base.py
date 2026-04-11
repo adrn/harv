@@ -41,7 +41,7 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
     Generic over the parameter struct type ``ParamT``. Subclasses declare
     their expected parameter type explicitly, for example::
 
-        class RVLikelihood(AbstractLikelihood[RadialVelocityData, RVParameters]):
+        class RVLikelihood(AbstractLikelihood[RVData, RVParameters]):
             ...
 
     """
@@ -298,13 +298,19 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
         """Compute the log-likelihood for a single parameter sample.
 
         Dispatches to marginalized or explicit evaluation based on the
-        presence of ``linear_prior``.
+        presence of ``linear_prior`` and whether ``params`` has non-empty
+        ``marginalized_names``.
         """
-        if self._has_marginalized:
+        _is_marg = (
+            self._has_marginalized
+            and isinstance(params, MarginalizedParameters)
+            and params.marginalized_names  # non-empty tuple is truthy
+        )
+        if _is_marg:
             return self._log_prob_marginalized(
                 cast("MarginalizedParameters", params), offsets or {}
             )
-        return self._log_prob_explicit(cast("ParamT", params), offsets or {})
+        return self._log_prob_explicit(params, offsets or {})
 
     def _log_prob_marginalized(
         self, params: MarginalizedParameters, offsets: dict[str, AbstractQuantity]
@@ -314,17 +320,29 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
         return c.dist.log_prob(c.obs)
 
     def _log_prob_explicit(
-        self, params: ParamT, offsets: dict[str, AbstractQuantity]
+        self,
+        params: MarginalizedParameters | ParamT,
+        offsets: dict[str, AbstractQuantity],
     ) -> jax.Array:
         """Explicit (non-marginalized) Gaussian log-likelihood.
 
-        Computes ``Normal(X @ y, obs_err).log_prob(obs)`` where ``X`` is the
-        full design matrix and ``y`` is the vector of all linear parameter
+        Computes ``sum(Normal(X @ y, obs_err).log_prob(obs))`` where ``X`` is
+        the full design matrix and ``y`` is the vector of all linear parameter
         values (base parameters + any per-instrument offsets).
         """
         X = self.design_matrix(params)
         linear_params = self.linear_unmarginalized_param_values(params, offsets)
-        y = jnp.array(list(linear_params.values()))
+
+        # Full column ordering of the design matrix.  Zero-fill any missing
+        # offset columns (e.g. when multi-survey indicator is present but no
+        # offsets were provided — implies zero offset for all instruments).
+        linear_names = (
+            params.source_cls.linear_param_names
+            if isinstance(params, MarginalizedParameters)
+            else params.linear_param_names
+        )
+        cols = (*linear_names, *(self.instrument_names or ()))
+        y = jnp.array([linear_params.get(name, 0.0) for name in cols])
 
         y_pred = X @ y
 
@@ -334,7 +352,7 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
         arr_obs = ustrip(obs_unit, obs)
         arr_obs_err = ustrip(obs_unit, self.data._get_obs_err())
 
-        return dist.Normal(y_pred, arr_obs_err).log_prob(arr_obs)
+        return dist.Normal(y_pred, arr_obs_err).log_prob(arr_obs).sum()
 
     # Sampling from the conditional posterior over linear parameters:
 

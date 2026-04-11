@@ -3,24 +3,25 @@
 TODO: we could add support for metadata for the data type classes below.
 """
 
-__all__ = [
+__all__ = (
     "AbstractAstrometryData",
     "GaiaAstrometryData",
     # "AbsoluteAstrometryData",
-    "RadialVelocityData",
+    "RVData",
     "SourceData",
     "DatasetType",
     "InputData",
     "stack_datasets",
     "build_indicator_matrix",
-]
+)
 
 from collections.abc import Iterator
 from dataclasses import KW_ONLY, fields
-from typing import ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 import equinox as eqx
 import jax
+import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Quantity, ustrip
 from unxt.quantity import AllowValue
@@ -90,6 +91,71 @@ class GaiaAstrometryData(AbstractAstrometryData):
     parallax_factor: NFloatArray
     """AL parallax factors."""
 
+    def plot(
+        self,
+        ax: Any = None,
+        *,
+        add_labels: bool = True,
+        relative_to_t_ref: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Plot along-scan residuals vs time.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  If ``None``, uses ``plt.gca()``.
+        add_labels : bool, optional
+            Add axis labels.
+        relative_to_t_ref : bool, optional
+            Plot time relative to ``t_ref``.
+        **kwargs
+            Passed to ``ax.errorbar()``.  Defaults can be overridden.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            ax = plt.gca()
+
+        al_unit = str(self.al_position.unit)
+        time_unit = str(self.time.unit)
+
+        t = np.asarray(ustrip(time_unit, self.time))
+        if relative_to_t_ref and self.t_ref is not None:
+            t = t - float(ustrip(time_unit, self.t_ref))
+
+        style = kwargs.copy()
+        style.setdefault("linestyle", "none")
+        style.setdefault("marker", "o")
+        style.setdefault("markersize", 4.0)
+        style.setdefault("elinewidth", 1.0)
+        style.setdefault("capsize", 0)
+        style.setdefault("color", "k")
+        style.setdefault("ecolor", "#666666")
+        style.setdefault("zorder", 10)
+
+        ax.errorbar(
+            t,
+            np.asarray(ustrip(al_unit, self.al_position)),
+            yerr=np.asarray(ustrip(al_unit, self.al_position_err)),
+            **style,
+        )
+
+        if add_labels:
+            xlabel = (
+                f"Time \u2212 t_ref [{time_unit}]"
+                if relative_to_t_ref
+                else f"Time [{time_unit}]"
+            )
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(f"AL position [{al_unit}]")
+
+        return ax
+
 
 # TODO: currently not supported, so commenting out
 # class AbsoluteAstrometryData(AbstractAstrometryData):
@@ -111,7 +177,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
 #     """Dec uncertainty."""
 
 
-class RadialVelocityData(AbstractData):
+class RVData(AbstractData):
     """Radial velocity measurements."""
 
     _obs_name: ClassVar[str] = "rv"
@@ -123,9 +189,91 @@ class RadialVelocityData(AbstractData):
     rv_err: NVelocity
     """Radial velocity uncertainties."""
 
+    def plot(
+        self,
+        ax: Any = None,
+        *,
+        rv_unit: str | None = None,
+        add_labels: bool = True,
+        relative_to_t_ref: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Plot RV data as error bars.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  If ``None``, uses ``plt.gca()``.
+        rv_unit : str, optional
+            Display unit for the RV axis.  Defaults to the data's own unit.
+        add_labels : bool, optional
+            Add axis labels.
+        relative_to_t_ref : bool, optional
+            Plot time relative to ``t_ref``.
+        **kwargs
+            Passed to ``ax.errorbar()``.  Defaults can be overridden.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+
+        Examples
+        --------
+        >>> import matplotlib.pyplot as plt
+        >>> from unxt import Quantity
+        >>> data = RVData(
+        ...     time=Quantity([0.0, 50.0, 100.0], "day"),
+        ...     rv=Quantity([1.0, -2.0, 0.5], "km/s"),
+        ...     rv_err=Quantity([0.5, 0.5, 0.5], "km/s"),
+        ... )
+        >>> ax = data.plot()  # uses errorbar() with sensible defaults
+        >>> ax = data.plot(color="C1", markersize=6)  # override style
+        >>> plt.close("all")
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            ax = plt.gca()
+
+        if rv_unit is None:
+            rv_unit = str(self.rv.unit)
+        time_unit = str(self.time.unit)
+
+        t = np.asarray(ustrip(time_unit, self.time))
+        if relative_to_t_ref and self.t_ref is not None:
+            t = t - float(ustrip(time_unit, self.t_ref))
+
+        style = kwargs.copy()
+        style.setdefault("linestyle", "none")
+        style.setdefault("marker", "o")
+        style.setdefault("markersize", 4.0)
+        style.setdefault("elinewidth", 1.0)
+        style.setdefault("capsize", 0)
+        style.setdefault("color", "k")
+        style.setdefault("ecolor", "#666666")
+        style.setdefault("zorder", 10)
+
+        ax.errorbar(
+            t,
+            np.asarray(ustrip(rv_unit, self.rv)),
+            yerr=np.asarray(ustrip(rv_unit, self.rv_err)),
+            **style,
+        )
+
+        if add_labels:
+            xlabel = (
+                f"Time \u2212 t_ref [{time_unit}]"
+                if relative_to_t_ref
+                else f"Time [{time_unit}]"
+            )
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(f"RV [{rv_unit}]")
+
+        return ax
+
 
 # Type alias for all supported data types
-DatasetType = AbstractAstrometryData | RadialVelocityData
+DatasetType = AbstractAstrometryData | RVData
 _DT = TypeVar("_DT", bound=DatasetType)
 
 
@@ -145,7 +293,7 @@ class SourceData(eqx.Module):
             if not isinstance(ds, AbstractData):
                 raise TypeError(
                     f"Dataset '{name}' must be AbstractAstrometryData or "
-                    f"RadialVelocityData, got {type(ds).__name__}"
+                    f"RVData, got {type(ds).__name__}"
                 )
         object.__setattr__(self, "_datasets", datasets)
 
@@ -182,7 +330,7 @@ class SourceData(eqx.Module):
 
     def _n_rv(self) -> int:
         """Number of radial velocity datasets."""
-        return len(self.get_datasets_by_type(RadialVelocityData))
+        return len(self.get_datasets_by_type(RVData))
 
 
 # Type alias for any top-level input accepted by the sampler and likelihoods.
@@ -223,6 +371,7 @@ def stack_datasets(
         if hasattr(getattr(ref, field.name), "unit")
         else ""
         for field in fields(ref)
+        if field.name != "t_ref"  # scalar, not array — skip and recompute below
     }
 
     # NOTE: we assume that all datasets have the same fields and units, and we assume
@@ -241,6 +390,11 @@ def stack_datasets(
         )
         for name, unit in all_units.items()
     }
+    # NOTE: t_ref is recomputed from the stacked time by __check_init__
+    # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
+    # class docstrings) about how t_ref is handled when stacking datasets, since it's
+    # not just concatenated but recomputed from the mean time. A potentially better
+    # thing to do would be to check if one t_ref is set (use that), else throw an error.
     return type(ref)(**all_data)
 
 

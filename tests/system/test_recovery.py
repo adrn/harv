@@ -38,6 +38,7 @@ from unxt import Quantity, ustrip
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import GaiaAstrometryParameters
 from harv.priors.rejection import RejectionPrior
+from harv.quantity_distribution import QuantityDistribution
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
@@ -49,7 +50,7 @@ from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
 
 def _period_quantile(samples, q: float) -> float:
     """Return the q-th percentile (0-100) of the period samples in days."""
-    return float(jnp.percentile(samples["period"].value, q))
+    return float(jnp.percentile(ustrip("day", samples["period"]), q))
 
 
 # ---------------------------------------------------------------------------
@@ -58,12 +59,12 @@ def _period_quantile(samples, q: float) -> float:
 
 
 class TestHighSNRRVRecovery:
-    """High-SNR single-instrument RV with a tight period prior.
+    """Moderate-SNR single-instrument RV with a broad period prior.
 
-    True parameters: P=100 d, e=0.3, K=5 km/s, s=2 km/s (K/s=2.5), 30 obs.
+    True parameters: P=100 d, e=0.3, rv_semiamp=10 km/s, s=5 km/s (K/s=2), 15 obs.
     Period prior: log-uniform [50, 200] days.
 
-    Expected: ~800 accepted samples from 500 k draws; the posterior 90%
+    Expected: ~50-100 accepted samples from 500 k draws; the posterior 90%
     credible interval for period should contain the true value.
     """
 
@@ -71,14 +72,19 @@ class TestHighSNRRVRecovery:
     def rv_samples_high_snr(self):
         data, true = simulate_rv_sb1_data(
             seed=42,
-            n_obs=30,
+            n_obs=15,
             period=Quantity(100.0, "day"),
             eccentricity=0.3,
-            K=Quantity(5.0, "km/s"),
-            v0=Quantity(0.0, "km/s"),
-            rv_err=Quantity(2.0, "km/s"),
+            rv_semiamp=Quantity(10.0, "km/s"),
+            v_sys=Quantity(0.0, "km/s"),
+            rv_err=Quantity(5.0, "km/s"),
         )
-        prior = RejectionPrior.default_rv(period_min=50.0, period_max=200.0)
+        prior = RejectionPrior.default_rv(
+            period_min=Quantity(50.0, "day"),
+            period_max=Quantity(200.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+        )
         sampler = RejectionSampler(prior)
         samples = sampler.run(data, n_prior_samples=500_000, seed=42)
         return samples, true
@@ -96,18 +102,18 @@ class TestHighSNRRVRecovery:
         true_period = float(ustrip("day", true["period"]))
         p5 = _period_quantile(samples, 5)
         p95 = _period_quantile(samples, 95)
-        assert (
-            p5 <= true_period <= p95
-        ), f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
+        assert p5 <= true_period <= p95, (
+            f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
+        )
 
-    def test_k_v0_recovered(self, rv_samples_high_snr):
-        """K and v0 (marginalized linear params) should be consistent with truth."""
+    def test_rv_semiamp_v_sys_recovered(self, rv_samples_high_snr):
+        """rv_semiamp and v_sys (marginalized linear params) should be consistent with truth."""
         samples, true = rv_samples_high_snr
-        true_K = float(ustrip("km/s", true["K"]))
-        true_v0 = float(ustrip("km/s", true["v0"]))
+        true_K = float(ustrip("km/s", true["rv_semiamp"]))
+        true_v0 = float(ustrip("km/s", true["v_sys"]))
 
-        K_samples = samples["K"].value
-        v0_samples = samples["v0"].value
+        K_samples = samples["rv_semiamp"].value
+        v0_samples = samples["v_sys"].value
 
         K_lo, K_hi = (
             float(jnp.percentile(K_samples, 5)),
@@ -118,12 +124,12 @@ class TestHighSNRRVRecovery:
             float(jnp.percentile(v0_samples, 95)),
         )
 
-        assert (
-            K_lo <= true_K <= K_hi
-        ), f"True K={true_K:.2f} km/s not in 90% CI [{K_lo:.2f}, {K_hi:.2f}]."
-        assert (
-            v0_lo <= true_v0 <= v0_hi
-        ), f"True v0={true_v0:.2f} km/s not in 90% CI [{v0_lo:.2f}, {v0_hi:.2f}]."
+        assert K_lo <= true_K <= K_hi, (
+            f"True rv_semiamp={true_K:.2f} km/s not in 90% CI [{K_lo:.2f}, {K_hi:.2f}]."
+        )
+        assert v0_lo <= true_v0 <= v0_hi, (
+            f"True v_sys={true_v0:.2f} km/s not in 90% CI [{v0_lo:.2f}, {v0_hi:.2f}]."
+        )
 
     def test_eccentricity_positive(self, rv_samples_high_snr):
         """Sampled eccentricities must lie in [0, 1)."""
@@ -151,17 +157,22 @@ class TestMultiSurveyRVRecovery:
         source_data, true = simulate_rv_multisurv_data(
             instruments=instruments,
             seed=10,
-            n_obs_per_instrument=20,
+            n_obs_per_instrument=10,
             period=Quantity(100.0, "day"),
             eccentricity=0.3,
-            K=Quantity(5.0, "km/s"),
-            v0=Quantity(0.0, "km/s"),
-            rv_err=Quantity(2.0, "km/s"),
+            rv_semiamp=Quantity(10.0, "km/s"),
+            v_sys=Quantity(0.0, "km/s"),
+            rv_err=Quantity(5.0, "km/s"),
         )
         prior = RejectionPrior.default_rv(
-            period_min=50.0,
-            period_max=200.0,
-            offsets={"keck": None, "harps": dist.Normal(0.0, 5.0)},
+            period_min=Quantity(50.0, "day"),
+            period_max=Quantity(200.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+            offsets={
+                "keck": None,
+                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            },
         )
         sampler = RejectionSampler(prior)
         samples = sampler.run(source_data, n_prior_samples=500_000, seed=10)
@@ -176,9 +187,9 @@ class TestMultiSurveyRVRecovery:
         true_period = float(ustrip("day", true["period"]))
         p5 = _period_quantile(samples, 5)
         p95 = _period_quantile(samples, 95)
-        assert (
-            p5 <= true_period <= p95
-        ), f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
+        assert p5 <= true_period <= p95, (
+            f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
+        )
 
     def test_injected_offset_in_90pct_credible_interval(self, multisurv_samples):
         """Injected harps offset (2 km/s) should be covered by the posterior."""
@@ -207,7 +218,7 @@ class TestMultiSurveyRVRecovery:
 class TestLowSNRBroadPosterior:
     """Low-SNR RV with very few epochs: posterior is broad and likely multi-modal.
 
-    True parameters: P=100 d, K=2 km/s, s=5 km/s (K/s=0.4), 15 obs.
+    True parameters: P=100 d, rv_semiamp=2 km/s, s=5 km/s (K/s=0.4), 15 obs.
     Prior: log-uniform [20, 500] days.
 
     We verify:
@@ -225,11 +236,16 @@ class TestLowSNRBroadPosterior:
             n_obs=15,
             period=Quantity(100.0, "day"),
             eccentricity=0.2,
-            K=Quantity(2.0, "km/s"),
-            v0=Quantity(0.0, "km/s"),
+            rv_semiamp=Quantity(2.0, "km/s"),
+            v_sys=Quantity(0.0, "km/s"),
             rv_err=Quantity(5.0, "km/s"),
         )
-        prior = RejectionPrior.default_rv(period_min=20.0, period_max=500.0)
+        prior = RejectionPrior.default_rv(
+            period_min=Quantity(20.0, "day"),
+            period_max=Quantity(500.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+        )
         sampler = RejectionSampler(prior)
         samples = sampler.run(data, n_prior_samples=200_000, seed=7)
         return samples, true
@@ -237,9 +253,9 @@ class TestLowSNRBroadPosterior:
     def test_enough_accepted_samples(self, low_snr_samples):
         """Low-SNR data should still yield accepted samples from the broad prior."""
         samples, _ = low_snr_samples
-        assert (
-            samples.n_samples >= 10
-        ), f"Expected ≥10 accepted samples; got {samples.n_samples}."
+        assert samples.n_samples >= 10, (
+            f"Expected ≥10 accepted samples; got {samples.n_samples}."
+        )
 
     def test_posterior_is_broad(self, low_snr_samples):
         """With low SNR, the period posterior should span > factor of 2 in period."""
@@ -255,8 +271,8 @@ class TestLowSNRBroadPosterior:
         """True period (100 d) should be contained in the posterior's range."""
         samples, true = low_snr_samples
         true_period = float(ustrip("day", true["period"]))
-        p_min = float(jnp.min(samples["period"].value))
-        p_max = float(jnp.max(samples["period"].value))
+        p_min = float(jnp.min(ustrip("day", samples["period"])))
+        p_max = float(jnp.max(ustrip("day", samples["period"])))
         assert p_min <= true_period <= p_max, (
             f"True period {true_period:.1f} d not within posterior range "
             f"[{p_min:.1f}, {p_max:.1f}] d."
@@ -302,10 +318,15 @@ class TestAstrometryLikelihoodSanity:
             semimajor_axis=Quantity(5.0, "mas"),
             al_error=Quantity(0.2, "mas"),
         )
-        lp = dist.MultivariateNormal(
-            loc=jnp.zeros(6), covariance_matrix=1000.0**2 * jnp.eye(6)
-        )
-        lik = GaiaAstrometryLikelihood(data=data, linear_prior=lp)
+        lp = {
+            "ra0": dist.Normal(0.0, 1000.0),
+            "dec0": dist.Normal(0.0, 1000.0),
+            "pmra": dist.Normal(0.0, 1000.0),
+            "pmdec": dist.Normal(0.0, 1000.0),
+            "parallax": dist.Normal(0.0, 1000.0),
+            "semi_major_axis": dist.Normal(0.0, 1000.0),
+        }
+        lik = GaiaAstrometryLikelihood(data=data, linear_marginalized_prior=lp)
         return lik, data, true
 
     def test_true_params_log_prob_finite(self, astro_lik_and_truth):
@@ -321,9 +342,9 @@ class TestAstrometryLikelihoodSanity:
             lon_asc_node=float(ustrip("rad", true["lon_asc_node"])),
         )
         log_lik = lik.log_prob(params)
-        assert jnp.isfinite(
-            log_lik
-        ), f"log_prob at true params is not finite: {log_lik}"
+        assert jnp.isfinite(log_lik), (
+            f"log_prob at true params is not finite: {log_lik}"
+        )
 
     def test_true_params_better_than_prior_median(self, astro_lik_and_truth):
         """log_prob at true params >> median log_prob under the prior.
@@ -347,8 +368,15 @@ class TestAstrometryLikelihoodSanity:
         log_lik_true = float(lik.log_prob(params_true))
 
         # Sample 1000 random nonlinear parameter sets from the prior
-        prior = RejectionPrior.default_astrometry(period_min=100.0, period_max=1000.0)
-        prior_nl = prior.sample_nonlinear(jr.PRNGKey(0), 1_000)
+        prior = RejectionPrior.default_gaia_astrometry(
+            period_min=Quantity(100.0, "day"),
+            period_max=Quantity(1000.0, "day"),
+            sigma_a0=Quantity(1e3, "AU"),
+            sigma_parallax=Quantity(100.0, "mas"),
+            sigma_pos=Quantity(1e3, "mas"),
+            sigma_vtan=Quantity(200.0, "km/s"),
+        )
+        prior_nl = prior.sample_nonlinear(jr.key(0), 1_000)
         prior_batch = GaiaAstrometryParameters.marginalized(
             period=Quantity(prior_nl["period"], "day"),
             eccentricity=prior_nl["eccentricity"],

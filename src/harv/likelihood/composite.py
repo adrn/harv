@@ -32,7 +32,7 @@ class CompositeLikelihood(eqx.Module):
     Combining astrometry and RV likelihoods::
 
         import numpyro.distributions as dist
-        from harv.likelihood.combined import CompositeLikelihood
+        from harv.likelihood.composite import CompositeLikelihood
         from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
         from harv.likelihood.rv import RVLikelihood
         from harv.likelihood.params import (
@@ -57,8 +57,8 @@ class CompositeLikelihood(eqx.Module):
             rv=RVLikelihood(
                 data=rv_data,
                 linear_marginalized_prior={
-                    "K": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
-                    "v0": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+                    "rv_semiamp": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+                    "v_sys": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
                 },
             ),
         )
@@ -96,6 +96,14 @@ class CompositeLikelihood(eqx.Module):
     def items(self) -> Any:
         """Return (name, component) pairs."""
         return self.components.items()
+
+    @property
+    def linear_param_units(self) -> dict[str, str]:
+        """Merged ``{param_name: unit_str}`` from all sub-likelihoods."""
+        units: dict[str, str] = {}
+        for comp in self.components.values():
+            units.update(comp.linear_param_units)
+        return units
 
     def log_prob(
         self,

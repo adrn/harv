@@ -135,8 +135,8 @@ def rv_at_times(
     eccentricity: ScalarFloat,
     t_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
-    K: ScalarQSpeed,
-    v0: ScalarQSpeed,
+    rv_semiamp: ScalarQSpeed,
+    v_sys: ScalarQSpeed,
 ) -> BatchQSpeed:
     """Compute the RV model: K·[cos(ω + f(t)) + e·cos(ω)] + v₀.
 
@@ -149,18 +149,20 @@ def rv_at_times(
     eccentricity
         Orbital eccentricity.
     t_peri
-        Time of periastron passage.
+        Time of periastron passage.  In the likelihood layer this is
+        derived from the dimensionless ``phase_peri`` as
+        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron ω.
-    K
+    rv_semiamp
         RV semi-amplitude.
-    v0
+    v_sys
         Systemic velocity.
 
     Returns
     -------
     rv
-        Radial velocities in the same unit as ``K`` and ``v0``.
+        Radial velocities in the same unit as ``rv_semiamp`` and ``v_sys``.
 
     Examples
     --------
@@ -173,15 +175,15 @@ def rv_at_times(
     ...     eccentricity=0.3,
     ...     t_peri=Quantity(50.0, "day"),
     ...     arg_peri=Quantity(1.2, "rad"),
-    ...     K=Quantity(8.0, "km/s"),
-    ...     v0=Quantity(-5.0, "km/s"),
+    ...     rv_semiamp=Quantity(8.0, "km/s"),
+    ...     v_sys=Quantity(-5.0, "km/s"),
     ... )
     >>> rv.unit
     Unit("km / s")
     """
     sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
     amplitude = rv_shape(sin_f, cos_f, eccentricity, arg_peri)
-    return cast("BatchQSpeed", K * amplitude + v0)
+    return cast("BatchQSpeed", rv_semiamp * amplitude + v_sys)
 
 
 def astrometric_orbit_at_times(
@@ -216,7 +218,9 @@ def astrometric_orbit_at_times(
     eccentricity
         Orbital eccentricity.
     t_peri
-        Time of periastron passage.
+        Time of periastron passage.  In the likelihood layer this is
+        derived from the dimensionless ``phase_peri`` as
+        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron ω.
     cos_i

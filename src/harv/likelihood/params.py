@@ -33,6 +33,7 @@ from typing import Any, ClassVar, final
 import equinox as eqx
 
 from harv.custom_types import (
+    DIMENSIONED_BATCH_TYPES,
     BatchFloat,
     BatchQAngle,
     BatchQAngularSpeed,
@@ -52,18 +53,44 @@ class AbstractParameters(eqx.Module):
 
     linear_param_names: ClassVar[tuple[str, ...]] = ()
     nonlinear_param_names: ClassVar[tuple[str, ...]] = ()
+    _dimensioned_param_names: ClassVar[tuple[str, ...]] = ()
 
     period: BatchQTime
     eccentricity: BatchFloat
-    phase_peri: BatchFloat
-    arg_peri: BatchFloat
+    phase_peri: BatchFloat  # Fractional orbital phase at pericenter, ∈ [0, 1]
+    arg_peri: BatchQAngle
 
     def __init_subclass__(cls) -> None:
-        """Automatically compute nonlinear_param_names for each subclass."""
+        """Automatically compute nonlinear_param_names for each subclass.
+
+        Note: equinox may not have processed the subclass fields yet when this
+        hook fires, so ``dataclasses.fields(cls)`` may only contain parent
+        fields.  To be safe, subclasses that add extra nonlinear fields should
+        set ``nonlinear_param_names`` explicitly as a ClassVar.
+        """
+        # NOTE: This is safe to do at the moment because all parameters are defined as
+        # plain annotations / dataclass fields. In the future, if we use eqx.field() and
+        # any custom arguments, we would have to be more careful here since
+        # dataclasses.dataclass() would not know how to handle that.
+        dataclasses.dataclass(cls)
         cls.nonlinear_param_names = tuple(
             f.name
             for f in dataclasses.fields(cls)
             if f.name not in cls.linear_param_names and f.init
+        )
+
+        # Auto-detect which fields carry physical dimensions by checking
+        # their annotation against DIMENSIONED_BATCH_TYPES.
+        def _get_annotation(klass: type, name: str) -> Any:
+            for base in klass.__mro__:
+                if name in getattr(base, "__annotations__", {}):
+                    return base.__annotations__[name]
+            return None
+
+        cls._dimensioned_param_names = tuple(
+            f.name
+            for f in dataclasses.fields(cls)
+            if f.init and _get_annotation(cls, f.name) in DIMENSIONED_BATCH_TYPES
         )
 
     @classmethod
@@ -118,22 +145,22 @@ class RVParameters(AbstractParameters):
     """Full parameter set for the RV likelihood.
 
     Includes both nonlinear orbital parameters, the linear RV parameters
-    (semi-amplitude K and systemic velocity v0).
+    (semi-amplitude and systemic velocity).
 
     Parameters
     ----------
     period, eccentricity, phase_peri, arg_peri
         Nonlinear orbital parameters (inherited from ``AbstractParameters``).
-    K : BatchQSpeed
+    rv_semiamp : BatchQSpeed
         RV semi-amplitude.
-    v0 : BatchQSpeed
+    v_sys : BatchQSpeed
         Systemic velocity (for the reference instrument).
     """
 
-    linear_param_names: ClassVar[tuple[str, ...]] = ("K", "v0")
+    linear_param_names: ClassVar[tuple[str, ...]] = ("rv_semiamp", "v_sys")
 
-    K: BatchQSpeed  # RV semi-amplitude
-    v0: BatchQSpeed  # systemic velocity (reference instrument)
+    rv_semiamp: BatchQSpeed  # RV semi-amplitude
+    v_sys: BatchQSpeed  # systemic velocity (reference instrument)
 
 
 @final
@@ -159,7 +186,7 @@ class GaiaAstrometryParameters(AbstractParameters):
     )
 
     cos_i: BatchFloat
-    lon_asc_node: BatchFloat
+    lon_asc_node: BatchQAngle
     ra0: BatchQAngle  # reference RA offset
     dec0: BatchQAngle  # reference Dec offset
     pmra: BatchQAngularSpeed  # proper motion in RA

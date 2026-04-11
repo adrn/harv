@@ -7,28 +7,28 @@ and the presence of ``linear_prior`` / ``indicator_matrix``:
 
 1. **Marginalized** (``linear_prior`` provided, ``params`` is
    :class:`MarginalizedParameters`): analytically integrates over the linear RV
-   parameters (K, v0) given a Gaussian prior. The prior can depend on the nonlinear
-   parameters. Supports partial marginalization (e.g., only marginalizing over K and not
-   v0) via ``params.marginalized_names``.  For multi-survey data (``indicator_matrix``
-   provided), the per-instrument offset columns are always appended to the marginalized
-   design matrix -- partial marginalization of the named parameters (K, v0) works
-   simultaneously with multi-survey offset columns.
+   parameters (rv_semiamp, v_sys) given a Gaussian prior. The prior can depend on the
+   nonlinear parameters. Supports partial marginalization (e.g., only marginalizing over
+   rv_semiamp and not v_sys) via ``params.marginalized_names``.  For multi-survey data
+   (``indicator_matrix`` provided), the per-instrument offset columns are always appended
+   to the marginalized design matrix -- partial marginalization of the named parameters
+   (rv_semiamp, v_sys) works simultaneously with multi-survey offset columns.
 
 2. **Explicit** (``linear_prior`` is ``None``, ``params`` is :class:`RVParameters`):
-   evaluates the Gaussian data log-likelihood directly at the provided K and v0.
-   For multi-survey data (``indicator_matrix`` present), per-instrument offsets are
-   included when ``params.offsets`` is provided, giving the full model
-   ``K * rv_shape(t) + v0 + dj * I(j)``.  If ``offsets`` is ``None`` with multi-survey
+   evaluates the Gaussian data log-likelihood directly at the provided rv_semiamp
+   and v_sys. For multi-survey data (``indicator_matrix`` present), per-instrument
+   offsets are included when ``params.offsets`` is provided, giving the full model
+   ``rv_semiamp * rv_shape(t) + v_sys + dj * I(j)``.  If ``offsets`` is ``None`` with multi-survey
    data, offset corrections are omitted -- pre-correct the data externally or use
    mode 1 to marginalize offsets analytically.
 
 For the SB1 model the RV model is:
 
-    RV(t) = K * [cos(w + f(t)) + e * cos(w)] + v0
-           = K * rv_shape(t) + v0
+    RV(t) = rv_semiamp * [cos(w + f(t)) + e * cos(w)] + v_sys
+           = rv_semiamp * rv_shape(t) + v_sys
 
 Note on SB2: :func:`_get_design_matrix_sb2` provides the (n_obs, 3) design matrix
-for double-lined spectroscopic binaries (columns [K1, K2, v0]), but no likelihood
+for double-lined spectroscopic binaries (columns [K1, K2, v_sys]), but no likelihood
 class uses it yet.  SB2 support requires a dedicated ``SystemData`` container that
 does not yet exist -- see the Planned section in docs/spec.md.
 """
@@ -40,7 +40,7 @@ import quaxed.numpy as jnp
 from unxt import ustrip
 from unxt.quantity import AllowValue
 
-from harv.data import RadialVelocityData
+from harv.data import RVData
 from harv.kepler.orbits import rv_shape as _rv_shape
 from harv.likelihood.base import AbstractLikelihood
 from harv.likelihood.helpers import (
@@ -61,7 +61,7 @@ def _get_design_matrix_sb1(
     cos_f: jax.Array,
 ) -> jax.Array:
     """Build (n_obs, 2) design matrix for SB1: columns [rv_amplitude, 1]."""
-    arg_peri = ustrip(AllowValue, "", params.arg_peri)
+    arg_peri = ustrip(AllowValue, "rad", params.arg_peri)
     rv_shape = _rv_shape(sin_f, cos_f, params.eccentricity, arg_peri)
 
     # NOTE: the order here should match the order of the linear parameters in
@@ -75,14 +75,14 @@ def _get_design_matrix_sb2(
     cos_f: jax.Array,
     primary: bool,
 ) -> jax.Array:
-    """Build (n_obs, 3) design matrix for SB2: columns [K1, K2, v0].
+    """Build (n_obs, 3) design matrix for SB2: columns [K1, K2, v_sys].
 
     For primary: [X(t), 0, 1].  For secondary: [0, -X(t), 1].
 
     Not yet called by any likelihood class -- SB2 support requires
     ``SystemData`` (not yet implemented).  See the Planned section in docs/spec.md.
     """
-    arg_peri = ustrip(AllowValue, "", params.arg_peri)
+    arg_peri = ustrip(AllowValue, "rad", params.arg_peri)
     rv_shape = _rv_shape(sin_f, cos_f, params.eccentricity, arg_peri)
 
     if primary:
@@ -95,14 +95,14 @@ def _get_design_matrix_sb2(
 
 
 @final
-class RVLikelihood(AbstractLikelihood[RadialVelocityData, RVParameters]):
+class RVLikelihood(AbstractLikelihood[RVData, RVParameters]):
     """Unified RV likelihood supporting marginalized and explicit evaluation.
 
     This is an internal class that implements the core RV likelihood logic.
 
     When ``linear_marginalized_prior`` is provided and ``params`` is a
     :class:`MarginalizedParameters` instance, the likelihood analytically marginalizes
-    over the linear parameters (K, v0), and optionally per-instrument offsets when
+    over the linear parameters (rv_semiamp, v_sys), and optionally per-instrument offsets when
     ``indicator_matrix`` is supplied.
 
     When ``linear_marginalized_prior`` is ``None``, ``params`` must be a full
@@ -110,11 +110,11 @@ class RVLikelihood(AbstractLikelihood[RadialVelocityData, RVParameters]):
 
     Parameters
     ----------
-    data : RadialVelocityData
+    data : RVData
         Radial velocity observations.
     linear_marginalized_prior : dict[str, PriorDist | LinearPriorCallable] or None
         Per-parameter Gaussian priors for linear parameters to be analytically
-        marginalized.  Keys are parameter names (``"K"``, ``"v0"``).  Values
+        marginalized.  Keys are parameter names (``"rv_semiamp"``, ``"v_sys"``).  Values
         are ``dist.Normal``, ``QuantityDistribution(dist.Normal(...), unit)``,
         or a callable ``(params) -> dist.Normal``.  ``None`` for explicit
         evaluation.
@@ -139,13 +139,13 @@ class RVLikelihood(AbstractLikelihood[RadialVelocityData, RVParameters]):
 
     Examples
     --------
-    Single-instrument, marginalized over K and v0::
+    Single-instrument, marginalized over rv_semiamp and v_sys::
 
         >>> lik = RVLikelihood(
         ...     data=rv_data,
         ...     linear_marginalized_prior={
-        ...         "K": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
-        ...         "v0": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+        ...         "rv_semiamp": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
+        ...         "v_sys": QuantityDistribution(dist.Normal(0., 100.), "km/s"),
         ...     },
         ... )
         >>> ll = lik.log_prob(marg_params)
@@ -175,4 +175,4 @@ class RVLikelihood(AbstractLikelihood[RadialVelocityData, RVParameters]):
     def linear_param_units(self) -> dict[str, str]:
         """Units of the linear parameters."""
         u = str(self.data.rv.unit)
-        return {"K": u, "v0": u}
+        return {"rv_semiamp": u, "v_sys": u}

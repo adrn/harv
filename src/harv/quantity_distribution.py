@@ -70,10 +70,3 @@ class QuantityDistribution(eqx.Module):
         if isinstance(self.unit, str) and isinstance(value, Quantity):
             return self.distribution.log_prob(ustrip(self.unit, value))
         return self.distribution.log_prob(value)
-
-
-def _unwrap_dist(v: "PriorDist") -> dist.Distribution:
-    """Extract the underlying numpyro distribution from a PriorDist."""
-    if isinstance(v, QuantityDistribution):
-        return v.distribution
-    return v

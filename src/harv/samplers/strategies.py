@@ -3,75 +3,41 @@
 Each concrete subclass encapsulates all branching logic for a specific data
 type (RV-only, astrometry-only, combined).  The sampler itself is kept
 branch-free by dispatching to the appropriate strategy instance.
+
+``CompositeStrategy`` composes single-component strategies rather than
+hardcoding parameter classes — adding a new data type requires only a new
+single-component strategy.
 """
 
-import dataclasses
 from abc import ABC, abstractmethod
 from typing import Any, Literal, final
 
 import jax
 import jax.random as jr
-import numpyro.distributions as dist
-from unxt import Quantity, ustrip
+from equinox import AbstractVar
+from unxt import Quantity
 
 from harv.data import (
+    AbstractData,
     GaiaAstrometryData,
     InputData,
-    RadialVelocityData,
+    RVData,
     SourceData,
+    build_indicator_matrix,
+    stack_datasets,
 )
-from harv.likelihood.combined import CompositeLikelihood
+from harv.likelihood.composite import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
-from harv.likelihood.helpers import _IndexedCallable, _sub_mvn
 from harv.likelihood.params import (
     AbstractParameters,
     GaiaAstrometryParameters,
     MarginalizedParameters,
     RVParameters,
 )
-from harv.likelihood.rv import (
-    RVLikelihood,
-    build_rv_indicator_matrix,
-    stack_rv_datasets,
-)
+from harv.likelihood.rv import RVLikelihood
 from harv.priors.rejection import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
-
-
-# ---------------------------------------------------------------------------
-# Component slice — metadata for one likelihood component in the joint vector
-# ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class _ComponentSlice:
-    """One component's metadata within the joint linear parameter vector.
-
-    Produced by ``_DataTypeStrategy.build_component_slices`` and consumed by
-    the numpyro model builders in ``_numpyro.py``.  ``global_col_indices``
-    replaces the old hardcoded ``n_astro`` boundary: for combined data the
-    astro component might be ``(0, 1, 2, 3, 4, 5)`` and the RV component
-    ``(6, 7)``, with no coupling between them.
-    """
-
-    name: str
-    """Human-readable label (e.g. ``"astro"``, ``"rv"``)."""
-
-    lik: Any
-    """The per-component likelihood object (has ``design_matrix``)."""
-
-    global_col_indices: tuple[int, ...]
-    """Indices into the joint linear parameter vector."""
-
-    obs: jax.Array
-    """Unit-stripped observed data vector."""
-
-    err: jax.Array
-    """Unit-stripped uncertainties vector."""
-
-
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -79,14 +45,14 @@ class _ComponentSlice:
 # ---------------------------------------------------------------------------
 
 
-class _DataTypeStrategy(ABC):
+class DataTypeStrategy(ABC):
     """Per-data-type strategy encapsulating all branching logic.
 
     Each concrete subclass provides data extraction, likelihood construction,
     orbit param building, and linear parameter sampling for one data type.
-    Required prior params are derived from the full param class fields minus
-    the linear parameter names.
     """
+
+    data_type: AbstractVar[DataType]
 
     # Stateless strategies: equality/hashing by class identity so that
     # eqx.filter_jit can hash them as static arguments.
@@ -96,51 +62,81 @@ class _DataTypeStrategy(ABC):
     def __eq__(self, other: object) -> bool:
         return type(self) is type(other)
 
+    def required_prior_params(self, prior: RejectionPrior) -> tuple[str, ...]:
+        """Parameter names that must appear in the batched values dict.
+
+        Includes nonlinear params (always sampled from prior) plus any
+        linear params that are *not* in ``prior.marginalize_names``
+        and therefore sampled explicitly.
+        """
+        seen: set[str] = set()
+        result: list[str] = []
+        for cls in self.full_cls:
+            for name in cls.nonlinear_param_names:
+                if name not in seen:
+                    seen.add(name)
+                    result.append(name)
+
+        # Explicitly-sampled linear params.
+        if isinstance(prior.linear_prior, dict):
+            marg_names = prior.marginalize_names
+            if marg_names is None:
+                # All linear params marginalized → nothing extra to sample.
+                pass
+            else:
+                marg_set = set(marg_names)
+                for name in prior.linear_prior:
+                    if name not in marg_set and name not in seen:
+                        seen.add(name)
+                        result.append(name)
+
+        return tuple(result)
+
     @property
     @abstractmethod
-    def nonlinear_cls(self) -> type[AbstractParameters]:
-        """The full parameter class used to create marginalized params.
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]:
+        """The full parameter class(es) including linear params.
 
-        For single-data-type strategies this is the single full class.
-        For combined strategies it is the full class with the superset of
-        nonlinear fields (``GaiaAstrometryParameters``).
+        Used to derive ``all_linear_names`` and for ``Samples`` serialization.
         """
         ...
 
-    @property
-    @abstractmethod
-    def full_cls(self) -> tuple[type[AbstractParameters], ...]: ...
-
-    @property
-    @abstractmethod
-    def data_type(self) -> DataType: ...
-
-    @property
-    def required_prior_params(self) -> tuple[str, ...]:
-        """Prior parameter names (nonlinear fields of ``nonlinear_cls``)."""
-        linear = set(self.nonlinear_cls.linear_param_names)
-        return tuple(
-            f.name
-            for f in dataclasses.fields(self.nonlinear_cls)
-            if f.name not in linear and f.default is dataclasses.MISSING
-        )
-
-    @property
-    def n_linear(self) -> int:
-        """Total linear parameters, summed from ``full_cls.linear_param_names``."""
-        return sum(len(cls.linear_param_names) for cls in self.full_cls)
-
-    @abstractmethod
     def extract_data(
         self,
         data: InputData,
-    ) -> dict[str, Any]:
+    ) -> dict[str, AbstractData]:
         """Extract concrete data objects from the input.
 
         Returns a dict keyed by component name (e.g. ``{"rv": rv_data}`` or
         ``{"astro": astro_data, "rv": rv_data}``).
         """
-        ...
+        if isinstance(data, RVData):
+            return {"rv": data}
+        if isinstance(data, GaiaAstrometryData):
+            return {"astro": data}
+
+        if isinstance(data, SourceData):
+            _data: dict[str, Any] = {}
+
+            rv_datasets = data.get_datasets_by_type(RVData)
+            if len(rv_datasets) == 1:
+                _data["rv"] = next(iter(rv_datasets.values()))
+            elif len(rv_datasets) > 1:
+                # Pass through the raw dict; build_likelihood handles
+                # stacking + indicator matrix construction.
+                _data["rv"] = rv_datasets
+
+            astro_datasets = data.get_datasets_by_type(GaiaAstrometryData)
+            if len(astro_datasets) == 1:
+                _data["astro"] = next(iter(astro_datasets.values()))
+            elif len(astro_datasets) > 1:
+                msg = "Multiple astrometry datasets not supported yet"
+                raise NotImplementedError(msg)
+
+            return _data
+
+        msg = f"Expected AbstractData subclass or SourceData, got {type(data)}"
+        raise TypeError(msg)
 
     @abstractmethod
     def build_likelihood(
@@ -152,39 +148,107 @@ class _DataTypeStrategy(ABC):
         """Build the likelihood for batched evaluation."""
         ...
 
-    @abstractmethod
-    def build_component_slices(
-        self,
-        lik: Any,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,
-        data: InputData,
-    ) -> tuple[_ComponentSlice, ...]:
-        """Build component metadata for the numpyro model builders."""
-        ...
-
-    @abstractmethod
-    def linear_param_units(
-        self,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,
-    ) -> tuple[str, ...]:
-        """Derive linear parameter unit strings from the data."""
-        ...
-
-    @abstractmethod
     def sample_linear_one(
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        datasets: dict[str, Any],
         prior: RejectionPrior,
         time_unit: Any,
-        data: InputData,
         lik: Any,
     ) -> dict[str, Quantity]:
         """Sample linear parameters for one accepted nonlinear sample."""
-        ...
+        params = self.build_marginalized_params(
+            sample, time_unit, prior.marginalize_names, lik.linear_param_units
+        )
+        return lik.sample_conditional_linear(params, key)
+
+    def build_marginalized_params(
+        self,
+        values: dict[str, Any],
+        time_unit: str,
+        marginalize_names: tuple[str, ...] | None = None,
+        linear_param_units: dict[str, str] | None = None,
+    ) -> Any:
+        """Build ``MarginalizedParameters`` from sampled values.
+
+        ``values`` is a dict of raw scalars keyed by parameter name
+        (period already converted to ``time_unit``).  May contain both
+        nonlinear and explicitly-sampled linear parameter values.
+
+        When ``marginalize_names`` is ``None`` (default), all linear
+        parameters are analytically marginalized.
+
+        Returns the form expected by ``lik.log_prob``: a single
+        ``MarginalizedParameters`` for single-component strategies, or a
+        ``dict[str, MarginalizedParameters]`` for :class:`CompositeStrategy`.
+        """
+        cls = self.full_cls[0]
+        kw: dict[str, Any] = {name: values[name] for name in cls.nonlinear_param_names}
+        # TODO: I don't understand why this is necessary! Shouldn't kw["period"] already
+        # be a Quantity?
+        kw["period"] = Quantity(kw["period"], time_unit)
+
+        # Determine which linear params to marginalize.
+        marg = (
+            marginalize_names
+            if marginalize_names is not None
+            else cls.linear_param_names
+        )
+
+        # Include explicit linear values (those not being marginalized).
+        units = linear_param_units or {}
+        for name in cls.linear_param_names:
+            if name not in marg and name in values:
+                u = units.get(name, "")
+                kw[name] = Quantity(values[name], u) if u else values[name]
+
+        # cls.marginalized() with no positional args defaults to marginalizing
+        # all, so guard the empty-tuple case explicitly.
+        if marg:
+            return cls.marginalized(*marg, **kw)
+        return MarginalizedParameters(values=kw, marginalized_names=(), source_cls=cls)
+
+    def build_params_with_fixed_linear(
+        self,
+        values: dict[str, Any],
+        fixed_linear: dict[str, Any],
+        linear_units: dict[str, str],
+        time_unit: str,
+    ) -> Any:
+        """Build ``MarginalizedParameters`` with some linear params provided.
+
+        Like ``build_marginalized_params``, but some linear parameters are
+        given explicit values (e.g. computed by an ``extra_model``).  The
+        provided values are wrapped in ``Quantity`` with the correct unit and
+        stored as non-marginalized fields; the remaining linear parameters
+        are still analytically marginalized.
+
+        Parameters
+        ----------
+        values
+            Raw nonlinear scalars (period already in ``time_unit``).
+        fixed_linear
+            Raw scalar values for the linear parameters to fix, keyed by
+            parameter name (e.g. ``{"rv_semiamp": 5.0}``).
+        linear_units
+            Unit string for each linear parameter (from the likelihood's
+            ``linear_param_units``).
+        time_unit
+            Unit string of the data's time axis.
+        """
+        base = self.build_marginalized_params(values, time_unit)
+        cls = base.source_cls
+        _lin = cls.linear_param_names
+        free = tuple(n for n in _lin if n not in fixed_linear)
+
+        kw = dict(base.values)
+        for name in _lin:
+            if name in fixed_linear:
+                kw[name] = Quantity(fixed_linear[name], linear_units[name])
+
+        if free:
+            return cls.marginalized(*free, **kw)
+        return MarginalizedParameters(values=kw, marginalized_names=(), source_cls=cls)
 
     def all_linear_names(
         self,
@@ -199,446 +263,194 @@ class _DataTypeStrategy(ABC):
         if (
             prior.offsets is not None
             and isinstance(data, SourceData)
-            and data.n_rv() > 1
+            and data._n_rv() > 1
         ):
             names = names + tuple(k for k, v in prior.offsets.items() if v is not None)
         return names
 
-    @abstractmethod
-    def build_orbit_params(
-        self,
-        period: jax.Array,
-        ecc: jax.Array,
-        phase: jax.Array,
-        arg_peri: jax.Array,
-        cos_i: jax.Array,
-        lon_asc: jax.Array,
-        time_unit: Any,
-    ) -> Any:
-        """Build orbit param struct from batch-sliced scalar arrays.
-
-        Called inside ``fori_loop``.  The strategy is closed over as a static
-        value so this branch is resolved at trace time.
-
-        For single-component strategies this returns a ``MarginalizedParameters``.
-        For combined strategies this returns a ``dict[str, MarginalizedParameters]``.
-        """
-        ...
-
-    def params_for_log_prob(self, params: MarginalizedParameters) -> Any:
-        """Wrap a single ``MarginalizedParameters`` for ``lik.log_prob``.
-
-        Default implementation returns the params unchanged.  The combined
-        strategy overrides this to build per-component params dicts.
-        """
-        return params
-
 
 @final
-class _RVStrategy(_DataTypeStrategy):
-    @property
-    def data_type(self) -> DataType:
-        return "rv"
-
-    @property
-    def nonlinear_cls(self) -> type[AbstractParameters]:
-        return RVParameters
+class RVStrategy(DataTypeStrategy):
+    data_type = "rv"
 
     @property
     def full_cls(self) -> tuple[type[AbstractParameters], ...]:
         return (RVParameters,)
 
-    def extract_data(
-        self,
-        data: InputData,
-    ) -> dict[str, RadialVelocityData]:
-        if isinstance(data, RadialVelocityData):
-            return {"rv": data}
-        if isinstance(data, SourceData):
-            rv_datasets = data.get_datasets_by_type(RadialVelocityData)
-            if len(rv_datasets) == 1:
-                return {"rv": next(iter(rv_datasets.values()))}
-            return {"rv": stack_rv_datasets(rv_datasets)}
-        msg = f"Expected RadialVelocityData or SourceData, got {type(data)}"
-        raise TypeError(msg)
-
     def build_likelihood(
         self,
         datasets: dict[str, Any],
         prior: RejectionPrior,
-        data: InputData,
+        data: InputData,  # noqa: ARG002
     ) -> Any:
-        rv_data = datasets["rv"]
+        rv_raw = datasets["rv"]
+        rv_offsets = prior.offsets.get("rv") if prior.offsets is not None else None
+
         indicator = None
         instrument_names = None
-        if (
-            prior.offsets is not None
-            and isinstance(data, SourceData)
-            and data.n_rv() > 1
-        ):
-            rv_datasets = data.get_datasets_by_type(RadialVelocityData)
-            non_ref = [k for k, v in prior.offsets.items() if v is not None]
-            ref = next(k for k in rv_datasets if k not in non_ref)
-            indicator, instrument_names = build_rv_indicator_matrix(
-                rv_datasets, reference=ref
+        if isinstance(rv_raw, dict) and rv_offsets is not None:
+            # Multi-survey: extract_data passed through the raw per-instrument
+            # dict.  Stack + build indicator matrix in one step.
+            reference = next(name for name, v in rv_offsets.items() if v is None)
+            rv_data, indicator, instrument_names = build_indicator_matrix(
+                rv_raw, reference=reference
             )
+        elif isinstance(rv_raw, dict):
+            # Multi-survey data but no offsets configured — just stack.
+            rv_data = stack_datasets(rv_raw)
+        else:
+            rv_data = rv_raw
+
+        linear_prior = None
+        if isinstance(prior.linear_prior, dict):
+            linear_prior = {
+                name: prior.linear_prior[name]
+                for name in RVParameters.linear_param_names
+                if name in prior.linear_prior
+            }
+
+        offsets_prior = None
+        if rv_offsets is not None:
+            offsets_prior = {name: v for name, v in rv_offsets.items() if v is not None}
+
         return RVLikelihood(
             data=rv_data,
-            linear_prior=prior.linear_prior,
+            linear_marginalized_prior=linear_prior or None,
+            offsets_marginalized_prior=offsets_prior,
             indicator_matrix=indicator,
             instrument_names=instrument_names,
         )
 
-    def build_component_slices(
-        self,
-        lik: Any,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,
-        data: InputData,
-    ) -> tuple[_ComponentSlice, ...]:
-        rv_data = datasets["rv"]
-        obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
-        err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
-        n_base = len(RVParameters.linear_param_names)
-        n_offsets = 0
-        if (
-            prior.offsets is not None
-            and isinstance(data, SourceData)
-            and data.n_rv() > 1
-        ):
-            n_offsets = sum(1 for v in prior.offsets.values() if v is not None)
-        return (_ComponentSlice("rv", lik, tuple(range(n_base + n_offsets)), obs, err),)
-
-    def linear_param_units(
-        self,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,
-    ) -> tuple[str, ...]:
-        rv_data = datasets["rv"]
-        rv_unit = str(rv_data.rv.unit)
-        n_offsets = sum(1 for v in (prior.offsets or {}).values() if v is not None)
-        return (rv_unit,) * (self.n_linear + n_offsets)
-
-    def sample_linear_one(
-        self,
-        key: jax.Array,
-        sample: dict[str, jax.Array],
-        datasets: dict[str, Any],  # noqa: ARG002
-        prior: RejectionPrior,  # noqa: ARG002
-        time_unit: Any,
-        data: InputData,  # noqa: ARG002
-        lik: Any,
-    ) -> dict[str, Quantity]:
-        params = RVParameters.marginalized(
-            period=Quantity(sample["period"], time_unit),
-            eccentricity=sample["eccentricity"],
-            phase_peri=sample["phase_peri"],
-            arg_peri=sample["arg_peri"],
-        )
-        return lik.sample_conditional_linear(params, key)
-
-    def build_orbit_params(
-        self,
-        period: jax.Array,
-        ecc: jax.Array,
-        phase: jax.Array,
-        arg_peri: jax.Array,
-        cos_i: jax.Array,  # noqa: ARG002
-        lon_asc: jax.Array,  # noqa: ARG002
-        time_unit: Any,
-    ) -> MarginalizedParameters:
-        return RVParameters.marginalized(
-            period=Quantity(period, time_unit),
-            eccentricity=ecc,
-            phase_peri=phase,
-            arg_peri=arg_peri,
-        )
-
 
 @final
-class _AstrometryStrategy(_DataTypeStrategy):
-    @property
-    def data_type(self) -> DataType:
-        return "astrometry"
-
-    @property
-    def nonlinear_cls(self) -> type[AbstractParameters]:
-        return GaiaAstrometryParameters
+class AstrometryStrategy(DataTypeStrategy):
+    data_type = "astrometry"
 
     @property
     def full_cls(self) -> tuple[type[AbstractParameters], ...]:
         return (GaiaAstrometryParameters,)
 
-    def extract_data(
-        self,
-        data: InputData,
-    ) -> dict[str, GaiaAstrometryData]:
-        if isinstance(data, GaiaAstrometryData):
-            return {"astro": data}
-        if isinstance(data, SourceData):
-            astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
-            return {"astro": astro}
-        msg = f"Expected GaiaAstrometryData or SourceData, got {type(data)}"
-        raise TypeError(msg)
-
     def build_likelihood(
         self,
         datasets: dict[str, Any],
         prior: RejectionPrior,
         data: InputData,  # noqa: ARG002
     ) -> Any:
+        linear_prior = None
+        if isinstance(prior.linear_prior, dict):
+            linear_prior = {
+                name: prior.linear_prior[name]
+                for name in GaiaAstrometryParameters.linear_param_names
+                if name in prior.linear_prior
+            }
+
         return GaiaAstrometryLikelihood(
-            data=datasets["astro"], linear_prior=prior.linear_prior
-        )
-
-    def build_component_slices(
-        self,
-        lik: Any,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,  # noqa: ARG002
-        data: InputData,  # noqa: ARG002
-    ) -> tuple[_ComponentSlice, ...]:
-        astro_data = datasets["astro"]
-        obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
-        err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
-        n = len(GaiaAstrometryParameters.linear_param_names)
-        return (_ComponentSlice("astro", lik, tuple(range(n)), obs, err),)
-
-    def linear_param_units(
-        self,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,  # noqa: ARG002
-    ) -> tuple[str, ...]:
-        astro_data = datasets["astro"]
-        pos_unit = str(astro_data.al_position.unit)
-        pm_unit = f"{pos_unit}/yr"
-        return (pos_unit, pos_unit, pm_unit, pm_unit, pos_unit, pos_unit)
-
-    def sample_linear_one(
-        self,
-        key: jax.Array,
-        sample: dict[str, jax.Array],
-        datasets: dict[str, Any],  # noqa: ARG002
-        prior: RejectionPrior,  # noqa: ARG002
-        time_unit: Any,
-        data: InputData,  # noqa: ARG002
-        lik: Any,
-    ) -> dict[str, Quantity]:
-        params = GaiaAstrometryParameters.marginalized(
-            period=Quantity(sample["period"], time_unit),
-            eccentricity=sample["eccentricity"],
-            phase_peri=sample["phase_peri"],
-            cos_i=sample["cos_i"],
-            arg_peri=sample["arg_peri"],
-            lon_asc_node=sample["lon_asc_node"],
-        )
-        return lik.sample_conditional_linear(params, key)
-
-    def build_orbit_params(
-        self,
-        period: jax.Array,
-        ecc: jax.Array,
-        phase: jax.Array,
-        arg_peri: jax.Array,
-        cos_i: jax.Array,
-        lon_asc: jax.Array,
-        time_unit: Any,
-    ) -> MarginalizedParameters:
-        return GaiaAstrometryParameters.marginalized(
-            period=Quantity(period, time_unit),
-            eccentricity=ecc,
-            phase_peri=phase,
-            arg_peri=arg_peri,
-            cos_i=cos_i,
-            lon_asc_node=lon_asc,
+            data=datasets["astro"],
+            linear_marginalized_prior=linear_prior or None,
         )
 
 
 @final
-class _CombinedStrategy(_DataTypeStrategy):
-    @property
-    def data_type(self) -> DataType:
-        return "combined"
+class CompositeStrategy(DataTypeStrategy):
+    """Compose single-component strategies to handle multiple data types.
 
-    @property
-    def nonlinear_cls(self) -> type[AbstractParameters]:
-        return GaiaAstrometryParameters
+    Rather than hardcoding parameter classes, this strategy delegates to its
+    children for param construction, likelihood building, and linear sampling.
+    Adding a new data type requires only a new single-component strategy.
+    """
+
+    data_type = "combined"
+
+    def __init__(self, **sub_strategies: DataTypeStrategy) -> None:
+        object.__setattr__(self, "_sub_strategies", sub_strategies)
 
     @property
     def full_cls(self) -> tuple[type[AbstractParameters], ...]:
-        return (GaiaAstrometryParameters, RVParameters)
-
-    def extract_data(
-        self,
-        data: InputData,
-    ) -> dict[str, Any]:
-        if not isinstance(data, SourceData):
-            msg = "Combined data type requires SourceData"
-            raise TypeError(msg)
-        rv_datasets = data.get_datasets_by_type(RadialVelocityData)
-        if len(rv_datasets) > 1:
-            msg = (
-                "Combined astrometry + multi-survey RV (with per-instrument offsets) "
-                "is not yet implemented. SourceData contains multiple "
-                f"RadialVelocityData datasets ({list(rv_datasets.keys())}), but "
-                "_CombinedStrategy only supports a single RV dataset alongside "
-                "astrometry. See docs/spec.md §'Combined astrometry + multi-survey RV' "
-                "for the planned design."
-            )
-            raise NotImplementedError(msg)
-        astro = next(iter(data.get_datasets_by_type(GaiaAstrometryData).values()))
-        rv = next(iter(rv_datasets.values()))
-        return {"astro": astro, "rv": rv}
+        """Ordered tuple of full parameter classes from all sub-strategies."""
+        return sum(
+            (sub.full_cls for sub in self._sub_strategies.values()),
+            (),
+        )
 
     def build_likelihood(
         self,
         datasets: dict[str, Any],
         prior: RejectionPrior,
-        data: InputData,  # noqa: ARG002
-    ) -> Any:
-        astro_data = datasets["astro"]
-        rv_data = datasets["rv"]
-        n = len(GaiaAstrometryParameters.linear_param_names)  # 6
-        astro_idx = tuple(range(n))
-        rv_idx = tuple(range(n, n + 2))  # K, v0
-        lp = prior.linear_prior
-        if isinstance(lp, dist.MultivariateNormal):
-            astro_lp = _sub_mvn(lp, astro_idx)
-            rv_lp = _sub_mvn(lp, rv_idx)
-        else:
-            astro_lp = _IndexedCallable(lp, astro_idx)
-            rv_lp = _IndexedCallable(lp, rv_idx)
-        return CompositeLikelihood(
-            astro=GaiaAstrometryLikelihood(astro_data, astro_lp),
-            rv=RVLikelihood(rv_data, rv_lp),
-        )
+        data: InputData,
+    ) -> CompositeLikelihood:
+        """Build a CompositeLikelihood by delegating to each sub-strategy."""
+        # Guard: combined astrometry + multi-survey RV is not yet fully
+        # validated.  See docs/spec.md §'Combined astrometry + multi-survey
+        # RV'.
+        rv_data = datasets.get("rv")
+        if "astro" in datasets and isinstance(rv_data, dict) and len(rv_data) > 1:
+            msg = (
+                "Combined astrometry + multi-survey RV is not yet implemented. "
+                "See docs/spec.md §'Combined astrometry + multi-survey RV'."
+            )
+            raise NotImplementedError(msg)
 
-    def build_component_slices(
-        self,
-        lik: Any,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,  # noqa: ARG002
-        data: InputData,  # noqa: ARG002
-    ) -> tuple[_ComponentSlice, ...]:
-        astro_data = datasets["astro"]
-        rv_data = datasets["rv"]
-        n_astro = len(GaiaAstrometryParameters.linear_param_names)
-        n_rv = len(RVParameters.linear_param_names)
-        astro_obs = ustrip(str(astro_data.al_position.unit), astro_data.al_position)
-        astro_err = ustrip(str(astro_data.al_position.unit), astro_data.al_position_err)
-        rv_obs = ustrip(str(rv_data.rv.unit), rv_data.rv)
-        rv_err = ustrip(str(rv_data.rv.unit), rv_data.rv_err)
-        return (
-            _ComponentSlice(
-                "astro", lik["astro"], tuple(range(n_astro)), astro_obs, astro_err
-            ),
-            _ComponentSlice(
-                "rv",
-                lik["rv"],
-                tuple(range(n_astro, n_astro + n_rv)),
-                rv_obs,
-                rv_err,
-            ),
-        )
-
-    def linear_param_units(
-        self,
-        datasets: dict[str, Any],
-        prior: RejectionPrior,  # noqa: ARG002
-    ) -> tuple[str, ...]:
-        astro_data = datasets["astro"]
-        rv_data = datasets["rv"]
-        pos_unit = str(astro_data.al_position.unit)
-        pm_unit = f"{pos_unit}/yr"
-        rv_unit = str(rv_data.rv.unit)
-        return (
-            pos_unit,
-            pos_unit,
-            pm_unit,
-            pm_unit,
-            pos_unit,
-            pos_unit,
-            rv_unit,
-            rv_unit,
-        )
+        components: dict[str, Any] = {}
+        for name, sub in self._sub_strategies.items():
+            # Each sub-strategy gets only the datasets it needs.
+            sub_datasets = {name: datasets[name]}
+            components[name] = sub.build_likelihood(sub_datasets, prior, data)
+        return CompositeLikelihood(**components)
 
     def sample_linear_one(
         self,
         key: jax.Array,
         sample: dict[str, jax.Array],
-        datasets: dict[str, Any],  # noqa: ARG002
-        prior: RejectionPrior,  # noqa: ARG002
+        prior: RejectionPrior,
         time_unit: Any,
-        data: InputData,  # noqa: ARG002
         lik: Any,
     ) -> dict[str, Quantity]:
-        k_astro, k_rv = jr.split(key)
-        params = GaiaAstrometryParameters.marginalized(
-            period=Quantity(sample["period"], time_unit),
-            eccentricity=sample["eccentricity"],
-            phase_peri=sample["phase_peri"],
-            cos_i=sample["cos_i"],
-            arg_peri=sample["arg_peri"],
-            lon_asc_node=sample["lon_asc_node"],
-        )
-        astro_sample = lik["astro"].sample_conditional_linear(params, k_astro)
-        rv_sample = lik["rv"].sample_conditional_linear(params, k_rv)
-        return {**astro_sample, **rv_sample}
+        keys = jr.split(key, len(self._sub_strategies))
+        result: dict[str, Quantity] = {}
+        for (name, sub), k in zip(self._sub_strategies.items(), keys, strict=True):
+            sub_lik = lik[name]
+            sub_sample = sub.sample_linear_one(k, sample, prior, time_unit, sub_lik)
+            result.update(sub_sample)
+        return result
 
-    def build_orbit_params(
+    def build_marginalized_params(
         self,
-        period: jax.Array,
-        ecc: jax.Array,
-        phase: jax.Array,
-        arg_peri: jax.Array,
-        cos_i: jax.Array,
-        lon_asc: jax.Array,
-        time_unit: Any,
+        values: dict[str, Any],
+        time_unit: str,
+        marginalize_names: tuple[str, ...] | None = None,
+        linear_param_units: dict[str, str] | None = None,
     ) -> dict[str, MarginalizedParameters]:
-        p = Quantity(period, time_unit)
         return {
-            "astro": GaiaAstrometryParameters.marginalized(
-                period=p,
-                eccentricity=ecc,
-                phase_peri=phase,
-                arg_peri=arg_peri,
-                cos_i=cos_i,
-                lon_asc_node=lon_asc,
-            ),
-            "rv": RVParameters.marginalized(
-                period=p,
-                eccentricity=ecc,
-                phase_peri=phase,
-                arg_peri=arg_peri,
-            ),
+            name: sub.build_marginalized_params(
+                values, time_unit, marginalize_names, linear_param_units
+            )
+            for name, sub in self._sub_strategies.items()
         }
 
-    def params_for_log_prob(
-        self, params: MarginalizedParameters
+    def build_params_with_fixed_linear(
+        self,
+        values: dict[str, Any],
+        fixed_linear: dict[str, Any],
+        linear_units: dict[str, str],
+        time_unit: str,
     ) -> dict[str, MarginalizedParameters]:
-        """Wrap a single ``MarginalizedParameters`` into per-component dict."""
-        orbital = {
-            "period": params.period,
-            "eccentricity": params.eccentricity,
-            "phase_peri": params.phase_peri,
-            "arg_peri": params.arg_peri,
-        }
         return {
-            "astro": GaiaAstrometryParameters.marginalized(
-                **orbital,
-                cos_i=params.cos_i,
-                lon_asc_node=params.lon_asc_node,
-            ),
-            "rv": RVParameters.marginalized(**orbital),
+            name: sub.build_params_with_fixed_linear(
+                values, fixed_linear, linear_units, time_unit
+            )
+            for name, sub in self._sub_strategies.items()
         }
 
 
 # SB2 strategy placeholder — requires SystemData (not yet implemented).
 # See spec §Planned: SystemData for details.
-# class _SB2Strategy(_DataTypeStrategy): ...
+# class SB2Strategy(DataTypeStrategy): ...
 
-_STRATEGIES: dict[str, _DataTypeStrategy] = {
-    "rv": _RVStrategy(),
-    "astrometry": _AstrometryStrategy(),
-    "combined": _CombinedStrategy(),
+_STRATEGIES: dict[str, DataTypeStrategy] = {
+    "rv": RVStrategy(),
+    "astrometry": AstrometryStrategy(),
+    "combined": CompositeStrategy(
+        astro=AstrometryStrategy(),
+        rv=RVStrategy(),
+    ),
 }

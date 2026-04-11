@@ -79,9 +79,9 @@ def _check_thiele_innes_round_trip(
         atol=atol,
     )
 
-    assert (
-        match_primary or match_sym
-    ), "Recovered orientation does not match original or symmetric solution."
+    assert match_primary or match_sym, (
+        "Recovered orientation does not match original or symmetric solution."
+    )
 
     # Check Thiele-Innes constants are preserved
     roundtrip_constants = roundtrip_orientation.thiele_innes_constants(roundtrip_a)
@@ -281,7 +281,7 @@ def test_thiele_innes_round_trip_random(seed: int, incl_range: str, dtype: str) 
     else:
         rtol, atol = 1e-6, 1e-8
 
-    key = jax.random.PRNGKey(seed)
+    key = jax.random.key(seed)
     random_vals = jax.random.uniform(key, shape=(4,))
 
     arg_peri = random_vals[0] * 2 * jnp.pi

@@ -6,18 +6,18 @@ data (K ~ sigma_rv) so that rejection sampling is efficient enough to accept sam
 """
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 import pytest
-from unxt import Quantity
+import quaxed.numpy as jnp
+from unxt import Quantity, uconvert
 
-from harv.data import RadialVelocityData
+from harv.data import RVData, build_indicator_matrix
 from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import RVLikelihood
 from harv.priors.rejection import RejectionPrior
+from harv.quantity_distribution import QuantityDistribution
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.strategies import _build_indicator_matrix, _stack_rv_datasets
 from harv.simulate.rv import simulate_rv_multisurv_data
 
 
@@ -31,18 +31,28 @@ class TestMultiSurveyLikelihood:
             seed=1,
             n_obs_per_instrument=20,
             period=Quantity(50.0, "day"),
-            K=Quantity(5.0, "km/s"),
+            rv_semiamp=Quantity(5.0, "km/s"),
             rv_err=Quantity(3.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RadialVelocityData)
-        stacked = _stack_rv_datasets(rv_datasets)
-        offsets = {"keck": None, "espresso": dist.Normal(0.0, 5.0)}
-        indicator = _build_indicator_matrix(rv_datasets, offsets)
-
-        lp = dist.MultivariateNormal(
-            loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
+        rv_datasets = source_data.get_datasets_by_type(RVData)
+        stacked, indicator, instrument_names = build_indicator_matrix(
+            rv_datasets, reference="keck"
         )
-        lik = RVLikelihood(data=stacked, indicator_matrix=indicator, linear_prior=lp)
+
+        linear_prior = {
+            "rv_semiamp": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+            "v_sys": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+        }
+        offsets_prior = {
+            "espresso": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+        }
+        lik = RVLikelihood(
+            data=stacked,
+            linear_marginalized_prior=linear_prior,
+            offsets_marginalized_prior=offsets_prior,
+            indicator_matrix=indicator,
+            instrument_names=instrument_names,
+        )
         params = RVParameters.marginalized(
             period=Quantity(50.0, "day"),
             eccentricity=0.2,
@@ -64,28 +74,35 @@ class TestMultiSurveyLikelihood:
             n_obs_per_instrument=30,
             period=Quantity(100.0, "day"),
             eccentricity=0.0,
-            K=Quantity(3.0, "km/s"),
+            rv_semiamp=Quantity(3.0, "km/s"),
             rv_err=Quantity(2.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RadialVelocityData)
-        stacked = _stack_rv_datasets(rv_datasets)
-
-        offsets = {"keck": None, "espresso": dist.Normal(0.0, 15.0)}
-        indicator = _build_indicator_matrix(rv_datasets, offsets)
-
-        # Multi-survey: 3D prior [K, v0, delta_espresso]
-        lp_multi = dist.MultivariateNormal(
-            loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
+        rv_datasets = source_data.get_datasets_by_type(RVData)
+        stacked, indicator, instrument_names = build_indicator_matrix(
+            rv_datasets, reference="keck"
         )
+
+        # Multi-survey: prior on rv_semiamp, v_sys, + espresso offset
+        linear_prior = {
+            "rv_semiamp": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+            "v_sys": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+        }
+        offsets_prior = {
+            "espresso": QuantityDistribution(dist.Normal(0.0, 15.0), "km/s"),
+        }
         lik_multi = RVLikelihood(
-            data=stacked, indicator_matrix=indicator, linear_prior=lp_multi
+            data=stacked,
+            linear_marginalized_prior=linear_prior,
+            offsets_marginalized_prior=offsets_prior,
+            indicator_matrix=indicator,
+            instrument_names=instrument_names,
         )
 
-        # Single-instrument: 2D prior [K, v0] ignoring offset
-        lp_single = dist.MultivariateNormal(
-            loc=jnp.zeros(2), covariance_matrix=100.0**2 * jnp.eye(2)
+        # Single-instrument: prior on rv_semiamp, v_sys only, ignoring offset
+        lik_single = RVLikelihood(
+            data=stacked,
+            linear_marginalized_prior=linear_prior,
         )
-        lik_single = RVLikelihood(data=stacked, linear_prior=lp_single)
 
         params = RVParameters.marginalized(
             period=Quantity(100.0, "day"),
@@ -106,18 +123,28 @@ class TestMultiSurveyLikelihood:
             seed=3,
             n_obs_per_instrument=15,
             period=Quantity(30.0, "day"),
-            K=Quantity(4.0, "km/s"),
+            rv_semiamp=Quantity(4.0, "km/s"),
             rv_err=Quantity(2.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RadialVelocityData)
-        stacked = _stack_rv_datasets(rv_datasets)
-        offsets = {"keck": None, "hires": dist.Normal(0.0, 5.0)}
-        indicator = _build_indicator_matrix(rv_datasets, offsets)
-
-        lp = dist.MultivariateNormal(
-            loc=jnp.zeros(3), covariance_matrix=100.0**2 * jnp.eye(3)
+        rv_datasets = source_data.get_datasets_by_type(RVData)
+        stacked, indicator, instrument_names = build_indicator_matrix(
+            rv_datasets, reference="keck"
         )
-        lik = RVLikelihood(data=stacked, indicator_matrix=indicator, linear_prior=lp)
+
+        linear_prior = {
+            "rv_semiamp": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+            "v_sys": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+        }
+        offsets_prior = {
+            "hires": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+        }
+        lik = RVLikelihood(
+            data=stacked,
+            linear_marginalized_prior=linear_prior,
+            offsets_marginalized_prior=offsets_prior,
+            indicator_matrix=indicator,
+            instrument_names=instrument_names,
+        )
 
         n = 8
         params_batch = RVParameters.marginalized(
@@ -144,33 +171,57 @@ class TestMultiSurveyRejectionSampler:
             n_obs_per_instrument=20,
             period=Quantity(80.0, "day"),
             eccentricity=0.1,
-            K=Quantity(5.0, "km/s"),
-            v0=Quantity(0.0, "km/s"),
-            rv_err=Quantity(5.0, "km/s"),
+            rv_semiamp=Quantity(5.0, "km/s"),
+            v_sys=Quantity(0.0, "km/s"),
+            rv_err=Quantity(1.0, "km/s"),
         )
         return source_data, true
 
     def test_sampler_runs_and_returns_samples(self, low_snr_data):
         """Rejection sampler completes and returns a valid Samples object."""
-        source_data, _ = low_snr_data
+        source_data, truth = low_snr_data
         prior = RejectionPrior.default_rv(
-            period_min=40.0,
-            period_max=160.0,
-            offsets={"keck": None, "harps": dist.Normal(0.0, 5.0)},
+            period_min=Quantity(40.0, "day"),
+            period_max=Quantity(160.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+            offsets={
+                "keck": None,
+                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            },
         )
         sampler = RejectionSampler(prior)
-        samples = sampler.run(source_data, n_prior_samples=50_000, seed=10)
+        samples = sampler.run(source_data, n_prior_samples=500_000, seed=10)
 
-        assert samples.n_samples >= 0  # may be 0 with very unlucky seed
+        period_samples = uconvert("day", samples["period"])
+        period_true = uconvert("day", truth["period"])
+        assert jnp.all(jnp.abs(period_samples - period_true).value < 2.0)
+
+        offset_samples = uconvert("km/s", samples["harps"])
+        offset_true = uconvert("km/s", truth["offset_harps"])
+        assert jnp.all(jnp.abs(offset_samples - offset_true).value < 1.0)
+
+        assert jnp.all(jnp.abs(samples["eccentricity"] - truth["eccentricity"]) < 0.1)
+
+        K_samples = jnp.abs(uconvert("km/s", samples["rv_semiamp"]))
+        K_true = uconvert("km/s", truth["rv_semiamp"])
+        assert jnp.all(jnp.abs(K_samples - K_true).value < 1.0)
+
+        assert samples.n_samples > 0
         assert samples.data_type == "rv"
 
     def test_samples_have_correct_keys(self, low_snr_data):
         """Samples object has all expected parameter keys, including offset."""
         source_data, _ = low_snr_data
         prior = RejectionPrior.default_rv(
-            period_min=40.0,
-            period_max=160.0,
-            offsets={"keck": None, "harps": dist.Normal(0.0, 5.0)},
+            period_min=Quantity(40.0, "day"),
+            period_max=Quantity(160.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+            offsets={
+                "keck": None,
+                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            },
         )
         sampler = RejectionSampler(prior)
         samples = sampler.run(source_data, n_prior_samples=50_000, seed=11)
@@ -184,7 +235,7 @@ class TestMultiSurveyRejectionSampler:
             "arg_peri",
         ):
             assert nonlinear_key in keys, f"Missing key: {nonlinear_key}"
-        for linear_key in ("K", "v0"):
+        for linear_key in ("rv_semiamp", "v_sys"):
             assert linear_key in keys, f"Missing key: {linear_key}"
         assert "harps" in keys, "Missing offset key: harps"
 
@@ -192,9 +243,14 @@ class TestMultiSurveyRejectionSampler:
         """The reference instrument (keck, offset=None) has no offset key."""
         source_data, _ = low_snr_data
         prior = RejectionPrior.default_rv(
-            period_min=40.0,
-            period_max=160.0,
-            offsets={"keck": None, "harps": dist.Normal(0.0, 5.0)},
+            period_min=Quantity(40.0, "day"),
+            period_max=Quantity(160.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+            offsets={
+                "keck": None,
+                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            },
         )
         sampler = RejectionSampler(prior)
         samples = sampler.run(source_data, n_prior_samples=50_000, seed=12)
@@ -204,9 +260,14 @@ class TestMultiSurveyRejectionSampler:
         """Same seed produces identical samples."""
         source_data, _ = low_snr_data
         prior = RejectionPrior.default_rv(
-            period_min=40.0,
-            period_max=160.0,
-            offsets={"keck": None, "harps": dist.Normal(0.0, 5.0)},
+            period_min=Quantity(40.0, "day"),
+            period_max=Quantity(160.0, "day"),
+            sigma_K0=Quantity(30.0, "km/s"),
+            sigma_v0=Quantity(30.0, "km/s"),
+            offsets={
+                "keck": None,
+                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            },
         )
         sampler = RejectionSampler(prior)
         s1 = sampler.run(source_data, n_prior_samples=20_000, seed=20)
