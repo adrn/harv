@@ -21,9 +21,9 @@ import pytest
 from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 
 
 def _minimal_rv_data(seed: int, n: int = 5) -> RVData:
@@ -146,3 +146,23 @@ def test_combined_multisurv_with_offsets_raises_not_implemented():
     )
     sampler = RejectionSampler(prior)
     sampler.run(source_data, n_prior_samples=100, seed=0)
+
+
+def test_combined_single_rv_plus_astrometry_runs():
+    """Combined astrometry + single-RV rejection sampling should not raise.
+
+    Regression test: CompositeStrategy used to pass the full combined
+    marginalize_names (including RV-specific names like 'rv_semiamp') to the
+    astrometry sub-strategy, causing a ValueError.
+    """
+    astro = _minimal_astro_data()
+    rv = _minimal_rv_data(seed=0)
+    source_data = SourceData(gaia=astro, rv=rv)
+
+    prior = _make_combined_prior(period_min=10.0, period_max=500.0)
+    sampler = RejectionSampler(prior)
+    samples = sampler.run(source_data, n_prior_samples=1000, seed=0)
+
+    # Should return a Samples object (may have 0 accepted samples with
+    # random data, but the run itself must not error).
+    assert samples is not None

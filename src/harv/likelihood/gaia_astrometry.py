@@ -82,6 +82,8 @@ def _get_design_matrix_gaia_ast(
     _arg_peri = ustrip(AllowValue, "", params.arg_peri)
     _lon_asc_node = ustrip(AllowValue, "", params.lon_asc_node)
 
+    _ecc = ustrip(AllowValue, "", params.eccentricity)
+
     # Thiele-Innes constants (unit, i.e. semi-major axis = 1)
     A, B, F, G = thiele_innes_ABFG(
         jnp.cos(_arg_peri),
@@ -91,9 +93,15 @@ def _get_design_matrix_gaia_ast(
         _cos_i,
     )
 
-    # Along-scan orbital term: w_orbit = (B*cos f + G*sin f)*sin theta
-    #                                    + (A*cos f + F*sin f)*cos theta
-    semimaj_term = (B * cos_f + G * sin_f) * sin_psi + (A * cos_f + F * sin_f) * cos_psi
+    # Thiele-Innes orbital coordinates: X = (cos E - e), Y = sqrt(1-e²) sin E,
+    # expressed in terms of true anomaly via r/a = (1-e²)/(1+e cos f).
+    r_over_a = (1 - _ecc**2) / (1 + _ecc * cos_f)
+    X = r_over_a * cos_f
+    Y = r_over_a * sin_f
+
+    # Along-scan orbital term: w_orbit = (B*X + G*Y)*sin theta
+    #                                    + (A*X + F*Y)*cos theta
+    semimaj_term = (B * X + G * Y) * sin_psi + (A * X + F * Y) * cos_psi
 
     # NOTE: the order here should match the order of the linear parameters in
     # GaiaAstrometryParameters.linear_param_names

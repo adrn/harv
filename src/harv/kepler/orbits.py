@@ -88,6 +88,11 @@ def thiele_innes_ABFG(
     Returns the constants with an implicit semi-major axis of 1. Multiply each
     by ``a`` to recover the physical Thiele-Innes constants.
 
+    The sky-plane orbital displacement uses the Thiele-Innes coordinates
+    ``X = (cos E - e)`` and ``Y = sqrt(1-e^2) sin E``, or equivalently in
+    terms of true anomaly: ``X = r/a cos f``, ``Y = r/a sin f`` where
+    ``r/a = (1-e^2)/(1+e cos f)``.
+
     In the Gaia LPC convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08,
     Eq. 4), B and G project into the RA (``a``) direction, while A and F
     project into the Dec (``d``) direction.
@@ -264,9 +269,14 @@ def astrometric_orbit_at_times(
         jnp.sin(ustrip("rad", lon_asc_node)),
         cos_i,
     )
+    # Thiele-Innes orbital coordinates: X = (cos E - e), Y = sqrt(1-e^2) sin E,
+    # expressed in terms of true anomaly via r/a = (1-e^2)/(1+e cos f).
+    r_over_a = (1 - eccentricity**2) / (1 + eccentricity * cos_f)
+    X = r_over_a * cos_f
+    Y = r_over_a * sin_f
     # LPC convention: B,G -> RA (a); A,F -> Dec (d)
-    delta_ra = (B * cos_f + G * sin_f) * semi_major_axis
-    delta_dec = (A * cos_f + F * sin_f) * semi_major_axis
+    delta_ra = (B * X + G * Y) * semi_major_axis
+    delta_dec = (A * X + F * Y) * semi_major_axis
     # cast: multiplication by a Q returns AbstractQuantity via quax dispatch;
     # mypy cannot verify that AbstractQuantity satisfies BatchQAngle.
     return cast("tuple[BatchQAngle, BatchQAngle]", (delta_ra, delta_dec))

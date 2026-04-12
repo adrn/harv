@@ -233,11 +233,17 @@ coordinate convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08, Eqs. 4 & 6)
 y_AL(t) = α₀ sin(θ) + δ₀ cos(θ)
          + (μ_α sin(θ) + μ_δ cos(θ)) · (t − t_ref)
          + ϖ · H_ϖ(t)
-         + a · [(B cos(f) + G sin(f)) sin(θ) + (A cos(f) + F sin(f)) cos(θ)]
+         + a · [(B X + G Y) sin(θ) + (A X + F Y) cos(θ)]
 ```
 
 where θ is the position angle of the scan, A, B, F, G are Thiele-Innes constants that
-encode the orbit orientation, and f is the true anomaly.
+encode the orbit orientation, f is the true anomaly, and X, Y are the Thiele-Innes
+orbital coordinates:
+
+```
+X = (1 − e²) cos(f) / (1 + e cos(f))      [= cos(E) − e]
+Y = (1 − e²) sin(f) / (1 + e cos(f))      [= √(1−e²) sin(E)]
+```
 
 `GaiaAstrometryData` has a `plot(ax, **kwargs)` method that renders the observations
 as error-bars on the given matplotlib `Axes`. Default style: black markers with grey

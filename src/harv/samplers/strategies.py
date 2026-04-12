@@ -191,11 +191,13 @@ class DataTypeStrategy(ABC):
         kw["period"] = Q(kw["period"], time_unit)
 
         # Determine which linear params to marginalize.
-        marg = (
-            marginalize_names
-            if marginalize_names is not None
-            else cls.linear_param_names
-        )
+        # Filter to only names valid for this parameter class -- in a
+        # CompositeStrategy the caller passes the *combined* marginalize_names
+        # which may include names from other sub-strategies.
+        if marginalize_names is not None:
+            marg = tuple(n for n in marginalize_names if n in cls.linear_param_names)
+        else:
+            marg = cls.linear_param_names
 
         # Include explicit linear values (those not being marginalized).
         units = linear_param_units or {}

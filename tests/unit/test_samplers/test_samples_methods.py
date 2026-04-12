@@ -20,8 +20,8 @@ from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples, _WarmStartMCMC
 
 try:
@@ -246,6 +246,49 @@ class TestAstrometricOrbitAtTimes:
         r2 = np.asarray(dra.value) ** 2 + np.asarray(ddec.value) ** 2
         np.testing.assert_allclose(r2, 1.0, atol=1e-5)
 
+    def test_eccentric_face_on_orbit_pericenter_distance(self):
+        """Face-on eccentric orbit: r(pericenter) = a(1-e), r(apocenter) = a(1+e).
+
+        At pericenter (true anomaly f=0, i.e. t=t_peri), the distance from
+        the focus should be a*(1-e). At apocenter (f=pi), a*(1+e). This
+        verifies the r/a = (1-e^2)/(1+e*cos f) factor is applied.
+        """
+        e = 0.6
+        a = 5.0  # mas
+        period = Q(100.0, "day")
+        # At t_peri, f=0, so r = a(1-e)
+        t_peri_val = Q(0.0, "day")
+        dra_peri, ddec_peri = astrometric_orbit_at_times(
+            Q(np.array([0.0]), "day"),
+            period=period,
+            eccentricity=e,
+            t_peri=t_peri_val,
+            arg_peri=Q(0.0, "rad"),
+            cos_i=1.0,  # face-on
+            lon_asc_node=Q(0.0, "rad"),
+            semi_major_axis=Q(a, "mas"),
+        )
+        r_peri = np.sqrt(
+            np.asarray(dra_peri.value) ** 2 + np.asarray(ddec_peri.value) ** 2
+        )
+        np.testing.assert_allclose(r_peri, a * (1 - e), atol=1e-8)
+
+        # At apocenter (half period later), f=pi, so r = a(1+e)
+        dra_apo, ddec_apo = astrometric_orbit_at_times(
+            Q(np.array([50.0]), "day"),
+            period=period,
+            eccentricity=e,
+            t_peri=t_peri_val,
+            arg_peri=Q(0.0, "rad"),
+            cos_i=1.0,  # face-on
+            lon_asc_node=Q(0.0, "rad"),
+            semi_major_axis=Q(a, "mas"),
+        )
+        r_apo = np.sqrt(
+            np.asarray(dra_apo.value) ** 2 + np.asarray(ddec_apo.value) ** 2
+        )
+        np.testing.assert_allclose(r_apo, a * (1 + e), atol=1e-8)
+
 
 # ---------------------------------------------------------------------------
 # Tests: Samples.init_mcmc (D3)
@@ -281,9 +324,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (
-                num_chains,
-            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            assert arr.shape == (num_chains,), (
+                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            )
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""
