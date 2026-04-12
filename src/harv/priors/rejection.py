@@ -123,16 +123,16 @@ class RejectionPrior(eqx.Module):
 
         TODO: changed to only take a dictionary
 
-        - ``dist.MultivariateNormal`` — joint Gaussian prior; all linear
+        - ``dist.MultivariateNormal`` -- joint Gaussian prior; all linear
           parameters are analytically marginalized.
-        - ``QuantityDistribution`` wrapping a ``MultivariateNormal`` — same
+        - ``QuantityDistribution`` wrapping a ``MultivariateNormal`` -- same
           as above but with per-element unit tracking (tuple of unit strings).
-        - ``LinearPriorCallable`` — callable returning a
+        - ``LinearPriorCallable`` -- callable returning a
           ``MultivariateNormal`` given the nonlinear parameters.
-        - ``dict[str, PriorDist]`` — per-parameter priors.  Each entry is
-          classified as Gaussian (``dist.Normal`` → marginalized), fixed
-          (``dist.Delta`` → subtracted from residuals), or explicit
-          (anything else → sampled from prior, treated as fixed for
+        - ``dict[str, PriorDist]`` -- per-parameter priors.  Each entry is
+          classified as Gaussian (``dist.Normal`` -> marginalized), fixed
+          (``dist.Delta`` -> subtracted from residuals), or explicit
+          (anything else -> sampled from prior, treated as fixed for
           marginalization of the Gaussian subset).
 
         Dimension must match the number of linear parameters (2 for RV,
@@ -210,10 +210,10 @@ class RejectionPrior(eqx.Module):
             }
             if explicit:
                 if self.marginalize_names is None:
-                    # Default "marginalize all" — exclude non-Gaussian entries.
+                    # Default "marginalize all" -- exclude non-Gaussian entries.
                     new_marg = tuple(n for n in self.linear_prior if n not in explicit)
                 else:
-                    # User-specified set — also exclude non-Gaussian entries.
+                    # User-specified set -- also exclude non-Gaussian entries.
                     new_marg = tuple(
                         n for n in self.marginalize_names if n not in explicit
                     )
@@ -373,7 +373,7 @@ class RejectionPrior(eqx.Module):
 
         Parallax is **explicitly sampled** (not analytically marginalized) by
         default because the Gaia catalog parallax is derived from the same
-        epoch data being fitted — using it as a strong prior would double-count
+        epoch data being fitted -- using it as a strong prior would double-count
         information.  For massive companions or black holes the catalog
         parallax can be biased.
 
@@ -409,7 +409,7 @@ class RejectionPrior(eqx.Module):
             Reference period for the semi-major axis scaling.  Default: 1 yr.
         marginalize_names : tuple[str, ...] | None
             Subset of linear params to analytically marginalize.  ``None``
-            (default) means "all that can be" — ``__check_init__`` will
+            (default) means "all that can be" -- ``__check_init__`` will
             automatically classify ``HalfNormal`` entries as explicit.
         {overrides}
 

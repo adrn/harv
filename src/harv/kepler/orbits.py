@@ -39,7 +39,7 @@ from harv.custom_types import (
 def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
     """Compute mean anomaly from elapsed time and period.
 
-    ``M = 2π · dt / period``, returned as a :class:`~unxt.Quantity` with angle
+    ``M = 2pi * dt / period``, returned as a :class:`~unxt.Quantity` with angle
     units (radians).
     """
     return Quantity.from_(ustrip("", 2 * jnp.pi * dt / period), "rad")
@@ -48,7 +48,7 @@ def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
 def true_anomaly_from_mean(
     M: BatchQAngle, eccentricity: ScalarFloat
 ) -> tuple[BatchFloat, BatchFloat]:
-    """Solve Kepler's equation: mean anomaly → (sin f, cos f).
+    """Solve Kepler's equation: mean anomaly -> (sin f, cos f).
 
     Wraps ``jaxoplanet.core.kepler.kepler``. The mean anomaly is stripped to
     radians internally.
@@ -62,7 +62,7 @@ def rv_shape(
     eccentricity: ScalarFloat,
     arg_peri: ScalarQAngle | ScalarFloat,
 ) -> BatchFloat:
-    """RV shape function: cos(ω + f) + e·cos(ω).
+    """RV shape function: cos(omega + f) + e*cos(omega).
 
     Returns the dimensionless RV amplitude factor for each observation.
     ``arg_peri`` may be a plain float/array in radians or a
@@ -142,7 +142,7 @@ def rv_at_times(
     rv_semiamp: ScalarQSpeed,
     v_sys: ScalarQSpeed,
 ) -> BatchQSpeed:
-    """Compute the RV model: K·[cos(ω + f(t)) + e·cos(ω)] + v₀.
+    """Compute the RV model: K*[cos(omega + f(t)) + e*cos(omega)] + v_0.
 
     Parameters
     ----------
@@ -157,7 +157,7 @@ def rv_at_times(
         derived from the dimensionless ``phase_peri`` as
         ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
-        Argument of periastron ω.
+        Argument of periastron omega.
     rv_semiamp
         RV semi-amplitude.
     v_sys
@@ -200,14 +200,14 @@ def astrometric_orbit_at_times(
     lon_asc_node: ScalarQAngle,
     semi_major_axis: ScalarQAngle,
 ) -> tuple[BatchQAngle, BatchQAngle]:
-    """Compute sky-plane astrometric orbit (Δra, Δdec) at given times.
+    """Compute sky-plane astrometric orbit (Deltara, Deltadec) at given times.
 
     Uses the Thiele-Innes parameterization following the Gaia local plane
     coordinate (LPC) convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08,
     Eq. 4)::
 
-        Δra  = (B·cos f + G·sin f) · a      (RA / ``a`` direction)
-        Δdec = (A·cos f + F·sin f) · a      (Dec / ``d`` direction)
+        Deltara  = (B*cos f + G*sin f) * a      (RA / ``a`` direction)
+        Deltadec = (A*cos f + F*sin f) * a      (Dec / ``d`` direction)
 
     where A, B, F, G are the unit Thiele-Innes constants and a is the
     photocentric semi-major axis.
@@ -225,11 +225,11 @@ def astrometric_orbit_at_times(
         derived from the dimensionless ``phase_peri`` as
         ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
-        Argument of periastron ω.
+        Argument of periastron omega.
     cos_i
         Cosine of orbital inclination.
     lon_asc_node
-        Longitude of the ascending node Ω.
+        Longitude of the ascending node Omega.
     semi_major_axis
         Photocentric semi-major axis.
 
@@ -264,7 +264,7 @@ def astrometric_orbit_at_times(
         jnp.sin(ustrip("rad", lon_asc_node)),
         cos_i,
     )
-    # LPC convention: B,G → RA (a); A,F → Dec (d)
+    # LPC convention: B,G -> RA (a); A,F -> Dec (d)
     delta_ra = (B * cos_f + G * sin_f) * semi_major_axis
     delta_dec = (A * cos_f + F * sin_f) * semi_major_axis
     # cast: multiplication by a Quantity returns AbstractQuantity via quax dispatch;

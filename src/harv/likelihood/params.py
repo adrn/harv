@@ -57,7 +57,7 @@ class AbstractParameters(eqx.Module):
 
     period: BatchQTime
     eccentricity: BatchFloat
-    phase_peri: BatchFloat  # Fractional orbital phase at pericenter, ∈ [0, 1]
+    phase_peri: BatchFloat  # Fractional orbital phase at pericenter, in [0, 1]
     arg_peri: BatchQAngle
 
     def __init_subclass__(cls) -> None:

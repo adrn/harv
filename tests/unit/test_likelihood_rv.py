@@ -53,7 +53,7 @@ class TestRVDesignMatrix:
         dm = _get_design_matrix(params, sin_f, cos_f)
 
         assert dm.shape == (n_obs, 2)
-        # Second column should be all ones (v₀ coefficient)
+        # Second column should be all ones (v_0 coefficient)
         assert jnp.allclose(dm[:, 1], 1.0)
 
     def test_circular_orbit(self):
@@ -64,7 +64,7 @@ class TestRVDesignMatrix:
 
         dm = _get_design_matrix(params, sin_f, cos_f)
 
-        # For e=0, ω=0: RV amplitude = cos(f)
+        # For e=0, omega=0: RV amplitude = cos(f)
         assert jnp.allclose(dm[:, 0], cos_f)
 
     def test_eccentric_orbit(self):
@@ -75,7 +75,7 @@ class TestRVDesignMatrix:
 
         dm = _get_design_matrix(params, sin_f, cos_f)
 
-        # At f=0, ω=π/2: cos(ω+f) = cos(π/2) = 0, e·cos(π/2) = 0
+        # At f=0, omega=pi/2: cos(omega+f) = cos(pi/2) = 0, e*cos(pi/2) = 0
         assert jnp.allclose(dm[0, 0], 0.0, atol=1e-6)
 
 
@@ -92,9 +92,9 @@ class TestRVDesignMatrixSB2:
         dm = _get_design_matrix_sb2(params, sin_f, cos_f, primary=True)
 
         assert dm.shape == (n_obs, 3)
-        # Column 1 (K₂) should be zero for primary
+        # Column 1 (K_2) should be zero for primary
         assert jnp.allclose(dm[:, 1], 0.0)
-        # Column 2 (v₀) should be all ones
+        # Column 2 (v_0) should be all ones
         assert jnp.allclose(dm[:, 2], 1.0)
 
     def test_sb2_secondary_shape(self):
@@ -107,9 +107,9 @@ class TestRVDesignMatrixSB2:
         dm = _get_design_matrix_sb2(params, sin_f, cos_f, primary=False)
 
         assert dm.shape == (n_obs, 3)
-        # Column 0 (K₁) should be zero for secondary
+        # Column 0 (K_1) should be zero for secondary
         assert jnp.allclose(dm[:, 0], 0.0)
-        # Column 2 (v₀) should be all ones
+        # Column 2 (v_0) should be all ones
         assert jnp.allclose(dm[:, 2], 1.0)
 
     def test_sb2_opposite_phases(self):
@@ -121,7 +121,7 @@ class TestRVDesignMatrixSB2:
         primary = _get_design_matrix_sb2(params, sin_f, cos_f, primary=True)
         secondary = _get_design_matrix_sb2(params, sin_f, cos_f, primary=False)
 
-        # Primary K₁ coefficient = -Secondary K₂ coefficient
+        # Primary K_1 coefficient = -Secondary K_2 coefficient
         assert jnp.allclose(primary[:, 0], -secondary[:, 1])
 
 

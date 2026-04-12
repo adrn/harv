@@ -231,7 +231,7 @@ class TestAstrometricOrbitAtTimes:
         assert dra.unit.physical_type == "angle"
 
     def test_circular_face_on_orbit_is_circle(self):
-        """Face-on circular orbit traces a circle: Δra²+Δdec² = const."""
+        """Face-on circular orbit traces a circle: Deltara^2+Deltadec^2 = const."""
         times = Quantity(np.linspace(0.0, 1.0, 500), "day")
         dra, ddec = astrometric_orbit_at_times(
             times,
@@ -281,9 +281,9 @@ class TestInitMcmc:
             rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (num_chains,), (
-                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
-            )
+            assert arr.shape == (
+                num_chains,
+            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions are the first num_chains posterior samples."""
@@ -523,7 +523,7 @@ class TestInitMcmcExtraModel:
         assert "K_scale" in posterior
         # K is exposed as a deterministic site.
         assert "rv_semiamp" in posterior
-        # v_sys is analytically marginalized — not a sample site.
+        # v_sys is analytically marginalized -- not a sample site.
         assert "v_sys" not in posterior
 
     def test_extra_model_raises_for_unknown_param(

@@ -94,7 +94,7 @@ def _build_trend_columns(
 ) -> jax.Array:
     """Monomial trend basis: columns [(t-t_ref)^1, (t-t_ref)^2, ...].
 
-    The constant (order-0) term is NOT included — it is already captured by
+    The constant (order-0) term is NOT included -- it is already captured by
     ``v_sys`` (RV) or the 5-parameter astrometric solution (astrometry).
 
     Returns shape ``(n_obs, order)``.

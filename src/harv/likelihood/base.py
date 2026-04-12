@@ -199,7 +199,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         if len(marg_names) == 0:
             raise ValueError(
-                "No marginalized parameters remain after classification — "
+                "No marginalized parameters remain after classification -- "
                 "cannot build MarginalizedLinear"
             )
 
@@ -242,14 +242,14 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         }
 
         # Trend columns share the obs unit (trend coefficients have units
-        # like km/s/day^k for RV, mas/yr^k for astrometry — but the design
+        # like km/s/day^k for RV, mas/yr^k for astrometry -- but the design
         # matrix absorbs the time powers, so the coefficient unit matches the
         # observation unit, same as offsets).
         for n in marg_names:
             if n in self.trend_column_names:
                 marg_units[n] = obs_unit
 
-        # offset columns share the obs unit — add those too:
+        # offset columns share the obs unit -- add those too:
         for n in marg_names:
             if self.instrument_names is not None and n in self.instrument_names:
                 marg_units[n] = obs_unit
@@ -291,7 +291,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         if len(marg_names) == 0:
             raise ValueError(
-                "No marginalized parameters remain after classification — "
+                "No marginalized parameters remain after classification -- "
                 "cannot build MarginalizedLinear"
             )
 
@@ -367,7 +367,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         # Full column ordering of the design matrix.  Zero-fill any missing
         # offset columns (e.g. when multi-survey indicator is present but no
-        # offsets were provided — implies zero offset for all instruments).
+        # offsets were provided -- implies zero offset for all instruments).
         linear_names = (
             params.source_cls.linear_param_names
             if isinstance(params, MarginalizedParameters)
@@ -402,7 +402,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         Draws one sample from the posterior over marginalized linear
         parameters, conditioned on the observed data.  Explicit (non-marginalized)
-        parameters — including any whose priors are ``dist.Delta`` — are
+        parameters -- including any whose priors are ``dist.Delta`` -- are
         returned unchanged.
 
         Parameters

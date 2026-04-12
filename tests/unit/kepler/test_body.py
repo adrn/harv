@@ -108,7 +108,7 @@ class TestConstruction:
 
 class TestFromMasses:
     def test_kepler_third_law_round_trip(self) -> None:
-        """from_masses → get_mass recovers the companion mass."""
+        """from_masses -> get_mass recovers the companion mass."""
         m_comp = Quantity(1.0, "Mjup")
         m_prim = Quantity(1.0, "Msun")
         body = KeplerianBody.from_masses(
@@ -159,7 +159,7 @@ class TestCircularOrbit:
             assert jnp.allclose(r_mag, 2.0, rtol=1e-6)
 
     def test_constant_speed(self) -> None:
-        """For e=0, |v| = 2πa/P at all times."""
+        """For e=0, |v| = 2pia/P at all times."""
         a, P = 2.0, 1.0
         body = _make_circular_body(period=P, a=a)
         expected_speed = 2 * jnp.pi * a / P  # AU/yr
@@ -268,7 +268,7 @@ class TestJAXCompat:
     def test_vmap_over_period(self) -> None:
         """Vmap over batched KeplerianBody (different period per element).
 
-        For a circular orbit, orbital speed = 2πa/P, so results must differ
+        For a circular orbit, orbital speed = 2pia/P, so results must differ
         across period values. Batch by stacking individually-constructed bodies.
         """
         period_values = [0.5, 1.0, 2.0]

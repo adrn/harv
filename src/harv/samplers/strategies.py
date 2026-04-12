@@ -5,7 +5,7 @@ type (RV-only, astrometry-only, combined).  The sampler itself is kept
 branch-free by dispatching to the appropriate strategy instance.
 
 ``CompositeStrategy`` composes single-component strategies rather than
-hardcoding parameter classes — adding a new data type requires only a new
+hardcoding parameter classes -- adding a new data type requires only a new
 single-component strategy.
 """
 
@@ -83,7 +83,7 @@ class DataTypeStrategy(ABC):
         if isinstance(prior.linear_prior, dict):
             marg_names = prior.marginalize_names
             if marg_names is None:
-                # All linear params marginalized → nothing extra to sample.
+                # All linear params marginalized -> nothing extra to sample.
                 pass
             else:
                 marg_set = set(marg_names)
@@ -307,7 +307,7 @@ class RVStrategy(DataTypeStrategy):
                 rv_raw, reference=reference
             )
         elif isinstance(rv_raw, dict):
-            # Multi-survey data but no offsets configured — just stack.
+            # Multi-survey data but no offsets configured -- just stack.
             rv_data = stack_datasets(rv_raw)
         else:
             rv_data = rv_raw
@@ -399,13 +399,13 @@ class CompositeStrategy(DataTypeStrategy):
     ) -> CompositeLikelihood:
         """Build a CompositeLikelihood by delegating to each sub-strategy."""
         # Guard: combined astrometry + multi-survey RV is not yet fully
-        # validated.  See docs/spec.md §'Combined astrometry + multi-survey
+        # validated.  See docs/spec.md S'Combined astrometry + multi-survey
         # RV'.
         rv_data = datasets.get("rv")
         if "astro" in datasets and isinstance(rv_data, dict) and len(rv_data) > 1:
             msg = (
                 "Combined astrometry + multi-survey RV is not yet implemented. "
-                "See docs/spec.md §'Combined astrometry + multi-survey RV'."
+                "See docs/spec.md S'Combined astrometry + multi-survey RV'."
             )
             raise NotImplementedError(msg)
 
@@ -506,8 +506,8 @@ class SB2Strategy(DataTypeStrategy):
         )
 
 
-# SB2 strategy placeholder — requires SystemData (not yet implemented).
-# See spec §Planned: SystemData for details.
+# SB2 strategy placeholder -- requires SystemData (not yet implemented).
+# See spec SPlanned: SystemData for details.
 # class SB2Strategy(DataTypeStrategy): ...
 
 _STRATEGIES: dict[str, DataTypeStrategy] = {

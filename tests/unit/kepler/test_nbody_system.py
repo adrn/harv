@@ -65,7 +65,7 @@ class TestProperties:
 
 class TestPhysics:
     def test_barycentric_momentum_conservation(self) -> None:
-        """m1*v1 + m2*v2 ≈ 0 in the barycentric frame."""
+        """m1*v1 + m2*v2 ~= 0 in the barycentric frame."""
         sys = _make_system(m_primary=1.0, m_companion=5e-3, eccentricity=0.3)
         t = Quantity(0.37, "yr")
 

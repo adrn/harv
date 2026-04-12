@@ -23,7 +23,7 @@ class QuantityDistribution(eqx.Module):
 
     For scalar distributions, ``unit`` is a single string.
     For multivariate distributions (e.g. ``MultivariateNormal`` over parameters
-    with mixed units), ``unit`` is a tuple of strings — one per dimension.
+    with mixed units), ``unit`` is a tuple of strings -- one per dimension.
 
     Parameters
     ----------
@@ -39,7 +39,7 @@ class QuantityDistribution(eqx.Module):
     Scalar (period in days)::
 
         qd = QuantityDistribution(dist.LogUniform(50., 2000.), "day")
-        sample = qd.sample(key)  # → Quantity(array, "day")
+        sample = qd.sample(key)  # -> Quantity(array, "day")
 
     Multivariate (astrometric linear parameters with mixed units)::
 
@@ -47,7 +47,7 @@ class QuantityDistribution(eqx.Module):
             dist.MultivariateNormal(loc=jnp.zeros(6), ...),
             ("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
         )
-        sample = qd.sample(key)  # → raw jax.Array (consumer splits by name)
+        sample = qd.sample(key)  # -> raw jax.Array (consumer splits by name)
     """
 
     distribution: dist.Distribution
@@ -57,7 +57,7 @@ class QuantityDistribution(eqx.Module):
         """Sample from the distribution, attaching units when possible.
 
         For scalar units (``str``), returns ``Quantity``.
-        For tuple units (multivariate with mixed units), returns a raw array —
+        For tuple units (multivariate with mixed units), returns a raw array --
         the consumer splits by parameter name and attaches per-element units.
         """
         raw = self.distribution.sample(key, sample_shape)

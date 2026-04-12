@@ -56,7 +56,7 @@ def _check_thiele_innes_round_trip(
             atol=atol,
         )
 
-        # Check symmetric solution: Ω -> Ω+π, ω -> ω+π Thiele-Innes constants are
+        # Check symmetric solution: Omega -> Omega+pi, omega -> omega+pi Thiele-Innes constants are
         # invariant under this transformation, so we can't distinguish without radial
         # velocity data
         sym_orientation = KeplerianOrientation.from_angles(
@@ -72,9 +72,9 @@ def _check_thiele_innes_round_trip(
             atol=atol,
         )
 
-        assert match_primary or match_sym, (
-            "Recovered orientation does not match original or symmetric solution."
-        )
+        assert (
+            match_primary or match_sym
+        ), "Recovered orientation does not match original or symmetric solution."
     else:
         # For specific expected orientation (e.g., symmetry tests), compare components
         assert jnp.allclose(
@@ -114,7 +114,7 @@ def dtype(request):
             2 * jnp.pi - 0.02,
             jnp.pi / 2 - 0.001,
             2.8,
-        ),  # angles near 2π and π/2
+        ),  # angles near 2pi and pi/2
         (1.2, 0.5, 0.3, 4.0),  # arbitrary angles
     ],
 )
@@ -142,7 +142,7 @@ def test_thiele_innes_round_trip_edge_cases(
 
 @pytest.mark.parametrize("seed", [42, 123, 456])
 def test_thiele_innes_round_trip_random_low_inclination(seed: int, dtype: str) -> None:
-    """Test round-trip with random angles where inclination < π/2."""
+    """Test round-trip with random angles where inclination < pi/2."""
     # Set appropriate tolerance based on dtype
     # Note: Multiple arctan2 operations accumulate numerical errors
     # For float32, low inclination orbits suffer from catastrophic cancellation
@@ -176,7 +176,7 @@ def test_thiele_innes_round_trip_random_low_inclination(seed: int, dtype: str) -
 
 @pytest.mark.parametrize("seed", [42, 99])
 def test_thiele_innes_round_trip_random_high_inclination(seed: int, dtype: str) -> None:
-    """Test round-trip with random angles where inclination > π/2.
+    """Test round-trip with random angles where inclination > pi/2.
 
     We no longer enforce i <= pi/2, so we expect to recover the original inclination
     (subject to the standard Thiele-Innes ambiguity).
@@ -187,12 +187,12 @@ def test_thiele_innes_round_trip_random_high_inclination(seed: int, dtype: str) 
 
     key = jax.random.key(seed)
 
-    # Test multiple random configurations with i > π/2
+    # Test multiple random configurations with i > pi/2
     for _ in range(5):
         key, subkey = jax.random.split(key)
         random_vals = jax.random.uniform(subkey, shape=(4,))
 
-        # Generate random angles with inclination in (π/2, π)
+        # Generate random angles with inclination in (pi/2, pi)
         arg_peri = random_vals[0] * 2 * jnp.pi
         lon_asc_node = random_vals[1] * 2 * jnp.pi
         inclination = jnp.pi / 2 + random_vals[2] * jnp.pi / 2
@@ -208,18 +208,18 @@ def test_thiele_innes_round_trip_random_high_inclination(seed: int, dtype: str) 
 
 
 def test_thiele_innes_high_inclination_preservation(dtype: str) -> None:
-    """Test that inclination > π/2 is preserved (not forced to < π/2)."""
+    """Test that inclination > pi/2 is preserved (not forced to < pi/2)."""
     # Set appropriate tolerance based on dtype
     # Note: Multiple arctan2 operations accumulate numerical errors
     rtol = 5e-4 if dtype == "float32" else 1e-6
 
     semi_major_axis = Quantity(7.2, "AU")
 
-    # Use inclination > π/2
+    # Use inclination > pi/2
     high_inclination = KeplerianOrientation.from_angles(
         arg_peri=Quantity(0.8, "rad"),
         lon_asc_node=Quantity(2.3, "rad"),
-        inclination=Quantity(2.5, "rad"),  # > π/2
+        inclination=Quantity(2.5, "rad"),  # > pi/2
     )
 
     # We expect to recover the original orientation (subject to depth ambiguity)

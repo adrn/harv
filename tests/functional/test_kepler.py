@@ -1,4 +1,4 @@
-"""Functional tests for :mod:`harv.kepler` — end-to-end workflows."""
+"""Functional tests for :mod:`harv.kepler` -- end-to-end workflows."""
 
 import jax
 import quaxed.numpy as jnp

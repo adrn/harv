@@ -110,7 +110,7 @@ class RejectionSampler(eqx.Module):
 
         strategy = _STRATEGIES[data_type]
 
-        # Validate prior — required params derived from orbit param class fields
+        # Validate prior -- required params derived from orbit param class fields
         # TODO: audit how we do this validation
         all_prior_keys = set(self.prior.nonlinear_priors)
         if isinstance(self.prior.linear_prior, dict):
@@ -322,7 +322,7 @@ class RejectionSampler(eqx.Module):
             is called inside the numpyro model after the nonlinear parameters
             have been sampled.  ``pars`` contains the raw scalar nonlinear
             parameter values keyed by name (e.g. ``pars["period"]`` in the
-            data's time unit, ``pars["eccentricity"]``, …).  The function may
+            data's time unit, ``pars["eccentricity"]``, ...).  The function may
             call ``numpyro.sample`` for any number of new sites (e.g. stellar
             masses, inclination) and must return a dict mapping linear
             parameter names (e.g. ``"rv_semiamp"``) to their computed values.  Any
@@ -347,7 +347,7 @@ class RejectionSampler(eqx.Module):
         extra_init_params : dict, optional
             Initial values for the parameters introduced by ``extra_model``,
             one entry per chain.  Required when ``extra_model`` is provided,
-            since harv cannot automatically invert rv_semiamp → (m1, m2, inc).
+            since harv cannot automatically invert rv_semiamp -> (m1, m2, inc).
             Each value must be a 1-D array of length ``num_chains``::
 
                 extra_init_params={
@@ -380,7 +380,7 @@ class RejectionSampler(eqx.Module):
 
         Examples
         --------
-        **Marginalized (default)** — MCMC over nonlinear parameters only,
+        **Marginalized (default)** -- MCMC over nonlinear parameters only,
         ``rv_semiamp`` and ``v_sys`` analytically marginalized:
 
         >>> import jax.random as jr
@@ -394,7 +394,7 @@ class RejectionSampler(eqx.Module):
         >>> posterior = mcmc.get_samples()
         >>> # Keys: period, eccentricity, phase_peri, arg_peri
 
-        **Full model** — all parameters sampled jointly:
+        **Full model** -- all parameters sampled jointly:
 
         >>> mcmc = sampler.init_mcmc(samples, rv_data, marginalized=False,
         ...                          num_chains=4, num_warmup=500,
@@ -403,14 +403,14 @@ class RejectionSampler(eqx.Module):
         >>> posterior = mcmc.get_samples()
         >>> # Adds rv_semiamp and v_sys (as deterministic sites) to the above
 
-        **Physical reparameterization** — replace ``rv_semiamp`` with stellar masses
+        **Physical reparameterization** -- replace ``rv_semiamp`` with stellar masses
         and inclination; ``v_sys`` is analytically marginalized:
 
         >>> import jax.numpy as jnp
         >>> import numpyro
         >>> import numpyro.distributions as dist
         >>>
-        >>> _K_FACTOR = 28.4329  # km/s · day^(1/3) · M_sun^(-1/3)
+        >>> _K_FACTOR = 28.4329  # km/s * day^(1/3) * M_sun^(-1/3)
         >>>
         >>> def K_from_masses(m1, m2, inc, period_days, ecc):
         ...     return (
@@ -442,7 +442,7 @@ class RejectionSampler(eqx.Module):
         ... )
         >>> mcmc.run(jr.key(0))
         >>> posterior = mcmc.get_samples()
-        >>> # Sampled sites:      period, eccentricity, …, m1, m2, inc
+        >>> # Sampled sites:      period, eccentricity, ..., m1, m2, inc
         >>> # Deterministic site: rv_semiamp  (computed from m1, m2, inc, P, e)
         >>> # Marginalized:       v_sys (analytically integrated out)
         """

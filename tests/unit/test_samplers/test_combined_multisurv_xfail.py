@@ -1,6 +1,6 @@
 """xfail tests for combined astrometry + multi-survey RV (not yet implemented).
 
-Per docs/spec.md §'Combined astrometry + multi-survey RV':
+Per docs/spec.md S'Combined astrometry + multi-survey RV':
 
     CombinedStrategy raises NotImplementedError if SourceData contains both
     GaiaAstrometryData and more than one RVData.
@@ -92,7 +92,7 @@ def _make_combined_prior(
     raises=NotImplementedError,
     reason=(
         "Combined astrometry + multi-survey RV is not yet implemented. "
-        "See docs/spec.md §'Combined astrometry + multi-survey RV'."
+        "See docs/spec.md S'Combined astrometry + multi-survey RV'."
     ),
 )
 def test_combined_multisurv_raises_not_implemented():
@@ -121,7 +121,7 @@ def test_combined_multisurv_raises_not_implemented():
     raises=NotImplementedError,
     reason=(
         "Combined astrometry + multi-survey RV with offsets is not yet implemented. "
-        "See docs/spec.md §'Combined astrometry + multi-survey RV'."
+        "See docs/spec.md S'Combined astrometry + multi-survey RV'."
     ),
 )
 def test_combined_multisurv_with_offsets_raises_not_implemented():

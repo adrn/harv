@@ -144,7 +144,7 @@ class TestDictLinearPriorRV:
         )
         sampler = RejectionSampler(prior)
         # When all linear params are Delta, build_gaussian_mvn raises ValueError.
-        # This case is not yet supported — just verify the error is clear.
+        # This case is not yet supported -- just verify the error is clear.
         import pytest
 
         with pytest.raises(ValueError, match="No marginalized parameters remain"):

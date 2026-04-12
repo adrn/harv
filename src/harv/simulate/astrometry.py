@@ -111,9 +111,9 @@ def simulate_gaia_epoch_astrometry(
     t_peri : Quantity["time"], optional
         Time of periastron passage. If None, randomly drawn from [0, period].
     arg_peri : Quantity["angle"], optional
-        Argument of periastron ω. If None, randomly drawn from [0, 2π].
+        Argument of periastron omega. If None, randomly drawn from [0, 2pi].
     lon_asc_node : Quantity["angle"], optional
-        Longitude of ascending node Ω. If None, randomly drawn from [0, 2π].
+        Longitude of ascending node Omega. If None, randomly drawn from [0, 2pi].
     inclination : Quantity["angle"], optional
         Orbital inclination. If None, randomly drawn from cos(i) ~ U(-1, 1).
     semi_major_axis : Quantity["angle"], optional
@@ -244,7 +244,7 @@ def simulate_gaia_epoch_astrometry(
     # 5-parameter astrometry contribution (all in mas)
     # Follows the Gaia LPC convention (Lindegren & Bastian,
     # GAIA-C3-TN-LU-LL-061-08, Eqs. 4 & 6):
-    #   w = a·sin θ + d·cos θ   where a ≈ Δα*, d ≈ Δδ
+    #   w = a*sin theta + d*cos theta   where a ~= Deltaalpha*, d ~= Deltadelta
     y_astro = (
         sin_psi * alpha0
         + cos_psi * delta0
@@ -254,8 +254,8 @@ def simulate_gaia_epoch_astrometry(
     )
     y_astro = uconvert("mas", y_astro)
 
-    # Orbital contribution: along-scan projection of (Δra, Δdec)
-    # w_orbit = Δra·sin θ + Δdec·cos θ  (LPC convention, Eq. 6)
+    # Orbital contribution: along-scan projection of (Deltara, Deltadec)
+    # w_orbit = Deltara*sin theta + Deltadec*cos theta  (LPC convention, Eq. 6)
     cos_i = jnp.cos(inclination)
     delta_ra, delta_dec = astrometric_orbit_at_times(
         times,

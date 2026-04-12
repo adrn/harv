@@ -48,7 +48,7 @@ class _ModelContext:
     """Pre-computed shared state used by all numpyro model builders.
 
     Component-generic: data-type-specific details live in the likelihood
-    object itself.  Adding a new data type requires only a new strategy —
+    object itself.  Adding a new data type requires only a new strategy --
     no changes here.
     """
 
@@ -68,7 +68,7 @@ def _build_model_context(
     """Pre-compute shared state for numpyro model builders.
 
     Extracts the prior, strategy, data splits, time unit, likelihood,
-    component infos, linear parameter names, and unit info — all the setup
+    component infos, linear parameter names, and unit info -- all the setup
     that every builder needs (or a superset thereof).
     """
     prior = sampler.prior
@@ -280,7 +280,7 @@ def _build_extra_numpyro_model(
         Callable ``(pars: dict[str, scalar]) -> dict[str, scalar]``.
         ``pars`` contains the already-sampled nonlinear parameter values
         keyed by name (e.g. ``pars["period"]`` in the data's time unit,
-        ``pars["eccentricity"]``, …).  The callable may call
+        ``pars["eccentricity"]``, ...).  The callable may call
         ``numpyro.sample`` internally.  It must return a dict whose keys
         are a subset of the linear parameter names for this data type
         (e.g. ``"rv_semiamp"`` or ``"v_sys"`` for RV data).
@@ -299,7 +299,7 @@ def _build_extra_numpyro_model(
     the same units as the prior.  In particular, ``pars["period"]`` is in the
     time unit of the input data (e.g. days if ``data.time`` is in days).
 
-    Example — replace ``rv_semiamp`` with a mass-function reparameterization::
+    Example -- replace ``rv_semiamp`` with a mass-function reparameterization::
 
         import jax.numpy as jnp
         import numpyro
@@ -307,7 +307,7 @@ def _build_extra_numpyro_model(
 
         # Semi-amplitude constant: rv_semiamp [km/s] = K_FACTOR * f(masses, inc, P, e)
         # (Lovis & Fischer 2010, converted to km/s with period in days)
-        _K_FACTOR = 28.4329  # km/s · day^(1/3) · M_sun^(-1/3)
+        _K_FACTOR = 28.4329  # km/s * day^(1/3) * M_sun^(-1/3)
 
         def K_from_masses(m1, m2, inc, period_days, ecc):
             return (

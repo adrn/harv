@@ -67,7 +67,7 @@ def _needs_explicit_sampling(d: PriorDist | LinearPriorCallable) -> bool:
         return not isinstance(d.distribution, (dist.Normal, dist.Delta))
     if isinstance(d, (dist.Normal, dist.Delta)):
         return False
-    # LinearPriorCallable (or any other callable) → returns Normal, handled by
+    # LinearPriorCallable (or any other callable) -> returns Normal, handled by
     # _resolve_linear_prior_mvn.
     if callable(d) and not isinstance(d, dist.Distribution):
         return False
@@ -123,8 +123,8 @@ def _solve_kepler(
     params: AbstractParameters | MarginalizedParameters,
 ) -> tuple[jax.Array, jax.Array]:  # TODO: improve type to be Float with a batch shape
     """Solve Kepler's equation; return (sin_f, cos_f)."""
-    # phase_peri ∈ [0, 1] is a dimensionless fractional phase;
-    # t_peri = phase_peri × period gives the pericenter time relative to t=0.
+    # phase_peri in [0, 1] is a dimensionless fractional phase;
+    # t_peri = phase_peri * period gives the pericenter time relative to t=0.
     t_peri = params.phase_peri * params.period
     dt = data.time - t_peri
     M = mean_anomaly(dt, params.period)

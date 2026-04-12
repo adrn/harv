@@ -46,7 +46,7 @@ class PeriodDependentKPrior(eqx.Module):
     ----------
     sigma_K0 : Quantity["speed"]
         RV semi-amplitude scale (km/s) at the reference period ``P0``.
-        Default: 30 km/s — appropriate for stellar binary searches.
+        Default: 30 km/s -- appropriate for stellar binary searches.
     P0 : Quantity["time"]
         Numeric value of the reference period in units of ``P0_unit``.
 
@@ -58,7 +58,7 @@ class PeriodDependentKPrior(eqx.Module):
 
     See Also
     --------
-    Price-Whelan et al. (2017) — *The Joker: A Custom Monte Carlo Sampler for
+    Price-Whelan et al. (2017) -- *The Joker: A Custom Monte Carlo Sampler for
     Binary-star and Exoplanet Radial Velocity Data*.
     """
 
@@ -151,8 +151,8 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
             angular unit as ``params.parallax``.
         """
         P_ratio = ustrip("", params.period / self.P0)
-        # By the definition of parallax (ϖ ≡ 1 AU / d), the angular
-        # semi-major axis is a_angular = a_physical [AU] × ϖ [angle].
+        # By the definition of parallax (varpi == 1 AU / d), the angular
+        # semi-major axis is a_angular = a_physical [AU] * varpi [angle].
         sigma_a0_au = ustrip("AU", self.sigma_a0)
         sigma_angular = params.parallax * (sigma_a0_au * P_ratio ** (2.0 / 3.0))
         out_unit = str(params.parallax.unit)

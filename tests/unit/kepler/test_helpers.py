@@ -19,7 +19,7 @@ class TestComputeTrueAnomalyComponents:
         assert jnp.allclose(cos_f, 1.0, atol=1e-7)
 
     def test_circular_orbit_quarter_period(self) -> None:
-        """At t=P/4 with e=0, true anomaly = π/2: sin_f=1, cos_f=0."""
+        """At t=P/4 with e=0, true anomaly = pi/2: sin_f=1, cos_f=0."""
         sin_f, cos_f = compute_true_anomaly_components(
             time=Quantity(0.25, "yr"),
             period=Quantity(1.0, "yr"),
@@ -30,7 +30,7 @@ class TestComputeTrueAnomalyComponents:
         assert jnp.allclose(cos_f, 0.0, atol=1e-6)
 
     def test_sin_cos_identity(self) -> None:
-        """sin²f + cos²f = 1 for eccentric orbits."""
+        """sin^2f + cos^2f = 1 for eccentric orbits."""
         sin_f, cos_f = compute_true_anomaly_components(
             time=Quantity(0.3, "yr"),
             period=Quantity(1.0, "yr"),

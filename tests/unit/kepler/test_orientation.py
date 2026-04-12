@@ -57,7 +57,7 @@ def _check_thiele_innes_round_trip(
         ustrip("au", roundtrip_a), ustrip("au", semi_major_axis), rtol=rtol, atol=atol
     )
 
-    # Compare rotation matrices — more robust than comparing angles since
+    # Compare rotation matrices -- more robust than comparing angles since
     # there can be angle ambiguities giving the same rotation.
     match_primary = jnp.allclose(
         roundtrip_orientation.rotation_matrix,
@@ -66,7 +66,7 @@ def _check_thiele_innes_round_trip(
         atol=atol,
     )
 
-    # Symmetric solution: Ω → Ω+π, ω → ω+π (T-I invariant under this transform)
+    # Symmetric solution: Omega -> Omega+pi, omega -> omega+pi (T-I invariant under this transform)
     sym_orientation = KeplerianOrientation.from_angles(
         arg_peri=orientation.arg_peri + Quantity(jnp.pi, "rad"),
         lon_asc_node=orientation.lon_asc_node + Quantity(jnp.pi, "rad"),
@@ -79,9 +79,9 @@ def _check_thiele_innes_round_trip(
         atol=atol,
     )
 
-    assert match_primary or match_sym, (
-        "Recovered orientation does not match original or symmetric solution."
-    )
+    assert (
+        match_primary or match_sym
+    ), "Recovered orientation does not match original or symmetric solution."
 
     # Check Thiele-Innes constants are preserved
     roundtrip_constants = roundtrip_orientation.thiele_innes_constants(roundtrip_a)
@@ -123,7 +123,7 @@ class TestKeplerianOrientationConstruction:
         assert jnp.allclose(o.cos_arg_peri, 0.0, atol=1e-7)
 
     def test_angle_properties_round_trip(self) -> None:
-        """from_angles → .arg_peri/.lon_asc_node/.inclination recovers inputs."""
+        """from_angles -> .arg_peri/.lon_asc_node/.inclination recovers inputs."""
         w, W, i_ = 0.7, 1.3, 0.4
         o = _make_orientation(w, W, i_)
         assert jnp.allclose(ustrip("rad", o.arg_peri), w, atol=1e-6)
@@ -238,9 +238,9 @@ class TestJAXCompat:
     [
         (0.0, 0.0, 0.0, 5.0),  # zero angles
         (1.5, 2.0, jnp.pi / 2, 3.5),  # max inclination
-        (2 * jnp.pi - 0.01, 2 * jnp.pi - 0.02, jnp.pi / 2 - 0.001, 2.8),  # near 2π
+        (2 * jnp.pi - 0.01, 2 * jnp.pi - 0.02, jnp.pi / 2 - 0.001, 2.8),  # near 2pi
         (1.2, 0.5, 0.3, 4.0),  # arbitrary
-        (0.8, 2.3, 2.5, 7.2),  # inclination > π/2
+        (0.8, 2.3, 2.5, 7.2),  # inclination > pi/2
     ],
 )
 def test_thiele_innes_round_trip_edge_cases(

@@ -5,7 +5,7 @@ statistically consistent with the true parameters used to generate the data.
 They are organized into three regimes:
 
 High-SNR recovery (tight prior)
-    K/sigma ≈ 2-3, period prior within 2x of truth.  The posterior should
+    K/sigma ~= 2-3, period prior within 2x of truth.  The posterior should
     concentrate near the true parameter values; we verify by checking that the
     true period is covered by the posterior's central 90% credible interval.
 
@@ -92,8 +92,8 @@ class TestHighSNRRVRecovery:
     def test_enough_accepted_samples(self, rv_samples_high_snr):
         samples, _ = rv_samples_high_snr
         assert samples.n_samples >= 20, (
-            f"Expected ≥20 accepted samples; got {samples.n_samples}. "
-            "Acceptance rate may be too low — check simulation or prior."
+            f"Expected >=20 accepted samples; got {samples.n_samples}. "
+            "Acceptance rate may be too low -- check simulation or prior."
         )
 
     def test_true_period_in_90pct_credible_interval(self, rv_samples_high_snr):
@@ -222,7 +222,7 @@ class TestLowSNRBroadPosterior:
     Prior: log-uniform [20, 500] days.
 
     We verify:
-    - Posterior is broad (std of log₁₀(period) > 0.3, i.e. spanning more than
+    - Posterior is broad (std of log_1_0(period) > 0.3, i.e. spanning more than
       a factor of 2 in period).
     - True period is contained within the posterior's full range
       [min, max] of accepted samples.  This is satisfied if the true period is
@@ -255,7 +255,7 @@ class TestLowSNRBroadPosterior:
         samples, _ = low_snr_samples
         assert (
             samples.n_samples >= 10
-        ), f"Expected ≥10 accepted samples; got {samples.n_samples}."
+        ), f"Expected >=10 accepted samples; got {samples.n_samples}."
 
     def test_posterior_is_broad(self, low_snr_samples):
         """With low SNR, the period posterior should span > factor of 2 in period."""
@@ -263,7 +263,7 @@ class TestLowSNRBroadPosterior:
         log_periods = jnp.log10(samples["period"].value)
         std_log_p = float(jnp.std(log_periods))
         assert std_log_p > 0.3, (
-            f"std(log₁₀ period) = {std_log_p:.3f} — posterior not broad enough. "
+            f"std(log_1_0 period) = {std_log_p:.3f} -- posterior not broad enough. "
             "Low-SNR data should produce a wide period distribution."
         )
 
@@ -288,7 +288,7 @@ class TestLowSNRBroadPosterior:
         periods = samples["period"].value
         period_range_factor = float(jnp.max(periods) / jnp.min(periods))
         assert period_range_factor >= 3.0, (
-            f"Period range factor {period_range_factor:.1f} < 3 — "
+            f"Period range factor {period_range_factor:.1f} < 3 -- "
             "expected multi-modal coverage across period aliases."
         )
 
@@ -304,7 +304,7 @@ class TestAstrometryLikelihoodSanity:
     Rejection sampling is computationally intractable for high-SNR astrometry
     (the posterior is very narrow in 6 nonlinear dimensions).  Instead we
     confirm that the likelihood computed at the true parameter values is
-    substantially higher than the median likelihood under the prior — i.e., the
+    substantially higher than the median likelihood under the prior -- i.e., the
     likelihood function is correctly implemented and truly peaks near the truth.
     """
 

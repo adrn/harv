@@ -104,7 +104,7 @@ class _WarmStartMCMC:
         )
 
     def __getattr__(self, name: str) -> Any:
-        # Delegate everything else (get_samples, print_summary, …) to the
+        # Delegate everything else (get_samples, print_summary, ...) to the
         # underlying numpyro MCMC object.
         return getattr(self._mcmc, name)
 
@@ -176,11 +176,11 @@ class Samples(eqx.Module):
     >>> samples.n_samples        # number of posterior draws
     """
 
-    # Pytree leaves — Quantity arrays with units baked in
+    # Pytree leaves -- Quantity arrays with units baked in
     nonlinear: dict[str, Quantity]
     linear: dict[str, Quantity]
 
-    # Static fields — not JAX leaves
+    # Static fields -- not JAX leaves
     orbit_cls: type = eqx.field(static=True)
     full_cls: tuple[type, ...] = eqx.field(static=True)
     metadata: dict[str, Any] = eqx.field(static=True)
@@ -336,7 +336,7 @@ class Samples(eqx.Module):
         - median
         - mean
         - std (standard deviation)
-        - percentiles (16th, 84th) for ±1-sigma equivalent
+        - percentiles (16th, 84th) for +/-1-sigma equivalent
 
         Parameters
         ----------
@@ -390,13 +390,13 @@ class Samples(eqx.Module):
         filename = Path(filename)
 
         with h5py.File(filename, "w") as f:
-            # Store nonlinear parameters — each as a dataset with a unit attr.
+            # Store nonlinear parameters -- each as a dataset with a unit attr.
             nl_group = f.create_group("nonlinear")
             for key, qty in self.nonlinear.items():
                 ds = nl_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
-            # Store linear parameters — each as a dataset with a unit attr.
+            # Store linear parameters -- each as a dataset with a unit attr.
             lin_group = f.create_group("linear")
             for key, qty in self.linear.items():
                 ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
@@ -475,7 +475,7 @@ class Samples(eqx.Module):
                     "extra_linear_names",
                     "n_samples",
                     "data_type",
-                    # old-format keys — skip, handled separately
+                    # old-format keys -- skip, handled separately
                     "linear_param_units",
                     "time_unit",
                 ]:
@@ -633,11 +633,11 @@ class Samples(eqx.Module):
 
         Selects panels automatically based on ``data_type``:
 
-        - ``"rv"`` — RV curve (time-domain or phase-folded); ``data`` must be
+        - ``"rv"`` -- RV curve (time-domain or phase-folded); ``data`` must be
           a ``RVData`` or ``SourceData`` containing RV datasets.
-        - ``"astrometry"`` — on-sky orbital ellipses drawn from posterior
+        - ``"astrometry"`` -- on-sky orbital ellipses drawn from posterior
           samples; ``data`` is not required (orbit shape comes from samples).
-        - ``"combined"`` — both panels side by side; ``data`` must be a
+        - ``"combined"`` -- both panels side by side; ``data`` must be a
           ``SourceData`` containing both ``GaiaAstrometryData`` and at least
           one ``RVData``.
 
@@ -922,7 +922,7 @@ class Samples(eqx.Module):
                 ax.plot(x_plot, rv_plot, **orbit_style)
 
             ax.set_xlabel("Orbital phase")
-            ax.set_ylabel(f"RV \u2212 v\u2080 [{rv_unit}]")
+            ax.set_ylabel(f"RV $-$ $v_0$ [{rv_unit}]")
             ax.set_xlim(0.0, 1.0)
             ax.set_title(
                 f"Phase-folded RV  (median P = {median_period_val:.1f} {time_unit})"
@@ -1019,7 +1019,7 @@ class Samples(eqx.Module):
             # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
             t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
 
-            # One full orbit: phi in [0, 1] → times spanning exactly one period.
+            # One full orbit: phi in [0, 1] -> times spanning exactly one period.
             # Use t_ref as origin so the ellipse is centered near the observations.
             phi_grid = np.linspace(0.0, 1.0, 500)
             times_grid = t_ref + Quantity(phi_grid, "") * period_i
@@ -1040,8 +1040,8 @@ class Samples(eqx.Module):
                 **orbit_style,
             )
 
-        ax.set_xlabel(f"\u0394RA [{sma_unit}]")
-        ax.set_ylabel(f"\u0394Dec [{sma_unit}]")
+        ax.set_xlabel(rf"$\Delta$RA [{sma_unit}]")
+        ax.set_ylabel(rf"$\Delta$Dec [{sma_unit}]")
         ax.set_aspect("equal")
         ax.axhline(0, color="k", lw=0.5, ls="--")
         ax.axvline(0, color="k", lw=0.5, ls="--")

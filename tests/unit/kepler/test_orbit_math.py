@@ -15,7 +15,7 @@ from harv.kepler.orbits import (
 
 class TestMeanAnomaly:
     def test_known_value(self) -> None:
-        # Full orbit: dt = period → M = 2π
+        # Full orbit: dt = period -> M = 2pi
         M = mean_anomaly(Quantity(10.0, "day"), Quantity(10.0, "day"))
         assert jnp.allclose(ustrip("rad", M), 2 * jnp.pi)
 
@@ -39,7 +39,7 @@ class TestMeanAnomaly:
         assert jnp.allclose(ustrip("rad", Ms), expected)
 
     def test_mixed_units(self) -> None:
-        # dt in hours, period in days — should still work
+        # dt in hours, period in days -- should still work
         M = mean_anomaly(Quantity(24.0, "hr"), Quantity(1.0, "day"))
         assert jnp.allclose(ustrip("rad", M), 2 * jnp.pi)
 
@@ -68,13 +68,13 @@ class TestTrueAnomalyFromMean:
         sin_fs, cos_fs = jax.vmap(true_anomaly_from_mean, in_axes=(0, None))(Ms, 0.3)
         assert sin_fs.shape == (10,)
         assert cos_fs.shape == (10,)
-        # sin²f + cos²f = 1
+        # sin^2f + cos^2f = 1
         assert jnp.allclose(sin_fs**2 + cos_fs**2, 1.0, atol=1e-6)
 
 
 class TestRvShape:
     def test_circular_at_pericenter(self) -> None:
-        # At f=0, cos(ω+0) + e·cos(ω) = cos(ω)(1+e)
+        # At f=0, cos(omega+0) + e*cos(omega) = cos(omega)(1+e)
         omega = 0.5
         e = 0.3
         result = rv_shape(0.0, 1.0, e, omega)
@@ -105,7 +105,7 @@ class TestRvShape:
 
 class TestThieleInnesABFG:
     def test_identity_orientation(self) -> None:
-        # ω=0, Ω=0, i=0 → A=1, B=0, F=0, G=1 (face-on, aligned)
+        # omega=0, Omega=0, i=0 -> A=1, B=0, F=0, G=1 (face-on, aligned)
         A, B, F, G = thiele_innes_ABFG(1.0, 0.0, 1.0, 0.0, 1.0)
         assert jnp.allclose(A, 1.0, atol=1e-10)
         assert jnp.allclose(B, 0.0, atol=1e-10)

@@ -73,8 +73,8 @@ class TestAstrometryDesignMatrix:
     def test_design_matrix_pm_columns(self):
         """With scan_angle=0, Dec offset column = 1 and RA offset column = 0.
 
-        LPC convention: ra0 uses sin(θ), dec0 uses cos(θ).
-        At θ=0: sin(0)=0, cos(0)=1.
+        LPC convention: ra0 uses sin(theta), dec0 uses cos(theta).
+        At theta=0: sin(0)=0, cos(0)=1.
         """
         n_obs = 10
         data = GaiaAstrometryData(
@@ -91,10 +91,10 @@ class TestAstrometryDesignMatrix:
 
         dm = _get_design_matrix(data, params, sin_f, cos_f)
 
-        # scan_angle=0 → sin(θ)=0, cos(θ)=1
-        # Column 0 (ra0): sin(θ) = 0
+        # scan_angle=0 -> sin(theta)=0, cos(theta)=1
+        # Column 0 (ra0): sin(theta) = 0
         assert jnp.allclose(dm[:, 0], 0.0)
-        # Column 1 (dec0): cos(θ) = 1
+        # Column 1 (dec0): cos(theta) = 1
         assert jnp.allclose(dm[:, 1], 1.0)
 
 

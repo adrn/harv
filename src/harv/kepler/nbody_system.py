@@ -57,8 +57,8 @@ class TwoBodySystem(AbstractNBodySystem):
         we can use Kepler's 3rd law to derive the total mass from the companion's
         orbital parameters and the primary mass:
         a_body = a_rel * m_primary / m_total
-        a_rel^3 = G * m_total * P^2 / 4 π^2
-        a_body^3 = G * m_primary^3 * P^2 / (4 π^2 * m_total^2)
+        a_rel^3 = G * m_total * P^2 / 4 pi^2
+        a_body^3 = G * m_primary^3 * P^2 / (4 pi^2 * m_total^2)
         (solve for m_total)
         """
         a_body = self.companion.semi_major_axis

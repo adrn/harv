@@ -113,7 +113,7 @@ class TestMultiSurveyLikelihood:
         log_lik_multi = lik_multi.log_prob(params)
         log_lik_single = lik_single.log_prob(params)
 
-        # Multi-survey model has more flexibility to fit the offset → higher log-lik
+        # Multi-survey model has more flexibility to fit the offset -> higher log-lik
         assert log_lik_multi > log_lik_single
 
     def test_vmap_batch(self):

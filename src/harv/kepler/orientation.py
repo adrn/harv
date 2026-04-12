@@ -17,17 +17,17 @@ class KeplerianOrientation(eqx.Module):
     Stores the three Euler angles that define how the orbital plane
     is oriented relative to the observer's reference frame:
     - Inclination (i): tilt of orbital plane from sky plane
-    - Longitude of ascending node (Ω): where orbit crosses sky plane
-    - Argument of pericenter (ω): orientation of ellipse within orbital plane
+    - Longitude of ascending node (Omega): where orbit crosses sky plane
+    - Argument of pericenter (omega): orientation of ellipse within orbital plane
 
     Angles are stored as sin/cos pairs for numerical stability.
     """
 
-    # sin/cos of argument of pericenter (ω)
+    # sin/cos of argument of pericenter (omega)
     sin_arg_peri: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
     cos_arg_peri: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
 
-    # sin/cos of longitude of ascending node (Ω)
+    # sin/cos of longitude of ascending node (Omega)
     sin_lon_asc_node: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
     cos_lon_asc_node: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
 
@@ -103,19 +103,19 @@ class KeplerianOrientation(eqx.Module):
     ) -> tuple["KeplerianOrientation", ScalarQLength | ScalarQAngle]:
         """Construct orientation from Thiele-Innes constants.
 
-        Inverts the Thiele-Innes constants to recover (ω, Ω, i, a).
+        Inverts the Thiele-Innes constants to recover (omega, Omega, i, a).
         This loosely follows Appendix A of https://arxiv.org/abs/2206.05726
         but my convention for angles is different. For this implementation:
 
-        0 < i < π/2
-        0 < ω < 2π
-        0 < Ω < 2π
+        0 < i < pi/2
+        0 < omega < 2pi
+        0 < Omega < 2pi
 
         whereas the paper linked above assumes:
 
-        0 < i < π
-        0 < ω < 2π
-        0 < Ω < π
+        0 < i < pi
+        0 < omega < 2pi
+        0 < Omega < pi
 
         Returns
         -------
@@ -145,23 +145,23 @@ class KeplerianOrientation(eqx.Module):
 
         sin_i_squared = 1.0 - cos_i**2
         sin_i = jnp.sqrt(jnp.where(sin_i_squared < 0.0, 0.0, sin_i_squared))
-        i = jnp.arctan2(sin_i, cos_i)  # i in [0, π]
+        i = jnp.arctan2(sin_i, cos_i)  # i in [0, pi]
 
         # Sums & differences of angles (Binnendijk paper referenced in above paper)
-        # sp = (ω + Ω), sm = (ω - Ω)
+        # sp = (omega + Omega), sm = (omega - Omega)
         # Using the identities:
-        # A + G = a(1 + cos(i)) cos(ω + Ω)
-        # B - F = a(1 + cos(i)) sin(ω + Ω)
-        # A - G = a(1 - cos(i)) cos(ω - Ω)
-        # B + F = -a(1 - cos(i)) sin(ω - Ω)
+        # A + G = a(1 + cos(i)) cos(omega + Omega)
+        # B - F = a(1 + cos(i)) sin(omega + Omega)
+        # A - G = a(1 - cos(i)) cos(omega - Omega)
+        # B + F = -a(1 - cos(i)) sin(omega - Omega)
         sp = ustrip("rad", jnp.arctan2(B - F, A + G))
         sm = ustrip("rad", jnp.arctan2(-(B + F), A - G))
 
-        # Normalize sp to [0, 2π) for consistency
+        # Normalize sp to [0, 2pi) for consistency
         sp = jnp.mod(sp, 2 * jnp.pi)
-        # Keep sm in [-π, π] as returned by arctan2
+        # Keep sm in [-pi, pi] as returned by arctan2
 
-        # Compute ω and Ω, then normalize to [0, 2π)
+        # Compute omega and Omega, then normalize to [0, 2pi)
         omega = jnp.mod(0.5 * (sp + sm), 2 * jnp.pi)
         Omega = jnp.mod(0.5 * (sp - sm), 2 * jnp.pi)
 
@@ -176,12 +176,12 @@ class KeplerianOrientation(eqx.Module):
 
     @property
     def arg_peri(self) -> ScalarQAngle:
-        """Argument of pericenter (ω)."""
+        """Argument of pericenter (omega)."""
         return Quantity.from_(jnp.arctan2(self.sin_arg_peri, self.cos_arg_peri), "rad")
 
     @property
     def lon_asc_node(self) -> ScalarQAngle:
-        """Longitude of ascending node (Ω)."""
+        """Longitude of ascending node (Omega)."""
         return Quantity.from_(
             jnp.arctan2(self.sin_lon_asc_node, self.cos_lon_asc_node), "rad"
         )
@@ -199,12 +199,12 @@ class KeplerianOrientation(eqx.Module):
         r_observer_frame = R @ r_orbital_frame
 
         The rotation is composed of three sequential rotations:
-        1. R_z(ω): Rotate by argument of pericenter, ω, in orbital plane
+        1. R_z(omega): Rotate by argument of pericenter, omega, in orbital plane
         2. R_x(i): Rotate by inclination, i, to tilt orbital plane
-        3. R_z(Ω): Rotate by longitude of ascending node, Ω, on sky plane
+        3. R_z(Omega): Rotate by longitude of ascending node, Omega, on sky plane
 
         The full rotation matrix is therefore:
-        R = R_z(Ω) @ R_x(i) @ R_z(ω)
+        R = R_z(Omega) @ R_x(i) @ R_z(omega)
 
         We build the matrix directly from the sin/cos pairs for numerical stability and
         speed, but using the notation below, it is equivalent to:

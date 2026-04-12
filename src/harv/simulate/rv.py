@@ -40,7 +40,7 @@ def simulate_rv_sb1_data(
     """Simulate radial velocity data for a single-lined binary (SB1).
 
     This function generates synthetic RV measurements following the model:
-        RV(t) = K·[cos(ω + f(t)) + e·cos(ω)] + v₀
+        RV(t) = K*[cos(omega + f(t)) + e*cos(omega)] + v_0
 
     where f(t) is the true anomaly computed via Kepler's equation.
 
@@ -59,7 +59,7 @@ def simulate_rv_sb1_data(
     t_peri : Quantity["time"], optional
         Time of periastron passage. If None, randomly drawn from [0, period].
     arg_peri : Quantity["angle"], optional
-        Argument of periastron ω. If None, randomly drawn from [0, 2π].
+        Argument of periastron omega. If None, randomly drawn from [0, 2pi].
     rv_semiamp : Quantity["speed"], optional
         RV semi-amplitude. If None, randomly drawn from [1, 50] km/s.
     v_sys : Quantity["speed"], optional
@@ -140,7 +140,7 @@ def simulate_rv_sb1_data(
     )
     times = dt + t_ref
 
-    # Compute RV model: RV(t) = K·[cos(ω + f) + e·cos(ω)] + v₀
+    # Compute RV model: RV(t) = K*[cos(omega + f) + e*cos(omega)] + v_0
     rv_true = rv_at_times(
         times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys
     )

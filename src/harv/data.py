@@ -148,7 +148,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
 
         if add_labels:
             xlabel = (
-                f"Time \u2212 t_ref [{time_unit}]"
+                f"Time $-$ t_ref [{time_unit}]"
                 if relative_to_t_ref
                 else f"Time [{time_unit}]"
             )
@@ -263,7 +263,7 @@ class RVData(AbstractData):
 
         if add_labels:
             xlabel = (
-                f"Time \u2212 t_ref [{time_unit}]"
+                f"Time $-$ t_ref [{time_unit}]"
                 if relative_to_t_ref
                 else f"Time [{time_unit}]"
             )
@@ -455,7 +455,7 @@ def stack_datasets(
         if hasattr(getattr(ref, field.name), "unit")
         else ""
         for field in fields(ref)
-        if field.name != "t_ref"  # scalar, not array — skip and recompute below
+        if field.name != "t_ref"  # scalar, not array -- skip and recompute below
     }
 
     # NOTE: we assume that all datasets have the same fields and units, and we assume

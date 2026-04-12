@@ -69,8 +69,8 @@ def _get_design_matrix_gaia_ast(
 
     The projection follows the Gaia local plane coordinate (LPC) convention
     from Lindegren & Bastian (GAIA-C3-TN-LU-LL-061-08, Eqs. 4, 6, 8):
-    RA direction (a) uses sin(θ) and Thiele–Innes B, G;
-    Dec direction (d) uses cos(θ) and Thiele–Innes A, F.
+    RA direction (a) uses sin(theta) and Thiele-Innes B, G;
+    Dec direction (d) uses cos(theta) and Thiele-Innes A, F.
     """
     dt = ustrip(_AST_TIME_UNIT, data.time - data.t_ref)
     scan_angle_rad = ustrip("rad", data.scan_angle)
@@ -91,18 +91,18 @@ def _get_design_matrix_gaia_ast(
         _cos_i,
     )
 
-    # Along-scan orbital term: w_orbit = (B·cos f + G·sin f)·sin θ
-    #                                    + (A·cos f + F·sin f)·cos θ
+    # Along-scan orbital term: w_orbit = (B*cos f + G*sin f)*sin theta
+    #                                    + (A*cos f + F*sin f)*cos theta
     semimaj_term = (B * cos_f + G * sin_f) * sin_psi + (A * cos_f + F * sin_f) * cos_psi
 
     # NOTE: the order here should match the order of the linear parameters in
     # GaiaAstrometryParameters.linear_param_names
     return jnp.stack(
         [
-            sin_psi,  # ra0: a = Δα* → sin θ
-            cos_psi,  # dec0: d = Δδ → cos θ
-            sin_psi * dt,  # pmra: μ_α* · dt → sin θ · dt
-            cos_psi * dt,  # pmdec: μ_δ · dt → cos θ · dt
+            sin_psi,  # ra0: a = Deltaalpha* -> sin theta
+            cos_psi,  # dec0: d = Deltadelta -> cos theta
+            sin_psi * dt,  # pmra: mu_alpha* * dt -> sin theta * dt
+            cos_psi * dt,  # pmdec: mu_delta * dt -> cos theta * dt
             _parallax_factor,
             semimaj_term,
         ],
@@ -134,7 +134,7 @@ class GaiaAstrometryLikelihood(
 
     Polynomial trends via ``trend_order`` append higher-order proper-motion
     acceleration columns.  Each order *k* adds two columns (RA and Dec
-    components): ``cos(ψ)·dt^(k+1)`` and ``sin(ψ)·dt^(k+1)``, where
+    components): ``cos(psi)*dt^(k+1)`` and ``sin(psi)*dt^(k+1)``, where
     ``dt = (t - t_ref)`` in the internal astrometry time unit. The ``+1``
     offset is because order-0 proper motion (dt^1) is already in the base
     5-parameter solution.
@@ -163,8 +163,8 @@ class GaiaAstrometryLikelihood(
             scan_angle_rad = np.asarray(ustrip("rad", self.data.scan_angle))
             cos_psi = jnp.cos(scan_angle_rad)
             sin_psi = jnp.sin(scan_angle_rad)
-            # Each order k adds columns sin(θ)·dt^(k+1) (RA) and
-            # cos(θ)·dt^(k+1) (Dec), following the LPC convention.
+            # Each order k adds columns sin(theta)*dt^(k+1) (RA) and
+            # cos(theta)*dt^(k+1) (Dec), following the LPC convention.
             # k+1 because dt^1 proper motion is already in the base matrix.
             trend_cols = []
             for k in range(1, self.trend_order + 1):

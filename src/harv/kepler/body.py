@@ -186,7 +186,7 @@ class KeplerianBody(eqx.Module):
         M = mean_anomaly(time - self.t_peri, self.period)
         M_raw = ustrip("rad", M)
 
-        # True anomaly; circular shortcut avoids Kepler solver for e ≈ 0
+        # True anomaly; circular shortcut avoids Kepler solver for e ~= 0
         sin_cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M_raw), jnp.cos(M_raw)),
