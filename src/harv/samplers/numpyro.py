@@ -14,16 +14,16 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.data import InputData
+from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
-from harv.quantity_distribution import QuantityDistribution
 from harv.samplers.strategies import DataTypeStrategy
 
 if TYPE_CHECKING:
-    from harv.priors.rejection import RejectionPrior
+    from harv.samplers.rejection_prior import RejectionPrior
 
 # ---------------------------------------------------------------------------
 # Shared pre-computed context
@@ -120,7 +120,7 @@ def _sample_nonlinear(
     _p_prior = ctx.prior.nonlinear_priors.get("period")
     if isinstance(_p_prior, QuantityDistribution):
         period_in_data_unit = ustrip(
-            ctx.time_unit, Quantity(values["period"], str(_p_prior.unit))
+            ctx.time_unit, Q(values["period"], str(_p_prior.unit))
         )
         values["period"] = period_in_data_unit
 
@@ -134,7 +134,7 @@ def _sample_nonlinear(
                 # Convert to data units if the prior carries a unit.
                 target_u = ctx.linear_param_units.get(name, "")
                 if isinstance(d, QuantityDistribution) and target_u:
-                    raw = ustrip(target_u, Quantity(raw, str(d.unit)))
+                    raw = ustrip(target_u, Q(raw, str(d.unit)))
                 values[name] = raw
 
     params = ctx.strategy.build_marginalized_params(

@@ -5,7 +5,7 @@ from typing import Any, Literal
 import jax
 import numpy as np
 from jaxtyping import Float, Int, Real
-from unxt import Quantity
+from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
 Angle = Literal["angle"]
@@ -16,38 +16,38 @@ Speed = Literal["speed"]
 Time = Literal["time"]
 Dimless = Literal["dimensionless"]
 
-ScalarQAngle = Real[Quantity["angle"], ""]
-ScalarQAngularSpeed = Real[Quantity["angular speed"], ""]
-ScalarQDimless = Real[Quantity["dimensionless"], ""]
-ScalarQLength = Real[Quantity["length"], ""]
-ScalarQMass = Real[Quantity["mass"], ""]
-ScalarQSpeed = Real[Quantity["speed"], ""]
-ScalarQTime = Real[Quantity["time"], ""]
+ScalarQAngle = Real[Q["angle"], ""]
+ScalarQAngularSpeed = Real[Q["angular speed"], ""]
+ScalarQDimless = Real[Q["dimensionless"], ""]
+ScalarQLength = Real[Q["length"], ""]
+ScalarQMass = Real[Q["mass"], ""]
+ScalarQSpeed = Real[Q["speed"], ""]
+ScalarQTime = Real[Q["time"], ""]
 
-NAngle = Real[Quantity["angle"], "n"]
-NDimless = Real[Quantity["dimensionless"], "n"]
-NTime = Real[Quantity["time"], "n"]
-NVelocity = Real[Quantity["speed"], "n"]
+NAngle = Real[Q["angle"], "n"]
+NDimless = Real[Q["dimensionless"], "n"]
+NTime = Real[Q["time"], "n"]
+NVelocity = Real[Q["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
 
-Vec3QLength = Real[Quantity["length"], "3"]
-Vec3QSpeed = Real[Quantity["speed"], "3"]
+Vec3QLength = Real[Q["length"], "3"]
+Vec3QSpeed = Real[Q["speed"], "3"]
 
-BatchVec3QLength = Real[Quantity["length"], "3 *batch"]
-BatchVec3QSpeed = Real[Quantity["speed"], "3 *batch"]
+BatchVec3QLength = Real[Q["length"], "3 *batch"]
+BatchVec3QSpeed = Real[Q["speed"], "3 *batch"]
 
-BatchQAngle = Real[Quantity["angle"], "*batch"]
-BatchQAngularSpeed = Real[Quantity["angular speed"], "*batch"]
-BatchQDimless = Real[Quantity["dimensionless"], "*batch"]
-BatchQLength = Real[Quantity["length"], "*batch"]
-BatchQSpeed = Real[Quantity["speed"], "*batch"]
-BatchQTime = Real[Quantity["time"], "*batch"]
+BatchQAngle = Real[Q["angle"], "*batch"]
+BatchQAngularSpeed = Real[Q["angular speed"], "*batch"]
+BatchQDimless = Real[Q["dimensionless"], "*batch"]
+BatchQLength = Real[Q["length"], "*batch"]
+BatchQSpeed = Real[Q["speed"], "*batch"]
+BatchQTime = Real[Q["time"], "*batch"]
 BatchFloat = Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
 
 # Set of all Batch-level Quantity types that carry physical dimensions.
 # Used by AbstractParameters.__init_subclass__ to auto-detect which fields
-# require a QuantityDistribution prior.
+# require a QDistribution prior.
 DIMENSIONED_BATCH_TYPES: frozenset = frozenset(
     {
         BatchQAngle,

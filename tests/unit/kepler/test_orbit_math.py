@@ -2,7 +2,7 @@
 
 import jax
 import jax.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.kepler import KeplerianOrientation
 from harv.kepler.orbits import (
@@ -16,55 +16,55 @@ from harv.kepler.orbits import (
 class TestMeanAnomaly:
     def test_known_value(self) -> None:
         # Full orbit: dt = period -> M = 2pi
-        M = mean_anomaly(Quantity(10.0, "day"), Quantity(10.0, "day"))
+        M = mean_anomaly(Q(10.0, "day"), Q(10.0, "day"))
         assert jnp.allclose(ustrip("rad", M), 2 * jnp.pi)
 
     def test_half_orbit(self) -> None:
-        M = mean_anomaly(Quantity(5.0, "day"), Quantity(10.0, "day"))
+        M = mean_anomaly(Q(5.0, "day"), Q(10.0, "day"))
         assert jnp.allclose(ustrip("rad", M), jnp.pi)
 
     def test_zero_dt(self) -> None:
-        M = mean_anomaly(Quantity(0.0, "day"), Quantity(10.0, "day"))
+        M = mean_anomaly(Q(0.0, "day"), Q(10.0, "day"))
         assert jnp.allclose(ustrip("rad", M), 0.0)
 
     def test_jit(self) -> None:
-        M = jax.jit(mean_anomaly)(Quantity(3.0, "day"), Quantity(10.0, "day"))
+        M = jax.jit(mean_anomaly)(Q(3.0, "day"), Q(10.0, "day"))
         expected = 2 * jnp.pi * 3.0 / 10.0
         assert jnp.allclose(ustrip("rad", M), expected)
 
     def test_vmap(self) -> None:
-        dts = Quantity(jnp.array([0.0, 5.0, 10.0]), "day")
-        Ms = jax.vmap(mean_anomaly, in_axes=(0, None))(dts, Quantity(10.0, "day"))
+        dts = Q(jnp.array([0.0, 5.0, 10.0]), "day")
+        Ms = jax.vmap(mean_anomaly, in_axes=(0, None))(dts, Q(10.0, "day"))
         expected = 2 * jnp.pi * jnp.array([0.0, 5.0, 10.0]) / 10.0
         assert jnp.allclose(ustrip("rad", Ms), expected)
 
     def test_mixed_units(self) -> None:
         # dt in hours, period in days -- should still work
-        M = mean_anomaly(Quantity(24.0, "hr"), Quantity(1.0, "day"))
+        M = mean_anomaly(Q(24.0, "hr"), Q(1.0, "day"))
         assert jnp.allclose(ustrip("rad", M), 2 * jnp.pi)
 
 
 class TestTrueAnomalyFromMean:
     def test_circular_orbit(self) -> None:
         # For e=0, true anomaly = mean anomaly
-        M = Quantity(1.0, "rad")
+        M = Q(1.0, "rad")
         sin_f, cos_f = true_anomaly_from_mean(M, 0.0)
         assert jnp.allclose(sin_f, jnp.sin(1.0), atol=1e-6)
         assert jnp.allclose(cos_f, jnp.cos(1.0), atol=1e-6)
 
     def test_pericenter(self) -> None:
         # At M=0, f=0 for any eccentricity
-        sin_f, cos_f = true_anomaly_from_mean(Quantity(0.0, "rad"), 0.3)
+        sin_f, cos_f = true_anomaly_from_mean(Q(0.0, "rad"), 0.3)
         assert jnp.allclose(sin_f, 0.0, atol=1e-10)
         assert jnp.allclose(cos_f, 1.0, atol=1e-10)
 
     def test_jit(self) -> None:
-        sin_f, cos_f = jax.jit(true_anomaly_from_mean)(Quantity(1.0, "rad"), 0.3)
+        sin_f, cos_f = jax.jit(true_anomaly_from_mean)(Q(1.0, "rad"), 0.3)
         assert jnp.isfinite(sin_f)
         assert jnp.isfinite(cos_f)
 
     def test_vmap(self) -> None:
-        Ms = Quantity(jnp.linspace(0, 2 * jnp.pi, 10), "rad")
+        Ms = Q(jnp.linspace(0, 2 * jnp.pi, 10), "rad")
         sin_fs, cos_fs = jax.vmap(true_anomaly_from_mean, in_axes=(0, None))(Ms, 0.3)
         assert sin_fs.shape == (10,)
         assert cos_fs.shape == (10,)
@@ -114,9 +114,9 @@ class TestThieleInnesABFG:
 
     def test_matches_keplerian_orientation(self) -> None:
         """Verify building block KeplerianOrientation.thiele_innes_constants()."""
-        omega = Quantity(0.7, "rad")
-        Omega = Quantity(1.3, "rad")
-        incl = Quantity(0.5, "rad")
+        omega = Q(0.7, "rad")
+        Omega = Q(1.3, "rad")
+        incl = Q(0.5, "rad")
 
         orient = KeplerianOrientation.from_angles(
             arg_peri=omega, lon_asc_node=Omega, inclination=incl
@@ -138,11 +138,11 @@ class TestThieleInnesABFG:
     def test_with_semi_major_axis(self) -> None:
         """Unit T-I x a should match KeplerianOrientation with semi_major_axis."""
         orient = KeplerianOrientation.from_angles(
-            arg_peri=Quantity(0.7, "rad"),
-            lon_asc_node=Quantity(1.3, "rad"),
-            inclination=Quantity(0.5, "rad"),
+            arg_peri=Q(0.7, "rad"),
+            lon_asc_node=Q(1.3, "rad"),
+            inclination=Q(0.5, "rad"),
         )
-        a = Quantity(2.5, "mas")
+        a = Q(2.5, "mas")
         A_ref, B_ref, F_ref, G_ref = orient.thiele_innes_constants(semi_major_axis=a)
 
         A, B, F, G = thiele_innes_ABFG(

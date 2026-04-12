@@ -3,7 +3,7 @@
 import jax
 import pytest
 import quaxed.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.kepler.body import KeplerianBody
 from harv.kepler.nbody_system import TwoBodySystem
@@ -21,14 +21,14 @@ def _make_system(
 ) -> TwoBodySystem:
     """Create a TwoBodySystem from masses."""
     companion = KeplerianBody.from_masses(
-        period=Quantity(period, "yr"),
+        period=Q(period, "yr"),
         eccentricity=eccentricity,
-        m_total=Quantity(m_primary + m_companion, "Msun"),
-        m_body=Quantity(m_companion, "Msun"),
-        t_peri=Quantity(0.0, "yr"),
+        m_total=Q(m_primary + m_companion, "Msun"),
+        m_body=Q(m_companion, "Msun"),
+        t_peri=Q(0.0, "yr"),
     )
     return TwoBodySystem(
-        m_primary=Quantity(m_primary, "Msun"),
+        m_primary=Q(m_primary, "Msun"),
         companion=companion,
     )
 
@@ -67,7 +67,7 @@ class TestPhysics:
     def test_barycentric_momentum_conservation(self) -> None:
         """m1*v1 + m2*v2 ~= 0 in the barycentric frame."""
         sys = _make_system(m_primary=1.0, m_companion=5e-3, eccentricity=0.3)
-        t = Quantity(0.37, "yr")
+        t = Q(0.37, "yr")
 
         v0 = sys.velocity_barycentric(t, 0)
         v1 = sys.velocity_barycentric(t, 1)
@@ -83,7 +83,7 @@ class TestPhysics:
     def test_relative_position_relation(self) -> None:
         """position_relative = pos(1) - pos(0)."""
         sys = _make_system(eccentricity=0.2)
-        t = Quantity(0.25, "yr")
+        t = Q(0.25, "yr")
 
         r_rel = sys.position_relative(t)
         r0 = sys.position_barycentric(t, 0)
@@ -94,7 +94,7 @@ class TestPhysics:
     def test_relative_velocity_relation(self) -> None:
         """velocity_relative = vel(1) - vel(0)."""
         sys = _make_system(eccentricity=0.2)
-        t = Quantity(0.25, "yr")
+        t = Q(0.25, "yr")
 
         v_rel = sys.velocity_relative(t)
         v0 = sys.velocity_barycentric(t, 0)
@@ -105,12 +105,12 @@ class TestPhysics:
     def test_body_idx_out_of_range(self) -> None:
         sys = _make_system()
         with pytest.raises(IndexError, match="body_idx"):
-            sys.position_barycentric(Quantity(0.0, "yr"), 2)
+            sys.position_barycentric(Q(0.0, "yr"), 2)
 
     def test_body_idx_out_of_range_velocity(self) -> None:
         sys = _make_system()
         with pytest.raises(IndexError, match="body_idx"):
-            sys.velocity_barycentric(Quantity(0.0, "yr"), 2)
+            sys.velocity_barycentric(Q(0.0, "yr"), 2)
 
 
 # =============================================================================
@@ -123,14 +123,14 @@ class TestJAXCompat:
         sys = _make_system()
         leaves, treedef = jax.tree.flatten(sys)
         sys2 = treedef.unflatten(leaves)
-        t = Quantity(0.1, "yr")
+        t = Q(0.1, "yr")
         r1 = sys.position_barycentric(t, 1)
         r2 = sys2.position_barycentric(t, 1)
         assert jnp.allclose(ustrip("AU", r1), ustrip("AU", r2))
 
     def test_jit_position_barycentric(self) -> None:
         sys = _make_system()
-        t = Quantity(0.25, "yr")
+        t = Q(0.25, "yr")
 
         @jax.jit
         def f(sys, t):
@@ -146,7 +146,7 @@ class TestJAXCompat:
         system at a single time, then vmap over a batch of systems.
         """
         period_values = [0.5, 1.0, 2.0]
-        t = Quantity(0.25, "yr")
+        t = Q(0.25, "yr")
 
         systems = [_make_system(period=P, eccentricity=0.1) for P in period_values]
         systems_batched = jax.tree.map(lambda *xs: jnp.stack(xs), *systems)
@@ -175,7 +175,7 @@ class TestJAXCompat:
         Momentum conservation must hold for each batched system independently.
         """
         ecc_values = [0.0, 0.2, 0.5]
-        t = Quantity(0.3, "yr")
+        t = Q(0.3, "yr")
 
         systems = [_make_system(eccentricity=e) for e in ecc_values]
         systems_batched = jax.tree.map(lambda *xs: jnp.stack(xs), *systems)

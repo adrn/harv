@@ -49,10 +49,9 @@ uv add git+https://github.com/adrn/harv
 
 ```python
 import jax.numpy as jnp
-from unxt import Quantity as Q
+from unxt import Q
 from harv.data import RVData
-from harv.priors import RejectionPrior
-from harv.samplers import RejectionSampler
+from harv.samplers import RejectionPrior, RejectionSampler
 
 # Load or create RV data with explicit units - some sample RV data:
 data = RVData(

@@ -3,7 +3,7 @@
 Implementations of core orbit computations used by ``harv.kepler``, ``harv.likelihood``,
 and ``harv.simulate``.
 
-All functions accept :class:`~unxt.Quantity` objects (including dimensionless ones)
+All functions accept :class:`~unxt.Q` objects (including dimensionless ones)
 as well as plain JAX arrays and Python scalars.
 """
 
@@ -21,7 +21,7 @@ from typing import cast
 
 import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
-from unxt import Quantity
+from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.custom_types import (
@@ -39,10 +39,10 @@ from harv.custom_types import (
 def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
     """Compute mean anomaly from elapsed time and period.
 
-    ``M = 2pi * dt / period``, returned as a :class:`~unxt.Quantity` with angle
+    ``M = 2pi * dt / period``, returned as a :class:`~unxt.Q` with angle
     units (radians).
     """
-    return Quantity.from_(ustrip("", 2 * jnp.pi * dt / period), "rad")
+    return Q.from_(ustrip("", 2 * jnp.pi * dt / period), "rad")
 
 
 def true_anomaly_from_mean(
@@ -66,9 +66,9 @@ def rv_shape(
 
     Returns the dimensionless RV amplitude factor for each observation.
     ``arg_peri`` may be a plain float/array in radians or a
-    :class:`~unxt.Quantity` with angle units; ``jnp.cos`` handles both via
+    :class:`~unxt.Q` with angle units; ``jnp.cos`` handles both via
     quax dispatch.  ``eccentricity`` may likewise be a dimensionless
-    :class:`~unxt.Quantity` or a plain scalar.
+    :class:`~unxt.Q` or a plain scalar.
     """
     cos_wf = jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
     # cast: jnp ops on Quantity inputs return AbstractQuantity (quax dispatch),
@@ -170,17 +170,17 @@ def rv_at_times(
 
     Examples
     --------
-    >>> from unxt import Quantity
+    >>> from unxt import Q
     >>> from harv.kepler.orbits import rv_at_times
-    >>> times = Quantity([0.0, 50.0, 100.0], "day")
+    >>> times = Q([0.0, 50.0, 100.0], "day")
     >>> rv = rv_at_times(
     ...     times,
-    ...     period=Quantity(200.0, "day"),
+    ...     period=Q(200.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Quantity(50.0, "day"),
-    ...     arg_peri=Quantity(1.2, "rad"),
-    ...     rv_semiamp=Quantity(8.0, "km/s"),
-    ...     v_sys=Quantity(-5.0, "km/s"),
+    ...     t_peri=Q(50.0, "day"),
+    ...     arg_peri=Q(1.2, "rad"),
+    ...     rv_semiamp=Q(8.0, "km/s"),
+    ...     v_sys=Q(-5.0, "km/s"),
     ... )
     >>> rv.unit
     Unit("km / s")
@@ -240,18 +240,18 @@ def astrometric_orbit_at_times(
 
     Examples
     --------
-    >>> from unxt import Quantity
+    >>> from unxt import Q
     >>> from harv.kepler.orbits import astrometric_orbit_at_times
-    >>> times = Quantity([0.0, 100.0, 200.0], "day")
+    >>> times = Q([0.0, 100.0, 200.0], "day")
     >>> dra, ddec = astrometric_orbit_at_times(
     ...     times,
-    ...     period=Quantity(300.0, "day"),
+    ...     period=Q(300.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Quantity(0.0, "day"),
-    ...     arg_peri=Quantity(1.2, "rad"),
+    ...     t_peri=Q(0.0, "day"),
+    ...     arg_peri=Q(1.2, "rad"),
     ...     cos_i=0.5,
-    ...     lon_asc_node=Quantity(0.8, "rad"),
-    ...     semi_major_axis=Quantity(3.0, "mas"),
+    ...     lon_asc_node=Q(0.8, "rad"),
+    ...     semi_major_axis=Q(3.0, "mas"),
     ... )
     >>> dra.unit
     Unit("mas")
@@ -267,6 +267,6 @@ def astrometric_orbit_at_times(
     # LPC convention: B,G -> RA (a); A,F -> Dec (d)
     delta_ra = (B * cos_f + G * sin_f) * semi_major_axis
     delta_dec = (A * cos_f + F * sin_f) * semi_major_axis
-    # cast: multiplication by a Quantity returns AbstractQuantity via quax dispatch;
+    # cast: multiplication by a Q returns AbstractQuantity via quax dispatch;
     # mypy cannot verify that AbstractQuantity satisfies BatchQAngle.
     return cast("tuple[BatchQAngle, BatchQAngle]", (delta_ra, delta_dec))

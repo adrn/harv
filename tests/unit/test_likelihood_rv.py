@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import RVData
 from harv.likelihood.params import RVParameters
@@ -18,18 +18,18 @@ from harv.likelihood.rv import (
 
 def _make_rv_params(period_day=100.0, eccentricity=0.3, phase_peri=0.0, arg_peri=1.0):
     return RVParameters.marginalized(
-        period=Quantity(period_day, "day"),
+        period=Q(period_day, "day"),
         eccentricity=eccentricity,
         phase_peri=phase_peri,
-        arg_peri=Quantity(arg_peri, "rad"),
+        arg_peri=Q(arg_peri, "rad"),
     )
 
 
 def _make_rv_data(n_obs=20):
     return RVData(
-        time=Quantity(jnp.linspace(0, 100, n_obs), "day"),
-        rv=Quantity(jnp.zeros(n_obs), "km/s"),
-        rv_err=Quantity(jnp.ones(n_obs) * 0.1, "km/s"),
+        time=Q(jnp.linspace(0, 100, n_obs), "day"),
+        rv=Q(jnp.zeros(n_obs), "km/s"),
+        rv_err=Q(jnp.ones(n_obs) * 0.1, "km/s"),
     )
 
 
@@ -141,18 +141,18 @@ class TestMarginalizedLikelihoodRV:
     def test_likelihood_decreases_with_noise(self):
         """Test that likelihood is higher with smaller errors."""
         n_obs = 30
-        times = Quantity(jnp.linspace(0, 100, n_obs), "day")
-        rv = Quantity(jnp.zeros(n_obs), "km/s")
+        times = Q(jnp.linspace(0, 100, n_obs), "day")
+        rv = Q(jnp.zeros(n_obs), "km/s")
 
         data_small = RVData(
             time=times,
             rv=rv,
-            rv_err=Quantity(jnp.ones(n_obs) * 0.01, "km/s"),
+            rv_err=Q(jnp.ones(n_obs) * 0.01, "km/s"),
         )
         data_large = RVData(
             time=times,
             rv=rv,
-            rv_err=Quantity(jnp.ones(n_obs) * 1.0, "km/s"),
+            rv_err=Q(jnp.ones(n_obs) * 1.0, "km/s"),
         )
 
         params = _make_rv_params(eccentricity=0.2)
@@ -170,9 +170,9 @@ class TestMarginalizedLikelihoodRV:
     def test_circular_vs_eccentric(self):
         """Test likelihood for circular vs eccentric orbits."""
         data = RVData(
-            time=Quantity(jnp.linspace(0, 365, 50), "day"),
-            rv=Quantity(jnp.zeros(50), "km/s"),
-            rv_err=Quantity(jnp.ones(50) * 0.1, "km/s"),
+            time=Q(jnp.linspace(0, 365, 50), "day"),
+            rv=Q(jnp.zeros(50), "km/s"),
+            rv_err=Q(jnp.ones(50) * 0.1, "km/s"),
         )
         prior = _rv_prior()
 
@@ -198,10 +198,10 @@ class TestBatchLikelihoodRV:
 
         eccentricities = jnp.linspace(0.0, 0.5, n_samples)
         params_batch = RVParameters.marginalized(
-            period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
+            period=Q(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=eccentricities,
             phase_peri=jnp.zeros(n_samples),
-            arg_peri=Quantity(jnp.ones(n_samples) * 1.0, "rad"),
+            arg_peri=Q(jnp.ones(n_samples) * 1.0, "rad"),
         )
 
         log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
@@ -213,9 +213,9 @@ class TestBatchLikelihoodRV:
         """Test that vmap gives same result as serial evaluation."""
         n_obs = 15
         data = RVData(
-            time=Quantity(jnp.linspace(0, 100, n_obs), "day"),
-            rv=Quantity(jnp.zeros(n_obs), "km/s"),
-            rv_err=Quantity(jnp.ones(n_obs) * 0.1, "km/s"),
+            time=Q(jnp.linspace(0, 100, n_obs), "day"),
+            rv=Q(jnp.zeros(n_obs), "km/s"),
+            rv_err=Q(jnp.ones(n_obs) * 0.1, "km/s"),
         )
         prior = _rv_prior()
         lik = RVLikelihood(data=data, linear_marginalized_prior=prior)
@@ -223,10 +223,10 @@ class TestBatchLikelihoodRV:
         eccs = jnp.linspace(0.0, 0.5, 5)
 
         params_batch = RVParameters.marginalized(
-            period=Quantity(jnp.ones(5) * 100.0, "day"),
+            period=Q(jnp.ones(5) * 100.0, "day"),
             eccentricity=eccs,
             phase_peri=jnp.zeros(5),
-            arg_peri=Quantity(jnp.ones(5), "rad"),
+            arg_peri=Q(jnp.ones(5), "rad"),
         )
         log_liks_batch = jax.jit(jax.vmap(lik.log_prob))(params_batch)
 
@@ -234,10 +234,10 @@ class TestBatchLikelihoodRV:
             [
                 lik.log_prob(
                     RVParameters.marginalized(
-                        period=Quantity(100.0, "day"),
+                        period=Q(100.0, "day"),
                         eccentricity=float(eccs[i]),
                         phase_peri=0.0,
-                        arg_peri=Quantity(1.0, "rad"),
+                        arg_peri=Q(1.0, "rad"),
                     )
                 )
                 for i in range(5)
@@ -252,12 +252,12 @@ class TestExplicitLikelihoodRV:
 
     def _make_params(self, rv_semiamp=10.0, v_sys=0.0):
         return RVParameters(
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.3,
             phase_peri=0.0,
-            arg_peri=Quantity(1.0, "rad"),
-            rv_semiamp=Quantity(rv_semiamp, "km/s"),
-            v_sys=Quantity(v_sys, "km/s"),
+            arg_peri=Q(1.0, "rad"),
+            rv_semiamp=Q(rv_semiamp, "km/s"),
+            v_sys=Q(v_sys, "km/s"),
         )
 
     def test_single_survey_explicit_finite(self):
@@ -311,12 +311,12 @@ class TestExplicitLikelihoodRV:
         lik = RVLikelihood(data=data)
 
         params_batch = RVParameters(
-            period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
+            period=Q(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=jnp.ones(n_samples) * 0.3,
             phase_peri=jnp.zeros(n_samples),
-            arg_peri=Quantity(jnp.ones(n_samples) * 1.0, "rad"),
-            rv_semiamp=Quantity(jnp.ones(n_samples) * 10.0, "km/s"),
-            v_sys=Quantity(jnp.zeros(n_samples), "km/s"),
+            arg_peri=Q(jnp.ones(n_samples) * 1.0, "rad"),
+            rv_semiamp=Q(jnp.ones(n_samples) * 10.0, "km/s"),
+            v_sys=Q(jnp.zeros(n_samples), "km/s"),
         )
 
         log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)

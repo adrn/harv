@@ -6,14 +6,14 @@ import jax
 import pytest
 import quaxed.numpy as jnp
 from jax import config as jax_config
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.kepler.orientation import KeplerianOrientation
 
 
 def _check_thiele_innes_round_trip(
     orientation: KeplerianOrientation,
-    semi_major_axis: Quantity,
+    semi_major_axis: Q,
     expected_orientation: KeplerianOrientation | None = None,
     rtol: float = 1e-10,
     atol: float = 1e-8,
@@ -60,8 +60,8 @@ def _check_thiele_innes_round_trip(
         # invariant under this transformation, so we can't distinguish without radial
         # velocity data
         sym_orientation = KeplerianOrientation.from_angles(
-            arg_peri=orientation.arg_peri + Quantity(jnp.pi, "rad"),
-            lon_asc_node=orientation.lon_asc_node + Quantity(jnp.pi, "rad"),
+            arg_peri=orientation.arg_peri + Q(jnp.pi, "rad"),
+            lon_asc_node=orientation.lon_asc_node + Q(jnp.pi, "rad"),
             inclination=orientation.inclination,
         )
 
@@ -131,12 +131,12 @@ def test_thiele_innes_round_trip_edge_cases(
     rtol = 5e-4 if dtype == "float32" else 1e-6
 
     orientation = KeplerianOrientation.from_angles(
-        arg_peri=Quantity(arg_peri, "rad"),
-        lon_asc_node=Quantity(lon_asc_node, "rad"),
-        inclination=Quantity(inclination, "rad"),
+        arg_peri=Q(arg_peri, "rad"),
+        lon_asc_node=Q(lon_asc_node, "rad"),
+        inclination=Q(inclination, "rad"),
     )
     _check_thiele_innes_round_trip(
-        orientation, Quantity(semi_major_axis, "AU"), rtol=rtol
+        orientation, Q(semi_major_axis, "AU"), rtol=rtol
     )
 
 
@@ -161,12 +161,12 @@ def test_thiele_innes_round_trip_random_low_inclination(seed: int, dtype: str) -
         arg_peri = random_vals[0] * 2 * jnp.pi
         lon_asc_node = random_vals[1] * 2 * jnp.pi
         inclination = random_vals[2] * jnp.pi / 2
-        semi_major_axis = Quantity(jnp.asarray(1.0 + random_vals[3] * 10), "AU")
+        semi_major_axis = Q(jnp.asarray(1.0 + random_vals[3] * 10), "AU")
 
         orientation = KeplerianOrientation.from_angles(
-            arg_peri=Quantity(arg_peri, "rad"),
-            lon_asc_node=Quantity(lon_asc_node, "rad"),
-            inclination=Quantity(inclination, "rad"),
+            arg_peri=Q(arg_peri, "rad"),
+            lon_asc_node=Q(lon_asc_node, "rad"),
+            inclination=Q(inclination, "rad"),
         )
 
         _check_thiele_innes_round_trip(
@@ -196,12 +196,12 @@ def test_thiele_innes_round_trip_random_high_inclination(seed: int, dtype: str) 
         arg_peri = random_vals[0] * 2 * jnp.pi
         lon_asc_node = random_vals[1] * 2 * jnp.pi
         inclination = jnp.pi / 2 + random_vals[2] * jnp.pi / 2
-        semi_major_axis = Quantity(1.0 + random_vals[3] * 5, "AU")
+        semi_major_axis = Q(1.0 + random_vals[3] * 5, "AU")
 
         orientation = KeplerianOrientation.from_angles(
-            arg_peri=Quantity(arg_peri, "rad"),
-            lon_asc_node=Quantity(lon_asc_node, "rad"),
-            inclination=Quantity(inclination, "rad"),
+            arg_peri=Q(arg_peri, "rad"),
+            lon_asc_node=Q(lon_asc_node, "rad"),
+            inclination=Q(inclination, "rad"),
         )
 
         _check_thiele_innes_round_trip(orientation, semi_major_axis, rtol=rtol)
@@ -213,13 +213,13 @@ def test_thiele_innes_high_inclination_preservation(dtype: str) -> None:
     # Note: Multiple arctan2 operations accumulate numerical errors
     rtol = 5e-4 if dtype == "float32" else 1e-6
 
-    semi_major_axis = Quantity(7.2, "AU")
+    semi_major_axis = Q(7.2, "AU")
 
     # Use inclination > pi/2
     high_inclination = KeplerianOrientation.from_angles(
-        arg_peri=Quantity(0.8, "rad"),
-        lon_asc_node=Quantity(2.3, "rad"),
-        inclination=Quantity(2.5, "rad"),  # > pi/2
+        arg_peri=Q(0.8, "rad"),
+        lon_asc_node=Q(2.3, "rad"),
+        inclination=Q(2.5, "rad"),  # > pi/2
     )
 
     # We expect to recover the original orientation (subject to depth ambiguity)

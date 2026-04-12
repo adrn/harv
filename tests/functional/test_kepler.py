@@ -2,21 +2,21 @@
 
 import jax
 import quaxed.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.kepler import KeplerianBody, KeplerianOrientation, TwoBodySystem
 
 
 def test_full_orbit_workflow() -> None:
     """End-to-end: build system from masses, compute positions and velocities."""
-    m_star = Quantity(1.0, "Msun")
-    m_planet = Quantity(1.0, "Mjup")
-    period = Quantity(1.0, "yr")
+    m_star = Q(1.0, "Msun")
+    m_planet = Q(1.0, "Mjup")
+    period = Q(1.0, "yr")
 
     orientation = KeplerianOrientation.from_angles(
-        arg_peri=Quantity(0.5, "rad"),
-        lon_asc_node=Quantity(1.2, "rad"),
-        inclination=Quantity(0.3, "rad"),
+        arg_peri=Q(0.5, "rad"),
+        lon_asc_node=Q(1.2, "rad"),
+        inclination=Q(0.3, "rad"),
     )
 
     companion = KeplerianBody.from_masses(
@@ -24,7 +24,7 @@ def test_full_orbit_workflow() -> None:
         eccentricity=0.1,
         m_total=m_star + m_planet,
         m_body=m_planet,
-        t_peri=Quantity(0.0, "yr"),
+        t_peri=Q(0.0, "yr"),
         orientation=orientation,
     )
     system = TwoBodySystem(m_primary=m_star, companion=companion)
@@ -34,7 +34,7 @@ def test_full_orbit_workflow() -> None:
     assert ustrip("Msun", system.m_total) > ustrip("Msun", m_star)
 
     # Compute positions/velocities at multiple times
-    times = Quantity(jnp.linspace(0.0, 1.0, 20), "yr")
+    times = Q(jnp.linspace(0.0, 1.0, 20), "yr")
 
     @jax.vmap
     def compute_state(t):
@@ -58,14 +58,14 @@ def test_full_orbit_workflow() -> None:
 
 def test_jit_full_pipeline() -> None:
     """The full pipeline (build + compute) runs under jax.jit."""
-    m_star = Quantity(1.0, "Msun")
+    m_star = Q(1.0, "Msun")
 
     companion = KeplerianBody.from_masses(
-        period=Quantity(1.0, "yr"),
+        period=Q(1.0, "yr"),
         eccentricity=0.2,
-        m_total=m_star + Quantity(1.0, "Mjup"),
-        m_body=Quantity(1.0, "Mjup"),
-        t_peri=Quantity(0.0, "yr"),
+        m_total=m_star + Q(1.0, "Mjup"),
+        m_body=Q(1.0, "Mjup"),
+        t_peri=Q(0.0, "yr"),
     )
     system = TwoBodySystem(m_primary=m_star, companion=companion)
 
@@ -74,5 +74,5 @@ def test_jit_full_pipeline() -> None:
         v = system.velocity_barycentric(t, 0)
         return v[2]  # radial (z) component
 
-    rv = get_rv(system, Quantity(0.25, "yr"))
+    rv = get_rv(system, Q(0.25, "yr"))
     assert rv.shape == ()

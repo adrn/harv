@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import GaiaAstrometryData
 from harv.likelihood.gaia_astrometry import (
@@ -18,12 +18,12 @@ from harv.likelihood.params import GaiaAstrometryParameters
 def _make_astro_data(n_obs=50):
     """Helper: synthetic GaiaAstrometryData."""
     return GaiaAstrometryData(
-        time=Quantity(jnp.linspace(0, 1000, n_obs), "day"),
-        al_position=Quantity(jnp.zeros(n_obs), "mas"),
-        al_position_err=Quantity(jnp.ones(n_obs) * 0.1, "mas"),
-        scan_angle=Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad"),
+        time=Q(jnp.linspace(0, 1000, n_obs), "day"),
+        al_position=Q(jnp.zeros(n_obs), "mas"),
+        al_position_err=Q(jnp.ones(n_obs) * 0.1, "mas"),
+        scan_angle=Q(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad"),
         parallax_factor=jnp.ones(n_obs) * 0.5,
-        t_ref=Quantity(0.0, "day"),
+        t_ref=Q(0.0, "day"),
     )
 
 
@@ -36,7 +36,7 @@ def _make_astro_params(
     lon_asc_node=2.0,
 ):
     return GaiaAstrometryParameters.marginalized(
-        period=Quantity(period_day, "day"),
+        period=Q(period_day, "day"),
         eccentricity=eccentricity,
         phase_peri=phase_peri,
         arg_peri=arg_peri,
@@ -78,12 +78,12 @@ class TestAstrometryDesignMatrix:
         """
         n_obs = 10
         data = GaiaAstrometryData(
-            time=Quantity(jnp.zeros(n_obs), "day"),
-            al_position=Quantity(jnp.zeros(n_obs), "mas"),
-            al_position_err=Quantity(jnp.ones(n_obs) * 0.1, "mas"),
-            scan_angle=Quantity(jnp.zeros(n_obs), "rad"),  # all zero
+            time=Q(jnp.zeros(n_obs), "day"),
+            al_position=Q(jnp.zeros(n_obs), "mas"),
+            al_position_err=Q(jnp.ones(n_obs) * 0.1, "mas"),
+            scan_angle=Q(jnp.zeros(n_obs), "rad"),  # all zero
             parallax_factor=jnp.ones(n_obs),
-            t_ref=Quantity(0.0, "day"),
+            t_ref=Q(0.0, "day"),
         )
         params = _make_astro_params()
         sin_f = jnp.zeros(n_obs)
@@ -116,25 +116,25 @@ class TestMarginalizedLikelihood:
     def test_likelihood_decreases_with_noise(self):
         """Test that log_prob is higher with smaller errors."""
         n_obs = 30
-        times = Quantity(jnp.linspace(0, 500, n_obs), "day")
-        scan = Quantity(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
+        times = Q(jnp.linspace(0, 500, n_obs), "day")
+        scan = Q(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad")
         pf = jnp.ones(n_obs) * 0.5
 
         data_small = GaiaAstrometryData(
             time=times,
-            al_position=Quantity(jnp.zeros(n_obs), "mas"),
-            al_position_err=Quantity(jnp.ones(n_obs) * 0.01, "mas"),
+            al_position=Q(jnp.zeros(n_obs), "mas"),
+            al_position_err=Q(jnp.ones(n_obs) * 0.01, "mas"),
             scan_angle=scan,
             parallax_factor=pf,
-            t_ref=Quantity(0.0, "day"),
+            t_ref=Q(0.0, "day"),
         )
         data_large = GaiaAstrometryData(
             time=times,
-            al_position=Quantity(jnp.zeros(n_obs), "mas"),
-            al_position_err=Quantity(jnp.ones(n_obs) * 1.0, "mas"),
+            al_position=Q(jnp.zeros(n_obs), "mas"),
+            al_position_err=Q(jnp.ones(n_obs) * 1.0, "mas"),
             scan_angle=scan,
             parallax_factor=pf,
-            t_ref=Quantity(0.0, "day"),
+            t_ref=Q(0.0, "day"),
         )
 
         params = _make_astro_params()
@@ -177,7 +177,7 @@ class TestBatchLikelihood:
         )
 
         params_batch = GaiaAstrometryParameters.marginalized(
-            period=Quantity(jnp.ones(n_samples) * 100.0, "day"),
+            period=Q(jnp.ones(n_samples) * 100.0, "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n_samples),
             phase_peri=jnp.zeros(n_samples),
             arg_peri=jnp.ones(n_samples) * 1.0,
@@ -199,7 +199,7 @@ class TestBatchLikelihood:
 
         eccs = jnp.array([0.1, 0.3])
         params_batch = GaiaAstrometryParameters.marginalized(
-            period=Quantity(jnp.ones(2) * 100.0, "day"),
+            period=Q(jnp.ones(2) * 100.0, "day"),
             eccentricity=eccs,
             phase_peri=jnp.zeros(2),
             arg_peri=jnp.ones(2),

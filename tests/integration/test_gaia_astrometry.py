@@ -9,12 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 import pytest
-from unxt import Quantity
+from unxt import Q
 
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import GaiaAstrometryParameters
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.rejection_prior import RejectionPrior
+from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 
@@ -28,10 +28,10 @@ class TestGaiaAstrometryLikelihood:
         data, true = simulate_gaia_epoch_astrometry(
             seed=42,
             n_obs=80,
-            period=Quantity(1.5, "yr"),
+            period=Q(1.5, "yr"),
             eccentricity=0.3,
-            semi_major_axis=Quantity(5.0, "mas"),
-            al_error=Quantity(0.05, "mas"),
+            semi_major_axis=Q(5.0, "mas"),
+            al_error=Q(0.05, "mas"),
         )
         return data, true
 
@@ -39,19 +39,19 @@ class TestGaiaAstrometryLikelihood:
         """Likelihood returns a finite scalar at arbitrary parameters."""
         data, _ = astro_data
         linear_prior = {
-            "ra0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "dec0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "pmra": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "pmdec": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "parallax": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "semi_major_axis": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
+            "ra0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "dec0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "pmra": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "pmdec": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "parallax": QD(dist.Normal(0.0, 1e3), "mas"),
+            "semi_major_axis": QD(dist.Normal(0.0, 1e3), "mas"),
         }
         lik = GaiaAstrometryLikelihood(
             data=data,
             linear_marginalized_prior=linear_prior,
         )
         params = GaiaAstrometryParameters.marginalized(
-            period=Quantity(1.5, "yr"),
+            period=Q(1.5, "yr"),
             eccentricity=0.3,
             phase_peri=0.5,
             arg_peri=1.0,
@@ -65,12 +65,12 @@ class TestGaiaAstrometryLikelihood:
         """Vmap over a batch of parameter samples works correctly."""
         data, _ = astro_data
         linear_prior = {
-            "ra0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "dec0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "pmra": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "pmdec": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "parallax": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "semi_major_axis": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
+            "ra0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "dec0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "pmra": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "pmdec": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "parallax": QD(dist.Normal(0.0, 1e3), "mas"),
+            "semi_major_axis": QD(dist.Normal(0.0, 1e3), "mas"),
         }
         lik = GaiaAstrometryLikelihood(
             data=data,
@@ -78,7 +78,7 @@ class TestGaiaAstrometryLikelihood:
         )
         n = 8
         params_batch = GaiaAstrometryParameters.marginalized(
-            period=Quantity(jnp.ones(n) * 1.5, "yr"),
+            period=Q(jnp.ones(n) * 1.5, "yr"),
             eccentricity=jnp.linspace(0.0, 0.5, n),
             phase_peri=jnp.linspace(0.0, 1.0, n),
             arg_peri=jnp.ones(n) * 1.0,
@@ -94,12 +94,12 @@ class TestGaiaAstrometryLikelihood:
         """True parameters should give a higher log-likelihood than random ones."""
         data, true = astro_data
         linear_prior = {
-            "ra0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "dec0": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "pmra": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "pmdec": QuantityDistribution(dist.Normal(0.0, 1e3), "mas/yr"),
-            "parallax": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
-            "semi_major_axis": QuantityDistribution(dist.Normal(0.0, 1e3), "mas"),
+            "ra0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "dec0": QD(dist.Normal(0.0, 1e3), "mas"),
+            "pmra": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "pmdec": QD(dist.Normal(0.0, 1e3), "mas/yr"),
+            "parallax": QD(dist.Normal(0.0, 1e3), "mas"),
+            "semi_major_axis": QD(dist.Normal(0.0, 1e3), "mas"),
         }
         lik = GaiaAstrometryLikelihood(
             data=data,
@@ -126,7 +126,7 @@ class TestGaiaAstrometryLikelihood:
         )
         # Random params
         params_rng = GaiaAstrometryParameters.marginalized(
-            period=Quantity(0.5, "yr"),
+            period=Q(0.5, "yr"),
             eccentricity=0.0,
             phase_peri=0.1,
             arg_peri=0.0,
@@ -147,10 +147,10 @@ class TestGaiaAstrometryRejectionSampler:
         data, true = simulate_gaia_epoch_astrometry(
             seed=100,
             n_obs=80,
-            period=Quantity(1.0, "yr"),
+            period=Q(1.0, "yr"),
             eccentricity=0.2,
-            semi_major_axis=Quantity(3.0, "mas"),
-            al_error=Quantity(0.1, "mas"),
+            semi_major_axis=Q(3.0, "mas"),
+            al_error=Q(0.1, "mas"),
         )
         return data, true
 
@@ -158,12 +158,12 @@ class TestGaiaAstrometryRejectionSampler:
         """Rejection sampler completes and returns a valid Samples object."""
         data, _ = sim_data
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(0.3, "yr"),
-            period_max=Quantity(3.0, "yr"),
-            sigma_a0=Quantity(1e3, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(1e3, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(0.3, "yr"),
+            period_max=Q(3.0, "yr"),
+            sigma_a0=Q(1e3, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(1e3, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
         sampler = RejectionSampler(prior, batch_size=10_000)
         samples = sampler.run(data, n_prior_samples=50_000, seed=42)
@@ -175,12 +175,12 @@ class TestGaiaAstrometryRejectionSampler:
         """Samples object has all expected parameter keys."""
         data, _ = sim_data
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(0.3, "yr"),
-            period_max=Quantity(3.0, "yr"),
-            sigma_a0=Quantity(1e3, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(1e3, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(0.3, "yr"),
+            period_max=Q(3.0, "yr"),
+            sigma_a0=Q(1e3, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(1e3, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
         sampler = RejectionSampler(prior, batch_size=10_000)
         samples = sampler.run(data, n_prior_samples=50_000, seed=43)
@@ -210,12 +210,12 @@ class TestGaiaAstrometryRejectionSampler:
         """Same seed produces identical samples."""
         data, _ = sim_data
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(0.3, "yr"),
-            period_max=Quantity(3.0, "yr"),
-            sigma_a0=Quantity(1e3, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(1e3, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(0.3, "yr"),
+            period_max=Q(3.0, "yr"),
+            sigma_a0=Q(1e3, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(1e3, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
         sampler = RejectionSampler(prior, batch_size=10_000)
         s1 = sampler.run(data, n_prior_samples=20_000, seed=44)

@@ -4,7 +4,7 @@ import jax
 import pytest
 import quaxed.numpy as jnp
 from jax import config as jax_config
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.kepler.orientation import KeplerianOrientation
 
@@ -34,15 +34,15 @@ def _make_orientation(
 ) -> KeplerianOrientation:
     """Create a KeplerianOrientation from angles in radians."""
     return KeplerianOrientation.from_angles(
-        arg_peri=Quantity(arg_peri, "rad"),
-        lon_asc_node=Quantity(lon_asc_node, "rad"),
-        inclination=Quantity(inclination, "rad"),
+        arg_peri=Q(arg_peri, "rad"),
+        lon_asc_node=Q(lon_asc_node, "rad"),
+        inclination=Q(inclination, "rad"),
     )
 
 
 def _check_thiele_innes_round_trip(
     orientation: KeplerianOrientation,
-    semi_major_axis: Quantity,
+    semi_major_axis: Q,
     rtol: float = 1e-10,
     atol: float = 1e-8,
 ) -> None:
@@ -68,8 +68,8 @@ def _check_thiele_innes_round_trip(
 
     # Symmetric solution: Omega -> Omega+pi, omega -> omega+pi (T-I invariant under this transform)
     sym_orientation = KeplerianOrientation.from_angles(
-        arg_peri=orientation.arg_peri + Quantity(jnp.pi, "rad"),
-        lon_asc_node=orientation.lon_asc_node + Quantity(jnp.pi, "rad"),
+        arg_peri=orientation.arg_peri + Q(jnp.pi, "rad"),
+        lon_asc_node=orientation.lon_asc_node + Q(jnp.pi, "rad"),
         inclination=orientation.inclination,
     )
     match_sym = jnp.allclose(
@@ -117,7 +117,7 @@ class TestKeplerianOrientationConstruction:
     def test_from_angles_stores_sin_cos(self) -> None:
         """from_angles correctly stores sin/cos pairs."""
         o = KeplerianOrientation.from_angles(
-            arg_peri=Quantity(jnp.pi / 2, "rad"),
+            arg_peri=Q(jnp.pi / 2, "rad"),
         )
         assert jnp.allclose(o.sin_arg_peri, 1.0, atol=1e-7)
         assert jnp.allclose(o.cos_arg_peri, 0.0, atol=1e-7)
@@ -131,10 +131,10 @@ class TestKeplerianOrientationConstruction:
         assert jnp.allclose(ustrip("rad", o.inclination), i_, atol=1e-6)
 
     def test_converter_accepts_quantity(self) -> None:
-        """Sin/cos fields accept dimensionless Quantity values."""
+        """Sin/cos fields accept dimensionless Q values."""
         o = KeplerianOrientation(
-            sin_arg_peri=Quantity(0.0, ""),
-            cos_arg_peri=Quantity(1.0, ""),
+            sin_arg_peri=Q(0.0, ""),
+            cos_arg_peri=Q(1.0, ""),
         )
         assert jnp.allclose(o.sin_arg_peri, 0.0)
 
@@ -179,7 +179,7 @@ class TestJAXCompat:
     def test_jit_thiele_innes(self) -> None:
         """jax.jit can compute Thiele-Innes constants."""
         o = _make_orientation()
-        a = Quantity(3.0, "AU")
+        a = Q(3.0, "AU")
 
         @jax.jit
         def f(o, a):
@@ -193,9 +193,9 @@ class TestJAXCompat:
         angles = [0.0, 0.5, 1.2, 2.5]
         orientations = [
             KeplerianOrientation.from_angles(
-                arg_peri=Quantity(w, "rad"),
-                lon_asc_node=Quantity(1.0, "rad"),
-                inclination=Quantity(0.4, "rad"),
+                arg_peri=Q(w, "rad"),
+                lon_asc_node=Q(1.0, "rad"),
+                inclination=Q(0.4, "rad"),
             )
             for w in angles
         ]
@@ -211,12 +211,12 @@ class TestJAXCompat:
     def test_vmap_over_inclination_thiele_innes(self) -> None:
         """Vmap over Thiele-Innes constants across different inclinations."""
         inclinations = [0.1, 0.5, 1.0, 1.5]
-        a = Quantity(3.0, "AU")
+        a = Q(3.0, "AU")
         orientations = [
             KeplerianOrientation.from_angles(
-                arg_peri=Quantity(0.5, "rad"),
-                lon_asc_node=Quantity(1.0, "rad"),
-                inclination=Quantity(i, "rad"),
+                arg_peri=Q(0.5, "rad"),
+                lon_asc_node=Q(1.0, "rad"),
+                inclination=Q(i, "rad"),
             )
             for i in inclinations
         ]
@@ -253,12 +253,12 @@ def test_thiele_innes_round_trip_edge_cases(
     """Test Thiele-Innes round-trip for edge cases and typical values."""
     rtol = 5e-4 if dtype == "float32" else 1e-6
     orientation = KeplerianOrientation.from_angles(
-        arg_peri=Quantity(arg_peri, "rad"),
-        lon_asc_node=Quantity(lon_asc_node, "rad"),
-        inclination=Quantity(inclination, "rad"),
+        arg_peri=Q(arg_peri, "rad"),
+        lon_asc_node=Q(lon_asc_node, "rad"),
+        inclination=Q(inclination, "rad"),
     )
     _check_thiele_innes_round_trip(
-        orientation, Quantity(semi_major_axis, "AU"), rtol=rtol
+        orientation, Q(semi_major_axis, "AU"), rtol=rtol
     )
 
 
@@ -290,11 +290,11 @@ def test_thiele_innes_round_trip_random(seed: int, incl_range: str, dtype: str) 
         inclination = random_vals[2] * jnp.pi / 2
     else:
         inclination = jnp.pi / 2 + random_vals[2] * jnp.pi / 2
-    semi_major_axis = Quantity(jnp.asarray(1.0 + random_vals[3] * 10), "AU")
+    semi_major_axis = Q(jnp.asarray(1.0 + random_vals[3] * 10), "AU")
 
     orientation = KeplerianOrientation.from_angles(
-        arg_peri=Quantity(arg_peri, "rad"),
-        lon_asc_node=Quantity(lon_asc_node, "rad"),
-        inclination=Quantity(inclination, "rad"),
+        arg_peri=Q(arg_peri, "rad"),
+        lon_asc_node=Q(lon_asc_node, "rad"),
+        inclination=Q(inclination, "rad"),
     )
     _check_thiele_innes_round_trip(orientation, semi_major_axis, rtol=rtol, atol=atol)

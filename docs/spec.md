@@ -71,25 +71,25 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 
 | Alias                 | Definition                                                              | Use for                                       |
 | --------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
-| `ScalarQTime`         | `Real[Quantity["time"], ""]`                                            | Scalar time quantities (period, t_peri, …)    |
-| `ScalarQLength`       | `Real[Quantity["length"], ""]`                                          | Scalar length quantities (semi-major axis, …) |
-| `ScalarQMass`         | `Real[Quantity["mass"], ""]`                                            | Scalar mass quantities                        |
-| `ScalarQSpeed`        | `Real[Quantity["speed"], ""]`                                           | Scalar velocity quantities                    |
-| `ScalarQAngle`        | `Real[Quantity["angle"], ""]`                                           | Scalar angle quantities                       |
-| `ScalarQAngularSpeed` | `Real[Quantity["angular speed"], ""]`                                   | Scalar angular speed quantities               |
-| `ScalarQDimless`      | `Real[Quantity["dimensionless"], ""]`                                   | Scalar dimensionless quantities               |
-| `Vec3QLength`         | `Real[Quantity["length"], "3"]`                                         | 3-vector position returns                     |
-| `Vec3QSpeed`          | `Real[Quantity["speed"], "3"]`                                          | 3-vector velocity returns                     |
-| `BatchVec3QLength`    | `Real[Quantity["length"], "3 *batch"]`                                  | Batched 3-vector positions                    |
-| `BatchVec3QSpeed`     | `Real[Quantity["speed"], "3 *batch"]`                                   | Batched 3-vector velocities                   |
-| `BatchQTime`, etc.    | `Real[Quantity[dim], "*batch"]`                                         | Batched Quantities (scalar or array)          |
+| `ScalarQTime`         | `Real[Q["time"], ""]`                                            | Scalar time quantities (period, t_peri, …)    |
+| `ScalarQLength`       | `Real[Q["length"], ""]`                                          | Scalar length quantities (semi-major axis, …) |
+| `ScalarQMass`         | `Real[Q["mass"], ""]`                                            | Scalar mass quantities                        |
+| `ScalarQSpeed`        | `Real[Q["speed"], ""]`                                           | Scalar velocity quantities                    |
+| `ScalarQAngle`        | `Real[Q["angle"], ""]`                                           | Scalar angle quantities                       |
+| `ScalarQAngularSpeed` | `Real[Q["angular speed"], ""]`                                   | Scalar angular speed quantities               |
+| `ScalarQDimless`      | `Real[Q["dimensionless"], ""]`                                   | Scalar dimensionless quantities               |
+| `Vec3QLength`         | `Real[Q["length"], "3"]`                                         | 3-vector position returns                     |
+| `Vec3QSpeed`          | `Real[Q["speed"], "3"]`                                          | 3-vector velocity returns                     |
+| `BatchVec3QLength`    | `Real[Q["length"], "3 *batch"]`                                  | Batched 3-vector positions                    |
+| `BatchVec3QSpeed`     | `Real[Q["speed"], "3 *batch"]`                                   | Batched 3-vector velocities                   |
+| `BatchQTime`, etc.    | `Real[Q[dim], "*batch"]`                                              | Batched Quantities (scalar or array)          |
 | `BatchFloat`          | `Float[jax.Array, "*batch"] \| np.floating \| float \| ...`             | Dimensionless batched inputs                  |
-| `NTime`, `NAngle`, …  | `Real[Quantity[dim], "n"]`                                              | 1-d arrays of observations                    |
+| `NTime`, `NAngle`, …  | `Real[Q[dim], "n"]`                                                   | 1-d arrays of observations                    |
 | `NFloatArray`         | `Float[jax.Array, "n"]`                                                 | Plain JAX float arrays                        |
 | `ScalarFloat`         | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
 
 Dimension literal aliases (`Time = Literal["time"]`, `Speed = Literal["speed"]`, etc.)
-are also exported for use in `Quantity[Time]`-style annotations elsewhere.
+are also exported for use in `Q[Time]`-style annotations elsewhere.
 
 ### `ScalarFloat` and `float_converter`
 
@@ -103,7 +103,7 @@ class KeplerianBody(eqx.Module):
 ```
 
 `float_converter` calls `ustrip(AllowValue, "", x)`, which strips units from a
-dimensionless `Quantity` or passes through plain scalars, always producing a 0-d JAX
+dimensionless `Q` or passes through plain scalars, always producing a 0-d JAX
 array.
 
 ### Annotation semantics
@@ -111,7 +111,7 @@ array.
 Field annotations describe the **accepted input type**, not necessarily the stored type.
 When a field has a `converter`, the stored type is whatever the converter returns. For
 example, `eccentricity: ScalarFloat` accepts `float`, `int`, `jax.Array`, or a
-dimensionless `Quantity`, but after `float_converter` the stored value is always
+dimensionless `Q`, but after `float_converter` the stored value is always
 `Float[jax.Array, ""]`.
 
 ### No `from __future__ import annotations`
@@ -167,8 +167,11 @@ ______________________________________________________________________
 ```
 src/harv/
 ├── custom_types.py          # Unit-dimension Literal aliases + Batch* type aliases
-├── data.py                  # Observation data classes + stack/indicator helpers
-├── quantity_distribution.py # QuantityDistribution unit-aware wrapper
+├── data/                    # Observation data classes + stack/indicator helpers
+│   ├── datasets.py          # AbstractData, GaiaAstrometryData, RVData
+│   ├── containers.py        # SystemData, SourceData, InputData
+│   └── helpers.py           # stack_datasets, build_indicator_matrix
+├── distributions.py         # QuantityDistribution (QD) unit-aware wrapper
 ├── kepler/                  # Orbit mechanics (JAX)
 │   ├── orbits.py            # Low-level building blocks and orbit functions
 │   ├── body.py              # KeplerianBody
@@ -183,10 +186,9 @@ src/harv/
 │   ├── gaia_astrometry.py   # GaiaAstrometryLikelihood
 │   ├── composite.py         # CompositeLikelihood
 │   └── astrometry.py        # Stub: future absolute/relative astrometry
-├── priors/
-│   ├── rejection.py         # RejectionPrior
-│   └── custom.py            # PeriodDependentKPrior, _make_log_period_prior
 ├── samplers/
+│   ├── rejection_prior.py   # RejectionPrior
+│   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
 │   ├── rejection.py         # RejectionSampler
 │   ├── strategies.py        # DataTypeStrategy subclasses (RV, Astrometry, Composite)
 │   ├── numpyro.py           # Numpyro model builders for MCMC (internal)
@@ -204,7 +206,7 @@ ______________________________________________________________________
 
 ### `AbstractData`
 
-The root base class for all observational datasets. Carries a `time: Quantity["time"]`
+The root base class for all observational datasets. Carries a `time: Q["time"]`
 array (barycentric TCB) and an optional keyword-only `t_ref` reference epoch
 (defaults to the mean observation time via `__check_init__`). Subclasses add the
 observed quantities and their uncertainties. Declares abstract class variables
@@ -341,14 +343,14 @@ Core orbit computation functions used by `harv.kepler`, `harv.likelihood`, and
 `harv.simulate`. All three consumers call these building blocks instead of duplicating
 the math.
 
-`mean_anomaly` and `true_anomaly_from_mean` accept and return `Quantity` objects
+`mean_anomaly` and `true_anomaly_from_mean` accept and return `Q` objects
 so callers never need to strip units themselves:
 
 - `mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle` — `M = 2π · dt / period`
 - `true_anomaly_from_mean(M: BatchQAngle, eccentricity: ScalarFloat) -> (sin f, cos f)` — solve Kepler's equation
 
 `rv_shape` and `thiele_innes_ABFG` remain pure functions on raw JAX arrays
-or dimensionless `Quantity` objects, because their inputs are always already dimensionless at every call site:
+or dimensionless `Q` objects, because their inputs are always already dimensionless at every call site:
 
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
 - `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
@@ -491,8 +493,8 @@ docstrings explaining the model), the physics symbols $K$ (semi-amplitude) and $
 
 ### The `period` convention
 
-Parameter structs store `period: Quantity["time"]`. The period prior is typically a
-`dist.LogUniform(period_min, period_max)` wrapped in a `QuantityDistribution` to
+Parameter structs store `period: Q["time"]`. The period prior is typically a
+`dist.LogUniform(period_min, period_max)` wrapped in a `QD` to
 carry the unit. At sampling time, the sampler converts period draws from the prior's
 unit to the data's time unit before constructing parameter structs.
 
@@ -548,8 +550,8 @@ where each entry specifies the prior for one linear parameter. Each entry is cla
 
 | Prior type                                      | Classification  | Treatment                                                                                            |
 | ----------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
-| `QuantityDistribution(Normal)` or `dist.Normal` | Gaussian        | Analytically marginalized via joint MVN                                                              |
-| `LinearPriorCallable`                           | Param-dependent | Called with `params` to produce a `QuantityDistribution(Normal)` or `dist.Normal`, then marginalized |
+| `QD(Normal)` or `dist.Normal` | Gaussian        | Analytically marginalized via joint MVN                                                              |
+| `LinearPriorCallable`                           | Param-dependent | Called with `params` to produce a `QD(Normal)` or `dist.Normal`, then marginalized |
 
 `_resolve_linear_prior_mvn` (in `helpers.py`) resolves all entries into a joint diagonal
 `dist.MultivariateNormal`, converting units to the data's native units using
@@ -564,9 +566,9 @@ class LinearPriorCallable(Protocol):
     ) -> QuantityDistribution | dist.Normal: ...
 ```
 
-Callables that return Quantity-valued distributions **must** wrap them in
-`QuantityDistribution`, not pass bare `dist.Normal` with Quantity loc/scale. numpyro
-distributions do not natively support `Quantity` parameters.
+Callables that return Q-valued distributions **must** wrap them in
+`QuantityDistribution` (or `QD`), not pass bare `dist.Normal` with Q loc/scale. numpyro
+distributions do not natively support `Q` parameters.
 
 ### `RVLikelihood`
 
@@ -656,20 +658,20 @@ log_liks = jax.jit(jax.vmap(composite.log_prob))(params_dict_batch)
 `CompositeLikelihood` also exposes `linear_param_units` (property) and dict-style
 access (`keys()`, `values()`, `items()`, `__getitem__`, `__len__`) over its components.
 
-### `QuantityDistribution`
+### `QuantityDistribution` / `QD`
 
-`QuantityDistribution` (in `harv.quantity_distribution`) pairs a numpyro distribution
-with the physical unit of its samples:
+`QuantityDistribution` (alias `QD`, in `harv.distributions`) pairs a numpyro
+distribution with the physical unit of its samples:
 
 ```python
-from harv.quantity_distribution import QuantityDistribution
+from harv.distributions import QD  # or: from harv import QD
 
 # Scalar (period in days):
-qd = QuantityDistribution(dist.LogUniform(50., 2000.), "day")
-sample = qd.sample(key)  # → Quantity(array, "day")
+qd = QD(dist.LogUniform(50., 2000.), "day")
+sample = qd.sample(key)  # → Q(array, "day")
 
 # Multivariate (mixed units):
-qd = QuantityDistribution(
+qd = QD(
     dist.MultivariateNormal(loc=jnp.zeros(6), ...),
     ("mas", "mas", "mas/yr", "mas/yr", "mas", "mas"),
 )
@@ -677,7 +679,7 @@ qd = QuantityDistribution(
 
 ### `PeriodDependentKPrior`
 
-`PeriodDependentKPrior` (in `harv.priors.custom`) implements `LinearPriorCallable`.
+`PeriodDependentKPrior` (in `harv.samplers.custom_priors`) implements `LinearPriorCallable`.
 It computes a period- and eccentricity-dependent scale for the RV semi-amplitude
 prior, following the Joker's default:
 
@@ -686,16 +688,16 @@ prior, following the Joker's default:
 ```
 
 This keeps the prior approximately constant in companion mass at fixed primary mass.
-`__call__` returns a `QuantityDistribution(dist.Normal(0, σ_K_stripped), unit)`.
+`__call__` returns a `QD(dist.Normal(0, σ_K_stripped), unit)`.
 
 Fields:
 
-- `sigma_K0: Quantity["speed"]` — scale at reference period
-- `P0: Quantity["time"]` — reference period
+- `sigma_K0: Q["speed"]` — scale at reference period
+- `P0: Q["time"]` — reference period
 
 ### `PeriodDependentSemiMajorAxisPrior`
 
-`PeriodDependentSemiMajorAxisPrior` (in `harv.priors.custom`) implements
+`PeriodDependentSemiMajorAxisPrior` (in `harv.samplers.custom_priors`) implements
 `LinearPriorCallable`. It computes a period- and parallax-dependent scale for the
 astrometric semi-major axis prior:
 
@@ -713,16 +715,16 @@ amplitude, there is **no eccentricity dependence**.
 
 `__call__` receives a parameter struct with `.period`, `.eccentricity`, and `.parallax`
 fields (parallax is available because it is explicitly sampled by default) and returns
-`QuantityDistribution(dist.Normal(0, σ_a_stripped), "mas")`.
+`QD(dist.Normal(0, σ_a_stripped), "mas")`.
 
 Fields:
 
-- `sigma_a0: Quantity["length"]` — semi-major axis scale at reference period (e.g. AU)
-- `P0: Quantity["time"]` — reference period
+- `sigma_a0: Q["length"]` — semi-major axis scale at reference period (e.g. AU)
+- `P0: Q["time"]` — reference period
 
 ### `ParallaxDependentProperMotionPrior`
 
-`ParallaxDependentProperMotionPrior` (in `harv.priors.custom`) implements
+`ParallaxDependentProperMotionPrior` (in `harv.samplers.custom_priors`) implements
 `LinearPriorCallable`. It computes a parallax-dependent scale for the proper motion
 prior, keeping the prior fixed in velocity space:
 
@@ -740,15 +742,15 @@ distance (smaller parallax) gets a proportionally smaller proper motion prior sc
 
 `__call__` receives a parameter struct with a `.parallax` field (parallax is available
 because it is explicitly sampled by default) and returns
-`QuantityDistribution(dist.Normal(0, σ_μ), parallax_unit + "/yr")`.
+`QD(dist.Normal(0, σ_μ), parallax_unit + "/yr")`.
 
 Fields:
 
-- `sigma_v0: Quantity["speed"]` — velocity dispersion scale (e.g. km/s)
+- `sigma_v0: Q["speed"]` — velocity dispersion scale (e.g. km/s)
 
 ______________________________________________________________________
 
-## Prior (`harv.priors.rejection.RejectionPrior`)
+## Prior (`harv.samplers.RejectionPrior`)
 
 `RejectionPrior` holds numpyro distributions over all nonlinear parameters and a
 per-parameter linear prior. It is an `eqx.Module`.
@@ -760,7 +762,7 @@ per-parameter linear prior. It is an `eqx.Module`.
 | `nonlinear_priors`  | `dict[str, PriorDist]`                                                 | Nonlinear parameter priors                                           |
 | `linear_prior`      | `LinearPriorDist`                                                      | Per-parameter linear priors                                          |
 | `marginalize_names` | `tuple[str, ...] \| None` (KW_ONLY)                                    | Which linear params to marginalize; `None` = all                     |
-| `offsets`           | `dict[str, dict[str, QuantityDistribution \| None]] \| None` (KW_ONLY) | Per-instrument offset priors keyed by data type then instrument name |
+| `offsets`           | `dict[str, dict[str, QD \| None]] \| None` (KW_ONLY) | Per-instrument offset priors keyed by data type then instrument name |
 | `trend_order`       | `int` (KW_ONLY, default 0)                                             | Polynomial trend order (0 = no trend)                                |
 | `trend_priors`      | `dict[str, LinearPriorDist] \| None` (KW_ONLY)                         | Per-trend-column Gaussian priors                                     |
 
@@ -780,12 +782,12 @@ Direct `__init__` construction is always supported for fully custom configuratio
 ```python
 RejectionPrior.default_rv(
     *,
-    period_min: Quantity["time"],     # required
-    period_max: Quantity["time"],     # required
-    sigma_K0: Quantity["speed"],      # required — RV amplitude scale
-    sigma_v0: Quantity["speed"],      # required — systemic velocity scale
-    P0: Quantity["time"] = Quantity(1.0, "yr"),
-    offsets: dict[str, QuantityDistribution | None] | None = None,
+    period_min: Q["time"],     # required
+    period_max: Q["time"],     # required
+    sigma_K0: Q["speed"],      # required — RV amplitude scale
+    sigma_v0: Q["speed"],      # required — systemic velocity scale
+    P0: Q["time"] = Q(1.0, "yr"),
+    offsets: dict[str, QD | None] | None = None,
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
@@ -795,13 +797,13 @@ RejectionPrior.default_rv(
 
 Constructs a prior with:
 
-- `period`: `LogUniform(period_min, period_max)` wrapped in `QuantityDistribution`
+- `period`: `LogUniform(period_min, period_max)` wrapped in `QD`
 - `eccentricity`: `Beta(0.867, 3.03)` (Kipping 2013)
 - `phase_peri`: `Uniform(0, 1)`
 - `arg_peri`: `Uniform(0, 2π)`
 - `rv_semiamp` linear prior: `PeriodDependentKPrior(sigma_K0, P0)` — a callable that scales
   the K prior with period and eccentricity
-- `v_sys` linear prior: `QuantityDistribution(Normal(0, sigma_v0), unit)`
+- `v_sys` linear prior: `QD(Normal(0, sigma_v0), unit)`
 
 Any nonlinear or linear prior can be overridden by passing the corresponding
 parameter name as a keyword argument.  Valid names are the nonlinear and linear
@@ -813,13 +815,13 @@ parameter names from `RVParameters`: `period`, `eccentricity`, `phase_peri`,
 ```python
 RejectionPrior.default_gaia_astrometry(
     *,
-    period_min: Quantity["time"],             # required
-    period_max: Quantity["time"],             # required
-    sigma_a0: Quantity["length"],             # required — semi-major axis scale
-    sigma_parallax: Quantity["angle"],        # required — parallax prior scale
-    sigma_pos: Quantity["angle"],             # required — position prior scale
-    sigma_vtan: Quantity["speed"],            # required — tangential velocity dispersion scale
-    P0: Quantity["time"] = Quantity(1.0, "yr"),
+    period_min: Q["time"],             # required
+    period_max: Q["time"],             # required
+    sigma_a0: Q["length"],             # required — semi-major axis scale
+    sigma_parallax: Q["angle"],        # required — parallax prior scale
+    sigma_pos: Q["angle"],             # required — position prior scale
+    sigma_vtan: Q["speed"],            # required — tangential velocity dispersion scale
+    P0: Q["time"] = Q(1.0, "yr"),
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
@@ -834,10 +836,10 @@ Constructs a prior with:
 - `lon_asc_node`: `Uniform(0, 2π)`
 - `semi_major_axis`: `PeriodDependentSemiMajorAxisPrior(sigma_a0, P0)` — a
   callable that scales the semi-major axis prior with period and parallax
-- `parallax`: `QuantityDistribution(HalfNormal(sigma_parallax), "mas")` — explicitly
+- `parallax`: `QD(HalfNormal(sigma_parallax), "mas")` — explicitly
   sampled (not marginalized) by default, because the Gaia catalog parallax is
   derived from the same epoch data
-- `ra0`, `dec0`: `QuantityDistribution(Normal(0, sigma_pos), "mas")`
+- `ra0`, `dec0`: `QD(Normal(0, sigma_pos), "mas")`
 - `pmra`, `pmdec`: `ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)` — a
   callable that scales the proper motion prior with parallax, keeping the prior
   fixed in velocity space
@@ -858,11 +860,11 @@ and include `"parallax"` in `marginalize_names`.
 ```python
 RejectionPrior.default_sb2(
     *,
-    period_min: Quantity["time"],     # required
-    period_max: Quantity["time"],     # required
-    sigma_K0: Quantity["speed"],      # required — RV amplitude scale
-    sigma_v0: Quantity["speed"],      # required — systemic velocity scale
-    P0: Quantity["time"] = Quantity(1.0, "yr"),
+    period_min: Q["time"],     # required
+    period_max: Q["time"],     # required
+    sigma_K0: Q["speed"],      # required — RV amplitude scale
+    sigma_v0: Q["speed"],      # required — systemic velocity scale
+    P0: Q["time"] = Q(1.0, "yr"),
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
@@ -873,22 +875,22 @@ RejectionPrior.default_sb2(
 Same defaults as `default_rv` but with three linear parameters:
 
 - `rv_semiamp_1`, `rv_semiamp_2`: both use `PeriodDependentKPrior(sigma_K0, P0)`
-- `v_sys`: `QuantityDistribution(Normal(0, sigma_v0), unit)`
+- `v_sys`: `QD(Normal(0, sigma_v0), unit)`
 
 ### Multi-survey RV offsets
 
 When multiple instruments observe the same star, their zero-points may differ by an
 additive offset. The `offsets` dict on `RejectionPrior` maps data-type keys (e.g.
-`"rv"`) to instrument-name → `QuantityDistribution | None` dicts:
+`"rv"`) to instrument-name → `QD | None` dicts:
 
 ```python
 prior = RejectionPrior.default_rv(
-    period_min=Quantity(50, "day"),
-    period_max=Quantity(1000, "day"),
-    sigma_K0=Quantity(30, "km/s"),
-    sigma_v0=Quantity(10, "km/s"),
+    period_min=Q(50, "day"),
+    period_max=Q(1000, "day"),
+    sigma_K0=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
     offsets={
-        "espresso": QuantityDistribution(dist.Normal(0, 5.0), "km/s"),
+        "espresso": QD(dist.Normal(0, 5.0), "km/s"),
         # "keck" absent → reference instrument, offset = 0
     },
 )
@@ -1002,8 +1004,8 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 | Field                | Type                        | Description                                 |
 | -------------------- | --------------------------- | ------------------------------------------- |
-| `nonlinear`          | `dict[str, Quantity]`       | Nonlinear parameter samples with units      |
-| `linear`             | `dict[str, Quantity]`       | Linear parameter samples with units         |
+| `nonlinear`          | `dict[str, Q]`       | Nonlinear parameter samples with units      |
+| `linear`             | `dict[str, Q]`       | Linear parameter samples with units         |
 | `orbit_cls`          | `type` (static)             | Nonlinear param class (e.g. `RVParameters`) |
 | `full_cls`           | `tuple[type, ...]` (static) | Ordered tuple of full parameter classes     |
 | `metadata`           | `dict[str, Any]` (static)   | Contains `t_ref` and extra info             |
@@ -1014,13 +1016,13 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 `samples["key"]` dispatches to appropriate unit restoration:
 
-- Nonlinear params (`"period"`, `"eccentricity"`, `"phase_peri"`, etc.) → `Quantity`
+- Nonlinear params (`"period"`, `"eccentricity"`, `"phase_peri"`, etc.) → `Q`
   with units
-- Linear params (`"rv_semiamp"`, `"v_sys"`, `"ra0"`, etc.) → `Quantity` with units
+- Linear params (`"rv_semiamp"`, `"v_sys"`, `"ra0"`, etc.) → `Q` with units
 - Derived keys:
   - `"log_period"` → dimensionless array (`log10(period in data time units)`)
-  - `"t_peri"` → `Quantity` (derived from `phase_peri * period + t_ref`)
-  - `"inclination"` → `Quantity` in radians (derived from `arccos(cos_i)`)
+  - `"t_peri"` → `Q` (derived from `phase_peri * period + t_ref`)
+  - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
 
 ### Methods
 
@@ -1039,7 +1041,7 @@ ______________________________________________________________________
 
 ### `get_t_grid`
 
-`get_t_grid(times: BatchQTime, period: Quantity["time"])` returns a dense time grid
+`get_t_grid(times: BatchQTime, period: Q["time"])` returns a dense time grid
 for plotting orbit curves. The grid spans from `min(times) - span_factor*range/2` to
 `max(times) + span_factor*range/2`, with spacing determined by
 `period / n_points_per_period`.
@@ -1195,11 +1197,10 @@ The intended user-facing interface for common use cases:
 
 ```python
 import numpyro.distributions as dist
-from unxt import Quantity as Q
+from unxt import Q
 from harv.data import RVData, SourceData
-from harv.priors import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
-from harv.samplers import RejectionSampler
+from harv.distributions import QD
+from harv.samplers import RejectionPrior, RejectionSampler
 
 # Minimal RV-only case:
 data = RVData(time, rv, rv_err)
@@ -1226,7 +1227,7 @@ prior = RejectionPrior.default_rv(
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
     offsets={
-        "espresso": QuantityDistribution(dist.Normal(0, 5.0), "km/s"),
+        "espresso": QD(dist.Normal(0, 5.0), "km/s"),
         # keck is the reference instrument; its offset is fixed to 0
     },
 )

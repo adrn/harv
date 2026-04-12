@@ -2,11 +2,11 @@
 
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import RVData
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.rejection_prior import RejectionPrior
+from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
 
 
@@ -15,9 +15,9 @@ def _make_rv_data(n_obs: int = 30, seed: int = 42) -> RVData:
     import jax.random as jr
 
     key = jr.key(seed)
-    times = Quantity(jnp.linspace(0.0, 200.0, n_obs), "day")
-    rv = Quantity(jr.normal(key, (n_obs,)) * 5.0, "km/s")
-    rv_err = Quantity(jnp.ones(n_obs) * 2.0, "km/s")
+    times = Q(jnp.linspace(0.0, 200.0, n_obs), "day")
+    rv = Q(jr.normal(key, (n_obs,)) * 5.0, "km/s")
+    rv_err = Q(jnp.ones(n_obs) * 2.0, "km/s")
     return RVData(time=times, rv=rv, rv_err=rv_err)
 
 
@@ -32,14 +32,14 @@ class TestDictLinearPriorRV:
         # Dict prior with all Gaussian entries
         dict_prior = RejectionPrior(
             nonlinear_priors={
-                "period": QuantityDistribution(dist.LogUniform(50.0, 200.0), "day"),
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
-                "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+                "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
         dict_sampler = RejectionSampler(dict_prior)
@@ -56,14 +56,14 @@ class TestDictLinearPriorRV:
 
         prior = RejectionPrior(
             nonlinear_priors={
-                "period": QuantityDistribution(dist.LogUniform(50.0, 200.0), "day"),
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
-                "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.HalfNormal(100.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+                "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
         sampler = RejectionSampler(prior)
@@ -84,14 +84,14 @@ class TestDictLinearPriorRV:
 
         prior = RejectionPrior(
             nonlinear_priors={
-                "period": QuantityDistribution(dist.LogUniform(50.0, 200.0), "day"),
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
-                "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.Delta(10.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+                "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
         sampler = RejectionSampler(prior)
@@ -110,14 +110,14 @@ class TestDictLinearPriorRV:
 
         prior = RejectionPrior(
             nonlinear_priors={
-                "period": QuantityDistribution(dist.LogUniform(50.0, 200.0), "day"),
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
-                "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.HalfNormal(100.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+                "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
         sampler = RejectionSampler(prior)
@@ -132,14 +132,14 @@ class TestDictLinearPriorRV:
 
         prior = RejectionPrior(
             nonlinear_priors={
-                "period": QuantityDistribution(dist.LogUniform(50.0, 200.0), "day"),
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
-                "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.Delta(10.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Delta(0.0), "km/s"),
+                "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
+                "v_sys": QD(dist.Delta(0.0), "km/s"),
             },
         )
         sampler = RejectionSampler(prior)

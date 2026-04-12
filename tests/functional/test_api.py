@@ -5,20 +5,20 @@ from data creation through sampling to analysis.
 """
 
 import numpy as np
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import GaiaAstrometryData
-from harv.priors.rejection import RejectionPrior
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
 
 # Common kwargs for default_gaia_astrometry throughout tests
 _ASTRO_KWARGS = dict(
-    period_min=Quantity(50.0, "day"),
-    period_max=Quantity(200.0, "day"),
-    sigma_a0=Quantity(1e3, "AU"),
-    sigma_parallax=Quantity(100.0, "mas"),
-    sigma_pos=Quantity(1e3, "mas"),
-    sigma_vtan=Quantity(200.0, "km/s"),
+    period_min=Q(50.0, "day"),
+    period_max=Q(200.0, "day"),
+    sigma_a0=Q(1e3, "AU"),
+    sigma_parallax=Q(100.0, "mas"),
+    sigma_pos=Q(1e3, "mas"),
+    sigma_vtan=Q(200.0, "km/s"),
 )
 
 
@@ -34,11 +34,11 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     semimajor_axis = 1.0  # mas
 
     # Observation times
-    t_ref = Quantity(2000.0, "day")
-    times = Quantity(np.sort(rng.uniform(0, 1000, n_obs)), "day") + t_ref
+    t_ref = Q(2000.0, "day")
+    times = Q(np.sort(rng.uniform(0, 1000, n_obs)), "day") + t_ref
 
     # Random scan angles
-    scan_angle = Quantity(rng.uniform(0, 2 * np.pi, n_obs), "rad")
+    scan_angle = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
 
     # Simplified parallax factor (just random numbers for test)
     parallax_factor = rng.uniform(-0.5, 0.5, n_obs)
@@ -69,9 +69,9 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     y_orbit = semimajor_axis * (cos_psi * np.cos(phase) + sin_psi * np.sin(phase))
 
     # Add noise
-    al_error = Quantity(rng.uniform(0.05, 0.15, n_obs), "mas")
+    al_error = Q(rng.uniform(0.05, 0.15, n_obs), "mas")
     noise = rng.normal(size=n_obs)
-    y_al = Quantity(y_astro + y_orbit + al_error.to_value("mas") * noise, "mas")
+    y_al = Q(y_astro + y_orbit + al_error.to_value("mas") * noise, "mas")
 
     return GaiaAstrometryData(
         time=times,
@@ -118,12 +118,12 @@ class TestBasicAPI:
     def test_custom_prior(self):
         """Test creating a custom prior with specific parameter bounds."""
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(10.0, "day"),
-            period_max=Quantity(1000.0, "day"),
-            sigma_a0=Quantity(500.0, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(500.0, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(10.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(500.0, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(500.0, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
 
         data = simulate_gaia_data_simple(seed=44, n_obs=30)
@@ -226,7 +226,7 @@ class TestSamplesContainer:
         sampler = RejectionSampler(prior)
         samples = sampler.run(data, n_prior_samples=10_000, seed=52)
 
-        # These should be dimensionless (plain arrays or Quantity with unit='')
+        # These should be dimensionless (plain arrays or Q with unit='')
         for key in ("eccentricity", "phase_peri", "cos_i"):
             val = samples[key]
             if hasattr(val, "unit"):

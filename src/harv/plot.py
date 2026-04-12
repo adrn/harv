@@ -5,7 +5,7 @@ __all__ = ("get_t_grid",)
 from typing import Any
 
 import numpy as np
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from .custom_types import BatchQTime
 
@@ -43,11 +43,11 @@ def _plot_timeseries_errorbar(
     ax
         Matplotlib axes to draw on.
     time, obs, obs_err
-        Quantity arrays for time, observation, and uncertainty.
+        Q arrays for time, observation, and uncertainty.
     time_unit, obs_unit
         Unit strings for axes.
     t_ref
-        Reference epoch (Quantity or None).
+        Reference epoch (Q or None).
     relative_to_t_ref
         Subtract ``t_ref`` from times before plotting.
     xlabel, ylabel
@@ -86,12 +86,12 @@ def _plot_timeseries_errorbar(
 
 def get_t_grid(
     times: BatchQTime,
-    period: Quantity["time"],
+    period: Q["time"],
     *,
     span_factor: float = 0.1,
     n_points_per_period: int = 64,
     max_t_grid: int | None = None,
-) -> Quantity["time"]:
+) -> Q["time"]:
     """Dense time grid spanning the observation baseline with a small buffer.
 
     Generates a regular grid of times suitable for plotting model orbits over
@@ -100,9 +100,9 @@ def get_t_grid(
 
     Parameters
     ----------
-    times : Quantity["time"]
+    times : Q["time"]
         Observation times.
-    period : Quantity["time"]
+    period : Q["time"]
         Orbital period (scalar).  Used to set the grid spacing as
         ``period / n_points_per_period``.
     span_factor : float, optional
@@ -116,14 +116,14 @@ def get_t_grid(
 
     Returns
     -------
-    t_grid : Quantity["time"]
+    t_grid : Q["time"]
         Regular time grid spanning the buffered observation range.
 
     Examples
     --------
-    >>> from unxt import Quantity
-    >>> times = Quantity([0.0, 50.0, 100.0], "day")
-    >>> t_grid = get_t_grid(times, Quantity(30.0, "day"))
+    >>> from unxt import Q
+    >>> times = Q([0.0, 50.0, 100.0], "day")
+    >>> t_grid = get_t_grid(times, Q(30.0, "day"))
     >>> len(t_grid) > 0
     True
     """
@@ -144,4 +144,4 @@ def get_t_grid(
         t_max + w * span_factor / 2 + dt,
         dt,
     )
-    return Quantity(grid, time_unit)
+    return Q(grid, time_unit)

@@ -18,29 +18,29 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
 import pytest
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.rejection_prior import RejectionPrior
+from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
 
 
 def _minimal_rv_data(seed: int, n: int = 5) -> RVData:
     """Tiny RV dataset for structural tests (not statistically meaningful)."""
     key = jr.key(seed)
-    times = Quantity(jnp.linspace(0.0, 100.0, n), "day")
-    rv = Quantity(jr.normal(key, (n,)) * 2.0, "km/s")
-    rv_err = Quantity(jnp.ones(n) * 2.0, "km/s")
+    times = Q(jnp.linspace(0.0, 100.0, n), "day")
+    rv = Q(jr.normal(key, (n,)) * 2.0, "km/s")
+    rv_err = Q(jnp.ones(n) * 2.0, "km/s")
     return RVData(time=times, rv=rv, rv_err=rv_err)
 
 
 def _minimal_astro_data(n: int = 10) -> GaiaAstrometryData:
     """Tiny Gaia astrometry dataset for structural tests."""
-    times = Quantity(jnp.linspace(0.0, 1000.0, n), "day")
-    al_pos = Quantity(jnp.zeros(n), "mas")
-    al_pos_err = Quantity(jnp.ones(n) * 0.1, "mas")
-    scan_angles = Quantity(jnp.linspace(0.0, 3.14, n), "rad")
+    times = Q(jnp.linspace(0.0, 1000.0, n), "day")
+    al_pos = Q(jnp.zeros(n), "mas")
+    al_pos_err = Q(jnp.ones(n) * 0.1, "mas")
+    scan_angles = Q(jnp.linspace(0.0, 3.14, n), "rad")
     parallax_factors = jnp.zeros(n)
     return GaiaAstrometryData(
         time=times,
@@ -63,22 +63,22 @@ def _make_combined_prior(
     the equivalent prior for testing purposes.
     """
     nonlinear = {
-        "period": QuantityDistribution(dist.LogUniform(period_min, period_max), "day"),
+        "period": QD(dist.LogUniform(period_min, period_max), "day"),
         "eccentricity": dist.Beta(0.867, 3.03),
         "phase_peri": dist.Uniform(0.0, 1.0),
         "cos_i": dist.Uniform(-1.0, 1.0),
-        "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
-        "lon_asc_node": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+        "arg_peri": QD(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+        "lon_asc_node": QD(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }
     linear = {
-        "ra0": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas"),
-        "dec0": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas"),
-        "pmra": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas/yr"),
-        "pmdec": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas/yr"),
-        "parallax": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas"),
-        "semi_major_axis": QuantityDistribution(dist.Normal(0.0, 1000.0), "mas"),
-        "rv_semiamp": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
-        "v_sys": QuantityDistribution(dist.Normal(0.0, 100.0), "km/s"),
+        "ra0": QD(dist.Normal(0.0, 1000.0), "mas"),
+        "dec0": QD(dist.Normal(0.0, 1000.0), "mas"),
+        "pmra": QD(dist.Normal(0.0, 1000.0), "mas/yr"),
+        "pmdec": QD(dist.Normal(0.0, 1000.0), "mas/yr"),
+        "parallax": QD(dist.Normal(0.0, 1000.0), "mas"),
+        "semi_major_axis": QD(dist.Normal(0.0, 1000.0), "mas"),
+        "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
+        "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
     }
     return RejectionPrior(
         nonlinear_priors=nonlinear,
@@ -141,7 +141,7 @@ def test_combined_multisurv_with_offsets_raises_not_implemented():
         period_max=500.0,
         offsets={
             "keck": None,
-            "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+            "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
         },
     )
     sampler = RejectionSampler(prior)

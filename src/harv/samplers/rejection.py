@@ -20,7 +20,7 @@ import jax.random as jr
 import numpy as np
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.data import (
     AbstractAstrometryData,
@@ -28,14 +28,14 @@ from harv.data import (
     RVData,
     SourceData,
 )
+from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import _unwrap_dist
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
 from harv.samplers.numpyro import (
     _build_extra_numpyro_model,
     _build_full_numpyro_model,
     _build_marginalized_numpyro_model,
 )
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples, _WarmStartMCMC
 from harv.samplers.strategies import (
     _STRATEGIES,
@@ -141,7 +141,7 @@ class RejectionSampler(eqx.Module):
                 d = self.prior.linear_prior.get(name)
             if d is None:
                 continue
-            # QuantityDistribution and callables (LinearPriorCallable) are OK.
+            # QDistribution and callables (LinearPriorCallable) are OK.
             if isinstance(d, QuantityDistribution):
                 continue
             if callable(d) and not isinstance(d, dist.Distribution):
@@ -151,7 +151,7 @@ class RejectionSampler(eqx.Module):
         if bad:
             msg = (
                 f"Parameters {sorted(bad)} have physical dimensions and require "
-                f"a QuantityDistribution prior, but received bare "
+                f"a QDistribution prior, but received bare "
                 f"numpyro distributions. Wrap each in "
                 f"QuantityDistribution(dist, unit_str)."
             )
@@ -233,7 +233,7 @@ class RejectionSampler(eqx.Module):
         # safely in the static metadata dict without "JAX array set as static"
         # warnings. Samples.__getitem__ reads metadata["t_ref"] as a scalar in
         # the period's unit when computing t_peri.
-        if isinstance(t_ref, Quantity):
+        if isinstance(t_ref, Q):
             t_ref_stored: float | None = float(ustrip(time_unit, t_ref))
         elif t_ref is not None:
             t_ref_stored = float(t_ref)
@@ -259,7 +259,7 @@ class RejectionSampler(eqx.Module):
         }
         _nl_keys = set(self.prior.nonlinear_priors)
         nonlinear_q: dict[str, AbstractQuantity] = {
-            k: Quantity(v, _nl_units.get(k, ""))
+            k: Q(v, _nl_units.get(k, ""))
             for k, v in accepted_nonlinear.items()
             if k in _nl_keys
         }
@@ -468,7 +468,7 @@ class RejectionSampler(eqx.Module):
             kernel = _numpyro_infer.NUTS
 
         # Take the first num_chains posterior samples as starting positions.
-        # Strip units from each nonlinear Quantity to get the raw array that
+        # Strip units from each nonlinear Q to get the raw array that
         # matches what numpyro's prior model sampled (unit-free floats).
         indices = list(range(num_chains))
         init_params: dict[str, Any] = {
@@ -538,15 +538,13 @@ class RejectionSampler(eqx.Module):
 
         # Convert period samples from the prior's unit to the data's time
         # unit.  When the period prior is a bare distribution (not wrapped in
-        # QuantityDistribution), assume values are already in time_unit.
+        # QDistribution), assume values are already in time_unit.
         _p_prior = self.prior.nonlinear_priors.get("period")
         _p_unit = (
             str(_p_prior.unit) if isinstance(_p_prior, QuantityDistribution) else ""
         )
         if _p_unit:
-            period_converted = ustrip(
-                time_unit, Quantity(prior_samples["period"], _p_unit)
-            )
+            period_converted = ustrip(time_unit, Q(prior_samples["period"], _p_unit))
             prior_samples["period"] = period_converted
 
         # Sample explicit linear params (those not being marginalized).
@@ -567,7 +565,7 @@ class RejectionSampler(eqx.Module):
                     # Convert to data units if the prior carries a unit.
                     target_u = lp_units.get(name, "")
                     if isinstance(d, QuantityDistribution) and target_u:
-                        raw = ustrip(target_u, Quantity(raw, str(d.unit)))
+                        raw = ustrip(target_u, Q(raw, str(d.unit)))
                     prior_samples[name] = raw
 
         # Reshape all parameter arrays into (n_batches, batch_size).
@@ -613,7 +611,7 @@ class RejectionSampler(eqx.Module):
         strategy: DataTypeStrategy,
         data: InputData,
         lik: Any,
-    ) -> dict[str, Quantity]:
+    ) -> dict[str, Q]:
         """Sample linear parameters from conditional posterior using vmap.
 
         For each accepted nonlinear sample, draws from the conditional posterior
@@ -622,16 +620,14 @@ class RejectionSampler(eqx.Module):
         n_samples = len(next(iter(nonlinear_samples.values())))
         if n_samples == 0:
             names = strategy.all_linear_names(self.prior, data)
-            return {name: Quantity(jnp.zeros(0), "") for name in names}
+            return {name: Q(jnp.zeros(0), "") for name in names}
 
         _ref = next(iter(data.values())) if isinstance(data, SourceData) else data
         time_unit = _ref.time.unit
 
         keys = jr.split(key, n_samples)
 
-        def _sample_one(
-            key: jax.Array, sample: dict[str, jax.Array]
-        ) -> dict[str, Quantity]:
+        def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> dict[str, Q]:
             return strategy.sample_linear_one(key, sample, self.prior, time_unit, lik)
 
         return jax.vmap(_sample_one)(keys, nonlinear_samples)

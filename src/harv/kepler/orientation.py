@@ -5,7 +5,7 @@ from typing import cast
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
 from harv.kepler.orbits import thiele_innes_ABFG
@@ -79,18 +79,18 @@ class KeplerianOrientation(eqx.Module):
     def from_angles(
         cls,
         /,
-        arg_peri: ScalarQAngle = Quantity.from_(0.0, "rad"),
-        lon_asc_node: ScalarQAngle = Quantity.from_(0.0, "rad"),
-        inclination: ScalarQAngle = Quantity.from_(0.0, "rad"),
+        arg_peri: ScalarQAngle = Q.from_(0.0, "rad"),
+        lon_asc_node: ScalarQAngle = Q.from_(0.0, "rad"),
+        inclination: ScalarQAngle = Q.from_(0.0, "rad"),
     ) -> "KeplerianOrientation":
         """Construct from angle values."""
         return cls(
-            sin_arg_peri=jnp.sin(Quantity.from_(arg_peri)),
-            cos_arg_peri=jnp.cos(Quantity.from_(arg_peri)),
-            sin_lon_asc_node=jnp.sin(Quantity.from_(lon_asc_node)),
-            cos_lon_asc_node=jnp.cos(Quantity.from_(lon_asc_node)),
-            sin_i=jnp.sin(Quantity.from_(inclination)),
-            cos_i=jnp.cos(Quantity.from_(inclination)),
+            sin_arg_peri=jnp.sin(Q.from_(arg_peri)),
+            cos_arg_peri=jnp.cos(Q.from_(arg_peri)),
+            sin_lon_asc_node=jnp.sin(Q.from_(lon_asc_node)),
+            cos_lon_asc_node=jnp.cos(Q.from_(lon_asc_node)),
+            sin_i=jnp.sin(Q.from_(inclination)),
+            cos_i=jnp.cos(Q.from_(inclination)),
         )
 
     @classmethod
@@ -124,10 +124,10 @@ class KeplerianOrientation(eqx.Module):
         semi_major_axis
             Recovered semi-major axis
         """
-        # A: Quantity[Any] = Quantity.from_(A)
-        # B: Quantity[Any] = Quantity.from_(B)
-        # F: Quantity[Any] = Quantity.from_(F)
-        # G: Quantity[Any] = Quantity.from_(G)
+        # A: Q[Any] = Q.from_(A)
+        # B: Q[Any] = Q.from_(B)
+        # F: Q[Any] = Q.from_(F)
+        # G: Q[Any] = Q.from_(G)
 
         u_ = (A**2 + B**2 + F**2 + G**2) / 2.0
         v_ = A * G - B * F
@@ -135,7 +135,7 @@ class KeplerianOrientation(eqx.Module):
         inner_tmp = (u_ + v_) * (u_ - v_)
         # Guard against small negative from roundoff
         inner = jnp.where(
-            inner_tmp < 0.0, Quantity.from_(0.0, inner_tmp.unit), inner_tmp
+            inner_tmp < 0.0, Q.from_(0.0, inner_tmp.unit), inner_tmp
         )
         a = jnp.sqrt(u_ + jnp.sqrt(inner))
 
@@ -167,9 +167,9 @@ class KeplerianOrientation(eqx.Module):
 
         return (
             cls.from_angles(
-                arg_peri=Quantity.from_(omega, "rad"),
-                lon_asc_node=Quantity.from_(Omega, "rad"),
-                inclination=Quantity.from_(i, "rad"),
+                arg_peri=Q.from_(omega, "rad"),
+                lon_asc_node=Q.from_(Omega, "rad"),
+                inclination=Q.from_(i, "rad"),
             ),
             cast("ScalarQLength | ScalarQAngle", a),
         )
@@ -177,19 +177,19 @@ class KeplerianOrientation(eqx.Module):
     @property
     def arg_peri(self) -> ScalarQAngle:
         """Argument of pericenter (omega)."""
-        return Quantity.from_(jnp.arctan2(self.sin_arg_peri, self.cos_arg_peri), "rad")
+        return Q.from_(jnp.arctan2(self.sin_arg_peri, self.cos_arg_peri), "rad")
 
     @property
     def lon_asc_node(self) -> ScalarQAngle:
         """Longitude of ascending node (Omega)."""
-        return Quantity.from_(
+        return Q.from_(
             jnp.arctan2(self.sin_lon_asc_node, self.cos_lon_asc_node), "rad"
         )
 
     @property
     def inclination(self) -> ScalarQAngle:
         """Inclination (i)."""
-        return Quantity.from_(jnp.arctan2(self.sin_i, self.cos_i), "rad")
+        return Q.from_(jnp.arctan2(self.sin_i, self.cos_i), "rad")
 
     @property
     def rotation_matrix(self) -> jax.Array:
@@ -262,7 +262,7 @@ class KeplerianOrientation(eqx.Module):
         a: jax.Array | ScalarQLength | ScalarQAngle = (
             jnp.array(1.0)
             if semi_major_axis is None
-            else Quantity.from_(semi_major_axis)
+            else Q.from_(semi_major_axis)
         )
 
         A, B, F, G = thiele_innes_ABFG(

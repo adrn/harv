@@ -15,8 +15,9 @@ import jax
 import jax.random as jr
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
+from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import (
     LinearPriorDist,
     PriorDist,
@@ -28,13 +29,12 @@ from harv.likelihood.params import (
     RVParameters,
     SB2RVParameters,
 )
-from harv.priors.custom import (
+from harv.samplers.custom_priors import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
     _make_log_period_prior,
 )
-from harv.quantity_distribution import QuantityDistribution
 
 __all__ = ("RejectionPrior",)
 
@@ -145,8 +145,8 @@ class RejectionPrior(eqx.Module):
 
     Examples
     --------
-    >>> from harv.priors.rejection import RejectionPrior
-    >>> from unxt import Quantity
+    >>> from harv.samplers import RejectionPrior
+    >>> from unxt import Q
     >>> prior = RejectionPrior.default_rv(...)
     >>> prior.n_nonlinear
     4
@@ -267,11 +267,11 @@ class RejectionPrior(eqx.Module):
     def default_rv(
         cls,
         *,
-        period_min: Quantity["time"],
-        period_max: Quantity["time"],
-        sigma_K0: Quantity["speed"],
-        sigma_v0: Quantity["speed"],
-        P0: Quantity["time"] = Quantity(1.0, "yr"),
+        period_min: Q["time"],
+        period_max: Q["time"],
+        sigma_K0: Q["speed"],
+        sigma_v0: Q["speed"],
+        P0: Q["time"] = Q(1.0, "yr"),
         offsets: dict[str, QuantityDistribution | None] | None = None,
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
@@ -296,19 +296,19 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        period_min : Quantity["time"]
+        period_min : Q["time"]
             Lower bound for the log-uniform period prior.  Pass a
             ``Quantity`` with time units (e.g. ``u.Q(50, "day")``) so
             the sampler can convert to whatever unit the data uses.
-        period_max : Quantity["time"]
+        period_max : Q["time"]
             Upper bound for the log-uniform period prior (same unit as
             ``period_min``).
-        sigma_K0 : Quantity["speed"]
+        sigma_K0 : Q["speed"]
             RV semi-amplitude scale at the reference period ``P0``. For
             binary-star systems, a reasonable value is around 30 km/s.
-        sigma_v0 : Quantity["speed"]
+        sigma_v0 : Q["speed"]
             Systemic velocity prior scale.
-        P0 : Quantity["time"]
+        P0 : Q["time"]
             Reference period for the K prior scaling.  Default: 1 yr.
         offsets : dict[str, QuantityDistribution | None], optional
             Multi-instrument offset priors. Keys are instrument names, values are
@@ -352,13 +352,13 @@ class RejectionPrior(eqx.Module):
     def default_gaia_astrometry(
         cls,
         *,
-        period_min: Quantity["time"],
-        period_max: Quantity["time"],
-        sigma_a0: Quantity["length"],
-        sigma_parallax: Quantity["angle"],
-        sigma_pos: Quantity["angle"],
-        sigma_vtan: Quantity["speed"],
-        P0: Quantity["time"] = Quantity(1.0, "yr"),
+        period_min: Q["time"],
+        period_max: Q["time"],
+        sigma_a0: Q["length"],
+        sigma_parallax: Q["angle"],
+        sigma_pos: Q["angle"],
+        sigma_vtan: Q["speed"],
+        P0: Q["time"] = Q(1.0, "yr"),
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
@@ -397,22 +397,22 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        period_min : Quantity["time"]
+        period_min : Q["time"]
             Lower bound for the log-uniform period prior.
-        period_max : Quantity["time"]
+        period_max : Q["time"]
             Upper bound for the log-uniform period prior.
-        sigma_a0 : Quantity["length"]
+        sigma_a0 : Q["length"]
             Semi-major axis scale in physical length units (e.g. AU) at
             reference period ``P0``.
-        sigma_parallax : Quantity["angle"]
+        sigma_parallax : Q["angle"]
             Scale for the half-normal parallax prior (mas).
-        sigma_pos : Quantity["angle"]
+        sigma_pos : Q["angle"]
             Scale for the position (ra0, dec0) Gaussian priors (mas).
-        sigma_vtan : Quantity["speed"]
+        sigma_vtan : Q["speed"]
             Transverse-velocity dispersion scale (e.g. km/s) for the
             proper-motion (pmra, pmdec) priors.  Converted to angular
             proper motion via the sampled parallax.
-        P0 : Quantity["time"]
+        P0 : Q["time"]
             Reference period for the semi-major axis scaling.  Default: 1 yr.
         marginalize_names : tuple[str, ...] | None
             Subset of linear params to analytically marginalize.  ``None``
@@ -466,11 +466,11 @@ class RejectionPrior(eqx.Module):
     def default_sb2(
         cls,
         *,
-        period_min: Quantity["time"],
-        period_max: Quantity["time"],
-        sigma_K0: Quantity["speed"],
-        sigma_v0: Quantity["speed"],
-        P0: Quantity["time"] = Quantity(1.0, "yr"),
+        period_min: Q["time"],
+        period_max: Q["time"],
+        sigma_K0: Q["speed"],
+        sigma_v0: Q["speed"],
+        P0: Q["time"] = Q(1.0, "yr"),
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
@@ -483,15 +483,15 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        period_min : Quantity["time"]
+        period_min : Q["time"]
             Lower bound for the log-uniform period prior.
-        period_max : Quantity["time"]
+        period_max : Q["time"]
             Upper bound for the log-uniform period prior.
-        sigma_K0 : Quantity["speed"]
+        sigma_K0 : Q["speed"]
             RV semi-amplitude scale at the reference period ``P0``.
-        sigma_v0 : Quantity["speed"]
+        sigma_v0 : Q["speed"]
             Systemic velocity prior scale.
-        P0 : Quantity["time"]
+        P0 : Q["time"]
             Reference period for the K prior scaling.  Default: 1 yr.
         marginalize_names : tuple[str, ...] | None
             Subset of linear params to analytically marginalize.

@@ -2,10 +2,10 @@
 
 This module provides :class:`QuantityDistribution`, a thin wrapper that
 pairs a numpyro distribution with a physical unit string so that samples
-carry explicit units via ``unxt.Quantity``.
+carry explicit units via ``unxt.Q``.
 
 It also exports the :data:`PriorDist` type alias and the private
-:func:`_unwrap_dist` helper used throughout ``harv.priors``.
+:func:`_unwrap_dist` helper used throughout ``harv.samplers``.
 """
 
 from typing import Any
@@ -13,9 +13,9 @@ from typing import Any
 import equinox as eqx
 import jax
 import numpyro.distributions as dist
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
-__all__ = ("QuantityDistribution",)
+__all__ = ("QD", "QuantityDistribution")
 
 
 class QuantityDistribution(eqx.Module):
@@ -39,7 +39,7 @@ class QuantityDistribution(eqx.Module):
     Scalar (period in days)::
 
         qd = QuantityDistribution(dist.LogUniform(50., 2000.), "day")
-        sample = qd.sample(key)  # -> Quantity(array, "day")
+        sample = qd.sample(key)  # -> Q(array, "day")
 
     Multivariate (astrometric linear parameters with mixed units)::
 
@@ -62,11 +62,15 @@ class QuantityDistribution(eqx.Module):
         """
         raw = self.distribution.sample(key, sample_shape)
         if isinstance(self.unit, str):
-            return Quantity(raw, self.unit)
+            return Q(raw, self.unit)
         return raw
 
     def log_prob(self, value: Any) -> jax.Array:
         """Evaluate log-probability, stripping units if present."""
-        if isinstance(self.unit, str) and isinstance(value, Quantity):
+        if isinstance(self.unit, str) and isinstance(value, Q):
             return self.distribution.log_prob(ustrip(self.unit, value))
         return self.distribution.log_prob(value)
+
+
+QD = QuantityDistribution
+"""Shorthand alias for :class:`QuantityDistribution`."""

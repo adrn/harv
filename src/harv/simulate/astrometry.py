@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import quaxed.numpy as jnp
-from unxt import AbstractQuantity, Quantity, uconvert, ustrip
+from unxt import AbstractQuantity, Q, uconvert, ustrip
 
 from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
@@ -30,10 +30,10 @@ __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
 
 
 def fake_parallax_factor(
-    time: Quantity["time"],
-    ra: Quantity["angle"],
-    dec: Quantity["angle"],
-    scan_angle: Quantity["angle"],
+    time: Q["time"],
+    ra: Q["angle"],
+    dec: Q["angle"],
+    scan_angle: Q["angle"],
 ) -> jnp.ndarray:
     """Mock, super simplified parallax factor for a star at (ra, dec).
 
@@ -43,13 +43,13 @@ def fake_parallax_factor(
 
     Parameters
     ----------
-    time : Quantity["time"]
+    time : Q["time"]
         Observation times.
-    ra : Quantity["angle"]
+    ra : Q["angle"]
         Right ascension of the source.
-    dec : Quantity["angle"]
+    dec : Q["angle"]
         Declination of the source.
-    scan_angle : Quantity["angle"]
+    scan_angle : Q["angle"]
         Gaia scan angle at each observation.
 
     Returns
@@ -58,7 +58,7 @@ def fake_parallax_factor(
         Dimensionless parallax factor for each observation.
     """
     # Simple sinusoidal model assuming 1-year period
-    ang: AbstractQuantity = Quantity(2 * jnp.pi * ustrip("yr", time), "rad")
+    ang: AbstractQuantity = Q(2 * jnp.pi * ustrip("yr", time), "rad")
     P_alpha = jnp.sin(ang - ra)
     P_delta = -jnp.sin(dec) * jnp.cos(ang - ra)
     return P_alpha * jnp.cos(scan_angle) + P_delta * jnp.sin(scan_angle)
@@ -67,28 +67,28 @@ def fake_parallax_factor(
 def simulate_gaia_epoch_astrometry(
     seed: int = 42,
     n_obs: int = 100,
-    baseline: Quantity["time"] | None = None,
+    baseline: Q["time"] | None = None,
     # Orbital parameters
-    period: Quantity["time"] | None = None,
+    period: Q["time"] | None = None,
     eccentricity: float | None = None,
-    t_peri: Quantity["time"] | None = None,
-    arg_peri: Quantity["angle"] | None = None,
-    lon_asc_node: Quantity["angle"] | None = None,
-    inclination: Quantity["angle"] | None = None,
-    semi_major_axis: Quantity["angle"] | None = None,
+    t_peri: Q["time"] | None = None,
+    arg_peri: Q["angle"] | None = None,
+    lon_asc_node: Q["angle"] | None = None,
+    inclination: Q["angle"] | None = None,
+    semi_major_axis: Q["angle"] | None = None,
     # Sky position (for parallax factor calculation)
-    ra: Quantity["angle"] | None = None,
-    dec: Quantity["angle"] | None = None,
+    ra: Q["angle"] | None = None,
+    dec: Q["angle"] | None = None,
     # Astrometric parameters (small offsets in mas)
-    alpha0: Quantity["angle"] | None = None,
-    delta0: Quantity["angle"] | None = None,
-    mu_alpha: Quantity[AngularSpeed] | None = None,
-    mu_delta: Quantity[AngularSpeed] | None = None,
-    parallax: Quantity["angle"] | None = None,
+    alpha0: Q["angle"] | None = None,
+    delta0: Q["angle"] | None = None,
+    mu_alpha: Q[AngularSpeed] | None = None,
+    mu_delta: Q[AngularSpeed] | None = None,
+    parallax: Q["angle"] | None = None,
     # Uncertainty
-    al_error: Quantity["angle"] | None = None,
+    al_error: Q["angle"] | None = None,
     # Reference time
-    t_ref: Quantity["time"] | None = None,
+    t_ref: Q["time"] | None = None,
 ) -> tuple[GaiaAstrometryData, dict[str, Any]]:
     """Simulate Gaia-like along-scan epoch astrometry.
 
@@ -102,42 +102,42 @@ def simulate_gaia_epoch_astrometry(
         Random seed for reproducibility. Default: 42.
     n_obs : int, optional
         Number of observations. Default: 100.
-    baseline : Quantity["time"], optional
+    baseline : Q["time"], optional
         Time baseline for observations. Default: 5 years.
-    period : Quantity["time"], optional
+    period : Q["time"], optional
         Orbital period. If None, randomly drawn from [0, 3] years.
     eccentricity : float, optional
         Orbital eccentricity. If None, randomly drawn from [0, 0.9].
-    t_peri : Quantity["time"], optional
+    t_peri : Q["time"], optional
         Time of periastron passage. If None, randomly drawn from [0, period].
-    arg_peri : Quantity["angle"], optional
+    arg_peri : Q["angle"], optional
         Argument of periastron omega. If None, randomly drawn from [0, 2pi].
-    lon_asc_node : Quantity["angle"], optional
+    lon_asc_node : Q["angle"], optional
         Longitude of ascending node Omega. If None, randomly drawn from [0, 2pi].
-    inclination : Quantity["angle"], optional
+    inclination : Q["angle"], optional
         Orbital inclination. If None, randomly drawn from cos(i) ~ U(-1, 1).
-    semi_major_axis : Quantity["angle"], optional
+    semi_major_axis : Q["angle"], optional
         Semi-major axis in angular units. If None, randomly drawn from [0.5, 50] mas.
-    ra : Quantity["angle"], optional
+    ra : Q["angle"], optional
         Right ascension of the source (for parallax factor). Default: 180 deg.
-    dec : Quantity["angle"], optional
+    dec : Q["angle"], optional
         Declination of the source (for parallax factor). Default: 45 deg.
-    alpha0 : Quantity["angle"], optional
+    alpha0 : Q["angle"], optional
         Small RA offset from reference position at t_ref. Default: 0 mas.
         This is a linear parameter, not the absolute RA.
-    delta0 : Quantity["angle"], optional
+    delta0 : Q["angle"], optional
         Small Dec offset from reference position at t_ref. Default: 0 mas.
         This is a linear parameter, not the absolute Dec.
-    mu_alpha : Quantity["angular speed"], optional
+    mu_alpha : Q["angular speed"], optional
         Proper motion in RA. If None, randomly drawn ~ N(0, 10 mas/yr).
-    mu_delta : Quantity["angular speed"], optional
+    mu_delta : Q["angular speed"], optional
         Proper motion in Dec. If None, randomly drawn ~ N(0, 10 mas/yr).
-    parallax : Quantity["angle"], optional
+    parallax : Q["angle"], optional
         Parallax. If None, randomly drawn from Exp(10 mas).
-    al_error : Quantity["angle"], optional
+    al_error : Q["angle"], optional
         Along-scan measurement errors (1-sigma). If None, randomly drawn from
         U(0.02, 0.1) mas for each observation.
-    t_ref : Quantity["time"], optional
+    t_ref : Q["time"], optional
         Reference time for astrometry. If None, randomly chosen.
 
     Returns
@@ -152,19 +152,19 @@ def simulate_gaia_epoch_astrometry(
 
     Examples
     --------
-    >>> from unxt import Quantity
+    >>> from unxt import Q
     >>> from harv.simulate import simulate_gaia_epoch_astrometry
     >>> data, true_params = simulate_gaia_epoch_astrometry(
     ...     seed=42,
     ...     n_obs=50,
-    ...     period=Quantity(100.0, "day"),
+    ...     period=Q(100.0, "day"),
     ...     eccentricity=0.3,
-    ...     semi_major_axis=Quantity(2.0, "mas"),
+    ...     semi_major_axis=Q(2.0, "mas"),
     ... )
     >>> data.time.shape
     (50,)
     >>> true_params["period"]
-    Quantity['time'](Array(100., dtype=float64), unit='d')
+    Q['time'](Array(100., dtype=float64), unit='d')
     """
     ss = np.random.SeedSequence(seed)
     # One RNG per parameter that needs a default value
@@ -172,67 +172,67 @@ def simulate_gaia_epoch_astrometry(
     rng = rngs[0]
 
     if baseline is None:
-        baseline = Quantity(5.0, "yr")
+        baseline = Q(5.0, "yr")
 
     if period is None:
-        period = Quantity(rngs[1].uniform(0.3, 3.0), "yr")
+        period = Q(rngs[1].uniform(0.3, 3.0), "yr")
 
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.9)
 
     if t_peri is None:
-        t_peri = Quantity(
+        t_peri = Q(
             rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
         )
 
     if arg_peri is None:
-        arg_peri = Quantity(rngs[4].uniform(0, 2 * np.pi), "rad")
+        arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
 
     if lon_asc_node is None:
-        lon_asc_node = Quantity(rngs[5].uniform(0, 2 * np.pi), "rad")
+        lon_asc_node = Q(rngs[5].uniform(0, 2 * np.pi), "rad")
 
     if inclination is None:
-        inclination = Quantity(np.arccos(rngs[6].uniform(-1.0, 1.0)), "rad")
+        inclination = Q(np.arccos(rngs[6].uniform(-1.0, 1.0)), "rad")
 
     if semi_major_axis is None:
-        semi_major_axis = Quantity(rngs[7].uniform(0.5, 50.0), "mas")
+        semi_major_axis = Q(rngs[7].uniform(0.5, 50.0), "mas")
 
     # Sky position for parallax factor calculation (absolute coordinates)
-    ra = Quantity(180.0, "deg") if ra is None else ra
-    dec = Quantity(45.0, "deg") if dec is None else dec
+    ra = Q(180.0, "deg") if ra is None else ra
+    dec = Q(45.0, "deg") if dec is None else dec
 
     # Astrometric offsets - these are small mas-scale deviations from reference
     # These are the LINEAR parameters in the astrometric model
-    alpha0 = Quantity(0.0, "mas") if alpha0 is None else uconvert("mas", alpha0)
-    delta0 = Quantity(0.0, "mas") if delta0 is None else uconvert("mas", delta0)
+    alpha0 = Q(0.0, "mas") if alpha0 is None else uconvert("mas", alpha0)
+    delta0 = Q(0.0, "mas") if delta0 is None else uconvert("mas", delta0)
 
     mu_alpha = (
-        Quantity(rngs[8].normal(0, 10), "mas/yr") if mu_alpha is None else mu_alpha
+        Q(rngs[8].normal(0, 10), "mas/yr") if mu_alpha is None else mu_alpha
     )
     mu_delta = (
-        Quantity(rngs[9].normal(0, 10), "mas/yr") if mu_delta is None else mu_delta
+        Q(rngs[9].normal(0, 10), "mas/yr") if mu_delta is None else mu_delta
     )
     parallax = (
-        Quantity(rngs[10].exponential(10.0), "mas") if parallax is None else parallax
+        Q(rngs[10].exponential(10.0), "mas") if parallax is None else parallax
     )
     al_error = (
-        Quantity(rngs[11].uniform(0.02, 0.1, n_obs), "mas")
+        Q(rngs[11].uniform(0.02, 0.1, n_obs), "mas")
         if al_error is None
         else al_error
     )
 
     if t_ref is None:
-        t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
+        t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
-    dt: AbstractQuantity = Quantity(
+    dt: AbstractQuantity = Q(
         jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
         baseline.unit,
     )
     times = dt + t_ref
 
     # Random scan angles
-    scan_angle: AbstractQuantity = Quantity(rng.uniform(0, 2 * np.pi, n_obs), "rad")
+    scan_angle: AbstractQuantity = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
 
     # Fudged parallax factor (uses absolute sky position)
     parallax_factor = fake_parallax_factor(times, ra, dec, scan_angle)
@@ -282,7 +282,7 @@ def simulate_gaia_epoch_astrometry(
     F = F * semi_major_axis
     G = G * semi_major_axis
 
-    noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
+    noise: AbstractQuantity = Q.from_(rng.normal(size=n_obs), "")
     y_al = y_astro + y_orbit + al_error * noise
 
     # Store true parameters with units

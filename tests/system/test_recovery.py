@@ -33,12 +33,12 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
 import pytest
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import GaiaAstrometryParameters
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.rejection_prior import RejectionPrior
+from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
@@ -73,17 +73,17 @@ class TestHighSNRRVRecovery:
         data, true = simulate_rv_sb1_data(
             seed=42,
             n_obs=15,
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.3,
-            rv_semiamp=Quantity(10.0, "km/s"),
-            v_sys=Quantity(0.0, "km/s"),
-            rv_err=Quantity(5.0, "km/s"),
+            rv_semiamp=Q(10.0, "km/s"),
+            v_sys=Q(0.0, "km/s"),
+            rv_err=Q(5.0, "km/s"),
         )
         prior = RejectionPrior.default_rv(
-            period_min=Quantity(50.0, "day"),
-            period_max=Quantity(200.0, "day"),
-            sigma_K0=Quantity(30.0, "km/s"),
-            sigma_v0=Quantity(30.0, "km/s"),
+            period_min=Q(50.0, "day"),
+            period_max=Q(200.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior)
         samples = sampler.run(data, n_prior_samples=500_000, seed=42)
@@ -153,25 +153,25 @@ class TestMultiSurveyRVRecovery:
 
     @pytest.fixture(scope="class")
     def multisurv_samples(self):
-        instruments = {"keck": None, "harps": Quantity(2.0, "km/s")}
+        instruments = {"keck": None, "harps": Q(2.0, "km/s")}
         source_data, true = simulate_rv_multisurv_data(
             instruments=instruments,
             seed=10,
             n_obs_per_instrument=10,
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.3,
-            rv_semiamp=Quantity(10.0, "km/s"),
-            v_sys=Quantity(0.0, "km/s"),
-            rv_err=Quantity(5.0, "km/s"),
+            rv_semiamp=Q(10.0, "km/s"),
+            v_sys=Q(0.0, "km/s"),
+            rv_err=Q(5.0, "km/s"),
         )
         prior = RejectionPrior.default_rv(
-            period_min=Quantity(50.0, "day"),
-            period_max=Quantity(200.0, "day"),
-            sigma_K0=Quantity(30.0, "km/s"),
-            sigma_v0=Quantity(30.0, "km/s"),
+            period_min=Q(50.0, "day"),
+            period_max=Q(200.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
             offsets={
                 "keck": None,
-                "harps": QuantityDistribution(dist.Normal(0.0, 5.0), "km/s"),
+                "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
             },
         )
         sampler = RejectionSampler(prior)
@@ -234,17 +234,17 @@ class TestLowSNRBroadPosterior:
         data, true = simulate_rv_sb1_data(
             seed=7,
             n_obs=15,
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.2,
-            rv_semiamp=Quantity(2.0, "km/s"),
-            v_sys=Quantity(0.0, "km/s"),
-            rv_err=Quantity(5.0, "km/s"),
+            rv_semiamp=Q(2.0, "km/s"),
+            v_sys=Q(0.0, "km/s"),
+            rv_err=Q(5.0, "km/s"),
         )
         prior = RejectionPrior.default_rv(
-            period_min=Quantity(20.0, "day"),
-            period_max=Quantity(500.0, "day"),
-            sigma_K0=Quantity(30.0, "km/s"),
-            sigma_v0=Quantity(30.0, "km/s"),
+            period_min=Q(20.0, "day"),
+            period_max=Q(500.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior)
         samples = sampler.run(data, n_prior_samples=200_000, seed=7)
@@ -313,10 +313,10 @@ class TestAstrometryLikelihoodSanity:
         data, true = simulate_gaia_epoch_astrometry(
             seed=42,
             n_obs=50,
-            period=Quantity(300.0, "day"),
+            period=Q(300.0, "day"),
             eccentricity=0.3,
-            semi_major_axis=Quantity(5.0, "mas"),
-            al_error=Quantity(0.2, "mas"),
+            semi_major_axis=Q(5.0, "mas"),
+            al_error=Q(0.2, "mas"),
         )
         lp = {
             "ra0": dist.Normal(0.0, 1000.0),
@@ -369,16 +369,16 @@ class TestAstrometryLikelihoodSanity:
 
         # Sample 1000 random nonlinear parameter sets from the prior
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(100.0, "day"),
-            period_max=Quantity(1000.0, "day"),
-            sigma_a0=Quantity(1e3, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(1e3, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(100.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(1e3, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(1e3, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
         prior_nl = prior.sample_nonlinear(jr.key(0), 1_000)
         prior_batch = GaiaAstrometryParameters.marginalized(
-            period=Quantity(prior_nl["period"], "day"),
+            period=Q(prior_nl["period"], "day"),
             eccentricity=prior_nl["eccentricity"],
             phase_peri=prior_nl["phase_peri"],
             cos_i=prior_nl["cos_i"],
@@ -407,7 +407,7 @@ class TestAstrometryLikelihoodSanity:
         n_grid = 100
         test_periods = jnp.linspace(200.0, 400.0, n_grid)
         params_batch = GaiaAstrometryParameters.marginalized(
-            period=Quantity(test_periods, "day"),
+            period=Q(test_periods, "day"),
             eccentricity=jnp.ones(n_grid) * ecc,
             phase_peri=jnp.ones(n_grid) * phase_peri,
             cos_i=jnp.ones(n_grid) * cos_i,

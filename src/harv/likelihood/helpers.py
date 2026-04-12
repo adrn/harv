@@ -12,17 +12,17 @@ from typing import Protocol, cast, runtime_checkable
 import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
-from unxt.quantity import AllowValue, Quantity, ustrip
+from unxt.quantity import AllowValue, Q, ustrip
 
 from harv.data import AbstractData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood.params import AbstractParameters, MarginalizedParameters
-from harv.quantity_distribution import QuantityDistribution
+from harv.distributions import QuantityDistribution
 
 type PriorDist = dist.Distribution | QuantityDistribution
 type LinearPriorDist = (
     dict[str, PriorDist | LinearPriorCallable]
-    # QuantityDistribution
+    # QDistribution
     # | dist.MultivariateNormal
     # | LinearPriorCallable
     # | dict[str, PriorDist | LinearPriorCallable]
@@ -102,8 +102,8 @@ def _resolve_linear_prior_mvn(
             inner = resolved.distribution
             if not isinstance(inner, dist.Normal):
                 raise TypeError(expected_msg)
-            loc = ustrip(AllowValue, target_u, Quantity(inner.loc, prior_unit))
-            scale = ustrip(AllowValue, target_u, Quantity(inner.scale, prior_unit))
+            loc = ustrip(AllowValue, target_u, Q(inner.loc, prior_unit))
+            scale = ustrip(AllowValue, target_u, Q(inner.scale, prior_unit))
         elif isinstance(resolved, dist.Normal):
             loc = resolved.loc
             scale = resolved.scale

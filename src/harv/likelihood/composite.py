@@ -38,7 +38,7 @@ class CompositeLikelihood(eqx.Module):
         from harv.likelihood.params import (
             GaiaAstrometryParameters, RVParameters,
         )
-        from harv.quantity_distribution import QuantityDistribution
+        from harv.distributions import QuantityDistribution
 
         composite = CompositeLikelihood(
             astro=GaiaAstrometryLikelihood(

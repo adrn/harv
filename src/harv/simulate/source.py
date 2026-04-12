@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import coordinax as cx
 import equinox as eqx
 import quaxed.numpy as jnp
-from unxt import AbstractQuantity, Quantity
+from unxt import AbstractQuantity, Q
 
 if TYPE_CHECKING:
     from harv.custom_types import ScalarQTime
@@ -21,14 +21,14 @@ class AbstractSource(eqx.Module):
     pos0: cx.vecs.AbstractPos
     vel0: cx.vecs.AbstractVel
 
-    def pos_at_time(self, _: Quantity["time"]) -> cx.vecs.AbstractPos:
+    def pos_at_time(self, _: Q["time"]) -> cx.vecs.AbstractPos:
         """Compute position at given times.
 
         This default implementation returns the reference position (i.e., no motion).
         """
         return self.pos0
 
-    def vel_at_time(self, _: Quantity["time"]) -> cx.vecs.AbstractVel:
+    def vel_at_time(self, _: Q["time"]) -> cx.vecs.AbstractVel:
         """Compute velocity at given times.
 
         This default implementation returns the reference velocity (i.e., no
@@ -38,7 +38,7 @@ class AbstractSource(eqx.Module):
 
     def offset_sky(
         self,
-        times: Quantity["time"],
+        times: Q["time"],
         ref_pos: cx.vecs.AbstractPos,  # noqa: ARG002
     ) -> Any:
         """Compute (d_ra * cos(dec), d_dec) offset from reference position at times.
@@ -79,7 +79,7 @@ class LinearMotion3DSource(AbstractSource):
     pos0: cx.vecs.AbstractPos3D
     vel0: cx.vecs.AbstractVel3D
 
-    def pos_at_time(self, times: Quantity["time"]) -> cx.vecs.AbstractPos3D:
+    def pos_at_time(self, times: Q["time"]) -> cx.vecs.AbstractPos3D:
         """Compute 3D position at given times.
 
         Parameters
@@ -114,7 +114,7 @@ class LinearMotionSmallAngleSource(AbstractSource):
     # vel0: cx.vecs.TwoSphereLonCosLatVel
 
     # TODO: implement pos_at_time for small-angle source
-    def pos_at_time(self, times: Quantity["time"]) -> cx.vecs.AbstractPos3D:
+    def pos_at_time(self, times: Q["time"]) -> cx.vecs.AbstractPos3D:
         """Compute position at given times.
 
         Parameters
@@ -139,7 +139,7 @@ class LinearMotionSmallAngleSource(AbstractSource):
     # TODO: simple small-angle offset implementation
     def offset_sky(
         self,
-        times: Quantity["time"],  # noqa: ARG002
+        times: Q["time"],  # noqa: ARG002
         ref_pos: cx.vecs.AbstractPos,  # noqa: ARG002
     ) -> Any:
         """Compute sky offset via 2D linear propagation (small-angle approx).
@@ -172,7 +172,7 @@ class Accelerating3DSource(AbstractSource):
     )
 
     def offset_sky(  # type: ignore[override]
-        self, times: Quantity["time"]
+        self, times: Q["time"]
     ) -> tuple[AbstractQuantity, AbstractQuantity]:
         """Compute sky offset of primary star.
 

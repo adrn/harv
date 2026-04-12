@@ -9,7 +9,7 @@ import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
-from unxt import AbstractQuantity, Quantity, ustrip
+from unxt import AbstractQuantity, Q, ustrip
 
 from harv.likelihood.helpers import (
     LinearPriorCallable,
@@ -18,7 +18,7 @@ from harv.likelihood.helpers import (
     _resolve_linear_prior_mvn,
 )
 from harv.likelihood.params import AbstractParameters, MarginalizedParameters
-from harv.quantity_distribution import QuantityDistribution
+from harv.distributions import QuantityDistribution
 
 
 class _MargLinearComponents(NamedTuple):
@@ -280,7 +280,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
                 delta_fixed[name] = jnp.array(
                     ustrip(
                         unit,
-                        Quantity(
+                        Q(
                             prior_dist.distribution.v, cast("str", prior_dist.unit)
                         ),
                     )
@@ -474,11 +474,11 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         obs_unit = str(self.data._get_obs().unit)
         result: dict[str, AbstractQuantity] = {}
         for i, name in enumerate(c.marg_names):
-            result[name] = Quantity(
+            result[name] = Q(
                 sample[i], self.linear_param_units.get(name, obs_unit)
             )
         for name in c.explicit_names:
-            result[name] = Quantity(
+            result[name] = Q(
                 c.linear_params[name], self.linear_param_units.get(name, obs_unit)
             )
         return result

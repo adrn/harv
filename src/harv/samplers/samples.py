@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import quaxed.numpy as jnp
 from numpyro import infer as _numpyro_infer
-from unxt import AbstractQuantity, Quantity, ustrip
+from unxt import AbstractQuantity, Q, ustrip
 
 from harv.data import RVData, SourceData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -140,20 +140,20 @@ _NONLINEAR_UNITS: dict[str, str] = {
 class Samples(eqx.Module):
     """Container for rejection sampler posterior samples.
 
-    Stores both nonlinear and linear parameter samples as :class:`~unxt.Quantity`
+    Stores both nonlinear and linear parameter samples as :class:`~unxt.Q`
     objects with units baked in. Provides dict-like access, statistical summaries,
     and visualization tools.
 
     Parameters
     ----------
-    nonlinear : dict[str, Quantity]
-        Nonlinear parameter samples, one Quantity per parameter.
+    nonlinear : dict[str, Q]
+        Nonlinear parameter samples, one Q per parameter.
         Keys: ``"period"``, ``"eccentricity"``, ``"phase_peri"``,
         and optionally ``"arg_peri"``, ``"cos_i"``, ``"lon_asc_node"``.
         Units: period has time units; angles have ``"rad"``; dimensionless
         parameters have unit ``""``.
-    linear : dict[str, Quantity]
-        Linear parameter samples, one Quantity per parameter.
+    linear : dict[str, Q]
+        Linear parameter samples, one Q per parameter.
         Keys: e.g. ``"rv_semiamp"``, ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``,
         ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"`` for
         astrometry.  Units are data-driven (e.g. ``"km/s"`` for RV).
@@ -171,14 +171,14 @@ class Samples(eqx.Module):
 
     Examples
     --------
-    >>> samples["period"]        # Quantity with time units
-    >>> samples["eccentricity"]  # Quantity (dimensionless)
+    >>> samples["period"]        # Q with time units
+    >>> samples["eccentricity"]  # Q (dimensionless)
     >>> samples.n_samples        # number of posterior draws
     """
 
-    # Pytree leaves -- Quantity arrays with units baked in
-    nonlinear: dict[str, Quantity]
-    linear: dict[str, Quantity]
+    # Pytree leaves -- Q arrays with units baked in
+    nonlinear: dict[str, Q]
+    linear: dict[str, Q]
 
     # Static fields -- not JAX leaves
     orbit_cls: type = eqx.field(static=True)
@@ -204,7 +204,7 @@ class Samples(eqx.Module):
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
 
-    def __getitem__(self, key: str) -> AbstractQuantity | jnp.ndarray:
+    def __getitem__(self, key: str) -> AbstractQ | jnp.ndarray:
         """Get parameter samples with units restored.
 
         Parameters
@@ -214,13 +214,13 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        values : Quantity | jnp.ndarray
+        values : Q | jnp.ndarray
             Parameter samples with appropriate units.
 
         Examples
         --------
-        >>> samples["period"]        # Quantity with time units
-        >>> samples["eccentricity"]  # Quantity (dimensionless)
+        >>> samples["period"]        # Q with time units
+        >>> samples["eccentricity"]  # Q (dimensionless)
         """
         if key in self.nonlinear:
             return self.nonlinear[key]
@@ -242,17 +242,17 @@ class Samples(eqx.Module):
             t_ref_raw = self.metadata.get("t_ref", 0.0)
             t_ref_val = (
                 float(ustrip(time_unit, t_ref_raw))
-                if isinstance(t_ref_raw, Quantity)
+                if isinstance(t_ref_raw, Q)
                 else (float(t_ref_raw) if t_ref_raw is not None else 0.0)
             )
             phase_peri = ustrip("", self.nonlinear["phase_peri"])
             period_val = ustrip(time_unit, period)
-            return Quantity(t_ref_val + phase_peri * period_val, time_unit)
+            return Q(t_ref_val + phase_peri * period_val, time_unit)
 
         if key == "inclination":
             if "cos_i" in self.nonlinear:
                 cos_i = ustrip("", self.nonlinear["cos_i"])
-                return Quantity(jnp.arccos(cos_i), "rad")
+                return Q(jnp.arccos(cos_i), "rad")
             msg = "Inclination only available for astrometry/combined data"
             raise KeyError(msg)
 
@@ -273,7 +273,7 @@ class Samples(eqx.Module):
 
     def median(
         self, key: str | None = None
-    ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:
+    ) -> dict[str, AbstractQ | jnp.ndarray] | AbstractQ | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
@@ -284,7 +284,7 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        median : dict or Quantity or Array
+        median : dict or Q or Array
             Median value(s).
 
         Examples
@@ -295,7 +295,7 @@ class Samples(eqx.Module):
         if key is not None:
             return jnp.median(self[key])
 
-        result: dict[str, AbstractQuantity | jnp.ndarray] = {}
+        result: dict[str, AbstractQ | jnp.ndarray] = {}
         for param_key in self.keys():
             try:
                 result[param_key] = jnp.median(self[param_key])
@@ -305,7 +305,7 @@ class Samples(eqx.Module):
 
     def percentile(
         self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
-    ) -> list[AbstractQuantity | jnp.ndarray]:
+    ) -> list[AbstractQ | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters
@@ -352,7 +352,7 @@ class Samples(eqx.Module):
         --------
         >>> summary = samples.summary(["period", "eccentricity", "parallax"])
         >>> summary["period"]["median"]
-        Quantity['time'](100.5, unit='d')
+        Q['time'](100.5, unit='d')
         >>> summary["eccentricity"]["std"]
         0.15
         """
@@ -416,7 +416,7 @@ class Samples(eqx.Module):
             for key, value in self.metadata.items():
                 if isinstance(value, int | float | str):
                     meta_group.attrs[key] = value
-                elif hasattr(value, "value"):  # Quantity
+                elif hasattr(value, "value"):  # Q
                     meta_group.attrs[f"{key}_value"] = float(value.value)
                     meta_group.attrs[f"{key}_unit"] = str(value.unit)
 
@@ -486,21 +486,21 @@ class Samples(eqx.Module):
                     base_key = key[:-5]
                     value = meta.attrs[f"{base_key}_value"]
                     unit = meta.attrs[key]
-                    metadata[base_key] = Quantity(value, unit)
+                    metadata[base_key] = Q(value, unit)
                 else:
                     metadata[key] = meta.attrs[key]
 
-            nonlinear: dict[str, Quantity] = {}
+            nonlinear: dict[str, Q] = {}
             for key in f["nonlinear"]:
                 ds = f["nonlinear"][key]
                 unit = ds.attrs.get("unit", "")
-                nonlinear[key] = Quantity(jnp.array(ds[:]), unit)
+                nonlinear[key] = Q(jnp.array(ds[:]), unit)
 
-            linear: dict[str, Quantity] = {}
+            linear: dict[str, Q] = {}
             for key in f["linear"]:
                 ds = f["linear"][key]
                 unit = ds.attrs.get("unit", "")
-                linear[key] = Quantity(jnp.array(ds[:]), unit)
+                linear[key] = Q(jnp.array(ds[:]), unit)
 
         return cls(
             nonlinear=nonlinear,
@@ -539,7 +539,7 @@ class Samples(eqx.Module):
         --------
         >>> axes = samples.plot_corner()
         >>> axes = samples.plot_corner(params=["period", "eccentricity", "parallax"])
-        >>> axes = samples.plot_corner(truths={"period": Quantity(100, "day")})
+        >>> axes = samples.plot_corner(truths={"period": Q(100, "day")})
         """
         if not HAS_ARVIZ:
             msg = "arviz is required for corner plots."
@@ -571,7 +571,7 @@ class Samples(eqx.Module):
         for param in params:
             try:
                 values = self[param]
-                if isinstance(values, Quantity):
+                if isinstance(values, Q):
                     # Store with unit in variable name
                     var_name = f"{param} [{values.unit}]"
                     data_dict[var_name] = np.asarray(values.value)[None, :]
@@ -579,7 +579,7 @@ class Samples(eqx.Module):
                     # Handle truths/reference values
                     if truths is not None and param in truths:
                         truth_val = truths[param]
-                        if isinstance(truth_val, Quantity):
+                        if isinstance(truth_val, Q):
                             reference_values[var_name] = ustrip(values.unit, truth_val)
                         else:
                             reference_values[var_name] = float(truth_val)
@@ -811,13 +811,13 @@ class Samples(eqx.Module):
         v0_vals = np.asarray(v0_qty.value)
 
         median_period_val = float(np.median(period_vals))
-        median_period = Quantity(median_period_val, time_unit)
+        median_period = Q(median_period_val, time_unit)
 
         t_ref_raw = self.metadata.get("t_ref", 0.0)
         t_ref = (
             t_ref_raw
-            if isinstance(t_ref_raw, Quantity)
-            else Quantity(t_ref_raw, time_unit)
+            if isinstance(t_ref_raw, Q)
+            else Q(t_ref_raw, time_unit)
         )
 
         # Collect per-instrument datasets (multi-survey support).
@@ -832,13 +832,13 @@ class Samples(eqx.Module):
             raise ValueError(msg)
 
         # Per-instrument mean offsets (extra linear params beyond rv_semiamp and v_sys).
-        mean_offsets: dict[str, Quantity] = {
-            name: Quantity(float(np.mean(np.asarray(self.linear[name].value))), rv_unit)
+        mean_offsets: dict[str, Q] = {
+            name: Q(float(np.mean(np.asarray(self.linear[name].value))), rv_unit)
             for name in self.extra_linear_names
         }
 
         # Mean v_sys used to centre phase-folded plots on zero.
-        mean_v0 = Quantity(float(np.mean(v0_vals)), rv_unit)
+        mean_v0 = Q(float(np.mean(v0_vals)), rv_unit)
 
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
@@ -854,7 +854,7 @@ class Samples(eqx.Module):
             if phase_fold:
                 x_data = ustrip(
                     "",
-                    ((rv_data.time - t_ref) / median_period) % Quantity(1.0, ""),
+                    ((rv_data.time - t_ref) / median_period) % Q(1.0, ""),
                 )
                 rv_obs = rv_obs - mean_v0
             else:
@@ -888,15 +888,15 @@ class Samples(eqx.Module):
             # even when the sample's period differs from the reference period.
             phi_grid = np.linspace(0.0, 1.0, 500)
             for i in range(n_draw):
-                period_i = Quantity(float(period_vals[i]), time_unit)
+                period_i = Q(float(period_vals[i]), time_unit)
                 ecc_i = float(ecc_vals[i])
                 phase_peri_i = float(phase_peri_vals[i])
-                arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
-                K_i = Quantity(float(K_vals[i]), rv_unit)
+                arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
+                K_i = Q(float(K_vals[i]), rv_unit)
                 # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-                t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
+                t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
                 # Times in sample i's own frame: one complete orbit from periastron.
-                t_model = t_peri_i + Quantity(phi_grid, "") * period_i
+                t_model = t_peri_i + Q(phi_grid, "") * period_i
                 rv_model = rv_at_times(
                     t_model,
                     period_i,
@@ -904,11 +904,11 @@ class Samples(eqx.Module):
                     t_peri_i,
                     arg_peri_i,
                     K_i,
-                    Quantity(0.0, rv_unit),
+                    Q(0.0, rv_unit),
                 )
                 # Map model times to data display phase.
                 x_model = np.asarray(
-                    ustrip("", (t_model - t_ref) / median_period % Quantity(1.0, ""))
+                    ustrip("", (t_model - t_ref) / median_period % Q(1.0, ""))
                 )
                 rv_vals = np.asarray(ustrip(rv_unit, rv_model))
                 # Sort by display phase; insert NaN breaks at wrap-around jumps
@@ -930,7 +930,7 @@ class Samples(eqx.Module):
         else:
             # Time-domain: dense grid spanning all observations.
             if rv_datasets:
-                all_times = Quantity(
+                all_times = Q(
                     jnp.concatenate(
                         [rv_data.time.value for rv_data in rv_datasets.values()]
                     ),
@@ -939,18 +939,18 @@ class Samples(eqx.Module):
                 t_grid = get_t_grid(all_times, median_period)
             else:
                 t_grid = (
-                    t_ref + Quantity(np.linspace(0.0, 1.0, 500), "") * median_period
+                    t_ref + Q(np.linspace(0.0, 1.0, 500), "") * median_period
                 )
 
             for i in range(n_draw):
-                period_i = Quantity(float(period_vals[i]), time_unit)
+                period_i = Q(float(period_vals[i]), time_unit)
                 ecc_i = float(ecc_vals[i])
                 phase_peri_i = float(phase_peri_vals[i])
-                arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
-                K_i = Quantity(float(K_vals[i]), rv_unit)
-                v0_i = Quantity(float(v0_vals[i]), rv_unit)
+                arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
+                K_i = Q(float(K_vals[i]), rv_unit)
+                v0_i = Q(float(v0_vals[i]), rv_unit)
                 # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-                t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
+                t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
                 rv_model = rv_at_times(
                     t_grid, period_i, ecc_i, t_peri_i, arg_peri_i, K_i, v0_i
                 )
@@ -1002,27 +1002,27 @@ class Samples(eqx.Module):
         t_ref_raw = self.metadata.get("t_ref", 0.0)
         t_ref = (
             t_ref_raw
-            if isinstance(t_ref_raw, Quantity)
-            else Quantity(t_ref_raw, time_unit)
+            if isinstance(t_ref_raw, Q)
+            else Q(t_ref_raw, time_unit)
         )
 
         n_draw = min(n_samples, self.n_samples)
         for i in range(n_draw):
-            period_i = Quantity(float(period_vals[i]), time_unit)
+            period_i = Q(float(period_vals[i]), time_unit)
             ecc_i = float(ecc_vals[i])
             phase_peri_i = float(phase_peri_vals[i])
-            arg_peri_i = Quantity(float(arg_peri_vals[i]), "rad")
+            arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
             cos_i_i = float(cos_i_vals[i])
-            lon_asc_i = Quantity(float(lon_asc_vals[i]), "rad")
+            lon_asc_i = Q(float(lon_asc_vals[i]), "rad")
             sma_val = float(sma_vals[i]) if sma_vals is not None else 1.0
-            sma_i = Quantity(sma_val, sma_unit)
+            sma_i = Q(sma_val, sma_unit)
             # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-            t_peri_i = Quantity(phase_peri_i * float(period_vals[i]), time_unit)
+            t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
 
             # One full orbit: phi in [0, 1] -> times spanning exactly one period.
             # Use t_ref as origin so the ellipse is centered near the observations.
             phi_grid = np.linspace(0.0, 1.0, 500)
-            times_grid = t_ref + Quantity(phi_grid, "") * period_i
+            times_grid = t_ref + Q(phi_grid, "") * period_i
 
             delta_ra, delta_dec = astrometric_orbit_at_times(
                 times_grid,

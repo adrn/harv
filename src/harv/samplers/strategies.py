@@ -15,7 +15,7 @@ from typing import Any, Literal, final
 import jax
 import jax.random as jr
 from equinox import AbstractVar
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import (
     AbstractData,
@@ -37,7 +37,7 @@ from harv.likelihood.params import (
     SB2RVParameters,
 )
 from harv.likelihood.rv import RVLikelihood, SB2RVLikelihood
-from harv.priors.rejection import RejectionPrior
+from harv.samplers.rejection_prior import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
 
@@ -157,7 +157,7 @@ class DataTypeStrategy(ABC):
         prior: RejectionPrior,
         time_unit: Any,
         lik: Any,
-    ) -> dict[str, Quantity]:
+    ) -> dict[str, Q]:
         """Sample linear parameters for one accepted nonlinear sample."""
         params = self.build_marginalized_params(
             sample, time_unit, prior.marginalize_names, lik.linear_param_units
@@ -187,8 +187,8 @@ class DataTypeStrategy(ABC):
         cls = self.full_cls[0]
         kw: dict[str, Any] = {name: values[name] for name in cls.nonlinear_param_names}
         # TODO: I don't understand why this is necessary! Shouldn't kw["period"] already
-        # be a Quantity?
-        kw["period"] = Quantity(kw["period"], time_unit)
+        # be a Q?
+        kw["period"] = Q(kw["period"], time_unit)
 
         # Determine which linear params to marginalize.
         marg = (
@@ -202,7 +202,7 @@ class DataTypeStrategy(ABC):
         for name in cls.linear_param_names:
             if name not in marg and name in values:
                 u = units.get(name, "")
-                kw[name] = Quantity(values[name], u) if u else values[name]
+                kw[name] = Q(values[name], u) if u else values[name]
 
         # cls.marginalized() with no positional args defaults to marginalizing
         # all, so guard the empty-tuple case explicitly.
@@ -246,7 +246,7 @@ class DataTypeStrategy(ABC):
         kw = dict(base.values)
         for name in _lin:
             if name in fixed_linear:
-                kw[name] = Quantity(fixed_linear[name], linear_units[name])
+                kw[name] = Q(fixed_linear[name], linear_units[name])
 
         if free:
             return cls.marginalized(*free, **kw)
@@ -423,9 +423,9 @@ class CompositeStrategy(DataTypeStrategy):
         prior: RejectionPrior,
         time_unit: Any,
         lik: Any,
-    ) -> dict[str, Quantity]:
+    ) -> dict[str, Q]:
         keys = jr.split(key, len(self._sub_strategies))
-        result: dict[str, Quantity] = {}
+        result: dict[str, Q] = {}
         for (name, sub), k in zip(self._sub_strategies.items(), keys, strict=True):
             sub_lik = lik[name]
             sub_sample = sub.sample_linear_one(k, sample, prior, time_unit, sub_lik)

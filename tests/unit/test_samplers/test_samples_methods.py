@@ -12,7 +12,7 @@ import numpyro
 import numpyro.distributions as ndist
 import pytest
 from numpyro import infer
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import RVData
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -20,7 +20,7 @@ from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
-from harv.priors.rejection import RejectionPrior
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.samples import Samples, _WarmStartMCMC
 
@@ -42,14 +42,14 @@ N = 10  # number of mock posterior samples
 def rv_samples() -> Samples:
     """Minimal RV Samples with N draws."""
     nonlinear = {
-        "period": Quantity(jnp.linspace(90.0, 110.0, N), "day"),
-        "eccentricity": Quantity(jnp.linspace(0.0, 0.3, N), ""),
-        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
-        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
+        "period": Q(jnp.linspace(90.0, 110.0, N), "day"),
+        "eccentricity": Q(jnp.linspace(0.0, 0.3, N), ""),
+        "phase_peri": Q(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Q(jnp.linspace(0.0, 3.14, N), "rad"),
     }
     linear = {
-        "rv_semiamp": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
-        "v_sys": Quantity(jnp.linspace(-1.0, 1.0, N), "km/s"),
+        "rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v_sys": Q(jnp.linspace(-1.0, 1.0, N), "km/s"),
     }
     return Samples(
         nonlinear=nonlinear,
@@ -65,20 +65,20 @@ def rv_samples() -> Samples:
 def astro_samples() -> Samples:
     """Minimal astrometry Samples with N draws."""
     nonlinear = {
-        "period": Quantity(jnp.linspace(250.0, 350.0, N), "day"),
-        "eccentricity": Quantity(jnp.linspace(0.0, 0.3, N), ""),
-        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
-        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
-        "cos_i": Quantity(jnp.linspace(0.2, 0.8, N), ""),
-        "lon_asc_node": Quantity(jnp.linspace(0.0, 6.28, N), "rad"),
+        "period": Q(jnp.linspace(250.0, 350.0, N), "day"),
+        "eccentricity": Q(jnp.linspace(0.0, 0.3, N), ""),
+        "phase_peri": Q(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Q(jnp.linspace(0.0, 3.14, N), "rad"),
+        "cos_i": Q(jnp.linspace(0.2, 0.8, N), ""),
+        "lon_asc_node": Q(jnp.linspace(0.0, 6.28, N), "rad"),
     }
     linear = {
-        "ra0": Quantity(jnp.zeros(N), "mas"),
-        "dec0": Quantity(jnp.zeros(N), "mas"),
-        "pmra": Quantity(jnp.ones(N) * 10.0, "mas/yr"),
-        "pmdec": Quantity(jnp.ones(N) * -5.0, "mas/yr"),
-        "parallax": Quantity(jnp.ones(N) * 5.0, "mas"),
-        "semi_major_axis": Quantity(jnp.linspace(1.0, 3.0, N), "mas"),
+        "ra0": Q(jnp.zeros(N), "mas"),
+        "dec0": Q(jnp.zeros(N), "mas"),
+        "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+        "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+        "parallax": Q(jnp.ones(N) * 5.0, "mas"),
+        "semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
     }
     return Samples(
         nonlinear=nonlinear,
@@ -94,22 +94,22 @@ def astro_samples() -> Samples:
 def combined_samples() -> Samples:
     """Minimal combined (astrometry + RV) Samples with N draws."""
     nonlinear = {
-        "period": Quantity(jnp.linspace(250.0, 350.0, N), "day"),
-        "eccentricity": Quantity(jnp.linspace(0.0, 0.2, N), ""),
-        "phase_peri": Quantity(jnp.linspace(0.0, 1.0, N), ""),
-        "arg_peri": Quantity(jnp.linspace(0.0, 3.14, N), "rad"),
-        "cos_i": Quantity(jnp.linspace(0.2, 0.8, N), ""),
-        "lon_asc_node": Quantity(jnp.linspace(0.0, 6.28, N), "rad"),
+        "period": Q(jnp.linspace(250.0, 350.0, N), "day"),
+        "eccentricity": Q(jnp.linspace(0.0, 0.2, N), ""),
+        "phase_peri": Q(jnp.linspace(0.0, 1.0, N), ""),
+        "arg_peri": Q(jnp.linspace(0.0, 3.14, N), "rad"),
+        "cos_i": Q(jnp.linspace(0.2, 0.8, N), ""),
+        "lon_asc_node": Q(jnp.linspace(0.0, 6.28, N), "rad"),
     }
     linear = {
-        "ra0": Quantity(jnp.zeros(N), "mas"),
-        "dec0": Quantity(jnp.zeros(N), "mas"),
-        "pmra": Quantity(jnp.ones(N) * 10.0, "mas/yr"),
-        "pmdec": Quantity(jnp.ones(N) * -5.0, "mas/yr"),
-        "parallax": Quantity(jnp.ones(N) * 5.0, "mas"),
-        "semi_major_axis": Quantity(jnp.linspace(1.0, 3.0, N), "mas"),
-        "rv_semiamp": Quantity(jnp.linspace(3.0, 7.0, N), "km/s"),
-        "v_sys": Quantity(jnp.zeros(N), "km/s"),
+        "ra0": Q(jnp.zeros(N), "mas"),
+        "dec0": Q(jnp.zeros(N), "mas"),
+        "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+        "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+        "parallax": Q(jnp.ones(N) * 5.0, "mas"),
+        "semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
+        "rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
+        "v_sys": Q(jnp.zeros(N), "km/s"),
     }
     return Samples(
         nonlinear=nonlinear,
@@ -126,14 +126,14 @@ def empty_rv_samples() -> Samples:
     """RV Samples with zero accepted draws."""
     return Samples(
         nonlinear={
-            "period": Quantity(jnp.array([]), "day"),
-            "eccentricity": Quantity(jnp.array([]), ""),
-            "phase_peri": Quantity(jnp.array([]), ""),
-            "arg_peri": Quantity(jnp.array([]), "rad"),
+            "period": Q(jnp.array([]), "day"),
+            "eccentricity": Q(jnp.array([]), ""),
+            "phase_peri": Q(jnp.array([]), ""),
+            "arg_peri": Q(jnp.array([]), "rad"),
         },
         linear={
-            "rv_semiamp": Quantity(jnp.array([]), "km/s"),
-            "v_sys": Quantity(jnp.array([]), "km/s"),
+            "rv_semiamp": Q(jnp.array([]), "km/s"),
+            "v_sys": Q(jnp.array([]), "km/s"),
         },
         orbit_cls=RVParameters,
         full_cls=(RVParameters,),
@@ -145,15 +145,15 @@ def empty_rv_samples() -> Samples:
 @pytest.fixture
 def rv_sampler_and_data():
     """RejectionSampler + RVData used for init_mcmc tests."""
-    times = Quantity(jnp.linspace(0.0, 100.0, 20), "day")
-    rv = Quantity(jnp.zeros(20), "km/s")
-    rv_err = Quantity(jnp.ones(20) * 2.0, "km/s")
+    times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+    rv = Q(jnp.zeros(20), "km/s")
+    rv_err = Q(jnp.ones(20) * 2.0, "km/s")
     data = RVData(time=times, rv=rv, rv_err=rv_err)
     prior = RejectionPrior.default_rv(
-        period_min=Quantity(50.0, "day"),
-        period_max=Quantity(200.0, "day"),
-        sigma_K0=Quantity(30.0, "km/s"),
-        sigma_v0=Quantity(30.0, "km/s"),
+        period_min=Q(50.0, "day"),
+        period_max=Q(200.0, "day"),
+        sigma_K0=Q(30.0, "km/s"),
+        sigma_v0=Q(30.0, "km/s"),
     )
     sampler = RejectionSampler(prior)
     return sampler, data
@@ -169,44 +169,44 @@ class TestRvAtTimes:
 
     def test_circular_orbit_shape(self):
         """Output has the same shape as the input times."""
-        times = Quantity(np.linspace(0.0, 200.0, 50), "day")
+        times = Q(np.linspace(0.0, 200.0, 50), "day")
         rv = rv_at_times(
             times,
-            period=Quantity(200.0, "day"),
+            period=Q(200.0, "day"),
             eccentricity=0.0,
-            t_peri=Quantity(0.0, "day"),
-            arg_peri=Quantity(0.0, "rad"),
-            rv_semiamp=Quantity(10.0, "km/s"),
-            v_sys=Quantity(0.0, "km/s"),
+            t_peri=Q(0.0, "day"),
+            arg_peri=Q(0.0, "rad"),
+            rv_semiamp=Q(10.0, "km/s"),
+            v_sys=Q(0.0, "km/s"),
         )
         assert rv.shape == (50,)
 
     def test_unit_preserved(self):
         """Output unit matches rv_semiamp and v_sys unit."""
-        times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
+        times = Q(np.array([0.0, 50.0, 100.0]), "day")
         rv = rv_at_times(
             times,
-            period=Quantity(200.0, "day"),
+            period=Q(200.0, "day"),
             eccentricity=0.3,
-            t_peri=Quantity(50.0, "day"),
-            arg_peri=Quantity(1.2, "rad"),
-            rv_semiamp=Quantity(8.0, "km/s"),
-            v_sys=Quantity(-5.0, "km/s"),
+            t_peri=Q(50.0, "day"),
+            arg_peri=Q(1.2, "rad"),
+            rv_semiamp=Q(8.0, "km/s"),
+            v_sys=Q(-5.0, "km/s"),
         )
         assert rv.unit.physical_type == "speed"
 
     def test_v_sys_offset(self):
         """Systemic velocity shifts every sample by v_sys."""
-        times = Quantity(np.array([0.0, 50.0, 100.0]), "day")
+        times = Q(np.array([0.0, 50.0, 100.0]), "day")
         kwargs = dict(
-            period=Quantity(200.0, "day"),
+            period=Q(200.0, "day"),
             eccentricity=0.0,
-            t_peri=Quantity(0.0, "day"),
-            arg_peri=Quantity(0.0, "rad"),
-            rv_semiamp=Quantity(10.0, "km/s"),
+            t_peri=Q(0.0, "day"),
+            arg_peri=Q(0.0, "rad"),
+            rv_semiamp=Q(10.0, "km/s"),
         )
-        rv0 = rv_at_times(times, v_sys=Quantity(0.0, "km/s"), **kwargs)
-        rv5 = rv_at_times(times, v_sys=Quantity(5.0, "km/s"), **kwargs)
+        rv0 = rv_at_times(times, v_sys=Q(0.0, "km/s"), **kwargs)
+        rv5 = rv_at_times(times, v_sys=Q(5.0, "km/s"), **kwargs)
         np.testing.assert_allclose(np.asarray(rv5.value - rv0.value), 5.0, atol=1e-6)
 
 
@@ -215,16 +215,16 @@ class TestAstrometricOrbitAtTimes:
 
     def test_output_shape_and_unit(self):
         """Both outputs have the input shape and semi_major_axis unit."""
-        times = Quantity(np.linspace(0.0, 300.0, 40), "day")
+        times = Q(np.linspace(0.0, 300.0, 40), "day")
         dra, ddec = astrometric_orbit_at_times(
             times,
-            period=Quantity(300.0, "day"),
+            period=Q(300.0, "day"),
             eccentricity=0.3,
-            t_peri=Quantity(0.0, "day"),
-            arg_peri=Quantity(1.2, "rad"),
+            t_peri=Q(0.0, "day"),
+            arg_peri=Q(1.2, "rad"),
             cos_i=0.5,
-            lon_asc_node=Quantity(0.8, "rad"),
-            semi_major_axis=Quantity(3.0, "mas"),
+            lon_asc_node=Q(0.8, "rad"),
+            semi_major_axis=Q(3.0, "mas"),
         )
         assert dra.shape == (40,)
         assert ddec.shape == (40,)
@@ -232,16 +232,16 @@ class TestAstrometricOrbitAtTimes:
 
     def test_circular_face_on_orbit_is_circle(self):
         """Face-on circular orbit traces a circle: Deltara^2+Deltadec^2 = const."""
-        times = Quantity(np.linspace(0.0, 1.0, 500), "day")
+        times = Q(np.linspace(0.0, 1.0, 500), "day")
         dra, ddec = astrometric_orbit_at_times(
             times,
-            period=Quantity(1.0, "day"),
+            period=Q(1.0, "day"),
             eccentricity=0.0,
-            t_peri=Quantity(0.0, "day"),
-            arg_peri=Quantity(0.0, "rad"),
+            t_peri=Q(0.0, "day"),
+            arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
-            lon_asc_node=Quantity(0.0, "rad"),
-            semi_major_axis=Quantity(1.0, "mas"),
+            lon_asc_node=Q(0.0, "rad"),
+            semi_major_axis=Q(1.0, "mas"),
         )
         r2 = np.asarray(dra.value) ** 2 + np.asarray(ddec.value) ** 2
         np.testing.assert_allclose(r2, 1.0, atol=1e-5)
@@ -573,9 +573,9 @@ class TestPlotRV:
 
     def test_plot_with_rv_data(self, rv_samples):
         """plot(data=rv_data) plots data points without error."""
-        times = Quantity(jnp.linspace(0.0, 100.0, 20), "day")
-        rv = Quantity(jnp.zeros(20), "km/s")
-        rv_err = Quantity(jnp.ones(20) * 2.0, "km/s")
+        times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+        rv = Q(jnp.zeros(20), "km/s")
+        rv_err = Q(jnp.ones(20) * 2.0, "km/s")
         rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
         fig = rv_samples.plot(data=rv_data)
         assert fig is not None
@@ -664,14 +664,14 @@ class TestPlotUnknownDataType:
         """plot() raises ValueError for an unknown data_type."""
         bad_samples = Samples(
             nonlinear={
-                "period": Quantity(jnp.ones(5) * 100.0, "day"),
-                "eccentricity": Quantity(jnp.zeros(5), ""),
-                "phase_peri": Quantity(jnp.zeros(5), ""),
-                "arg_peri": Quantity(jnp.zeros(5), "rad"),
+                "period": Q(jnp.ones(5) * 100.0, "day"),
+                "eccentricity": Q(jnp.zeros(5), ""),
+                "phase_peri": Q(jnp.zeros(5), ""),
+                "arg_peri": Q(jnp.zeros(5), "rad"),
             },
             linear={
-                "rv_semiamp": Quantity(jnp.zeros(5), "km/s"),
-                "v_sys": Quantity(jnp.zeros(5), "km/s"),
+                "rv_semiamp": Q(jnp.zeros(5), "km/s"),
+                "v_sys": Q(jnp.zeros(5), "km/s"),
             },
             orbit_cls=RVParameters,
             full_cls=(RVParameters,),

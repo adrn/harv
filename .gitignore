@@ -244,5 +244,5 @@ cython_debug/
 # Hatch-VCS
 _version.py
 
-data
+/data
 notebooks

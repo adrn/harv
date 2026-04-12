@@ -4,10 +4,10 @@ from typing import Any
 
 import equinox as eqx
 import numpyro.distributions as dist
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
+from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import PriorDist
-from harv.quantity_distribution import QuantityDistribution
 
 __all__ = (
     "ParallaxDependentProperMotionPrior",
@@ -17,8 +17,8 @@ __all__ = (
 
 
 def _make_log_period_prior(
-    period_min: Quantity["time"],
-    period_max: Quantity["time"],
+    period_min: Q["time"],
+    period_max: Q["time"],
 ) -> PriorDist:
     return QuantityDistribution(
         dist.LogUniform(
@@ -44,10 +44,10 @@ class PeriodDependentKPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_K0 : Quantity["speed"]
+    sigma_K0 : Q["speed"]
         RV semi-amplitude scale (km/s) at the reference period ``P0``.
         Default: 30 km/s -- appropriate for stellar binary searches.
-    P0 : Quantity["time"]
+    P0 : Q["time"]
         Numeric value of the reference period in units of ``P0_unit``.
 
     Notes
@@ -62,8 +62,8 @@ class PeriodDependentKPrior(eqx.Module):
     Binary-star and Exoplanet Radial Velocity Data*.
     """
 
-    sigma_K0: Quantity["speed"]
-    P0: Quantity["time"]
+    sigma_K0: Q["speed"]
+    P0: Q["time"]
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -114,10 +114,10 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_a0 : Quantity["length"]
+    sigma_a0 : Q["length"]
         Semi-major axis scale in physical units (e.g. AU) at the reference
         period ``P0``.  Converted to angular size via the parallax.
-    P0 : Quantity["time"]
+    P0 : Q["time"]
         Reference period.
 
     Notes
@@ -131,8 +131,8 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     as an explicit (non-marginalized) linear parameter by default.
     """
 
-    sigma_a0: Quantity["length"]
-    P0: Quantity["time"]
+    sigma_a0: Q["length"]
+    P0: Q["time"]
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -180,7 +180,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_v0 : Quantity["speed"]
+    sigma_v0 : Q["speed"]
         Transverse-velocity dispersion scale (e.g. km/s).
 
     Notes
@@ -194,7 +194,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     explicit (non-marginalized) linear parameter by default.
     """
 
-    sigma_v0: Quantity["speed"]
+    sigma_v0: Q["speed"]
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.

@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 
 from harv.data import RVData, SystemData
 from harv.likelihood.params import RVParameters, SB2RVParameters
@@ -22,19 +22,19 @@ from harv.likelihood.rv import (
 
 def _make_rv_data(n_obs=20, t_ref=None):
     return RVData(
-        time=Quantity(jnp.linspace(0, 100, n_obs), "day"),
-        rv=Quantity(jnp.zeros(n_obs), "km/s"),
-        rv_err=Quantity(jnp.ones(n_obs) * 0.1, "km/s"),
+        time=Q(jnp.linspace(0, 100, n_obs), "day"),
+        rv=Q(jnp.zeros(n_obs), "km/s"),
+        rv_err=Q(jnp.ones(n_obs) * 0.1, "km/s"),
         t_ref=t_ref,
     )
 
 
 def _make_rv_params(**kw):
     defaults = dict(
-        period=Quantity(100.0, "day"),
+        period=Q(100.0, "day"),
         eccentricity=0.3,
         phase_peri=0.0,
-        arg_peri=Quantity(1.0, "rad"),
+        arg_peri=Q(1.0, "rad"),
     )
     defaults.update(kw)
     return RVParameters.marginalized(**defaults)
@@ -181,10 +181,10 @@ class TestRVLikelihoodTrend:
         )
         n_samples = 5
         params_batch = RVParameters.marginalized(
-            period=Quantity(jnp.full(n_samples, 100.0), "day"),
+            period=Q(jnp.full(n_samples, 100.0), "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n_samples),
             phase_peri=jnp.zeros(n_samples),
-            arg_peri=Quantity(jnp.ones(n_samples), "rad"),
+            arg_peri=Q(jnp.ones(n_samples), "rad"),
         )
         lls = jax.vmap(lik.log_prob)(params_batch)
         assert lls.shape == (n_samples,)
@@ -229,21 +229,21 @@ class TestSystemData:
             SystemData()
 
     def test_t_ref_from_primary(self):
-        primary = _make_rv_data(n_obs=10, t_ref=Quantity(50.0, "day"))
+        primary = _make_rv_data(n_obs=10, t_ref=Q(50.0, "day"))
         secondary = _make_rv_data(n_obs=8)
         sd = SystemData(primary=primary, secondary=secondary)
         assert float(sd.t_ref.value) == 50.0
 
     def test_stacked_obs(self):
         primary = RVData(
-            time=Quantity(jnp.array([1.0, 2.0]), "day"),
-            rv=Quantity(jnp.array([10.0, 20.0]), "km/s"),
-            rv_err=Quantity(jnp.array([0.1, 0.1]), "km/s"),
+            time=Q(jnp.array([1.0, 2.0]), "day"),
+            rv=Q(jnp.array([10.0, 20.0]), "km/s"),
+            rv_err=Q(jnp.array([0.1, 0.1]), "km/s"),
         )
         secondary = RVData(
-            time=Quantity(jnp.array([1.5, 2.5, 3.5]), "day"),
-            rv=Quantity(jnp.array([30.0, 40.0, 50.0]), "km/s"),
-            rv_err=Quantity(jnp.array([0.2, 0.2, 0.2]), "km/s"),
+            time=Q(jnp.array([1.5, 2.5, 3.5]), "day"),
+            rv=Q(jnp.array([30.0, 40.0, 50.0]), "km/s"),
+            rv_err=Q(jnp.array([0.2, 0.2, 0.2]), "km/s"),
         )
         sd = SystemData(primary=primary, secondary=secondary)
         obs = sd._get_obs()
@@ -270,12 +270,12 @@ class TestSB2RVParameters:
 
     def test_marginalized_construction(self):
         mp = SB2RVParameters.marginalized(
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.3,
             phase_peri=0.0,
-            arg_peri=Quantity(1.0, "rad"),
+            arg_peri=Q(1.0, "rad"),
         )
-        assert mp.period == Quantity(100.0, "day")
+        assert mp.period == Q(100.0, "day")
         assert set(mp.marginalized_names) == {
             "rv_semiamp_1",
             "rv_semiamp_2",
@@ -288,23 +288,23 @@ class TestSB2RVLikelihood:
 
     def _make_sb2_data(self):
         primary = RVData(
-            time=Quantity(jnp.linspace(0, 100, 15), "day"),
-            rv=Quantity(jnp.zeros(15), "km/s"),
-            rv_err=Quantity(jnp.ones(15) * 0.1, "km/s"),
+            time=Q(jnp.linspace(0, 100, 15), "day"),
+            rv=Q(jnp.zeros(15), "km/s"),
+            rv_err=Q(jnp.ones(15) * 0.1, "km/s"),
         )
         secondary = RVData(
-            time=Quantity(jnp.linspace(0, 100, 12), "day"),
-            rv=Quantity(jnp.zeros(12), "km/s"),
-            rv_err=Quantity(jnp.ones(12) * 0.2, "km/s"),
+            time=Q(jnp.linspace(0, 100, 12), "day"),
+            rv=Q(jnp.zeros(12), "km/s"),
+            rv_err=Q(jnp.ones(12) * 0.2, "km/s"),
         )
         return SystemData(primary=primary, secondary=secondary)
 
     def _make_sb2_params(self):
         return SB2RVParameters.marginalized(
-            period=Quantity(100.0, "day"),
+            period=Q(100.0, "day"),
             eccentricity=0.3,
             phase_peri=0.0,
-            arg_peri=Quantity(1.0, "rad"),
+            arg_peri=Q(1.0, "rad"),
         )
 
     def test_design_matrix_shape(self):
@@ -343,16 +343,16 @@ class TestSB2RVLikelihood:
     def test_design_matrix_antiphase(self):
         """Secondary K2 column has opposite sign to primary K1 column."""
         # Use same times for both components
-        times = Quantity(jnp.linspace(0, 100, 10), "day")
+        times = Q(jnp.linspace(0, 100, 10), "day")
         primary = RVData(
             time=times,
-            rv=Quantity(jnp.zeros(10), "km/s"),
-            rv_err=Quantity(jnp.ones(10) * 0.1, "km/s"),
+            rv=Q(jnp.zeros(10), "km/s"),
+            rv_err=Q(jnp.ones(10) * 0.1, "km/s"),
         )
         secondary = RVData(
             time=times,
-            rv=Quantity(jnp.zeros(10), "km/s"),
-            rv_err=Quantity(jnp.ones(10) * 0.1, "km/s"),
+            rv=Q(jnp.zeros(10), "km/s"),
+            rv_err=Q(jnp.ones(10) * 0.1, "km/s"),
         )
         data = SystemData(primary=primary, secondary=secondary)
 
@@ -382,10 +382,10 @@ class TestSB2RVLikelihood:
         lik = SB2RVLikelihood(data=data, linear_marginalized_prior=_sb2_prior())
         n = 5
         params_batch = SB2RVParameters.marginalized(
-            period=Quantity(jnp.full(n, 100.0), "day"),
+            period=Q(jnp.full(n, 100.0), "day"),
             eccentricity=jnp.linspace(0.0, 0.5, n),
             phase_peri=jnp.zeros(n),
-            arg_peri=Quantity(jnp.ones(n), "rad"),
+            arg_peri=Q(jnp.ones(n), "rad"),
         )
         lls = jax.vmap(lik.log_prob)(params_batch)
         assert lls.shape == (n,)
@@ -427,13 +427,13 @@ class TestRejectionPriorTrend:
     """Tests for RejectionPrior default factories with trend support."""
 
     def test_default_rv_trend_order(self):
-        from harv.priors.rejection import RejectionPrior
+        from harv.samplers.rejection_prior import RejectionPrior
 
         prior = RejectionPrior.default_rv(
-            period_min=Quantity(1.0, "day"),
-            period_max=Quantity(1000.0, "day"),
-            sigma_K0=Quantity(30.0, "km/s"),
-            sigma_v0=Quantity(30.0, "km/s"),
+            period_min=Q(1.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
             trend_order=2,
             trend_priors=_trend_prior(2),
         )
@@ -442,13 +442,13 @@ class TestRejectionPriorTrend:
         assert len(prior.trend_priors) == 2
 
     def test_default_sb2(self):
-        from harv.priors.rejection import RejectionPrior
+        from harv.samplers.rejection_prior import RejectionPrior
 
         prior = RejectionPrior.default_sb2(
-            period_min=Quantity(1.0, "day"),
-            period_max=Quantity(1000.0, "day"),
-            sigma_K0=Quantity(30.0, "km/s"),
-            sigma_v0=Quantity(30.0, "km/s"),
+            period_min=Q(1.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
         )
         assert "rv_semiamp_1" in prior.linear_prior
         assert "rv_semiamp_2" in prior.linear_prior

@@ -9,6 +9,5 @@ from jaxtyping import install_import_hook
 # TODO: extend to other subpackages as typing is completed:
 #   - harv.simulate
 #   - harv.samplers
-#   - harv.priors
 install_import_hook("harv.kepler", "beartype.beartype")
 install_import_hook("harv.likelihood", "beartype.beartype")

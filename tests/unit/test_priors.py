@@ -2,31 +2,31 @@
 
 import jax.random as jr
 import numpyro.distributions as dist
-from unxt import Quantity
+from unxt import Q
 
-from harv.priors.custom import (
+from harv.distributions import QD
+from harv.samplers.custom_priors import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentSemiMajorAxisPrior,
 )
-from harv.priors.rejection import RejectionPrior
-from harv.quantity_distribution import QuantityDistribution
+from harv.samplers.rejection_prior import RejectionPrior
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = dict(
-    period_min=Quantity(50.0, "day"),
-    period_max=Quantity(200.0, "day"),
-    sigma_K0=Quantity(30.0, "km/s"),
-    sigma_v0=Quantity(30.0, "km/s"),
+    period_min=Q(50.0, "day"),
+    period_max=Q(200.0, "day"),
+    sigma_K0=Q(30.0, "km/s"),
+    sigma_v0=Q(30.0, "km/s"),
 )
 
 # Common default_gaia_astrometry kwargs used throughout tests
 _DEFAULT_ASTRO_KWARGS = dict(
-    period_min=Quantity(50.0, "day"),
-    period_max=Quantity(200.0, "day"),
-    sigma_a0=Quantity(1e3, "AU"),
-    sigma_parallax=Quantity(100.0, "mas"),
-    sigma_pos=Quantity(1e3, "mas"),
-    sigma_vtan=Quantity(200.0, "km/s"),
+    period_min=Q(50.0, "day"),
+    period_max=Q(200.0, "day"),
+    sigma_a0=Q(1e3, "AU"),
+    sigma_parallax=Q(100.0, "mas"),
+    sigma_pos=Q(1e3, "mas"),
+    sigma_vtan=Q(200.0, "km/s"),
 )
 
 
@@ -73,12 +73,12 @@ class TestRejectionPriorAstrometry:
     def test_custom_period_bounds(self):
         """Test custom period bounds."""
         prior = RejectionPrior.default_gaia_astrometry(
-            period_min=Quantity(1.0, "day"),
-            period_max=Quantity(1000.0, "day"),
-            sigma_a0=Quantity(1e3, "AU"),
-            sigma_parallax=Quantity(100.0, "mas"),
-            sigma_pos=Quantity(1e3, "mas"),
-            sigma_vtan=Quantity(200.0, "km/s"),
+            period_min=Q(1.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(1e3, "AU"),
+            sigma_parallax=Q(100.0, "mas"),
+            sigma_pos=Q(1e3, "mas"),
+            sigma_vtan=Q(200.0, "km/s"),
         )
         key = jr.key(123)
 
@@ -101,7 +101,7 @@ class TestRejectionPriorAstrometry:
             "semi_major_axis",
         }
         # parallax should be HalfNormal (explicit)
-        assert isinstance(prior.linear_prior["parallax"], QuantityDistribution)
+        assert isinstance(prior.linear_prior["parallax"], QD)
         # semi_major_axis should be PeriodDependentSemiMajorAxisPrior (callable)
         assert isinstance(
             prior.linear_prior["semi_major_axis"],
@@ -109,7 +109,7 @@ class TestRejectionPriorAstrometry:
         )
         # ra0/dec0 should be QuantityDistribution wrapping Normal
         for key in ("ra0", "dec0"):
-            assert isinstance(prior.linear_prior[key], QuantityDistribution)
+            assert isinstance(prior.linear_prior[key], QD)
             assert isinstance(prior.linear_prior[key].distribution, dist.Normal)
         # pmra/pmdec should be ParallaxDependentProperMotionPrior (callable)
         for key in ("pmra", "pmdec"):
@@ -135,8 +135,8 @@ class TestRejectionPriorRV:
         """Test RV prior with multi-instrument offsets."""
         offsets = {
             "keck": None,  # Reference instrument
-            "espresso": QuantityDistribution(dist.Normal(0, 5.0), "km/s"),
-            "harps": QuantityDistribution(dist.Normal(0, 10.0), "km/s"),
+            "espresso": QD(dist.Normal(0, 5.0), "km/s"),
+            "harps": QD(dist.Normal(0, 10.0), "km/s"),
         }
         prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, offsets=offsets)
 
@@ -175,14 +175,14 @@ class TestParameterOverrides:
 
     def test_rv_override_linear(self):
         """Linear prior can be overridden via kwargs."""
-        custom_K = QuantityDistribution(dist.Normal(0.0, 50.0), "km/s")
+        custom_K = QD(dist.Normal(0.0, 50.0), "km/s")
         prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, rv_semiamp=custom_K)
         assert prior.linear_prior["rv_semiamp"] is custom_K
 
     def test_rv_override_both(self):
         """Nonlinear and linear overrides can be combined."""
         custom_ecc = dist.Uniform(0.0, 0.3)
-        custom_v0 = QuantityDistribution(dist.Normal(0.0, 5.0), "km/s")
+        custom_v0 = QD(dist.Normal(0.0, 5.0), "km/s")
         prior = RejectionPrior.default_rv(
             **_DEFAULT_RV_KWARGS, eccentricity=custom_ecc, v_sys=custom_v0
         )
@@ -206,7 +206,7 @@ class TestParameterOverrides:
 
     def test_astro_override_linear(self):
         """Linear prior can be overridden in astrometry constructor."""
-        custom_parallax = QuantityDistribution(dist.Normal(5.0, 0.5), "mas")
+        custom_parallax = QD(dist.Normal(5.0, 0.5), "mas")
         prior = RejectionPrior.default_gaia_astrometry(
             **_DEFAULT_ASTRO_KWARGS, parallax=custom_parallax
         )
@@ -341,8 +341,8 @@ class TestDictLinearPrior:
                 "arg_peri": dist.Uniform(0, 6.28),
             },
             linear_prior={
-                "rv_semiamp": QuantityDistribution(dist.HalfNormal(100.0), "km/s"),
-                "v_sys": QuantityDistribution(dist.Normal(0.0, 50.0), "km/s"),
+                "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
         assert isinstance(prior.linear_prior, dict)
@@ -363,7 +363,7 @@ class TestPriorProperties:
             **_DEFAULT_RV_KWARGS,
             offsets={
                 "inst1": None,
-                "inst2": QuantityDistribution(dist.Normal(0, 5), "km/s"),
+                "inst2": QD(dist.Normal(0, 5), "km/s"),
             },
         )
         assert rv_prior_offsets.n_nonlinear == 4

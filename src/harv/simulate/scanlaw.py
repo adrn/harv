@@ -8,7 +8,7 @@ import h5py
 import healpy as hp
 import numpy as np
 import pooch
-from unxt import Quantity, ustrip
+from unxt import Q, ustrip
 
 SCANLAW_DATA_DOI = "10.5281/zenodo.17729248"
 SCANLAW_DATA_POOCH = pooch.create(
@@ -105,7 +105,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
 
         return scans[np.argsort(scans["time_bjd"])]
 
-    def query(self, ra: Quantity["angle"], dec: Quantity["angle"]) -> np.ndarray:
+    def query(self, ra: Q["angle"], dec: Q["angle"]) -> np.ndarray:
         """Query the scan data for a specific sky location.
 
         Parameters
@@ -120,7 +120,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
         scan_data
             Structured array containing the scan data for the specified sky location.
         """
-        ra_deg = ustrip("deg", Quantity.from_(ra))
-        dec_deg = ustrip("deg", Quantity.from_(dec))
+        ra_deg = ustrip("deg", Q.from_(ra))
+        dec_deg = ustrip("deg", Q.from_(dec))
         healpix_pixel = hp.ang2pix(self._nside, ra_deg, dec_deg, lonlat=True)
         return self.load_scans_for_healpix(healpix_pixel)
