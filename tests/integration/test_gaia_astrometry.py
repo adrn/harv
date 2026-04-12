@@ -30,7 +30,7 @@ class TestGaiaAstrometryLikelihood:
             n_obs=80,
             period=Quantity(1.5, "yr"),
             eccentricity=0.3,
-            semimajor_axis=Quantity(5.0, "mas"),
+            semi_major_axis=Quantity(5.0, "mas"),
             al_error=Quantity(0.05, "mas"),
         )
         return data, true
@@ -149,7 +149,7 @@ class TestGaiaAstrometryRejectionSampler:
             n_obs=80,
             period=Quantity(1.0, "yr"),
             eccentricity=0.2,
-            semimajor_axis=Quantity(3.0, "mas"),
+            semi_major_axis=Quantity(3.0, "mas"),
             al_error=Quantity(0.1, "mas"),
         )
         return data, true

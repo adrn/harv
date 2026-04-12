@@ -88,7 +88,11 @@ def thiele_innes_ABFG(
     Returns the constants with an implicit semi-major axis of 1. Multiply each
     by ``a`` to recover the physical Thiele-Innes constants.
 
-    See Eq. A.1 of https://arxiv.org/abs/2206.05726.
+    In the Gaia LPC convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08,
+    Eq. 4), B and G project into the RA (``a``) direction, while A and F
+    project into the Dec (``d``) direction.
+
+    See also Eq. A.1 of https://arxiv.org/abs/2206.05726.
     """
     A = cos_arg_peri * cos_lon_asc_node - sin_arg_peri * sin_lon_asc_node * cos_i
     B = cos_arg_peri * sin_lon_asc_node + sin_arg_peri * cos_lon_asc_node * cos_i
@@ -198,13 +202,12 @@ def astrometric_orbit_at_times(
 ) -> tuple[BatchQAngle, BatchQAngle]:
     """Compute sky-plane astrometric orbit (Δra, Δdec) at given times.
 
-    TODO: needs a different name - this is computing what? Tangent plane offsets? Or
-    relative astrometry?
+    Uses the Thiele-Innes parameterization following the Gaia local plane
+    coordinate (LPC) convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08,
+    Eq. 4)::
 
-    Uses the Thiele-Innes parameterization:
-
-        Δra  = (A·cos f + F·sin f) · a
-        Δdec = (B·cos f + G·sin f) · a
+        Δra  = (B·cos f + G·sin f) · a      (RA / ``a`` direction)
+        Δdec = (A·cos f + F·sin f) · a      (Dec / ``d`` direction)
 
     where A, B, F, G are the unit Thiele-Innes constants and a is the
     photocentric semi-major axis.
@@ -261,8 +264,9 @@ def astrometric_orbit_at_times(
         jnp.sin(ustrip("rad", lon_asc_node)),
         cos_i,
     )
-    delta_ra = (A * cos_f + F * sin_f) * semi_major_axis
-    delta_dec = (B * cos_f + G * sin_f) * semi_major_axis
+    # LPC convention: B,G → RA (a); A,F → Dec (d)
+    delta_ra = (B * cos_f + G * sin_f) * semi_major_axis
+    delta_dec = (A * cos_f + F * sin_f) * semi_major_axis
     # cast: multiplication by a Quantity returns AbstractQuantity via quax dispatch;
     # mypy cannot verify that AbstractQuantity satisfies BatchQAngle.
     return cast("tuple[BatchQAngle, BatchQAngle]", (delta_ra, delta_dec))

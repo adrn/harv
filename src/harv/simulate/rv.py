@@ -13,7 +13,7 @@ import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Quantity, ustrip
 
 from harv.data import RVData, SourceData
-from harv.kepler.orbits import mean_anomaly, rv_shape, true_anomaly_from_mean
+from harv.kepler.orbits import rv_at_times
 
 __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
 
@@ -141,11 +141,9 @@ def simulate_rv_sb1_data(
     times = dt + t_ref
 
     # Compute RV model: RV(t) = K·[cos(ω + f) + e·cos(ω)] + v₀
-    M = mean_anomaly(times - t_peri, period)
-    sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
-    rv_amplitude = rv_shape(sin_f, cos_f, eccentricity, ustrip("rad", arg_peri))
-
-    rv_true = rv_semiamp * rv_amplitude + v_sys
+    rv_true = rv_at_times(
+        times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys
+    )
 
     # Add noise
     noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
@@ -274,9 +272,6 @@ def simulate_rv_multisurv_data(  # noqa: C901
     if t_ref is None:
         t_ref = Quantity(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
-    # Pre-compute RV model constants
-    arg_peri_rad = ustrip("rad", arg_peri)
-
     datasets: dict[str, RVData] = {}
     true_params: dict[str, Any] = {
         "period": period,
@@ -303,10 +298,12 @@ def simulate_rv_multisurv_data(  # noqa: C901
         )
         times = dt + t_ref
 
-        M = mean_anomaly(times - t_peri, period)
-        sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
-        rv_amp = rv_shape(sin_f, cos_f, eccentricity, arg_peri_rad)
-        rv_true = rv_semiamp * rv_amp + v_sys + eff_offset
+        rv_true = (
+            rv_at_times(
+                times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys
+            )
+            + eff_offset
+        )
 
         n_obs = n_obs_per_instrument
         noise: AbstractQuantity = Quantity.from_(inst_rng.normal(size=n_obs), "")

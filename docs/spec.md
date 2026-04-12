@@ -224,17 +224,18 @@ for a single source:
 | `parallax_factor` | dimensionless | AL parallax factor H_ϖ(t)               |
 | `t_ref`           | time          | Reference epoch (defaults to mean time) |
 
-The along-scan model is (see §Gaia astrometry likelihood):
+The along-scan model is (see §Gaia astrometry likelihood), following the Gaia local plane
+coordinate convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08, Eqs. 4 & 6):
 
 ```
-y_AL(t) = α₀ cos(ψ) + δ₀ sin(ψ)
-         + (μ_α cos(ψ) + μ_δ sin(ψ)) · (t − t_ref)
+y_AL(t) = α₀ sin(θ) + δ₀ cos(θ)
+         + (μ_α sin(θ) + μ_δ cos(θ)) · (t − t_ref)
          + ϖ · H_ϖ(t)
-         + a · [(A sin(ψ) + B cos(ψ)) cos(f) + (F sin(ψ) + G cos(ψ)) sin(f)]
+         + a · [(B cos(f) + G sin(f)) sin(θ) + (A cos(f) + F sin(f)) cos(θ)]
 ```
 
-where A, B, F, G are Thiele-Innes constants that encode the orbit orientation, and f
-is the true anomaly.
+where θ is the position angle of the scan, A, B, F, G are Thiele-Innes constants that
+encode the orbit orientation, and f is the true anomaly.
 
 `GaiaAstrometryData` has a `plot(ax, **kwargs)` method that renders the observations
 as error-bars on the given matplotlib `Axes`. Default style: black markers with grey

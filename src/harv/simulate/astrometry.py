@@ -21,7 +21,7 @@ import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Quantity, uconvert, ustrip
 
 from harv.data import GaiaAstrometryData
-from harv.kepler import KeplerianOrientation, compute_true_anomaly_components
+from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
 
 if TYPE_CHECKING:
     from harv.custom_types import AngularSpeed
@@ -75,7 +75,7 @@ def simulate_gaia_epoch_astrometry(
     arg_peri: Quantity["angle"] | None = None,
     lon_asc_node: Quantity["angle"] | None = None,
     inclination: Quantity["angle"] | None = None,
-    semimajor_axis: Quantity["angle"] | None = None,
+    semi_major_axis: Quantity["angle"] | None = None,
     # Sky position (for parallax factor calculation)
     ra: Quantity["angle"] | None = None,
     dec: Quantity["angle"] | None = None,
@@ -116,7 +116,7 @@ def simulate_gaia_epoch_astrometry(
         Longitude of ascending node Ω. If None, randomly drawn from [0, 2π].
     inclination : Quantity["angle"], optional
         Orbital inclination. If None, randomly drawn from cos(i) ~ U(-1, 1).
-    semimajor_axis : Quantity["angle"], optional
+    semi_major_axis : Quantity["angle"], optional
         Semi-major axis in angular units. If None, randomly drawn from [0.5, 50] mas.
     ra : Quantity["angle"], optional
         Right ascension of the source (for parallax factor). Default: 180 deg.
@@ -146,7 +146,7 @@ def simulate_gaia_epoch_astrometry(
         Simulated Gaia astrometry data container.
     true_params : dict
         Dictionary of true parameter values used in simulation, including:
-        period, eccentricity, semimajor_axis, t_peri, alpha0, delta0, mu_alpha,
+        period, eccentricity, semi_major_axis, t_peri, alpha0, delta0, mu_alpha,
         mu_delta, parallax, A, B, F, G (Thiele-Innes), arg_peri, lon_asc_node,
         inclination.
 
@@ -159,7 +159,7 @@ def simulate_gaia_epoch_astrometry(
     ...     n_obs=50,
     ...     period=Quantity(100.0, "day"),
     ...     eccentricity=0.3,
-    ...     semimajor_axis=Quantity(2.0, "mas"),
+    ...     semi_major_axis=Quantity(2.0, "mas"),
     ... )
     >>> data.time.shape
     (50,)
@@ -194,8 +194,8 @@ def simulate_gaia_epoch_astrometry(
     if inclination is None:
         inclination = Quantity(np.arccos(rngs[6].uniform(-1.0, 1.0)), "rad")
 
-    if semimajor_axis is None:
-        semimajor_axis = Quantity(rngs[7].uniform(0.5, 50.0), "mas")
+    if semi_major_axis is None:
+        semi_major_axis = Quantity(rngs[7].uniform(0.5, 50.0), "mas")
 
     # Sky position for parallax factor calculation (absolute coordinates)
     ra = Quantity(180.0, "deg") if ra is None else ra
@@ -237,32 +237,50 @@ def simulate_gaia_epoch_astrometry(
     # Fudged parallax factor (uses absolute sky position)
     parallax_factor = fake_parallax_factor(times, ra, dec, scan_angle)
 
-    # True anomaly
-    sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
-
     # Compute true along-scan positions
     cos_psi = jnp.cos(scan_angle)
     sin_psi = jnp.sin(scan_angle)
 
     # 5-parameter astrometry contribution (all in mas)
-    # Note: alpha0 and delta0 are small offsets, not absolute coordinates
+    # Follows the Gaia LPC convention (Lindegren & Bastian,
+    # GAIA-C3-TN-LU-LL-061-08, Eqs. 4 & 6):
+    #   w = a·sin θ + d·cos θ   where a ≈ Δα*, d ≈ Δδ
     y_astro = (
-        cos_psi * alpha0
-        + sin_psi * delta0
-        + cos_psi * mu_alpha * dt
-        + sin_psi * mu_delta * dt
+        sin_psi * alpha0
+        + cos_psi * delta0
+        + sin_psi * mu_alpha * dt
+        + cos_psi * mu_delta * dt
         + parallax * parallax_factor
     )
     y_astro = uconvert("mas", y_astro)
 
-    # Orbital contribution using Thiele-Innes
-    orientation = KeplerianOrientation.from_angles(
-        arg_peri=arg_peri, lon_asc_node=lon_asc_node, inclination=inclination
+    # Orbital contribution: along-scan projection of (Δra, Δdec)
+    # w_orbit = Δra·sin θ + Δdec·cos θ  (LPC convention, Eq. 6)
+    cos_i = jnp.cos(inclination)
+    delta_ra, delta_dec = astrometric_orbit_at_times(
+        times,
+        period,
+        eccentricity,
+        t_peri,
+        arg_peri,
+        cos_i,
+        lon_asc_node,
+        semi_major_axis,
     )
-    A, B, F, G = orientation.thiele_innes_constants(semi_major_axis=semimajor_axis)
-    y_orbit = uconvert(
-        "mas", sin_psi * (A * cos_f + F * sin_f) + cos_psi * (B * cos_f + G * sin_f)
+    y_orbit = uconvert("mas", sin_psi * delta_ra + cos_psi * delta_dec)
+
+    # Thiele-Innes constants for true_params output
+    A, B, F, G = thiele_innes_ABFG(
+        jnp.cos(arg_peri),
+        jnp.sin(arg_peri),
+        jnp.cos(lon_asc_node),
+        jnp.sin(lon_asc_node),
+        cos_i,
     )
+    A = A * semi_major_axis
+    B = B * semi_major_axis
+    F = F * semi_major_axis
+    G = G * semi_major_axis
 
     noise: AbstractQuantity = Quantity.from_(rng.normal(size=n_obs), "")
     y_al = y_astro + y_orbit + al_error * noise
@@ -271,7 +289,7 @@ def simulate_gaia_epoch_astrometry(
     true_params = {
         "period": period,
         "eccentricity": eccentricity,
-        "semimajor_axis": semimajor_axis,
+        "semi_major_axis": semi_major_axis,
         "t_peri": t_peri,
         "alpha0": alpha0,
         "delta0": delta0,

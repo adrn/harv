@@ -71,7 +71,11 @@ class TestAstrometryDesignMatrix:
         assert dm.shape == (50, 6)
 
     def test_design_matrix_pm_columns(self):
-        """With scan_angle=0, RA offset column = 1 and Dec offset column = 0."""
+        """With scan_angle=0, Dec offset column = 1 and RA offset column = 0.
+
+        LPC convention: ra0 uses sin(θ), dec0 uses cos(θ).
+        At θ=0: sin(0)=0, cos(0)=1.
+        """
         n_obs = 10
         data = GaiaAstrometryData(
             time=Quantity(jnp.zeros(n_obs), "day"),
@@ -87,11 +91,11 @@ class TestAstrometryDesignMatrix:
 
         dm = _get_design_matrix(data, params, sin_f, cos_f)
 
-        # scan_angle=0 → cos(ψ)=1, sin(ψ)=0
-        # Column 0 (ra0): cos(scan) = 1
-        assert jnp.allclose(dm[:, 0], 1.0)
-        # Column 1 (dec0): sin(scan) = 0
-        assert jnp.allclose(dm[:, 1], 0.0)
+        # scan_angle=0 → sin(θ)=0, cos(θ)=1
+        # Column 0 (ra0): sin(θ) = 0
+        assert jnp.allclose(dm[:, 0], 0.0)
+        # Column 1 (dec0): cos(θ) = 1
+        assert jnp.allclose(dm[:, 1], 1.0)
 
 
 class TestMarginalizedLikelihood:
