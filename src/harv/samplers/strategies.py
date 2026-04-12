@@ -23,6 +23,7 @@ from harv.data import (
     InputData,
     RVData,
     SourceData,
+    SystemData,
     build_indicator_matrix,
     stack_datasets,
 )
@@ -33,8 +34,9 @@ from harv.likelihood.params import (
     GaiaAstrometryParameters,
     MarginalizedParameters,
     RVParameters,
+    SB2RVParameters,
 )
-from harv.likelihood.rv import RVLikelihood
+from harv.likelihood.rv import RVLikelihood, SB2RVLikelihood
 from harv.priors.rejection import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
@@ -255,11 +257,14 @@ class DataTypeStrategy(ABC):
         prior: RejectionPrior,
         data: InputData,
     ) -> tuple[str, ...]:
-        """All linear parameter names including multi-survey offsets."""
+        """All linear parameter names including trends and multi-survey offsets."""
         names: tuple[str, ...] = sum(
             (cls.linear_param_names for cls in self.full_cls),
             (),
         )
+        # Trend columns come after base linear params, before instrument offsets.
+        names = names + self._trend_column_names(prior)
+
         if (
             prior.offsets is not None
             and isinstance(data, SourceData)
@@ -267,6 +272,12 @@ class DataTypeStrategy(ABC):
         ):
             names = names + tuple(k for k, v in prior.offsets.items() if v is not None)
         return names
+
+    def _trend_column_names(self, prior: RejectionPrior) -> tuple[str, ...]:
+        """Trend column names implied by the prior's trend_priors."""
+        if prior.trend_priors is None:
+            return ()
+        return tuple(prior.trend_priors.keys())
 
 
 @final
@@ -317,6 +328,10 @@ class RVStrategy(DataTypeStrategy):
             data=rv_data,
             linear_marginalized_prior=linear_prior or None,
             offsets_marginalized_prior=offsets_prior,
+            trend_marginalized_prior=(
+                dict(prior.trend_priors) if prior.trend_priors is not None else None
+            ),
+            trend_order=prior.trend_order,
             indicator_matrix=indicator,
             instrument_names=instrument_names,
         )
@@ -347,6 +362,10 @@ class AstrometryStrategy(DataTypeStrategy):
         return GaiaAstrometryLikelihood(
             data=datasets["astro"],
             linear_marginalized_prior=linear_prior or None,
+            trend_marginalized_prior=(
+                dict(prior.trend_priors) if prior.trend_priors is not None else None
+            ),
+            trend_order=prior.trend_order,
         )
 
 
@@ -442,6 +461,51 @@ class CompositeStrategy(DataTypeStrategy):
         }
 
 
+@final
+class SB2Strategy(DataTypeStrategy):
+    """Strategy for double-lined spectroscopic binary (SB2) RV data."""
+
+    data_type = "sb2"
+
+    @property
+    def full_cls(self) -> tuple[type[AbstractParameters], ...]:
+        return (SB2RVParameters,)
+
+    def extract_data(
+        self,
+        data: InputData,
+    ) -> dict[str, AbstractData]:
+        if isinstance(data, SystemData):
+            return {"sb2": data}
+        msg = f"SB2Strategy expects SystemData, got {type(data)}"
+        raise TypeError(msg)
+
+    def build_likelihood(
+        self,
+        datasets: dict[str, Any],
+        prior: RejectionPrior,
+        data: InputData,  # noqa: ARG002
+    ) -> Any:
+        sb2_data = datasets["sb2"]
+
+        linear_prior = None
+        if isinstance(prior.linear_prior, dict):
+            linear_prior = {
+                name: prior.linear_prior[name]
+                for name in SB2RVParameters.linear_param_names
+                if name in prior.linear_prior
+            }
+
+        return SB2RVLikelihood(
+            data=sb2_data,
+            linear_marginalized_prior=linear_prior or None,
+            trend_marginalized_prior=(
+                dict(prior.trend_priors) if prior.trend_priors is not None else None
+            ),
+            trend_order=prior.trend_order,
+        )
+
+
 # SB2 strategy placeholder — requires SystemData (not yet implemented).
 # See spec §Planned: SystemData for details.
 # class SB2Strategy(DataTypeStrategy): ...
@@ -449,6 +513,7 @@ class CompositeStrategy(DataTypeStrategy):
 _STRATEGIES: dict[str, DataTypeStrategy] = {
     "rv": RVStrategy(),
     "astrometry": AstrometryStrategy(),
+    "sb2": SB2Strategy(),
     "combined": CompositeStrategy(
         astro=AstrometryStrategy(),
         rv=RVStrategy(),

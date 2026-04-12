@@ -8,6 +8,7 @@ __all__ = (
     "GaiaAstrometryData",
     # "AbsoluteAstrometryData",
     "RVData",
+    "SystemData",
     "SourceData",
     "DatasetType",
     "InputData",
@@ -277,6 +278,89 @@ DatasetType = AbstractAstrometryData | RVData
 _DT = TypeVar("_DT", bound=DatasetType)
 
 
+class SystemData(eqx.Module):
+    """Container for a multi-component system.
+
+    Each named component holds a :class:`DatasetType` (e.g. :class:`RVData`,
+    :class:`GaiaAstrometryData`) representing observations of a distinct
+    physical body or photocenter in a gravitationally bound system.
+
+    Unlike :class:`SourceData` (multiple instruments observing the *same*
+    source), ``SystemData`` represents *resolved components* of a multi-body
+    system (e.g. primary and secondary in an SB2).  The two containers may
+    eventually be composed: ``SystemData`` for per-component spectroscopy,
+    with a separate ``GaiaAstrometryData`` (or ``SourceData``) for the
+    unresolved photocenter astrometry.
+
+    Parameters are passed as keyword arguments where the key is the component
+    name and the value is the dataset.
+
+    Examples
+    --------
+    >>> data = SystemData(
+    ...     primary=RVData(...),
+    ...     secondary=RVData(...),
+    ... )
+    >>> data["primary"]
+    RVData(...)
+    """
+
+    _datasets: dict[str, DatasetType]
+
+    def __init__(self, **datasets: DatasetType) -> None:
+        if not datasets:
+            raise ValueError("At least one component must be provided")
+        for name, ds in datasets.items():
+            if not isinstance(ds, AbstractData):
+                raise TypeError(
+                    f"Component '{name}' must be an AbstractData subclass "
+                    f"(RVData, GaiaAstrometryData, ...), got {type(ds).__name__}"
+                )
+        object.__setattr__(self, "_datasets", datasets)
+
+    # -- Dict-like interface (mirrors SourceData) --
+
+    def __getitem__(self, name: str) -> DatasetType:
+        return self._datasets[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._datasets
+
+    def __len__(self) -> int:
+        return len(self._datasets)
+
+    def keys(self) -> Iterator[str]:
+        """Component names."""
+        return iter(self._datasets.keys())
+
+    def values(self) -> Iterator[DatasetType]:
+        """Component datasets."""
+        return iter(self._datasets.values())
+
+    def items(self) -> Iterator[tuple[str, DatasetType]]:
+        """(name, dataset) pairs."""
+        return iter(self._datasets.items())
+
+    def get_datasets_by_type(self, dtype: type[_DT]) -> dict[str, _DT]:
+        """Get all components of a specific data type."""
+        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}
+
+    # -- Convenience properties --
+
+    @property
+    def t_ref(self) -> NTime:
+        """Reference epoch from the first component."""
+        return next(iter(self._datasets.values())).t_ref
+
+    def _get_obs(self) -> AbstractQuantity:
+        """Concatenated observations across all components (key order)."""
+        return jnp.concatenate([ds._get_obs() for ds in self._datasets.values()])
+
+    def _get_obs_err(self) -> AbstractQuantity:
+        """Concatenated uncertainties across all components (key order)."""
+        return jnp.concatenate([ds._get_obs_err() for ds in self._datasets.values()])
+
+
 class SourceData(eqx.Module):
     """Container for multiple named datasets for a single source.
 
@@ -335,7 +419,7 @@ class SourceData(eqx.Module):
 
 # Type alias for any top-level input accepted by the sampler and likelihoods.
 # Use this instead of AbstractData in signatures that also accept SourceData.
-InputData = AbstractData | SourceData
+InputData = AbstractData | SourceData | SystemData
 
 
 def stack_datasets(

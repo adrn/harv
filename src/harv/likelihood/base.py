@@ -11,7 +11,6 @@ import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import AbstractQuantity, Quantity, ustrip
 
-from harv.data import AbstractData
 from harv.likelihood.helpers import (
     LinearPriorCallable,
     LinearPriorDist,
@@ -35,7 +34,7 @@ class _MargLinearComponents(NamedTuple):
     linear_params: dict[str, jax.Array]
 
 
-class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Module):
+class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Module):
     """Abstract base class for likelihood components.
 
     Generic over the parameter struct type ``ParamT``. Subclasses declare
@@ -50,6 +49,9 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
 
     linear_marginalized_prior: LinearPriorDist | None = None
     offsets_marginalized_prior: Mapping[str, PriorDist | LinearPriorCallable] | None = (
+        None
+    )
+    trend_marginalized_prior: Mapping[str, PriorDist | LinearPriorCallable] | None = (
         None
     )
     indicator_matrix: jax.Array | None = None
@@ -82,11 +84,22 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
                 )
 
     @property
+    def trend_column_names(self) -> tuple[str, ...]:
+        """Names of trend columns appended to the design matrix.
+
+        Subclasses that support polynomial trends override this to return
+        ``("trend_1", "trend_2", ...)`` for a trend of order *n*.  The base
+        implementation returns an empty tuple (no trend).
+        """
+        return ()
+
+    @property
     def _has_marginalized(self) -> bool:
         """Whether any linear parameters have marginalized priors."""
         return (
             len(self.linear_marginalized_prior or {})
             + len(self.offsets_marginalized_prior or {})
+            + len(self.trend_marginalized_prior or {})
         ) > 0
 
     # Abstract methods:
@@ -164,8 +177,13 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
         linear_params = self.linear_unmarginalized_param_values(params, offsets)
 
         # Full column ordering of the design matrix: base linear params first,
-        # then one column per non-reference instrument (if multi-survey).
-        cols = (*params.source_cls.linear_param_names, *(self.instrument_names or ()))
+        # then trend columns, then one column per non-reference instrument
+        # (if multi-survey).
+        cols = (
+            *params.source_cls.linear_param_names,
+            *self.trend_column_names,
+            *(self.instrument_names or ()),
+        )
         base_names = params.source_cls.linear_param_names
 
         # Classify each column as explicit (value known) or marginalized:
@@ -203,6 +221,12 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
         else:
             linear_prior = {}
 
+        # Append trend priors for marginalized trend columns.
+        if self.trend_marginalized_prior is not None:
+            for name in self.trend_marginalized_prior:
+                if name in marg_names:
+                    linear_prior[name] = self.trend_marginalized_prior[name]
+
         # Append offset priors for marginalized instrument offsets.
         if self.offsets_marginalized_prior is not None:
             for name in self.offsets_marginalized_prior:
@@ -216,6 +240,14 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
             for n in marg_names
             if n in self.linear_param_units
         }
+
+        # Trend columns share the obs unit (trend coefficients have units
+        # like km/s/day^k for RV, mas/yr^k for astrometry — but the design
+        # matrix absorbs the time powers, so the coefficient unit matches the
+        # observation unit, same as offsets).
+        for n in marg_names:
+            if n in self.trend_column_names:
+                marg_units[n] = obs_unit
 
         # offset columns share the obs unit — add those too:
         for n in marg_names:
@@ -341,7 +373,11 @@ class AbstractLikelihood[DataT: AbstractData, ParamT: AbstractParameters](eqx.Mo
             if isinstance(params, MarginalizedParameters)
             else params.linear_param_names
         )
-        cols = (*linear_names, *(self.instrument_names or ()))
+        cols = (
+            *linear_names,
+            *self.trend_column_names,
+            *(self.instrument_names or ()),
+        )
         y = jnp.array([linear_params.get(name, 0.0) for name in cols])
 
         y_pred = X @ y

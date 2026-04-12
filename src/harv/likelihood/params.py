@@ -196,6 +196,36 @@ class GaiaAstrometryParameters(AbstractParameters):
 
 
 @final
+class SB2RVParameters(AbstractParameters):
+    """Full parameter set for the SB2 (double-lined) RV likelihood.
+
+    Three linear parameters: the primary and secondary semi-amplitudes plus
+    the shared systemic velocity.
+
+    Parameters
+    ----------
+    period, eccentricity, phase_peri, arg_peri
+        Nonlinear orbital parameters (inherited from ``AbstractParameters``).
+    rv_semiamp_1 : BatchQSpeed
+        Primary RV semi-amplitude.
+    rv_semiamp_2 : BatchQSpeed
+        Secondary RV semi-amplitude.
+    v_sys : BatchQSpeed
+        Systemic velocity.
+    """
+
+    linear_param_names: ClassVar[tuple[str, ...]] = (
+        "rv_semiamp_1",
+        "rv_semiamp_2",
+        "v_sys",
+    )
+
+    rv_semiamp_1: BatchQSpeed
+    rv_semiamp_2: BatchQSpeed
+    v_sys: BatchQSpeed
+
+
+@final
 class MarginalizedParameters(eqx.Module):
     """Wrapper that holds non-marginalized field values as a pytree.
 

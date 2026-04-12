@@ -22,7 +22,11 @@ from harv.likelihood.helpers import (
     _needs_explicit_sampling,
     _unwrap_dist,
 )
-from harv.likelihood.params import GaiaAstrometryParameters, RVParameters
+from harv.likelihood.params import (
+    GaiaAstrometryParameters,
+    RVParameters,
+    SB2RVParameters,
+)
 from harv.priors.custom import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
@@ -169,6 +173,10 @@ class RejectionPrior(eqx.Module):
     # with linear params.
     offsets: dict[str, dict[str, QuantityDistribution | None]] | None = None
 
+    # Polynomial trend support
+    trend_order: int = 0
+    trend_priors: dict[str, LinearPriorDist] | None = None
+
     # TODO: need to add something like this, to support, e.g., adding more complex model
     # extensions. For example, might want to add a Gaussian Process RV model with its
     # own hyperparameters to model a source with Keplerian + stellar activity.
@@ -259,6 +267,8 @@ class RejectionPrior(eqx.Module):
         P0: Quantity["time"] = Quantity(1.0, "yr"),
         offsets: dict[str, QuantityDistribution | None] | None = None,
         marginalize_names: tuple[str, ...] | None = None,
+        trend_order: int = 0,
+        trend_priors: dict[str, LinearPriorDist] | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
@@ -327,6 +337,8 @@ class RejectionPrior(eqx.Module):
             linear_prior=linear_prior,
             marginalize_names=marginalize_names,
             offsets={"rv": offsets},
+            trend_order=trend_order,
+            trend_priors=trend_priors,
         )
 
     @classmethod
@@ -341,6 +353,8 @@ class RejectionPrior(eqx.Module):
         sigma_vtan: Quantity["speed"],
         P0: Quantity["time"] = Quantity(1.0, "yr"),
         marginalize_names: tuple[str, ...] | None = None,
+        trend_order: int = 0,
+        trend_priors: dict[str, LinearPriorDist] | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
@@ -437,6 +451,76 @@ class RejectionPrior(eqx.Module):
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             marginalize_names=marginalize_names,
+            trend_order=trend_order,
+            trend_priors=trend_priors,
+        )
+
+    @classmethod
+    def default_sb2(
+        cls,
+        *,
+        period_min: Quantity["time"],
+        period_max: Quantity["time"],
+        sigma_K0: Quantity["speed"],
+        sigma_v0: Quantity["speed"],
+        P0: Quantity["time"] = Quantity(1.0, "yr"),
+        marginalize_names: tuple[str, ...] | None = None,
+        trend_order: int = 0,
+        trend_priors: dict[str, LinearPriorDist] | None = None,
+        **kwargs: PriorDist,
+    ) -> "RejectionPrior":
+        r"""Create default prior for SB2 (double-lined) radial velocity data.
+
+        Both semi-amplitudes use the same period-dependent scaling as
+        :meth:`default_rv`.  The systemic velocity prior is a fixed Gaussian.
+
+        Parameters
+        ----------
+        period_min : Quantity["time"]
+            Lower bound for the log-uniform period prior.
+        period_max : Quantity["time"]
+            Upper bound for the log-uniform period prior.
+        sigma_K0 : Quantity["speed"]
+            RV semi-amplitude scale at the reference period ``P0``.
+        sigma_v0 : Quantity["speed"]
+            Systemic velocity prior scale.
+        P0 : Quantity["time"]
+            Reference period for the K prior scaling.  Default: 1 yr.
+        marginalize_names : tuple[str, ...] | None
+            Subset of linear params to analytically marginalize.
+        trend_order : int
+            Polynomial trend order (default 0).
+        trend_priors : dict or None
+            Per-trend-column priors.
+        {overrides}
+
+        Returns
+        -------
+        prior : RejectionPrior
+        """
+        nonlinear: dict[str, PriorDist] = {
+            "period": _make_log_period_prior(period_min, period_max),
+            "eccentricity": kipping_2013_ecc_prior,
+            "phase_peri": dist.Uniform(0.0, 1.0),
+            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+        }
+
+        linear_prior: dict[str, Any] = {
+            "rv_semiamp_1": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
+            "rv_semiamp_2": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
+            "v_sys": QuantityDistribution(
+                dist.Normal(0.0, sigma_v0.value), str(sigma_v0.unit)
+            ),
+        }
+
+        _apply_overrides(kwargs, nonlinear, linear_prior, SB2RVParameters)
+
+        return cls(
+            nonlinear_priors=nonlinear,
+            linear_prior=linear_prior,
+            marginalize_names=marginalize_names,
+            trend_order=trend_order,
+            trend_priors=trend_priors,
         )
 
 
@@ -449,5 +533,10 @@ RejectionPrior.default_rv.__func__.__doc__ = (
 RejectionPrior.default_gaia_astrometry.__func__.__doc__ = (
     RejectionPrior.default_gaia_astrometry.__func__.__doc__.replace(
         "{overrides}", _override_params_doc(GaiaAstrometryParameters)
+    )
+)
+RejectionPrior.default_sb2.__func__.__doc__ = (
+    RejectionPrior.default_sb2.__func__.__doc__.replace(
+        "{overrides}", _override_params_doc(SB2RVParameters)
     )
 )

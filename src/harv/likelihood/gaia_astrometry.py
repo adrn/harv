@@ -31,6 +31,7 @@ true anomaly.
 from typing import final
 
 import jax
+import numpy as np
 import quaxed.numpy as jnp
 from unxt import ustrip
 from unxt.quantity import AllowValue
@@ -127,53 +128,53 @@ class GaiaAstrometryLikelihood(
     :class:`GaiaAstrometryParameters` and the likelihood is evaluated
     explicitly.
 
-    Parameters
-    ----------
-    data : GaiaAstrometryData
-        Gaia epoch astrometry observations.
-    linear_marginalized_prior : dict[str, PriorDist | LinearPriorCallable] or None
-        Per-parameter Gaussian priors for linear parameters to be analytically
-        marginalized.  Keys are parameter names (``"ra0"``, ``"dec0"``,
-        ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"``).
-        Values are ``dist.Normal``,
-        ``QuantityDistribution(dist.Normal(...), unit)``, or a callable
-        ``(params) -> dist.Normal``.  ``None`` for explicit evaluation.
-
-    Examples
-    --------
-    Marginalized over all 6 linear parameters::
-
-        lik = GaiaAstrometryLikelihood(
-            data=gaia_data,
-            linear_marginalized_prior={
-                "ra0": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
-                "dec0": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
-                "pmra": QuantityDistribution(dist.Normal(0., 1e3), "mas/yr"),
-                "pmdec": QuantityDistribution(dist.Normal(0., 1e3), "mas/yr"),
-                "parallax": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
-                "semi_major_axis": QuantityDistribution(dist.Normal(0., 1e3), "mas"),
-            },
-        )
-        ll = lik.log_prob(marg_params)
-
-    Explicit::
-
-        lik = GaiaAstrometryLikelihood(data=gaia_data)
-        ll = lik.log_prob(full_astro_params)
+    Polynomial trends via ``trend_order`` append higher-order proper-motion
+    acceleration columns.  Each order *k* adds two columns (RA and Dec
+    components): ``cos(ψ)·dt^(k+1)`` and ``sin(ψ)·dt^(k+1)``, where
+    ``dt = (t - t_ref)`` in the internal astrometry time unit. The ``+1``
+    offset is because order-0 proper motion (dt^1) is already in the base
+    5-parameter solution.
     """
+
+    trend_order: int = 0
+
+    @property
+    def trend_column_names(self) -> tuple[str, ...]:
+        """Names of trend columns: two per order (RA + Dec component)."""
+        names: list[str] = []
+        for k in range(1, self.trend_order + 1):
+            names.append(f"trend_ra_{k}")
+            names.append(f"trend_dec_{k}")
+        return tuple(names)
 
     def design_matrix(
         self, params: MarginalizedParameters | GaiaAstrometryParameters
     ) -> jax.Array:
-        """Build the (n_obs, 6) design matrix for the given parameters."""
+        """Build the design matrix, optionally including trend columns."""
         sin_f, cos_f = _solve_kepler(self.data, params)
-        return _get_design_matrix_gaia_ast(self.data, params, sin_f, cos_f)
+        X = _get_design_matrix_gaia_ast(self.data, params, sin_f, cos_f)
+
+        if self.trend_order > 0:
+            dt = np.asarray(ustrip(_AST_TIME_UNIT, self.data.time - self.data.t_ref))
+            scan_angle_rad = np.asarray(ustrip("rad", self.data.scan_angle))
+            cos_psi = jnp.cos(scan_angle_rad)
+            sin_psi = jnp.sin(scan_angle_rad)
+            # Each order k adds columns cos(ψ)·dt^(k+1), sin(ψ)·dt^(k+1).
+            # k+1 because dt^1 proper motion is already in the base matrix.
+            trend_cols = []
+            for k in range(1, self.trend_order + 1):
+                dt_power = dt ** (k + 1)
+                trend_cols.append(cos_psi * dt_power)
+                trend_cols.append(sin_psi * dt_power)
+            X = jnp.concatenate([X, jnp.stack(trend_cols, axis=-1)], axis=-1)
+
+        return X
 
     @property
     def linear_param_units(self) -> dict[str, str]:
-        """Units of the linear astrometric parameters."""
+        """Units of the linear astrometric parameters (incl. trend columns)."""
         u = str(self.data.al_position.unit)
-        return {
+        units: dict[str, str] = {
             "ra0": u,
             "dec0": u,
             "pmra": f"{u}/{_AST_TIME_UNIT}",
@@ -181,3 +182,6 @@ class GaiaAstrometryLikelihood(
             "parallax": u,
             "semi_major_axis": u,
         }
+        for name in self.trend_column_names:
+            units[name] = u
+        return units
