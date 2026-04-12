@@ -384,9 +384,9 @@ def _build_extra_numpyro_model(
             c_fixed_global = [i for i in global_indices if i in set(fixed_idx)]
             c_free_global = [i for i in global_indices if i in set(free_idx)]
 
-            g2l = {g: lc for lc, g in enumerate(global_indices)}
-            c_fixed_local = [g2l[i] for i in c_fixed_global]
-            c_free_local = [g2l[i] for i in c_free_global]
+            global_to_local_idx = {g: loc for loc, g in enumerate(global_indices)}
+            c_fixed_local = [global_to_local_idx[i] for i in c_fixed_global]
+            c_free_local = [global_to_local_idx[i] for i in c_free_global]
 
             dm = comp_lik.design_matrix(base_params)
             obs = ustrip(comp_lik.data._get_obs())

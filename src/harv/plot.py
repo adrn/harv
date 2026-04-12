@@ -2,10 +2,86 @@
 
 __all__ = ("get_t_grid",)
 
+from typing import Any
+
 import numpy as np
 from unxt import Quantity, ustrip
 
 from .custom_types import BatchQTime
+
+_DEFAULT_ERRORBAR_STYLE: dict[str, Any] = {
+    "linestyle": "none",
+    "marker": "o",
+    "markersize": 4.0,
+    "elinewidth": 1.0,
+    "capsize": 0,
+    "color": "k",
+    "ecolor": "#666666",
+    "zorder": 10,
+}
+
+
+def _plot_timeseries_errorbar(
+    ax: Any,
+    time: Any,
+    obs: Any,
+    obs_err: Any,
+    *,
+    time_unit: str,
+    obs_unit: str,
+    t_ref: Any | None = None,
+    relative_to_t_ref: bool = False,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    add_labels: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """Plot observation vs time as error bars (internal helper).
+
+    Parameters
+    ----------
+    ax
+        Matplotlib axes to draw on.
+    time, obs, obs_err
+        Quantity arrays for time, observation, and uncertainty.
+    time_unit, obs_unit
+        Unit strings for axes.
+    t_ref
+        Reference epoch (Quantity or None).
+    relative_to_t_ref
+        Subtract ``t_ref`` from times before plotting.
+    xlabel, ylabel
+        Axis label overrides.
+    add_labels
+        Whether to set axis labels.
+    **kwargs
+        Forwarded to ``ax.errorbar()``, overriding defaults.
+    """
+    t = np.asarray(ustrip(time_unit, time))
+    if relative_to_t_ref and t_ref is not None:
+        t = t - float(ustrip(time_unit, t_ref))
+
+    style = {**_DEFAULT_ERRORBAR_STYLE, **kwargs}
+
+    ax.errorbar(
+        t,
+        np.asarray(ustrip(obs_unit, obs)),
+        yerr=np.asarray(ustrip(obs_unit, obs_err)),
+        **style,
+    )
+
+    if add_labels:
+        if xlabel is None:
+            xlabel = (
+                f"Time $-$ t_ref [{time_unit}]"
+                if relative_to_t_ref
+                else f"Time [{time_unit}]"
+            )
+        if ylabel is not None:
+            ax.set_ylabel(ylabel)
+        ax.set_xlabel(xlabel)
+
+    return ax
 
 
 def get_t_grid(

@@ -159,26 +159,15 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         return vals
 
-    def _build_marginalized_linear(  # noqa: C901
+    def _classify_linear_columns(
         self,
         params: MarginalizedParameters,
         offsets: dict[str, AbstractQuantity],
-    ) -> _MargLinearComponents:
-        """Build the MarginalizedLinear distribution and residual observations.
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        """Classify design-matrix columns as explicit or marginalized.
 
-        Shared by `_log_prob_marginalized` and `sample_conditional_linear`.
-        Handles column classification, explicit-parameter subtraction, prior
-        assembly, and construction of the ``MarginalizedLinear`` instance.
+        Returns (cols, base_names, explicit_names, marg_names).
         """
-        X = self.design_matrix(params)
-
-        # Unit-stripped values for all non-marginalized linear parameters
-        # (including any explicitly-provided offsets).
-        linear_params = self.linear_unmarginalized_param_values(params, offsets)
-
-        # Full column ordering of the design matrix: base linear params first,
-        # then trend columns, then one column per non-reference instrument
-        # (if multi-survey).
         cols = (
             *params.source_cls.linear_param_names,
             *self.trend_column_names,
@@ -203,15 +192,19 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
                 "cannot build MarginalizedLinear"
             )
 
-        # Strip units from observed data and errors.
-        obs = self.data._get_obs()
-        obs_unit = str(obs.unit)
-        arr_obs = jnp.array(ustrip(obs_unit, obs))
-        arr_obs_err = jnp.array(ustrip(obs_unit, self.data._get_obs_err()))
+        return cols, base_names, explicit_names, marg_names
 
-        # Now, assemble the linear prior for marginalized parameters:
+    def _assemble_linear_prior(
+        self,
+        marg_names: tuple[str, ...],
+        base_names: tuple[str, ...],
+        obs_unit: str,
+    ) -> tuple[dict[str, PriorDist | LinearPriorCallable], dict[str, str]]:
+        """Gather priors and units for marginalized columns.
 
-        # Gather base linear priors for marginalized params.
+        Returns (linear_prior, marg_units).
+        """
+        # Base linear priors
         if self.linear_marginalized_prior is not None:
             linear_prior: dict[str, PriorDist | LinearPriorCallable] = {
                 name: self.linear_marginalized_prior[name]
@@ -221,20 +214,19 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         else:
             linear_prior = {}
 
-        # Append trend priors for marginalized trend columns.
+        # Trend priors
         if self.trend_marginalized_prior is not None:
             for name in self.trend_marginalized_prior:
                 if name in marg_names:
                     linear_prior[name] = self.trend_marginalized_prior[name]
 
-        # Append offset priors for marginalized instrument offsets.
+        # Offset priors
         if self.offsets_marginalized_prior is not None:
             for name in self.offsets_marginalized_prior:
                 if name in marg_names:
                     linear_prior[name] = self.offsets_marginalized_prior[name]
 
-        # Collect physical units for each marginalized column so
-        # _resolve_linear_prior_mvn can convert QuantityDistributions.
+        # Units: base params from linear_param_units, trend/offset columns use obs_unit
         marg_units = {
             n: self.linear_param_units[n]
             for n in marg_names
@@ -254,12 +246,28 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
             if self.instrument_names is not None and n in self.instrument_names:
                 marg_units[n] = obs_unit
 
-        # If a prior entry is dist.Delta, the parameter is effectively fixed at a known
-        # value. Reclassify it as explicit so its contribution is subtracted from the
-        # observations rather than marginalized over.
-        # NOTE: this only catches Delta entries specified directly in the prior dicts.
-        # A LinearPriorCallable that *returns* a Delta is not caught here and will raise
-        # TypeError in _resolve_linear_prior_mvn.
+        return linear_prior, marg_units
+
+    @staticmethod
+    def _handle_delta_priors(
+        linear_prior: dict[str, PriorDist | LinearPriorCallable],
+        marg_units: dict[str, str],
+        obs_unit: str,
+        explicit_names: tuple[str, ...],
+        marg_names: tuple[str, ...],
+        linear_params: dict[str, jax.Array],
+    ) -> tuple[
+        dict[str, PriorDist | LinearPriorCallable],
+        dict[str, str],
+        tuple[str, ...],
+        tuple[str, ...],
+        dict[str, jax.Array],
+    ]:
+        """Reclassify Delta priors as explicit parameters.
+
+        Returns updated (linear_prior, marg_units, explicit_names, marg_names,
+        linear_params).
+        """
         delta_fixed: dict[str, jax.Array] = {}
         for name in list(linear_prior.keys()):
             # NOTE: we modify the linear_prior dict in place, so we need to list() the
@@ -286,7 +294,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
             # Reclassify Delta columns from "marginalized" to "explicit"
             explicit_names = (*explicit_names, *delta_fixed)
             marg_names = tuple(n for n in marg_names if n not in delta_fixed)
-            linear_params.update(delta_fixed)
+            linear_params = {**linear_params, **delta_fixed}
             marg_units = {n: v for n, v in marg_units.items() if n not in delta_fixed}
 
         if len(marg_names) == 0:
@@ -295,9 +303,50 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
                 "cannot build MarginalizedLinear"
             )
 
-        # Subtract the contribution of all explicit linear parameters (including any
-        # dist.Delta params) from the observations so the MarginalizedLinear only sees
-        # the residual.
+        return linear_prior, marg_units, explicit_names, marg_names, linear_params
+
+    def _build_marginalized_linear(
+        self,
+        params: MarginalizedParameters,
+        offsets: dict[str, AbstractQuantity],
+    ) -> _MargLinearComponents:
+        """Build the MarginalizedLinear distribution and residual observations.
+
+        Shared by `_log_prob_marginalized` and `sample_conditional_linear`.
+        Handles column classification, explicit-parameter subtraction, prior
+        assembly, and construction of the ``MarginalizedLinear`` instance.
+        """
+        X = self.design_matrix(params)
+        linear_params = self.linear_unmarginalized_param_values(params, offsets)
+
+        cols, base_names, explicit_names, marg_names = self._classify_linear_columns(
+            params, offsets
+        )
+
+        # Strip units from observed data and errors.
+        obs = self.data._get_obs()
+        obs_unit = str(obs.unit)
+        arr_obs = jnp.array(ustrip(obs_unit, obs))
+        arr_obs_err = jnp.array(ustrip(obs_unit, self.data._get_obs_err()))
+
+        linear_prior, marg_units = self._assemble_linear_prior(
+            marg_names, base_names, obs_unit
+        )
+
+        # Reclassify any Delta priors as explicit.
+        linear_prior, marg_units, explicit_names, marg_names, linear_params = (
+            self._handle_delta_priors(
+                linear_prior,
+                marg_units,
+                obs_unit,
+                explicit_names,
+                marg_names,
+                linear_params,
+            )
+        )
+
+        # Subtract the contribution of all explicit linear parameters from the
+        # observations so the MarginalizedLinear only sees the residual.
         if explicit_names:
             idx = jnp.array([cols.index(n) for n in explicit_names])
             y = jnp.array([linear_params[n] for n in explicit_names])

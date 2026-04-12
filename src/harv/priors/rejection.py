@@ -7,6 +7,7 @@ The prior is agnostic to data type - it simply holds distributions for any/all
 parameters. The sampler validates which parameters are needed based on the data.
 """
 
+import warnings
 from typing import Any
 
 import equinox as eqx
@@ -217,6 +218,12 @@ class RejectionPrior(eqx.Module):
                     new_marg = tuple(
                         n for n in self.marginalize_names if n not in explicit
                     )
+                warnings.warn(
+                    f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be "
+                    f"analytically marginalized and will be sampled explicitly. "
+                    f"Marginalized parameters: {new_marg}",
+                    stacklevel=2,
+                )
                 object.__setattr__(self, "marginalize_names", new_marg)
 
         # TODO:

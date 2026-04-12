@@ -99,51 +99,8 @@ def _build_trend_columns(
 
     Returns shape ``(n_obs, order)``.
 
-    .. note:: **Pluggable basis (future)**
-
-       To support alternative bases (Chebyshev, B-splines, etc.), replace
-       this function with a callable protocol::
-
-           class TrendBasis(Protocol):
-               n_basis: int
-               names: tuple[str, ...]          # one per output column
-               def __call__(
-                   self, times: jax.Array, t_ref: float,
-               ) -> jax.Array:                 # (n_obs, n_basis)
-                   ...
-
-       ``RVLikelihood`` (and ``GaiaAstrometryLikelihood``) would then accept
-       ``trend_basis: TrendBasis | None`` instead of ``trend_order: int``.
-       The monomial implementation becomes::
-
-           @dataclass
-           class MonomialBasis:
-               order: int
-               @property
-               def n_basis(self) -> int: return self.order
-               @property
-               def names(self) -> tuple[str, ...]:
-                   return tuple(f"trend_{k}" for k in range(1, self.order + 1))
-               def __call__(self, times, t_ref):
-                   dt = times - t_ref
-                   return jnp.column_stack([dt**k for k in range(1, self.order+1)])
-
-       A Chebyshev basis would return columns of Chebyshev polynomials evaluated
-       on a normalized domain [-1, 1] mapped from the observation time span.
-       A B-spline basis would use a fixed knot vector and return the spline
-       basis functions at each time.
-
-       **Key contract**: the basis must NOT include a constant column (order 0),
-       since that role is already filled by ``v_sys`` / ``ra0`` / ``dec0``.
-
-       Changes required to support a pluggable basis:
-       1. Define the ``TrendBasis`` protocol (here or in a new ``trends.py``).
-       2. Replace ``trend_order: int`` fields with ``trend_basis: TrendBasis | None``
-          on ``RVLikelihood`` and ``GaiaAstrometryLikelihood``.
-       3. Derive ``trend_column_names`` from ``trend_basis.names`` instead of the
-          current auto-generated ``trend_1``, ``trend_2``, ... names.
-       4. Update ``strategies.py`` to pass the basis object through.
-       5. Update ``RejectionPrior`` factory methods to accept a basis.
+    See "Pluggable trend basis" in ``docs/spec.md`` for the planned
+    ``TrendBasis`` protocol that will generalize this helper.
     """
     dt = times - t_ref
     return jnp.column_stack([dt**k for k in range(1, order + 1)])

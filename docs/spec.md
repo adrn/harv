@@ -608,9 +608,8 @@ Trend priors are passed via `trend_marginalized_prior` on the likelihood and
 
 **Pluggable basis (future):** The current implementation uses a power-law monomial
 basis. To support alternative bases (Chebyshev, B-splines), replace the
-`_build_trend_columns` helper with a `TrendBasis` protocol accepting `(times, t_ref)`
-and returning an `(n_obs, n_basis)` matrix. See the detailed notes in
-`harv.likelihood.rv._build_trend_columns`.
+`_build_trend_columns` helper with a `TrendBasis` protocol. See
+"Pluggable trend basis" under Planned features for the full design.
 
 ### `SB2RVLikelihood`
 
@@ -1137,6 +1136,56 @@ posterior samples are accepted. Useful when the likelihood is very constraining.
 
 - **Absolute astrometry** (RA/Dec timeseries from ground-based or HST observations)
 - **Relative astrometry** (separation and position angle from direct imaging)
+
+**TODO:** `AbsoluteAstrometryData` is currently commented out in `harv.data`. Before
+implementing, define the required fields (time, RA, Dec, errors, covariance structure)
+and add the corresponding likelihood class.
+
+### Source motion models (`harv.simulate.source`)
+
+`simulate/source.py` contains an incomplete `AbstractSource` hierarchy for modeling
+astrometric source motion (linear proper motion, small-angle approximation,
+accelerated motion from a Keplerian companion). The subclasses
+(`LinearMotion3DSource`, `LinearMotionSmallAngleSource`, `Accelerating3DSource`)
+are partially implemented and not yet functional.
+
+**TODO:** Finish the `AbstractSource` hierarchy:
+
+- Fix `LinearMotionSmallAngleSource.offset_sky` (references undefined `xyz_t`).
+- Fix `Accelerating3DSource` (references nonexistent `SingleStarSource`).
+- Define the `offset_sky` contract on `AbstractSource` (currently raises
+  `NotImplementedError`).
+- Integrate with `simulate_gaia_epoch_astrometry` once complete.
+
+### Pluggable trend basis
+
+The current polynomial trend implementation uses a monomial basis
+`[(t-t_ref)^1, ..., (t-t_ref)^k]` via the `_build_trend_columns` helper. To support
+alternative bases (Chebyshev, B-splines), replace this with a `TrendBasis` protocol::
+
+    class TrendBasis(Protocol):
+        n_basis: int
+        names: tuple[str, ...]          # one per output column
+        def __call__(
+            self, times: jax.Array, t_ref: float,
+        ) -> jax.Array:                 # (n_obs, n_basis)
+            ...
+
+The monomial implementation becomes a concrete `MonomialBasis` class. A Chebyshev
+basis would return columns evaluated on a normalized [-1, 1] domain mapped from the
+observation time span. A B-spline basis would use a fixed knot vector.
+
+**Key contract**: The basis must NOT include a constant column (order 0), since that
+role is already filled by ``v_sys`` / ``ra0`` / ``dec0``.
+
+Changes required:
+
+1. Define the ``TrendBasis`` protocol (in ``trends.py`` or ``likelihood/rv.py``).
+2. Replace ``trend_order: int`` fields with ``trend_basis: TrendBasis | None``
+   on ``RVLikelihood`` and ``GaiaAstrometryLikelihood``.
+3. Derive ``trend_column_names`` from ``trend_basis.names``.
+4. Update ``strategies.py`` to pass the basis object through.
+5. Update ``RejectionPrior`` factory methods to accept a basis.
 
 ______________________________________________________________________
 
