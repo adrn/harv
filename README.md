@@ -1,9 +1,6 @@
 # harv
 
 [![Tests](https://github.com/adrn/harv/actions/workflows/test.yml/badge.svg)](https://github.com/adrn/harv/actions/workflows/test.yml)
-
-<!-- [![Lint](https://github.com/adrn/harv/actions/workflows/lint.yml/badge.svg)](https://github.com/adrn/harv/actions/workflows/lint.yml) -->
-
 [![Docs](https://readthedocs.org/projects/harv/badge/?version=latest)](https://harv.readthedocs.io/en/latest/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
@@ -14,6 +11,10 @@ and star–exoplanet systems from time series data. Built on
 and [unxt](https://github.com/GalacticDynamics/unxt) for units-aware computation.
 
 It's pronounced _harvey_.
+
+<p align="center">
+<img src="https://raw.githubusercontent.com/adrn/harv/main/docs/_static/logo_med.png" alt="harv logo" width="200">
+</p>
 
 <!-- ### Key features
 
@@ -48,7 +49,6 @@ uv add git+https://github.com/adrn/harv
 ### Radial velocity fitting
 
 ```python
-import jax.numpy as jnp
 from unxt import Q
 from harv.data import RVData
 from harv.samplers import RejectionPrior, RejectionSampler
