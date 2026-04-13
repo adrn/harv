@@ -40,6 +40,7 @@ from harv.samplers.samples import Samples, _WarmStartMCMC
 from harv.samplers.strategies import (
     _STRATEGIES,
     DataTypeStrategy,
+    _jitter_units_from_prior,
 )
 
 __all__ = ["RejectionSampler"]
@@ -263,6 +264,16 @@ class RejectionSampler(eqx.Module):
             for k, v in accepted_nonlinear.items()
             if k in _nl_keys
         }
+
+        # Include jitter samples (keyed by user-friendly names like
+        # "jitter_rv", "jitter_astrometry") in the nonlinear dict.
+        if self.prior.jitter_priors is not None:
+            for dt_label, d in self.prior.jitter_priors.items():
+                values_key = f"_jitter_{dt_label}"
+                user_key = f"jitter_{dt_label}"
+                if values_key in accepted_nonlinear:
+                    unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
+                    nonlinear_q[user_key] = Q(accepted_nonlinear[values_key], unit)
 
         return Samples(
             nonlinear=nonlinear_q,
@@ -568,22 +579,53 @@ class RejectionSampler(eqx.Module):
                         raw = ustrip(target_u, Q(raw, str(d.unit)))
                     prior_samples[name] = raw
 
+        # Sample jitter parameters from jitter_priors (keyed by data type).
+        # Each jitter sample is stored with a namespaced key (e.g.
+        # "_jitter_rv") that the strategy maps to the "jitter" param field.
+        _jitter_keys: list[str] = []
+        if self.prior.jitter_priors is not None:
+            key, jit_key = jr.split(key)
+            jit_keys = jr.split(jit_key, len(self.prior.jitter_priors))
+            for (dt_label, d), k in zip(
+                self.prior.jitter_priors.items(), jit_keys, strict=True
+            ):
+                values_key = f"_jitter_{dt_label}"
+                _jitter_keys.append(values_key)
+                raw = _unwrap_dist(d).sample(k, (n_total,))
+                # Convert to data units if the prior carries a unit.
+                obs_unit = str(
+                    next(iter(data.values())).time.unit
+                    if isinstance(data, SourceData)
+                    else data.time.unit
+                )
+                if isinstance(d, QuantityDistribution):
+                    # Jitter must be in the observation unit of the matching
+                    # data type.  For RV that's the RV unit (e.g. km/s), for
+                    # astrometry that's the AL unit (e.g. mas).  The strategy
+                    # will pass the raw value through -- we keep it in the
+                    # prior's unit for now; the likelihood strips units.
+                    pass  # keep raw (unitless sample from the underlying dist)
+                prior_samples[values_key] = raw
+
         # Reshape all parameter arrays into (n_batches, batch_size).
         _zeros = jnp.zeros(n_total)
+        _required_keys = list(strategy.required_prior_params(self.prior))
+        _required_keys.extend(_jitter_keys)
         batched: dict[str, jax.Array] = {
             k: prior_samples.get(k, _zeros).reshape(n_batches, self.batch_size)
-            for k in strategy.required_prior_params(self.prior)
+            for k in _required_keys
         }
 
         # Static list of keys for dict reconstruction inside the fori_loop.
         _keys = tuple(batched.keys())
         _marg_names = self.prior.marginalize_names
         _lp_units = lik.linear_param_units
+        _ju = _jitter_units_from_prior(self.prior)
 
         def body_fn(i: int, acc: jax.Array) -> jax.Array:
             values = {k: batched[k][i] for k in _keys}
             params = strategy.build_marginalized_params(
-                values, time_unit, _marg_names, _lp_units
+                values, time_unit, _marg_names, _lp_units, _ju
             )
             return acc.at[i].set(jax.vmap(lik.log_prob)(params))
 

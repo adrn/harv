@@ -178,6 +178,13 @@ class RejectionPrior(eqx.Module):
     trend_order: int = 0
     trend_priors: dict[str, LinearPriorDist] | None = None
 
+    # Per-data-type jitter (excess variance) priors.
+    # Keys are data-type labels: ``"rv"``, ``"astrometry"``, ``"sb2"``.
+    # Values are distributions whose samples are added in quadrature to the
+    # observation uncertainties.  Use ``QuantityDistribution`` to attach
+    # physical units (e.g. ``QD(dist.HalfNormal(1.0), "km/s")``).
+    jitter_priors: dict[str, PriorDist] | None = None
+
     # TODO: need to add something like this, to support, e.g., adding more complex model
     # extensions. For example, might want to add a Gaussian Process RV model with its
     # own hyperparameters to model a source with Keplerian + stellar activity.
@@ -276,6 +283,7 @@ class RejectionPrior(eqx.Module):
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
+        jitter_scale: Q["speed"] | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
@@ -339,6 +347,15 @@ class RejectionPrior(eqx.Module):
 
         _apply_overrides(kwargs, nonlinear, linear_prior, RVParameters)
 
+        jitter_priors = None
+        if jitter_scale is not None:
+            jitter_priors = {
+                "rv": QuantityDistribution(
+                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
+                    str(jitter_scale.unit),
+                )
+            }
+
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
@@ -346,6 +363,7 @@ class RejectionPrior(eqx.Module):
             offsets={"rv": offsets},
             trend_order=trend_order,
             trend_priors=trend_priors,
+            jitter_priors=jitter_priors,
         )
 
     @classmethod
@@ -362,6 +380,7 @@ class RejectionPrior(eqx.Module):
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
+        jitter_scale: Q["angle"] | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
@@ -454,12 +473,22 @@ class RejectionPrior(eqx.Module):
 
         _apply_overrides(kwargs, nonlinear, linear_prior, GaiaAstrometryParameters)
 
+        jitter_priors = None
+        if jitter_scale is not None:
+            jitter_priors = {
+                "astrometry": QuantityDistribution(
+                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
+                    str(jitter_scale.unit),
+                )
+            }
+
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             marginalize_names=marginalize_names,
             trend_order=trend_order,
             trend_priors=trend_priors,
+            jitter_priors=jitter_priors,
         )
 
     @classmethod
@@ -474,6 +503,7 @@ class RejectionPrior(eqx.Module):
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
+        jitter_scale: Q["speed"] | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for SB2 (double-lined) radial velocity data.
@@ -522,12 +552,22 @@ class RejectionPrior(eqx.Module):
 
         _apply_overrides(kwargs, nonlinear, linear_prior, SB2RVParameters)
 
+        jitter_priors = None
+        if jitter_scale is not None:
+            jitter_priors = {
+                "rv": QuantityDistribution(
+                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
+                    str(jitter_scale.unit),
+                )
+            }
+
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             marginalize_names=marginalize_names,
             trend_order=trend_order,
             trend_priors=trend_priors,
+            jitter_priors=jitter_priors,
         )
 
 

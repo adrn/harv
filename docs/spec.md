@@ -447,11 +447,16 @@ processes the class.
 
 **Full parameter structs:**
 
-| Struct                     | Nonlinear (beyond base 4) | Linear fields                                                                  |
-| -------------------------- | ------------------------- | ------------------------------------------------------------------------------ |
-| `RVParameters`             | —                         | `rv_semiamp: BatchQSpeed`, `v_sys: BatchQSpeed`                                |
-| `SB2RVParameters`          | —                         | `rv_semiamp_1: BatchQSpeed`, `rv_semiamp_2: BatchQSpeed`, `v_sys: BatchQSpeed` |
-| `GaiaAstrometryParameters` | `cos_i`, `lon_asc_node`   | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis`                  |
+| Struct                     | Nonlinear (beyond base 4) | Linear fields                                                                  | Optional nonlinear         |
+| -------------------------- | ------------------------- | ------------------------------------------------------------------------------ | -------------------------- |
+| `RVParameters`             | —                         | `rv_semiamp: BatchQSpeed`, `v_sys: BatchQSpeed`                                | `jitter: BatchQSpeed \| None` |
+| `SB2RVParameters`          | —                         | `rv_semiamp_1: BatchQSpeed`, `rv_semiamp_2: BatchQSpeed`, `v_sys: BatchQSpeed` | `jitter: BatchQSpeed \| None` |
+| `GaiaAstrometryParameters` | `cos_i`, `lon_asc_node`   | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis`                  | `jitter: BatchQAngle \| None` |
+
+Optional nonlinear parameters (declared in `_optional_nonlinear_param_names`) default
+to `None` and are excluded from the auto-computed `nonlinear_param_names`. They do not
+need to appear in the prior. When `None`, they are static pytree leaves and do not
+interfere with `jax.vmap`.
 
 **`MarginalizedParameters` wrapper** (nonlinear parameters only; linear parameters are
 analytically marginalized out):
@@ -771,6 +776,7 @@ per-parameter linear prior. It is an `eqx.Module`.
 | `offsets`           | `dict[str, dict[str, QD \| None]] \| None` (KW_ONLY) | Per-instrument offset priors keyed by data type then instrument name |
 | `trend_order`       | `int` (KW_ONLY, default 0)                                             | Polynomial trend order (0 = no trend)                                |
 | `trend_priors`      | `dict[str, LinearPriorDist] \| None` (KW_ONLY)                         | Per-trend-column Gaussian priors                                     |
+| `jitter_priors`     | `dict[str, PriorDist] \| None` (KW_ONLY)                               | Per-data-type jitter (excess variance) priors                        |
 
 ### Constructing a prior
 
@@ -797,6 +803,7 @@ RejectionPrior.default_rv(
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
+    jitter_scale: Q["speed"] | None = None,  # excess variance scale (HalfNormal)
     **kwargs,                          # per-parameter prior overrides
 ) -> RejectionPrior
 ```
@@ -831,6 +838,7 @@ RejectionPrior.default_gaia_astrometry(
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
+    jitter_scale: Q["angle"] | None = None,  # excess variance scale (HalfNormal)
     **kwargs,                                  # per-parameter prior overrides
 ) -> RejectionPrior
 ```
@@ -874,6 +882,7 @@ RejectionPrior.default_sb2(
     marginalize_names: tuple[str, ...] | None = None,
     trend_order: int = 0,
     trend_priors: dict[str, LinearPriorDist] | None = None,
+    jitter_scale: Q["speed"] | None = None,  # excess variance scale (HalfNormal)
     **kwargs,                          # per-parameter prior overrides
 ) -> RejectionPrior
 ```
@@ -905,6 +914,57 @@ prior = RejectionPrior.default_rv(
 The offsets are additional linear parameters appended to the design matrix by the
 `RVLikelihood` via `indicator_matrix`. The sampler constructs the likelihood with the
 appropriate indicator matrix automatically when `SourceData` has multiple RV datasets.
+
+### Jitter (excess variance)
+
+The `jitter_priors` field on `RejectionPrior` provides per-data-type jitter parameters
+that are added in quadrature to the observation errors:
+
+$$\sigma_\mathrm{eff} = \sqrt{\sigma_\mathrm{obs}^2 + s^2}$$
+
+where $s$ is the jitter value. Jitter is an **optional nonlinear parameter** — it is
+sampled from its prior but is not required. When `jitter_priors` is `None` (the
+default), no jitter is applied and the behavior is identical to previous versions.
+
+The `jitter_priors` dict is keyed by data-type label (`"rv"`, `"astrometry"`):
+
+```python
+prior = RejectionPrior.default_rv(
+    period_min=Q(50, "day"),
+    period_max=Q(1000, "day"),
+    sigma_K0=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
+    jitter_scale=Q(1.0, "km/s"),  # HalfNormal(1.0 km/s)
+)
+```
+
+The `default_*` convenience methods accept a `jitter_scale` keyword that creates a
+`HalfNormal` prior with the given scale. For full control, pass `jitter_priors`
+directly to `__init__`:
+
+```python
+prior = RejectionPrior(
+    nonlinear_priors=...,
+    linear_prior=...,
+    jitter_priors={"rv": QD(dist.HalfNormal(1.0), "km/s")},
+)
+```
+
+In combined (multi-data-type) fits, each data type has its own independent jitter
+parameter. Internally these are stored with namespaced keys (`_jitter_rv`,
+`_jitter_astrometry`) to avoid collision; in the output `Samples`, they appear as
+`jitter_rv` and `jitter_astrometry`.
+
+Each parameter struct carries a `jitter` field with appropriate units:
+
+| Class                       | `jitter` type          |
+| --------------------------- | ---------------------- |
+| `RVParameters`              | `BatchQSpeed \| None`  |
+| `GaiaAstrometryParameters`  | `BatchQAngle \| None`  |
+| `SB2RVParameters`           | `BatchQSpeed \| None`  |
+
+The default is `None` (no jitter). When `None`, the parameter is a static pytree leaf,
+so it does not interfere with `jax.vmap` over batched parameters.
 
 ### `sample_nonlinear`
 

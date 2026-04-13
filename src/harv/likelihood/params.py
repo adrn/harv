@@ -53,6 +53,7 @@ class AbstractParameters(eqx.Module):
 
     linear_param_names: ClassVar[tuple[str, ...]] = ()
     nonlinear_param_names: ClassVar[tuple[str, ...]] = ()
+    _optional_nonlinear_param_names: ClassVar[tuple[str, ...]] = ()
     _dimensioned_param_names: ClassVar[tuple[str, ...]] = ()
 
     period: BatchQTime
@@ -76,7 +77,9 @@ class AbstractParameters(eqx.Module):
         cls.nonlinear_param_names = tuple(
             f.name
             for f in dataclasses.fields(cls)
-            if f.name not in cls.linear_param_names and f.init
+            if f.name not in cls.linear_param_names
+            and f.name not in cls._optional_nonlinear_param_names
+            and f.init
         )
 
         # Auto-detect which fields carry physical dimensions by checking
@@ -158,9 +161,11 @@ class RVParameters(AbstractParameters):
     """
 
     linear_param_names: ClassVar[tuple[str, ...]] = ("rv_semiamp", "v_sys")
+    _optional_nonlinear_param_names: ClassVar[tuple[str, ...]] = ("jitter",)
 
     rv_semiamp: BatchQSpeed  # RV semi-amplitude
     v_sys: BatchQSpeed  # systemic velocity (reference instrument)
+    jitter: BatchQSpeed | None = None  # excess variance added in quadrature to errors
 
 
 @final
@@ -185,6 +190,8 @@ class GaiaAstrometryParameters(AbstractParameters):
         "semi_major_axis",
     )
 
+    _optional_nonlinear_param_names: ClassVar[tuple[str, ...]] = ("jitter",)
+
     cos_i: BatchFloat
     lon_asc_node: BatchQAngle
     ra0: BatchQAngle  # reference RA offset
@@ -193,6 +200,7 @@ class GaiaAstrometryParameters(AbstractParameters):
     pmdec: BatchQAngularSpeed  # proper motion in Dec
     parallax: BatchQAngle  # parallax
     semi_major_axis: BatchQLength  # photocentric semi-major axis
+    jitter: BatchQAngle | None = None  # excess variance added in quadrature to errors
 
 
 @final
@@ -219,10 +227,12 @@ class SB2RVParameters(AbstractParameters):
         "rv_semiamp_2",
         "v_sys",
     )
+    _optional_nonlinear_param_names: ClassVar[tuple[str, ...]] = ("jitter",)
 
     rv_semiamp_1: BatchQSpeed
     rv_semiamp_2: BatchQSpeed
     v_sys: BatchQSpeed
+    jitter: BatchQSpeed | None = None  # excess variance added in quadrature to errors
 
 
 @final

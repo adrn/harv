@@ -11,6 +11,7 @@ import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import (
     LinearPriorCallable,
     LinearPriorDist,
@@ -18,7 +19,6 @@ from harv.likelihood.helpers import (
     _resolve_linear_prior_mvn,
 )
 from harv.likelihood.params import AbstractParameters, MarginalizedParameters
-from harv.distributions import QuantityDistribution
 
 
 class _MargLinearComponents(NamedTuple):
@@ -280,9 +280,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
                 delta_fixed[name] = jnp.array(
                     ustrip(
                         unit,
-                        Q(
-                            prior_dist.distribution.v, cast("str", prior_dist.unit)
-                        ),
+                        Q(prior_dist.distribution.v, cast("str", prior_dist.unit)),
                     )
                 )
                 del linear_prior[name]
@@ -328,6 +326,11 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         obs_unit = str(obs.unit)
         arr_obs = jnp.array(ustrip(obs_unit, obs))
         arr_obs_err = jnp.array(ustrip(obs_unit, self.data._get_obs_err()))
+
+        # Inflate errors with jitter (excess variance) if present.
+        jitter = getattr(params, "jitter", None)
+        if jitter is not None:
+            arr_obs_err = jnp.sqrt(arr_obs_err**2 + ustrip(obs_unit, jitter) ** 2)
 
         linear_prior, marg_units = self._assemble_linear_prior(
             marg_names, base_names, obs_unit
@@ -437,6 +440,11 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         arr_obs = ustrip(obs_unit, obs)
         arr_obs_err = ustrip(obs_unit, self.data._get_obs_err())
 
+        # Inflate errors with jitter (excess variance) if present.
+        jitter = getattr(params, "jitter", None)
+        if jitter is not None:
+            arr_obs_err = jnp.sqrt(arr_obs_err**2 + ustrip(obs_unit, jitter) ** 2)
+
         return dist.Normal(y_pred, arr_obs_err).log_prob(arr_obs).sum()
 
     # Sampling from the conditional posterior over linear parameters:
@@ -474,9 +482,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
         obs_unit = str(self.data._get_obs().unit)
         result: dict[str, AbstractQuantity] = {}
         for i, name in enumerate(c.marg_names):
-            result[name] = Q(
-                sample[i], self.linear_param_units.get(name, obs_unit)
-            )
+            result[name] = Q(sample[i], self.linear_param_units.get(name, obs_unit))
         for name in c.explicit_names:
             result[name] = Q(
                 c.linear_params[name], self.linear_param_units.get(name, obs_unit)

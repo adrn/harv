@@ -46,3 +46,8 @@ repos:
           - optional_dependencies
           - jax
           - quaxed
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+        files: .ipynb

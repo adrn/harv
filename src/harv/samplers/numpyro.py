@@ -20,7 +20,7 @@ from unxt.quantity import ustrip
 from harv.data import InputData
 from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
-from harv.samplers.strategies import DataTypeStrategy
+from harv.samplers.strategies import DataTypeStrategy, _jitter_units_from_prior
 
 if TYPE_CHECKING:
     from harv.samplers.rejection_prior import RejectionPrior
@@ -137,8 +137,18 @@ def _sample_nonlinear(
                     raw = ustrip(target_u, Q(raw, str(d.unit)))
                 values[name] = raw
 
+    # Sample jitter parameters (if any)
+    if ctx.prior.jitter_priors is not None:
+        for dt_label, qd in ctx.prior.jitter_priors.items():
+            jitter_key = f"_jitter_{dt_label}"
+            values[jitter_key] = numpyro.sample(f"jitter_{dt_label}", _unwrap_dist(qd))
+
     params = ctx.strategy.build_marginalized_params(
-        values, ctx.time_unit, ctx.prior.marginalize_names, ctx.linear_param_units
+        values,
+        ctx.time_unit,
+        ctx.prior.marginalize_names,
+        ctx.linear_param_units,
+        _jitter_units_from_prior(ctx.prior),
     )
     return values, params
 
@@ -146,6 +156,20 @@ def _sample_nonlinear(
 # ---------------------------------------------------------------------------
 # Numpyro model builders
 # ---------------------------------------------------------------------------
+
+
+def _component_jitter(
+    comp_name: str, values: dict[str, Any], prior: "RejectionPrior"
+) -> Any:
+    """Return the jitter value for a likelihood component (0.0 if none)."""
+    if prior.jitter_priors is None:
+        return 0.0
+    if comp_name == "primary":
+        # Single-component model: use the sole jitter prior
+        for dt_label in prior.jitter_priors:
+            return values.get(f"_jitter_{dt_label}", 0.0)
+        return 0.0
+    return values.get(f"_jitter_{comp_name}", 0.0)
 
 
 def _build_marginalized_numpyro_model(
@@ -214,7 +238,7 @@ def _build_full_numpyro_model(
     ctx = _build_model_context(sampler, data)
 
     def model() -> None:
-        _, params = _sample_nonlinear(ctx)
+        values, params = _sample_nonlinear(ctx)
 
         # --- linear parameters ---
         # Sample the full vector jointly to preserve the prior's covariance.
@@ -238,6 +262,8 @@ def _build_full_numpyro_model(
             prediction = dm @ linear_vec[global_indices]
             obs = ustrip(comp_lik.data._get_obs())
             err = ustrip(comp_lik.data._get_obs_err())
+            jitter_val = _component_jitter(_comp_name, values, ctx.prior)
+            err = jnp.sqrt(err**2 + jitter_val**2)
             log_lik = log_lik + dist.Normal(prediction, err).log_prob(obs).sum()
 
         numpyro.factor("log_lik", log_lik)
@@ -391,6 +417,8 @@ def _build_extra_numpyro_model(
             dm = comp_lik.design_matrix(base_params)
             obs = ustrip(comp_lik.data._get_obs())
             err = ustrip(comp_lik.data._get_obs_err())
+            jitter_val = _component_jitter(comp_name, values, ctx.prior)
+            err = jnp.sqrt(err**2 + jitter_val**2)
 
             y = obs
             if c_fixed_local:

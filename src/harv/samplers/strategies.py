@@ -27,6 +27,7 @@ from harv.data import (
     build_indicator_matrix,
     stack_datasets,
 )
+from harv.distributions import QuantityDistribution
 from harv.likelihood.composite import CompositeLikelihood
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import (
@@ -40,6 +41,16 @@ from harv.likelihood.rv import RVLikelihood, SB2RVLikelihood
 from harv.samplers.rejection_prior import RejectionPrior
 
 DataType = Literal["astrometry", "rv", "combined"]
+
+
+def _jitter_units_from_prior(prior: RejectionPrior) -> dict[str, str]:
+    """Extract jitter units from the prior's ``jitter_priors`` dict."""
+    if prior.jitter_priors is None:
+        return {}
+    return {
+        dt_label: str(d.unit) if isinstance(d, QuantityDistribution) else ""
+        for dt_label, d in prior.jitter_priors.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +171,11 @@ class DataTypeStrategy(ABC):
     ) -> dict[str, Q]:
         """Sample linear parameters for one accepted nonlinear sample."""
         params = self.build_marginalized_params(
-            sample, time_unit, prior.marginalize_names, lik.linear_param_units
+            sample,
+            time_unit,
+            prior.marginalize_names,
+            lik.linear_param_units,
+            _jitter_units_from_prior(prior),
         )
         return lik.sample_conditional_linear(params, key)
 
@@ -170,6 +185,7 @@ class DataTypeStrategy(ABC):
         time_unit: str,
         marginalize_names: tuple[str, ...] | None = None,
         linear_param_units: dict[str, str] | None = None,
+        jitter_units: dict[str, str] | None = None,
     ) -> Any:
         """Build ``MarginalizedParameters`` from sampled values.
 
@@ -189,6 +205,16 @@ class DataTypeStrategy(ABC):
         # TODO: I don't understand why this is necessary! Shouldn't kw["period"] already
         # be a Q?
         kw["period"] = Q(kw["period"], time_unit)
+
+        # Include optional nonlinear params (e.g. jitter) if present in values.
+        # Jitter uses a namespaced key in the values dict (e.g. "_jitter_rv")
+        # to avoid collision in combined fits, but the param field is "jitter".
+        _ju = jitter_units or {}
+        for name in cls._optional_nonlinear_param_names:
+            values_key = f"_{name}_{self.data_type}" if name == "jitter" else name
+            if values_key in values:
+                unit = _ju.get(self.data_type, "")
+                kw[name] = Q(values[values_key], unit) if unit else values[values_key]
 
         # Determine which linear params to marginalize.
         # Filter to only names valid for this parameter class -- in a
@@ -440,10 +466,11 @@ class CompositeStrategy(DataTypeStrategy):
         time_unit: str,
         marginalize_names: tuple[str, ...] | None = None,
         linear_param_units: dict[str, str] | None = None,
+        jitter_units: dict[str, str] | None = None,
     ) -> dict[str, MarginalizedParameters]:
         return {
             name: sub.build_marginalized_params(
-                values, time_unit, marginalize_names, linear_param_units
+                values, time_unit, marginalize_names, linear_param_units, jitter_units
             )
             for name, sub in self._sub_strategies.items()
         }
