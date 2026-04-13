@@ -246,3 +246,4 @@ _version.py
 
 /data
 notebooks
+docs/_static/logo*
