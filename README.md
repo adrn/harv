@@ -5,13 +5,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 
+<br/>
 <div align="center">
 <img
     src="https://raw.githubusercontent.com/adrn/harv/refs/heads/main/docs/_static/logo_med.png"
     alt="harv logo"
-    width="200"
+    width="300"
 >
 </div>
+<br/>
 
 **harv** is a Python package for inferring Keplerian orbital parameters of binary-star
 and star–exoplanet systems from time series data. Built on
