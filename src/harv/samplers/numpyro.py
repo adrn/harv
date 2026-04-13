@@ -19,6 +19,7 @@ from unxt.quantity import ustrip
 
 from harv.data import InputData
 from harv.distributions import QuantityDistribution
+from harv.likelihood.composite import CompositeLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
 from harv.samplers._strategies import DataTypeStrategy, _jitter_units_from_prior
 
@@ -36,8 +37,6 @@ def _iter_sub_likelihoods(lik: Any) -> tuple[tuple[str, Any], ...]:
     For a ``CompositeLikelihood`` this yields one entry per sub-likelihood.
     For a single-component likelihood it yields one ``("primary", lik)`` pair.
     """
-    from harv.likelihood.composite import CompositeLikelihood
-
     if isinstance(lik, CompositeLikelihood):
         return tuple(lik.components.items())
     return (("primary", lik),)

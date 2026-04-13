@@ -194,7 +194,7 @@ class AbstractLikelihood[DataT: eqx.Module, ParamT: AbstractParameters](eqx.Modu
 
         return cols, base_names, explicit_names, marg_names
 
-    def _assemble_linear_prior(
+    def _assemble_linear_prior(  # noqa: C901
         self,
         marg_names: tuple[str, ...],
         base_names: tuple[str, ...],

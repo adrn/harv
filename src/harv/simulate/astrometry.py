@@ -14,20 +14,22 @@ The astrometric model includes:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, uconvert, ustrip
 
-from harv.custom_types import (
-    BatchQAngle,
-    BatchQTime,
-    ScalarQAngle,
-    ScalarQAngularSpeed,
-    ScalarQTime,
-)
 from harv.data import GaiaAstrometryData
+
+if TYPE_CHECKING:
+    from harv.custom_types import (
+        BatchQAngle,
+        BatchQTime,
+        ScalarQAngle,
+        ScalarQAngularSpeed,
+        ScalarQTime,
+    )
 from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
 
 __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]

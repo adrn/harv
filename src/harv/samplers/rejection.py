@@ -76,7 +76,7 @@ class RejectionSampler(eqx.Module):
     prior: RejectionPrior
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def _infer_strategy(self, data: InputData) -> DataTypeStrategy:
+    def _infer_strategy(self, data: InputData) -> DataTypeStrategy:  # noqa: C901
         """Infer data type from ``data`` and return the matching strategy.
 
         Also validates that the prior has all required parameters for the
@@ -591,21 +591,10 @@ class RejectionSampler(eqx.Module):
             ):
                 values_key = f"_jitter_{dt_label}"
                 _jitter_keys.append(values_key)
-                raw = _unwrap_dist(d).sample(k, (n_total,))
-                # Convert to data units if the prior carries a unit.
-                obs_unit = str(
-                    next(iter(data.values())).time.unit
-                    if isinstance(data, SourceData)
-                    else data.time.unit
-                )
-                if isinstance(d, QuantityDistribution):
-                    # Jitter must be in the observation unit of the matching
-                    # data type.  For RV that's the RV unit (e.g. km/s), for
-                    # astrometry that's the AL unit (e.g. mas).  The strategy
-                    # will pass the raw value through -- we keep it in the
-                    # prior's unit for now; the likelihood strips units.
-                    pass  # keep raw (unitless sample from the underlying dist)
-                prior_samples[values_key] = raw
+                # Sample from the bare distribution (unitless).  The unit from
+                # the QuantityDistribution is re-attached downstream by
+                # build_marginalized_params via _jitter_units_from_prior().
+                prior_samples[values_key] = _unwrap_dist(d).sample(k, (n_total,))
 
         # Reshape all parameter arrays into (n_batches, batch_size).
         _zeros = jnp.zeros(n_total)
@@ -649,11 +638,11 @@ class RejectionSampler(eqx.Module):
         self,
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
-        datasets: dict[str, Any],
+        _: dict[str, Any],
         strategy: DataTypeStrategy,
         data: InputData,
         lik: Any,
-    ) -> dict[str, Q]:
+    ) -> dict[str, AbstractQuantity]:
         """Sample linear parameters from conditional posterior using vmap.
 
         For each accepted nonlinear sample, draws from the conditional posterior

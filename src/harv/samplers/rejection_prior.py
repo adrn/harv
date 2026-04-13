@@ -110,7 +110,8 @@ class RejectionPrior(eqx.Module):
 
     **Combined (astrometry + RV):**
         - Nonlinear keys: same as astrometry
-        - Linear params: ra0, dec0, pmra, pmdec, parallax, semi_major_axis, rv_semiamp, v_sys
+        - Linear params: ra0, dec0, pmra, pmdec, parallax, semi_major_axis, rv_semiamp,
+          v_sys
 
     Parameters
     ----------
@@ -234,7 +235,7 @@ class RejectionPrior(eqx.Module):
                 )
                 object.__setattr__(self, "marginalize_names", new_marg)
 
-        # TODO:
+        # TODO: validate offsets structure
         # - Validate that within offsets["rv"], one value is None (reference instrument)
         #   and the rest are dist.Normal.  Raise ValueError if not.
         # - No "astrometry" key in offsets, NotImplementedError
@@ -325,7 +326,14 @@ class RejectionPrior(eqx.Module):
         marginalize_names : tuple[str, ...] | None
             Subset of linear params to analytically marginalize.  ``None``
             (default) means "all that can be".
-        {overrides}
+        trend_order : int, optional
+            Polynomial trend order.  Default: 0.
+        trend_priors : dict or None, optional
+            Per-trend-column priors.
+        jitter_scale : Q["speed"] or None, optional
+            Scale for the half-normal jitter (excess noise) prior.
+        **kwargs : PriorDist
+            Override any default nonlinear or linear prior by name.
 
         Returns
         -------
@@ -438,7 +446,14 @@ class RejectionPrior(eqx.Module):
             Subset of linear params to analytically marginalize.  ``None``
             (default) means "all that can be" -- ``__check_init__`` will
             automatically classify ``HalfNormal`` entries as explicit.
-        {overrides}
+        trend_order : int, optional
+            Polynomial trend order.  Default: 0.
+        trend_priors : dict or None, optional
+            Per-trend-column priors.
+        jitter_scale : Q["angle"] or None, optional
+            Scale for the half-normal jitter (excess noise) prior.
+        **kwargs : PriorDist
+            Override any default nonlinear or linear prior by name.
 
         Returns
         -------
@@ -530,7 +545,10 @@ class RejectionPrior(eqx.Module):
             Polynomial trend order (default 0).
         trend_priors : dict or None
             Per-trend-column priors.
-        {overrides}
+        jitter_scale : Q["speed"] or None, optional
+            Scale for the half-normal jitter (excess noise) prior.
+        **kwargs : PriorDist
+            Override any default nonlinear or linear prior by name.
 
         Returns
         -------

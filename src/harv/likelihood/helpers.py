@@ -28,7 +28,7 @@ type LinearPriorDist = (
     # | dict[str, PriorDist | LinearPriorCallable]
     # | dict[
     #     tuple[str, ...], PriorDist | LinearPriorCallable
-    # ]  # TODO: we could also implement - e.g., ("rv_semiamp", "v_sys") -> MultivariateNormal
+    # ]  # TODO: could also support tuple keys for multivariate priors
 )
 
 
@@ -69,9 +69,7 @@ def _needs_explicit_sampling(d: PriorDist | LinearPriorCallable) -> bool:
         return False
     # LinearPriorCallable (or any other callable) -> returns Normal, handled by
     # _resolve_linear_prior_mvn.
-    if callable(d) and not isinstance(d, dist.Distribution):
-        return False
-    return True
+    return not (callable(d) and not isinstance(d, dist.Distribution))
 
 
 def _resolve_linear_prior_mvn(

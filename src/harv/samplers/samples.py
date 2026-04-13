@@ -748,7 +748,7 @@ class Samples(eqx.Module):
     # Private drawing helpers (draw into a caller-supplied Axes object)
     # ------------------------------------------------------------------
 
-    def _draw_rv(
+    def _draw_rv(  # noqa: C901
         self,
         data: Any,
         *,
@@ -764,6 +764,14 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
+        data : RVData or SourceData or None
+            Observed RV data to overplot.
+        ax : matplotlib.axes.Axes
+            Axes to draw into.
+        n_samples : int
+            Number of posterior samples to draw as model curves.
+        plt : module
+            The matplotlib.pyplot module.
         phase_fold :
             When ``True`` fold data and model to orbital phase using the median
             period and subtract the mean v_sys so the y-axis shows only the
