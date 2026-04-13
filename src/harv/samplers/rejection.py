@@ -30,6 +30,11 @@ from harv.data import (
 )
 from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import _unwrap_dist
+from harv.samplers._strategies import (
+    _STRATEGIES,
+    DataTypeStrategy,
+    _jitter_units_from_prior,
+)
 from harv.samplers.numpyro import (
     _build_extra_numpyro_model,
     _build_full_numpyro_model,
@@ -37,11 +42,6 @@ from harv.samplers.numpyro import (
 )
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples, _WarmStartMCMC
-from harv.samplers.strategies import (
-    _STRATEGIES,
-    DataTypeStrategy,
-    _jitter_units_from_prior,
-)
 
 __all__ = ["RejectionSampler"]
 

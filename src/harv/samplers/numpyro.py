@@ -20,7 +20,7 @@ from unxt.quantity import ustrip
 from harv.data import InputData
 from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
-from harv.samplers.strategies import DataTypeStrategy, _jitter_units_from_prior
+from harv.samplers._strategies import DataTypeStrategy, _jitter_units_from_prior
 
 if TYPE_CHECKING:
     from harv.samplers.rejection_prior import RejectionPrior
