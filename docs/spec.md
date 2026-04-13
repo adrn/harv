@@ -71,20 +71,20 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 
 | Alias                 | Definition                                                              | Use for                                       |
 | --------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
-| `ScalarQTime`         | `Real[Q["time"], ""]`                                            | Scalar time quantities (period, t_peri, …)    |
-| `ScalarQLength`       | `Real[Q["length"], ""]`                                          | Scalar length quantities (semi-major axis, …) |
-| `ScalarQMass`         | `Real[Q["mass"], ""]`                                            | Scalar mass quantities                        |
-| `ScalarQSpeed`        | `Real[Q["speed"], ""]`                                           | Scalar velocity quantities                    |
-| `ScalarQAngle`        | `Real[Q["angle"], ""]`                                           | Scalar angle quantities                       |
-| `ScalarQAngularSpeed` | `Real[Q["angular speed"], ""]`                                   | Scalar angular speed quantities               |
-| `ScalarQDimless`      | `Real[Q["dimensionless"], ""]`                                   | Scalar dimensionless quantities               |
-| `Vec3QLength`         | `Real[Q["length"], "3"]`                                         | 3-vector position returns                     |
-| `Vec3QSpeed`          | `Real[Q["speed"], "3"]`                                          | 3-vector velocity returns                     |
-| `BatchVec3QLength`    | `Real[Q["length"], "3 *batch"]`                                  | Batched 3-vector positions                    |
-| `BatchVec3QSpeed`     | `Real[Q["speed"], "3 *batch"]`                                   | Batched 3-vector velocities                   |
-| `BatchQTime`, etc.    | `Real[Q[dim], "*batch"]`                                              | Batched Quantities (scalar or array)          |
+| `ScalarQTime`         | `Real[Q["time"], ""]`                                                   | Scalar time quantities (period, t_peri, …)    |
+| `ScalarQLength`       | `Real[Q["length"], ""]`                                                 | Scalar length quantities (semi-major axis, …) |
+| `ScalarQMass`         | `Real[Q["mass"], ""]`                                                   | Scalar mass quantities                        |
+| `ScalarQSpeed`        | `Real[Q["speed"], ""]`                                                  | Scalar velocity quantities                    |
+| `ScalarQAngle`        | `Real[Q["angle"], ""]`                                                  | Scalar angle quantities                       |
+| `ScalarQAngularSpeed` | `Real[Q["angular speed"], ""]`                                          | Scalar angular speed quantities               |
+| `ScalarQDimless`      | `Real[Q["dimensionless"], ""]`                                          | Scalar dimensionless quantities               |
+| `Vec3QLength`         | `Real[Q["length"], "3"]`                                                | 3-vector position returns                     |
+| `Vec3QSpeed`          | `Real[Q["speed"], "3"]`                                                 | 3-vector velocity returns                     |
+| `BatchVec3QLength`    | `Real[Q["length"], "3 *batch"]`                                         | Batched 3-vector positions                    |
+| `BatchVec3QSpeed`     | `Real[Q["speed"], "3 *batch"]`                                          | Batched 3-vector velocities                   |
+| `BatchQTime`, etc.    | `Real[Q[dim], "*batch"]`                                                | Batched Quantities (scalar or array)          |
 | `BatchFloat`          | `Float[jax.Array, "*batch"] \| np.floating \| float \| ...`             | Dimensionless batched inputs                  |
-| `NTime`, `NAngle`, …  | `Real[Q[dim], "n"]`                                                   | 1-d arrays of observations                    |
+| `NTime`, `NAngle`, …  | `Real[Q[dim], "n"]`                                                     | 1-d arrays of observations                    |
 | `NFloatArray`         | `Float[jax.Array, "n"]`                                                 | Plain JAX float arrays                        |
 | `ScalarFloat`         | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
 
@@ -447,8 +447,8 @@ processes the class.
 
 **Full parameter structs:**
 
-| Struct                     | Nonlinear (beyond base 4) | Linear fields                                                                  | Optional nonlinear         |
-| -------------------------- | ------------------------- | ------------------------------------------------------------------------------ | -------------------------- |
+| Struct                     | Nonlinear (beyond base 4) | Linear fields                                                                  | Optional nonlinear            |
+| -------------------------- | ------------------------- | ------------------------------------------------------------------------------ | ----------------------------- |
 | `RVParameters`             | —                         | `rv_semiamp: BatchQSpeed`, `v_sys: BatchQSpeed`                                | `jitter: BatchQSpeed \| None` |
 | `SB2RVParameters`          | —                         | `rv_semiamp_1: BatchQSpeed`, `rv_semiamp_2: BatchQSpeed`, `v_sys: BatchQSpeed` | `jitter: BatchQSpeed \| None` |
 | `GaiaAstrometryParameters` | `cos_i`, `lon_asc_node`   | `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `semi_major_axis`                  | `jitter: BatchQAngle \| None` |
@@ -559,10 +559,10 @@ Shared methods provided by the base:
 The `linear_marginalized_prior` field accepts a `dict[str, PriorDist | LinearPriorCallable]`
 where each entry specifies the prior for one linear parameter. Each entry is classified:
 
-| Prior type                                      | Classification  | Treatment                                                                                            |
-| ----------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
-| `QD(Normal)` or `dist.Normal` | Gaussian        | Analytically marginalized via joint MVN                                                              |
-| `LinearPriorCallable`                           | Param-dependent | Called with `params` to produce a `QD(Normal)` or `dist.Normal`, then marginalized |
+| Prior type                    | Classification  | Treatment                                                                          |
+| ----------------------------- | --------------- | ---------------------------------------------------------------------------------- |
+| `QD(Normal)` or `dist.Normal` | Gaussian        | Analytically marginalized via joint MVN                                            |
+| `LinearPriorCallable`         | Param-dependent | Called with `params` to produce a `QD(Normal)` or `dist.Normal`, then marginalized |
 
 `_resolve_linear_prior_mvn` (in `helpers.py`) resolves all entries into a joint diagonal
 `dist.MultivariateNormal`, converting units to the data's native units using
@@ -768,15 +768,15 @@ per-parameter linear prior. It is an `eqx.Module`.
 
 ### Fields
 
-| Field               | Type                                                                   | Description                                                          |
-| ------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `nonlinear_priors`  | `dict[str, PriorDist]`                                                 | Nonlinear parameter priors                                           |
-| `linear_prior`      | `LinearPriorDist`                                                      | Per-parameter linear priors                                          |
-| `marginalize_names` | `tuple[str, ...] \| None` (KW_ONLY)                                    | Which linear params to marginalize; `None` = all                     |
+| Field               | Type                                                 | Description                                                          |
+| ------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
+| `nonlinear_priors`  | `dict[str, PriorDist]`                               | Nonlinear parameter priors                                           |
+| `linear_prior`      | `LinearPriorDist`                                    | Per-parameter linear priors                                          |
+| `marginalize_names` | `tuple[str, ...] \| None` (KW_ONLY)                  | Which linear params to marginalize; `None` = all                     |
 | `offsets`           | `dict[str, dict[str, QD \| None]] \| None` (KW_ONLY) | Per-instrument offset priors keyed by data type then instrument name |
-| `trend_order`       | `int` (KW_ONLY, default 0)                                             | Polynomial trend order (0 = no trend)                                |
-| `trend_priors`      | `dict[str, LinearPriorDist] \| None` (KW_ONLY)                         | Per-trend-column Gaussian priors                                     |
-| `jitter_priors`     | `dict[str, PriorDist] \| None` (KW_ONLY)                               | Per-data-type jitter (excess variance) priors                        |
+| `trend_order`       | `int` (KW_ONLY, default 0)                           | Polynomial trend order (0 = no trend)                                |
+| `trend_priors`      | `dict[str, LinearPriorDist] \| None` (KW_ONLY)       | Per-trend-column Gaussian priors                                     |
+| `jitter_priors`     | `dict[str, PriorDist] \| None` (KW_ONLY)             | Per-data-type jitter (excess variance) priors                        |
 
 ### Constructing a prior
 
@@ -920,7 +920,7 @@ appropriate indicator matrix automatically when `SourceData` has multiple RV dat
 The `jitter_priors` field on `RejectionPrior` provides per-data-type jitter parameters
 that are added in quadrature to the observation errors:
 
-$$\sigma_\mathrm{eff} = \sqrt{\sigma_\mathrm{obs}^2 + s^2}$$
+$$\\sigma\_\\mathrm{eff} = \\sqrt{\\sigma\_\\mathrm{obs}^2 + s^2}$$
 
 where $s$ is the jitter value. Jitter is an **optional nonlinear parameter** — it is
 sampled from its prior but is not required. When `jitter_priors` is `None` (the
@@ -957,11 +957,11 @@ parameter. Internally these are stored with namespaced keys (`_jitter_rv`,
 
 Each parameter struct carries a `jitter` field with appropriate units:
 
-| Class                       | `jitter` type          |
-| --------------------------- | ---------------------- |
-| `RVParameters`              | `BatchQSpeed \| None`  |
-| `GaiaAstrometryParameters`  | `BatchQAngle \| None`  |
-| `SB2RVParameters`           | `BatchQSpeed \| None`  |
+| Class                      | `jitter` type         |
+| -------------------------- | --------------------- |
+| `RVParameters`             | `BatchQSpeed \| None` |
+| `GaiaAstrometryParameters` | `BatchQAngle \| None` |
+| `SB2RVParameters`          | `BatchQSpeed \| None` |
 
 The default is `None` (no jitter). When `None`, the parameter is a static pytree leaf,
 so it does not interfere with `jax.vmap` over batched parameters.
@@ -1070,8 +1070,8 @@ Stores the posterior samples returned by `RejectionSampler.run()`.
 
 | Field                | Type                        | Description                                 |
 | -------------------- | --------------------------- | ------------------------------------------- |
-| `nonlinear`          | `dict[str, Q]`       | Nonlinear parameter samples with units      |
-| `linear`             | `dict[str, Q]`       | Linear parameter samples with units         |
+| `nonlinear`          | `dict[str, Q]`              | Nonlinear parameter samples with units      |
+| `linear`             | `dict[str, Q]`              | Linear parameter samples with units         |
 | `orbit_cls`          | `type` (static)             | Nonlinear param class (e.g. `RVParameters`) |
 | `full_cls`           | `tuple[type, ...]` (static) | Ordered tuple of full parameter classes     |
 | `metadata`           | `dict[str, Any]` (static)   | Contains `t_ref` and extra info             |
@@ -1231,29 +1231,31 @@ The current polynomial trend implementation uses a monomial basis
 `[(t-t_ref)^1, ..., (t-t_ref)^k]` via the `_build_trend_columns` helper. To support
 alternative bases (Chebyshev, B-splines), replace this with a `TrendBasis` protocol::
 
-    class TrendBasis(Protocol):
-        n_basis: int
-        names: tuple[str, ...]          # one per output column
-        def __call__(
-            self, times: jax.Array, t_ref: float,
-        ) -> jax.Array:                 # (n_obs, n_basis)
-            ...
+```
+class TrendBasis(Protocol):
+    n_basis: int
+    names: tuple[str, ...]          # one per output column
+    def __call__(
+        self, times: jax.Array, t_ref: float,
+    ) -> jax.Array:                 # (n_obs, n_basis)
+        ...
+```
 
 The monomial implementation becomes a concrete `MonomialBasis` class. A Chebyshev
-basis would return columns evaluated on a normalized [-1, 1] domain mapped from the
+basis would return columns evaluated on a normalized \[-1, 1\] domain mapped from the
 observation time span. A B-spline basis would use a fixed knot vector.
 
 **Key contract**: The basis must NOT include a constant column (order 0), since that
-role is already filled by ``v_sys`` / ``ra0`` / ``dec0``.
+role is already filled by `v_sys` / `ra0` / `dec0`.
 
 Changes required:
 
-1. Define the ``TrendBasis`` protocol (in ``trends.py`` or ``likelihood/rv.py``).
-2. Replace ``trend_order: int`` fields with ``trend_basis: TrendBasis | None``
-   on ``RVLikelihood`` and ``GaiaAstrometryLikelihood``.
-3. Derive ``trend_column_names`` from ``trend_basis.names``.
-4. Update ``strategies.py`` to pass the basis object through.
-5. Update ``RejectionPrior`` factory methods to accept a basis.
+1. Define the `TrendBasis` protocol (in `trends.py` or `likelihood/rv.py`).
+1. Replace `trend_order: int` fields with `trend_basis: TrendBasis | None`
+   on `RVLikelihood` and `GaiaAstrometryLikelihood`.
+1. Derive `trend_column_names` from `trend_basis.names`.
+1. Update `strategies.py` to pass the basis object through.
+1. Update `RejectionPrior` factory methods to accept a basis.
 
 ______________________________________________________________________
 
