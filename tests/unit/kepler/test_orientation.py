@@ -257,9 +257,7 @@ def test_thiele_innes_round_trip_edge_cases(
         lon_asc_node=Q(lon_asc_node, "rad"),
         inclination=Q(inclination, "rad"),
     )
-    _check_thiele_innes_round_trip(
-        orientation, Q(semi_major_axis, "AU"), rtol=rtol
-    )
+    _check_thiele_innes_round_trip(orientation, Q(semi_major_axis, "AU"), rtol=rtol)
 
 
 @pytest.mark.parametrize(

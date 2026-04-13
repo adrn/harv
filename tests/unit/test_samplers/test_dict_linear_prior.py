@@ -5,9 +5,9 @@ import numpyro.distributions as dist
 from unxt import Q
 
 from harv.data import RVData
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 
 
 def _make_rv_data(n_obs: int = 30, seed: int = 42) -> RVData:

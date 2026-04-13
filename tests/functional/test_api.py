@@ -8,8 +8,8 @@ import numpy as np
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 
 # Common kwargs for default_gaia_astrometry throughout tests
 _ASTRO_KWARGS = dict(

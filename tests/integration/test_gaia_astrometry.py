@@ -11,11 +11,11 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+from harv.distributions import QD
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import GaiaAstrometryParameters
-from harv.samplers.rejection_prior import RejectionPrior
-from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 
 

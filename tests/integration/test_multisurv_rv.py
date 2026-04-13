@@ -13,11 +13,11 @@ import quaxed.numpy as jnp
 from unxt import Q, uconvert
 
 from harv.data import RVData, build_indicator_matrix
+from harv.distributions import QD
 from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import RVLikelihood
-from harv.samplers.rejection_prior import RejectionPrior
-from harv.distributions import QD
 from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.rv import simulate_rv_multisurv_data
 
 
