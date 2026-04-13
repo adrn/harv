@@ -61,6 +61,20 @@ class PeriodDependentKPrior(eqx.Module):
     --------
     Price-Whelan et al. (2017) -- *The Joker: A Custom Monte Carlo Sampler for
     Binary-star and Exoplanet Radial Velocity Data*.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers.custom_priors import PeriodDependentKPrior
+    >>> prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+    >>> prior.sigma_K0.unit
+    Unit("km / s")
+
+    Used as the default ``linear_prior`` for ``rv_semiamp`` in
+    :meth:`RejectionPrior.default_rv`.  Called with a param struct to
+    condition on nonlinear parameters:
+
+    >>> qd = prior(params)  # doctest: +SKIP
     """
 
     sigma_K0: ScalarQSpeed
@@ -130,6 +144,16 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     The ``params`` struct must have ``.period``, ``.eccentricity``, and
     ``.parallax`` fields.  ``parallax`` is available because it is classified
     as an explicit (non-marginalized) linear parameter by default.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers.custom_priors import PeriodDependentSemiMajorAxisPrior
+    >>> prior = PeriodDependentSemiMajorAxisPrior(
+    ...     sigma_a0=Q(5.0, "AU"), P0=Q(1.0, "yr"),
+    ... )
+    >>> prior.sigma_a0.unit
+    Unit("AU")
     """
 
     sigma_a0: ScalarQLength
@@ -193,6 +217,14 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     The ``params`` struct must have a ``.parallax`` field (``Quantity`` with
     angular units).  ``parallax`` is available because it is classified as an
     explicit (non-marginalized) linear parameter by default.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers.custom_priors import ParallaxDependentProperMotionPrior
+    >>> prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
+    >>> prior.sigma_v0.unit
+    Unit("km / s")
     """
 
     sigma_v0: ScalarQSpeed

@@ -171,9 +171,34 @@ class Samples(eqx.Module):
 
     Examples
     --------
-    >>> samples["period"]        # Q with time units
-    >>> samples["eccentricity"]  # Q (dimensionless)
-    >>> samples.n_samples        # number of posterior draws
+    ``Samples`` is normally produced by :meth:`RejectionSampler.run`, but can
+    be constructed directly for testing or manual use:
+
+    >>> from unxt import Q
+    >>> from harv.likelihood.params import RVParameters
+    >>> from harv.samplers.samples import Samples
+    >>> samples = Samples(
+    ...     nonlinear={
+    ...         "period": Q([100.0, 101.0, 99.5], "day"),
+    ...         "eccentricity": Q([0.1, 0.15, 0.12], ""),
+    ...         "phase_peri": Q([0.3, 0.31, 0.29], ""),
+    ...         "arg_peri": Q([1.0, 1.1, 0.9], "rad"),
+    ...     },
+    ...     linear={
+    ...         "rv_semiamp": Q([10.0, 11.0, 9.5], "km/s"),
+    ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
+    ...     },
+    ...     orbit_cls=RVParameters,
+    ...     full_cls=(RVParameters,),
+    ...     metadata={"t_ref": Q(0.0, "day")},
+    ...     data_type="rv",
+    ... )
+    >>> samples.n_samples
+    3
+    >>> "period" in samples
+    True
+    >>> samples.keys()[:4]
+    ['period', 'eccentricity', 'phase_peri', 'arg_peri']
     """
 
     # Pytree leaves -- Q arrays with units baked in
@@ -219,8 +244,23 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> samples["period"]        # Q with time units
-        >>> samples["eccentricity"]  # Q (dimensionless)
+        >>> from unxt import Q
+        >>> from harv.likelihood.params import RVParameters
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 101.0], "day"),
+        ...                "eccentricity": Q([0.1, 0.15], ""),
+        ...                "phase_peri": Q([0.3, 0.31], ""),
+        ...                "arg_peri": Q([1.0, 1.1], "rad")},
+        ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
+        ...             "v_sys": Q([5.0, 5.1], "km/s")},
+        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
+        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ... )
+        >>> samples["period"].unit
+        Unit("d")
+        >>> samples["rv_semiamp"].shape
+        (2,)
         """
         if key in self.nonlinear:
             return self.nonlinear[key]
@@ -289,8 +329,25 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> samples.median("period")  # Median period
-        >>> samples.median()  # Dict of all medians
+        >>> from unxt import Q
+        >>> from harv.likelihood.params import RVParameters
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 102.0], "day"),
+        ...                "eccentricity": Q([0.1, 0.15], ""),
+        ...                "phase_peri": Q([0.3, 0.31], ""),
+        ...                "arg_peri": Q([1.0, 1.1], "rad")},
+        ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
+        ...             "v_sys": Q([5.0, 5.2], "km/s")},
+        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
+        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ... )
+        >>> med = samples.median("period")
+        >>> med.unit
+        Unit("d")
+        >>> all_medians = samples.median()
+        >>> "period" in all_medians
+        True
         """
         if key is not None:
             return jnp.median(self[key])
@@ -323,8 +380,22 @@ class Samples(eqx.Module):
 
         Examples
         --------
+        >>> from unxt import Q
+        >>> from harv.likelihood.params import RVParameters
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 102.0], "day"),
+        ...                "eccentricity": Q([0.1, 0.15], ""),
+        ...                "phase_peri": Q([0.3, 0.31], ""),
+        ...                "arg_peri": Q([1.0, 1.1], "rad")},
+        ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
+        ...             "v_sys": Q([5.0, 5.2], "km/s")},
+        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
+        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
-        >>> p5, p50, p95 = samples.percentile("period", [5, 50, 95])
+        >>> len(samples.percentile("period", [5, 50, 95]))
+        3
         """
         values = self[key]
         return [jnp.percentile(values, p) for p in percentiles]
@@ -350,11 +421,24 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> summary = samples.summary(["period", "eccentricity", "parallax"])
-        >>> summary["period"]["median"]
-        Q['time'](100.5, unit='d')
-        >>> summary["eccentricity"]["std"]
-        0.15
+        >>> from unxt import Q
+        >>> from harv.likelihood.params import RVParameters
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 102.0], "day"),
+        ...                "eccentricity": Q([0.1, 0.15], ""),
+        ...                "phase_peri": Q([0.3, 0.31], ""),
+        ...                "arg_peri": Q([1.0, 1.1], "rad")},
+        ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
+        ...             "v_sys": Q([5.0, 5.2], "km/s")},
+        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
+        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ... )
+        >>> summary = samples.summary(["period", "eccentricity"])
+        >>> sorted(summary.keys())
+        ['eccentricity', 'period']
+        >>> sorted(summary["period"].keys())
+        ['mean', 'median', 'p16', 'p84', 'std']
         """
         if params is None:
             params = self.keys()
@@ -385,7 +469,12 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> samples.to_hdf5("posterior_samples.h5")
+        Save posterior samples and reload them:
+
+        >>> samples.to_hdf5("posterior_samples.h5")  # doctest: +SKIP
+        >>> reloaded = Samples.from_hdf5("posterior_samples.h5")  # doctest: +SKIP
+        >>> reloaded.n_samples == samples.n_samples  # doctest: +SKIP
+        True
         """
         filename = Path(filename)
 
@@ -436,7 +525,11 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> samples = Samples.from_hdf5("posterior_samples.h5")
+        >>> samples = Samples.from_hdf5("posterior_samples.h5")  # doctest: +SKIP
+        >>> samples.n_samples  # doctest: +SKIP
+        42
+        >>> samples.data_type  # doctest: +SKIP
+        'rv'
         """
         filename = Path(filename)
 
@@ -537,9 +630,17 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> axes = samples.plot_corner()
-        >>> axes = samples.plot_corner(params=["period", "eccentricity", "parallax"])
-        >>> axes = samples.plot_corner(truths={"period": Q(100, "day")})
+        Default corner plot (selects parameters based on data type):
+
+        >>> axes = samples.plot_corner()  # doctest: +SKIP
+
+        Specify parameters and overplot true values:
+
+        >>> from unxt import Q  # doctest: +SKIP
+        >>> axes = samples.plot_corner(  # doctest: +SKIP
+        ...     params=["period", "eccentricity"],
+        ...     truths={"period": Q(100, "day"), "eccentricity": 0.3},
+        ... )
         """
         if not HAS_ARVIZ:
             msg = "arviz is required for corner plots."
@@ -682,11 +783,25 @@ class Samples(eqx.Module):
 
         Examples
         --------
-        >>> fig = samples.plot(data=rv_data)
-        >>> fig = samples.plot(data=source_data, n_samples=100)
-        >>> fig = samples.plot(data=source_data, phase_fold=True)
-        >>> fig = samples.plot()  # astrometry only, no data points needed
-        >>> fig = samples.plot(plot_kwargs={"color": "C3", "alpha": 0.3})
+        Plot RV curve with observed data:
+
+        >>> fig = samples.plot(data=rv_data)  # doctest: +SKIP
+
+        Phase-folded RV plot:
+
+        >>> fig = samples.plot(data=rv_data, phase_fold=True)  # doctest: +SKIP
+
+        Astrometric orbit on sky (no data needed):
+
+        >>> fig = samples.plot()  # doctest: +SKIP
+
+        Custom styling:
+
+        >>> fig = samples.plot(  # doctest: +SKIP
+        ...     data=rv_data,
+        ...     n_samples=100,
+        ...     plot_kwargs={"color": "C3", "alpha": 0.3},
+        ... )
         """
         if not HAS_MPL:
             msg = "matplotlib is required for plotting. "

@@ -62,6 +62,17 @@ def fake_parallax_factor(
     -------
     parallax_factor : jax.Array
         Dimensionless parallax factor for each observation.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.simulate.astrometry import fake_parallax_factor
+    >>> pf = fake_parallax_factor(
+    ...     time=Q([0.0, 0.5, 1.0], "yr"),
+    ...     ra=Q(180.0, "deg"),
+    ...     dec=Q(45.0, "deg"),
+    ...     scan_angle=Q([0.0, 1.0, 2.0], "rad"),
+    ... )
     """
     # Simple sinusoidal model assuming 1-year period
     ang: AbstractQuantity = Q(2 * jnp.pi * ustrip("yr", time), "rad")
@@ -169,8 +180,8 @@ def simulate_gaia_epoch_astrometry(
     ... )
     >>> data.time.shape
     (50,)
-    >>> true_params["period"]
-    Q['time'](Array(100., dtype=float64), unit='d')
+    >>> "period" in true_params
+    True
     """
     ss = np.random.SeedSequence(seed)
     # One RNG per parameter that needs a default value

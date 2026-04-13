@@ -21,6 +21,16 @@ class KeplerianOrientation(eqx.Module):
     - Argument of pericenter (omega): orientation of ellipse within orbital plane
 
     Angles are stored as sin/cos pairs for numerical stability.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orientation import KeplerianOrientation
+    >>> orient = KeplerianOrientation.from_angles(
+    ...     arg_peri=Q(0.5, "rad"),
+    ...     lon_asc_node=Q(1.0, "rad"),
+    ...     inclination=Q(0.3, "rad"),
+    ... )
     """
 
     # sin/cos of argument of pericenter (omega)

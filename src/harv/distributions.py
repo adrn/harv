@@ -36,10 +36,15 @@ class QuantityDistribution(eqx.Module):
 
     Examples
     --------
-    Scalar (period in days)::
+    Scalar (period in days):
 
-        qd = QuantityDistribution(dist.LogUniform(50., 2000.), "day")
-        sample = qd.sample(key)  # -> Q(array, "day")
+    >>> import jax
+    >>> import numpyro.distributions as dist
+    >>> from harv import QuantityDistribution
+    >>> qd = QuantityDistribution(dist.LogUniform(50., 2000.), "day")
+    >>> sample = qd.sample(jax.random.key(0))
+    >>> sample.unit
+    Unit("d")
 
     Multivariate (astrometric linear parameters with mixed units)::
 
@@ -73,4 +78,4 @@ class QuantityDistribution(eqx.Module):
 
 
 QD = QuantityDistribution
-"""Shorthand alias for :class:`QuantityDistribution`."""
+# Shorthand alias for :class:`QuantityDistribution`.

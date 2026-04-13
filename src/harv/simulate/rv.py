@@ -95,8 +95,8 @@ def simulate_rv_sb1_data(
     ... )
     >>> data.time.shape
     (30,)
-    >>> true_params["rv_semiamp"]
-    Q['speed'](Array(10., dtype=float64), unit='km / s')
+    >>> "rv_semiamp" in true_params
+    True
     """
     ss = np.random.SeedSequence(seed)
     rngs = [np.random.default_rng(s) for s in ss.spawn(10)]

@@ -31,6 +31,25 @@ def stack_datasets(
     -------
     data
         Single dataset containing all observations stacked in dict order.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.data import RVData
+    >>> from harv.data.helpers import stack_datasets
+    >>> rv1 = RVData(
+    ...     time=Q([0.0, 50.0], "day"),
+    ...     rv=Q([1.0, -2.0], "km/s"),
+    ...     rv_err=Q([0.5, 0.5], "km/s"),
+    ... )
+    >>> rv2 = RVData(
+    ...     time=Q([10.0, 60.0], "day"),
+    ...     rv=Q([0.5, -1.5], "km/s"),
+    ...     rv_err=Q([0.3, 0.3], "km/s"),
+    ... )
+    >>> stacked = stack_datasets({"instr1": rv1, "instr2": rv2})
+    >>> stacked.n_times
+    4
     """
     # first make sure that all datasets have the same type:
     dset_types = {type(ds) for ds in datasets.values()}
@@ -97,6 +116,30 @@ def build_indicator_matrix(
     instrument_names : tuple[str, ...]
         Names of the non-reference instruments, in column order.
 
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.data import RVData
+    >>> from harv.data.helpers import build_indicator_matrix
+    >>> rv1 = RVData(
+    ...     time=Q([0.0, 50.0], "day"),
+    ...     rv=Q([1.0, -2.0], "km/s"),
+    ...     rv_err=Q([0.5, 0.5], "km/s"),
+    ... )
+    >>> rv2 = RVData(
+    ...     time=Q([10.0, 60.0], "day"),
+    ...     rv=Q([0.5, -1.5], "km/s"),
+    ...     rv_err=Q([0.3, 0.3], "km/s"),
+    ... )
+    >>> stacked, indicator, names = build_indicator_matrix(
+    ...     {"survey1": rv1, "survey2": rv2}, reference="survey1",
+    ... )
+    >>> stacked.n_times
+    4
+    >>> names
+    ('survey2',)
+    >>> indicator.shape
+    (4, 1)
     """
     if reference not in datasets:
         msg = f"Reference instrument {reference!r} not in {list(datasets)}"

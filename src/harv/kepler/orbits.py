@@ -41,6 +41,14 @@ def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
 
     ``M = 2pi * dt / period``, returned as a :class:`~unxt.Q` with angle
     units (radians).
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import mean_anomaly
+    >>> M = mean_anomaly(Q(50.0, "day"), Q(100.0, "day"))
+    >>> M.unit
+    Unit("rad")
     """
     return Q.from_(ustrip("", 2 * jnp.pi * dt / period), "rad")
 
@@ -52,6 +60,12 @@ def true_anomaly_from_mean(
 
     Wraps ``jaxoplanet.core.kepler.kepler``. The mean anomaly is stripped to
     radians internally.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import true_anomaly_from_mean
+    >>> sin_f, cos_f = true_anomaly_from_mean(Q(1.0, "rad"), 0.3)
     """
     return kepler(ustrip("rad", M), eccentricity)
 
@@ -69,6 +83,13 @@ def rv_shape(
     :class:`~unxt.Q` with angle units; ``jnp.cos`` handles both via
     quax dispatch.  ``eccentricity`` may likewise be a dimensionless
     :class:`~unxt.Q` or a plain scalar.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import true_anomaly_from_mean, rv_shape
+    >>> sin_f, cos_f = true_anomaly_from_mean(Q(1.0, "rad"), 0.3)
+    >>> shape = rv_shape(sin_f, cos_f, 0.3, Q(0.5, "rad"))
     """
     cos_wf = jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
     # cast: jnp ops on Quantity inputs return AbstractQuantity (quax dispatch),
@@ -98,6 +119,19 @@ def thiele_innes_ABFG(
     project into the Dec (``d``) direction.
 
     See also Eq. A.1 of https://arxiv.org/abs/2206.05726.
+
+    Examples
+    --------
+    >>> import quaxed.numpy as jnp
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import thiele_innes_ABFG
+    >>> A, B, F, G = thiele_innes_ABFG(
+    ...     cos_arg_peri=jnp.cos(Q(0.5, "rad")),
+    ...     sin_arg_peri=jnp.sin(Q(0.5, "rad")),
+    ...     cos_lon_asc_node=jnp.cos(Q(1.0, "rad")),
+    ...     sin_lon_asc_node=jnp.sin(Q(1.0, "rad")),
+    ...     cos_i=jnp.cos(Q(0.3, "rad")),
+    ... )
     """
     A = cos_arg_peri * cos_lon_asc_node - sin_arg_peri * sin_lon_asc_node * cos_i
     B = cos_arg_peri * sin_lon_asc_node + sin_arg_peri * cos_lon_asc_node * cos_i
@@ -133,6 +167,17 @@ def compute_true_anomaly_components(
     -------
     sin_f, cos_f
         True anomaly components, each shape (n,)
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import compute_true_anomaly_components
+    >>> sin_f, cos_f = compute_true_anomaly_components(
+    ...     time=Q([0.0, 25.0, 50.0], "day"),
+    ...     period=Q(100.0, "day"),
+    ...     eccentricity=0.3,
+    ...     t_peri=Q(0.0, "day"),
+    ... )
     """
     M = mean_anomaly(time - t_peri, period)
     return true_anomaly_from_mean(M, eccentricity)

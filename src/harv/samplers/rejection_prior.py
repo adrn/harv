@@ -147,18 +147,11 @@ class RejectionPrior(eqx.Module):
 
     Examples
     --------
-    >>> from harv.samplers import RejectionPrior
-    >>> from unxt import Q
-    >>> prior = RejectionPrior.default_rv(...)
-    >>> prior.n_nonlinear
+    >>> from harv.samplers import RejectionPrior  # doctest: +SKIP
+    >>> from unxt import Q  # doctest: +SKIP
+    >>> prior = RejectionPrior.default_rv(...)  # doctest: +SKIP
+    >>> prior.n_nonlinear  # doctest: +SKIP
     4
-
-    TODO: support this
-    RejectionPrior(
-        {"period": ...},
-        linear_prior={"rv_semiamp": ..., "v_sys": ...},
-        offsets={"rv": {"survey1": None, "survey2": QuantityDistribution(...)}}
-    )
     """
 
     nonlinear_priors: dict[str, PriorDist]
@@ -242,7 +235,19 @@ class RejectionPrior(eqx.Module):
 
     @property
     def n_nonlinear(self) -> int:
-        """Number of nonlinear parameters."""
+        """Number of nonlinear parameters.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> prior = RejectionPrior.default_rv(
+        ...     period_min=Q(2.0, "day"), period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"), sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> prior.n_nonlinear
+        4
+        """
         return len(self.nonlinear_priors)
 
     def sample_nonlinear(self, key: jax.Array, n_samples: int) -> dict[str, Any]:
@@ -261,6 +266,21 @@ class RejectionPrior(eqx.Module):
             Dictionary mapping each parameter name to an array of shape
             ``(n_samples,)``.  Values are bare JAX arrays regardless of
             whether the distribution is wrapped in ``QuantityDistribution``.
+
+        Examples
+        --------
+        >>> import jax
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> prior = RejectionPrior.default_rv(
+        ...     period_min=Q(2.0, "day"), period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"), sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> samples = prior.sample_nonlinear(jax.random.key(0), 10)
+        >>> sorted(samples.keys())
+        ['arg_peri', 'eccentricity', 'period', 'phase_peri']
+        >>> samples["period"].shape
+        (10,)
         """
         keys = jr.split(key, len(self.nonlinear_priors))
         return {
@@ -339,6 +359,39 @@ class RejectionPrior(eqx.Module):
         -------
         prior : RejectionPrior
             Prior configured for RV data.
+
+        Examples
+        --------
+        Basic RV prior with log-uniform period and Kipping eccentricity:
+
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> prior = RejectionPrior.default_rv(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> sorted(prior.nonlinear_priors.keys())
+        ['arg_peri', 'eccentricity', 'period', 'phase_peri']
+
+        With jitter (excess noise) and multi-instrument offsets:
+
+        >>> from harv.distributions import QuantityDistribution as QD
+        >>> import numpyro.distributions as dist
+        >>> prior = RejectionPrior.default_rv(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ...     jitter_scale=Q(1.0, "km/s"),
+        ...     offsets={
+        ...         "survey1": None,
+        ...         "survey2": QD(dist.Normal(0.0, 5.0), "km/s"),
+        ...     },
+        ... )
+        >>> prior.jitter_priors is not None
+        True
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_log_period_prior(period_min, period_max),
@@ -459,6 +512,23 @@ class RejectionPrior(eqx.Module):
         -------
         prior : RejectionPrior
             Prior configured for Gaia astrometry data.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> prior = RejectionPrior.default_gaia_astrometry(
+        ...     period_min=Q(100.0, "day"),
+        ...     period_max=Q(3000.0, "day"),
+        ...     sigma_a0=Q(5.0, "AU"),
+        ...     sigma_parallax=Q(10.0, "mas"),
+        ...     sigma_pos=Q(100.0, "mas"),
+        ...     sigma_vtan=Q(50.0, "km/s"),
+        ... )
+        >>> prior.n_nonlinear
+        6
+        >>> sorted(prior.nonlinear_priors.keys())
+        ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_log_period_prior(period_min, period_max),
@@ -553,6 +623,21 @@ class RejectionPrior(eqx.Module):
         Returns
         -------
         prior : RejectionPrior
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> prior = RejectionPrior.default_sb2(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> sorted(prior.nonlinear_priors.keys())
+        ['arg_peri', 'eccentricity', 'period', 'phase_peri']
+        >>> sorted(k for k in prior.linear_prior)
+        ['rv_semiamp_1', 'rv_semiamp_2', 'v_sys']
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_log_period_prior(period_min, period_max),

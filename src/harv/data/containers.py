@@ -80,12 +80,24 @@ class SystemData(AbstractDatasetContainer):
 
     Examples
     --------
-    >>> data = SystemData(
-    ...     primary=RVData(...),
-    ...     secondary=RVData(...),
+    >>> from unxt import Q
+    >>> from harv.data import RVData
+    >>> from harv.data.containers import SystemData
+    >>> primary = RVData(
+    ...     time=Q([0.0, 50.0, 100.0], "day"),
+    ...     rv=Q([10.0, -5.0, 8.0], "km/s"),
+    ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
     ... )
-    >>> data["primary"]
-    RVData(...)
+    >>> secondary = RVData(
+    ...     time=Q([0.0, 50.0, 100.0], "day"),
+    ...     rv=Q([-20.0, 10.0, -16.0], "km/s"),
+    ...     rv_err=Q([1.0, 1.0, 1.0], "km/s"),
+    ... )
+    >>> data = SystemData(primary=primary, secondary=secondary)
+    >>> list(data.keys())
+    ['primary', 'secondary']
+    >>> data["primary"].n_times
+    3
     """
 
     def __init__(self, **datasets: DatasetType) -> None:
@@ -118,6 +130,24 @@ class SourceData(AbstractDatasetContainer):
 
     Accepts arbitrary named datasets via keyword arguments. Names are
     user-defined and can be anything (e.g., 'gaia', 'keck_rv', 'hst_imaging').
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.data import RVData, SourceData
+    >>> rv1 = RVData(
+    ...     time=Q([0.0, 50.0], "day"),
+    ...     rv=Q([1.0, -2.0], "km/s"),
+    ...     rv_err=Q([0.5, 0.5], "km/s"),
+    ... )
+    >>> rv2 = RVData(
+    ...     time=Q([10.0, 60.0], "day"),
+    ...     rv=Q([0.5, -1.5], "km/s"),
+    ...     rv_err=Q([0.3, 0.3], "km/s"),
+    ... )
+    >>> src = SourceData(survey1=rv1, survey2=rv2)
+    >>> list(src.keys())
+    ['survey1', 'survey2']
     """
 
     def __init__(self, **datasets: DatasetType) -> None:

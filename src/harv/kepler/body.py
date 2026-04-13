@@ -59,6 +59,16 @@ class KeplerianBody(eqx.Module):
         eccentricity is very small, and can be set to a small multiple of machine
         epsilon for the data type used.
 
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.body import KeplerianBody
+    >>> body = KeplerianBody(
+    ...     period=Q(365.25, "day"),
+    ...     eccentricity=0.1,
+    ...     semi_major_axis=Q(1.0, "AU"),
+    ...     t_peri=Q(0.0, "day"),
+    ... )
     """
 
     period: ScalarQTime

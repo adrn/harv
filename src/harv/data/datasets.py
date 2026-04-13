@@ -71,7 +71,23 @@ class AbstractAstrometryData(AbstractData):
 
 
 class GaiaAstrometryData(AbstractAstrometryData):
-    """Gaia epoch astrometry (along-scan measurements)."""
+    """Gaia epoch astrometry (along-scan measurements).
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> from unxt import Q
+    >>> from harv import GaiaAstrometryData
+    >>> data = GaiaAstrometryData(
+    ...     time=Q([0.0, 100.0, 200.0], "day"),
+    ...     al_position=Q([0.1, -0.2, 0.05], "mas"),
+    ...     al_position_err=Q([0.01, 0.01, 0.01], "mas"),
+    ...     scan_angle=Q([0.5, 1.2, 2.8], "rad"),
+    ...     parallax_factor=jnp.array([0.3, -0.1, 0.4]),
+    ... )
+    >>> data.n_times
+    3
+    """
 
     _obs_name: ClassVar[str] = "al_position"
     _err_name: ClassVar[str] = "al_position_err"
@@ -112,6 +128,22 @@ class GaiaAstrometryData(AbstractAstrometryData):
         Returns
         -------
         ax : matplotlib.axes.Axes
+
+        Examples
+        --------
+        >>> import jax.numpy as jnp
+        >>> import matplotlib.pyplot as plt
+        >>> from unxt import Q
+        >>> from harv import GaiaAstrometryData
+        >>> data = GaiaAstrometryData(
+        ...     time=Q([0.0, 100.0, 200.0], "day"),
+        ...     al_position=Q([0.1, -0.2, 0.05], "mas"),
+        ...     al_position_err=Q([0.01, 0.01, 0.01], "mas"),
+        ...     scan_angle=Q([0.5, 1.2, 2.8], "rad"),
+        ...     parallax_factor=jnp.array([0.3, -0.1, 0.4]),
+        ... )
+        >>> ax = data.plot()
+        >>> plt.close("all")
         """
         if ax is None:
             ax = plt.gca()
@@ -153,7 +185,20 @@ class GaiaAstrometryData(AbstractAstrometryData):
 
 
 class RVData(AbstractData):
-    """Radial velocity measurements."""
+    """Radial velocity measurements.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv import RVData
+    >>> data = RVData(
+    ...     time=Q([0.0, 50.0, 100.0], "day"),
+    ...     rv=Q([1.0, -2.0, 0.5], "km/s"),
+    ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
+    ... )
+    >>> data.n_times
+    3
+    """
 
     _obs_name: ClassVar[str] = "rv"
     _err_name: ClassVar[str] = "rv_err"

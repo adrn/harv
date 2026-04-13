@@ -68,9 +68,21 @@ class RejectionSampler(eqx.Module):
 
     Examples
     --------
-    >>> prior = RejectionPrior.default_gaia_astrometry(...)
+    >>> from unxt import Q
+    >>> from harv.samplers import RejectionPrior, RejectionSampler
+    >>> prior = RejectionPrior.default_rv(
+    ...     period_min=Q(2.0, "day"),
+    ...     period_max=Q(1000.0, "day"),
+    ...     sigma_K0=Q(30.0, "km/s"),
+    ...     sigma_v0=Q(50.0, "km/s"),
+    ... )
     >>> sampler = RejectionSampler(prior)
-    >>> samples = sampler.run(data, n_prior_samples=100_000)
+    >>> sampler.batch_size
+    100000
+
+    Run rejection sampling on data (expensive):
+
+    >>> samples = sampler.run(data, n_prior_samples=100_000)  # doctest: +SKIP
     """
 
     prior: RejectionPrior
@@ -193,6 +205,23 @@ class RejectionSampler(eqx.Module):
             If data type is not supported.
         ValueError
             If prior is missing required parameters.
+
+        Examples
+        --------
+        >>> from unxt import Q  # doctest: +SKIP
+        >>> from harv.samplers import RejectionPrior, RejectionSampler  # doctest: +SKIP
+        >>> from harv.simulate.rv import simulate_rv_sb1_data  # doctest: +SKIP
+        >>> rv_data, _ = simulate_rv_sb1_data()  # doctest: +SKIP
+        >>> prior = RejectionPrior.default_rv(  # doctest: +SKIP
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> sampler = RejectionSampler(prior)  # doctest: +SKIP
+        >>> samples = sampler.run(rv_data, n_prior_samples=100_000)  # doctest: +SKIP
+        >>> samples.n_samples  # doctest: +SKIP
+        42
         """
         strategy = self._infer_strategy(data)
         datasets = strategy.extract_data(data)
@@ -394,36 +423,35 @@ class RejectionSampler(eqx.Module):
         **Marginalized (default)** -- MCMC over nonlinear parameters only,
         ``rv_semiamp`` and ``v_sys`` analytically marginalized:
 
-        >>> import jax.random as jr
-        >>> prior = RejectionPrior.default_rv(TODO)
-        >>> sampler = RejectionSampler(prior)
-        >>> samples = sampler.run(rv_data, n_prior_samples=500_000)
-        >>> mcmc = sampler.init_mcmc(samples, rv_data,
+        >>> import jax.random as jr  # doctest: +SKIP
+        >>> prior = RejectionPrior.default_rv(...)  # doctest: +SKIP
+        >>> sampler = RejectionSampler(prior)  # doctest: +SKIP
+        >>> samples = sampler.run(rv_data, n_prior_samples=500_000)  # doctest: +SKIP
+        >>> mcmc = sampler.init_mcmc(samples, rv_data,  # doctest: +SKIP
         ...                          num_chains=4, num_warmup=500,
         ...                          num_samples=2000)
-        >>> mcmc.run(jr.key(0))
-        >>> posterior = mcmc.get_samples()
-        >>> # Keys: period, eccentricity, phase_peri, arg_peri
+        >>> mcmc.run(jr.key(0))  # doctest: +SKIP
+        >>> posterior = mcmc.get_samples()  # doctest: +SKIP
 
         **Full model** -- all parameters sampled jointly:
 
-        >>> mcmc = sampler.init_mcmc(samples, rv_data, marginalized=False,
-        ...                          num_chains=4, num_warmup=500,
+        >>> mcmc = sampler.init_mcmc(  # doctest: +SKIP
+        ...     samples, rv_data, marginalized=False,
+        ...     num_chains=4, num_warmup=500,
         ...                          num_samples=2000)
-        >>> mcmc.run(jr.key(0))
-        >>> posterior = mcmc.get_samples()
-        >>> # Adds rv_semiamp and v_sys (as deterministic sites) to the above
+        >>> mcmc.run(jr.key(0))  # doctest: +SKIP
+        >>> posterior = mcmc.get_samples()  # doctest: +SKIP
 
         **Physical reparameterization** -- replace ``rv_semiamp`` with stellar masses
         and inclination; ``v_sys`` is analytically marginalized:
 
-        >>> import jax.numpy as jnp
-        >>> import numpyro
-        >>> import numpyro.distributions as dist
+        >>> import jax.numpy as jnp  # doctest: +SKIP
+        >>> import numpyro  # doctest: +SKIP
+        >>> import numpyro.distributions as dist  # doctest: +SKIP
         >>>
-        >>> _K_FACTOR = 28.4329  # km/s * day^(1/3) * M_sun^(-1/3)
+        >>> _K_FACTOR = 28.4329  # doctest: +SKIP
         >>>
-        >>> def K_from_masses(m1, m2, inc, period_days, ecc):
+        >>> def K_from_masses(m1, m2, inc, period_days, ecc):  # doctest: +SKIP
         ...     return (
         ...         _K_FACTOR
         ...         * (m2 * jnp.sin(inc))
@@ -432,8 +460,7 @@ class RejectionSampler(eqx.Module):
         ...         / jnp.sqrt(1.0 - ecc**2)
         ...     )
         >>>
-        >>> def mass_model(pars):
-        ...     # pars["period"] is in the data's time unit (days here)
+        >>> def mass_model(pars):  # doctest: +SKIP
         ...     m1  = numpyro.sample("m1",  dist.Normal(1.0, 0.2))
         ...     m2  = numpyro.sample("m2",  dist.HalfNormal(1.0))
         ...     inc = numpyro.sample("inc", dist.Uniform(0.0, jnp.pi / 2))
@@ -441,21 +468,18 @@ class RejectionSampler(eqx.Module):
         ...                         pars["period"], pars["eccentricity"])
         ...     return {"rv_semiamp": K}
         >>>
-        >>> mcmc = sampler.init_mcmc(
+        >>> mcmc = sampler.init_mcmc(  # doctest: +SKIP
         ...     samples, rv_data,
         ...     extra_model=mass_model,
         ...     extra_init_params={
-        ...         "m1":  jnp.full(4, 1.0),   # shape (num_chains,)
+        ...         "m1":  jnp.full(4, 1.0),
         ...         "m2":  jnp.full(4, 0.5),
         ...         "inc": jnp.full(4, 1.0),
         ...     },
         ...     num_chains=4, num_warmup=500, num_samples=2000,
         ... )
-        >>> mcmc.run(jr.key(0))
-        >>> posterior = mcmc.get_samples()
-        >>> # Sampled sites:      period, eccentricity, ..., m1, m2, inc
-        >>> # Deterministic site: rv_semiamp  (computed from m1, m2, inc, P, e)
-        >>> # Marginalized:       v_sys (analytically integrated out)
+        >>> mcmc.run(jr.key(0))  # doctest: +SKIP
+        >>> posterior = mcmc.get_samples()  # doctest: +SKIP
         """
         if samples.n_samples == 0:
             msg = "Cannot initialise MCMC: no posterior samples available."
