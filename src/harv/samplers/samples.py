@@ -901,11 +901,14 @@ class Samples(eqx.Module):
         data_plot_kwargs :
             Style overrides for data points (passed to ``ax.errorbar()``).
         """
+        # How many curves we will actually draw.
+        n_draw = min(n_samples, self.n_samples)
+
         # Orbit curve style defaults (thin lines, no markers)
         orbit_style = (plot_kwargs or {}).copy()
         orbit_style.setdefault("linestyle", "-")
         orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", 0.05 + 4.0 / (n_samples + 4.0))
+        orbit_style.setdefault("alpha", max(0.08, min(0.6, 8.0 / n_draw)))
         orbit_style.setdefault("marker", "")
         orbit_style.setdefault("color", "#555555")
         orbit_style.setdefault("rasterized", True)
@@ -994,7 +997,6 @@ class Samples(eqx.Module):
             )
 
         # --- Posterior model curves ---
-        n_draw = min(n_samples, self.n_samples)
         ecc_vals = np.asarray(ecc_qty.value)
         phase_peri_vals = np.asarray(phase_peri_qty.value)
         arg_peri_vals = np.asarray(arg_peri_qty.value)
@@ -1096,10 +1098,12 @@ class Samples(eqx.Module):
         Gaia along-scan measurements are 1-D projections and cannot be plotted
         directly as 2-D sky positions, so only the model orbit curves are shown.
         """
+        n_draw = min(n_samples, self.n_samples)
+
         orbit_style = (plot_kwargs or {}).copy()
         orbit_style.setdefault("linestyle", "-")
         orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", 0.05 + 4.0 / (n_samples + 4.0))
+        orbit_style.setdefault("alpha", max(0.08, min(0.6, 8.0 / n_draw)))
         orbit_style.setdefault("marker", "")
         orbit_style.setdefault("color", "#555555")
         orbit_style.setdefault("rasterized", True)
@@ -1119,7 +1123,6 @@ class Samples(eqx.Module):
         t_ref_raw = self.metadata.get("t_ref", 0.0)
         t_ref = t_ref_raw if isinstance(t_ref_raw, Q) else Q(t_ref_raw, time_unit)
 
-        n_draw = min(n_samples, self.n_samples)
         for i in range(n_draw):
             period_i = Q(float(period_vals[i]), time_unit)
             ecc_i = float(ecc_vals[i])

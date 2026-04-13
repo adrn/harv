@@ -22,7 +22,7 @@ from harv.likelihood.params import (
 )
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
-from harv.samplers.samples import Samples, _WarmStartMCMC
+from harv.samplers.samples import Samples, WarmStartMCMC
 
 try:
     import matplotlib.pyplot as plt
@@ -299,12 +299,12 @@ class TestInitMcmc:
     """Tests for Samples.init_mcmc."""
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
-        """init_mcmc returns a _WarmStartMCMC wrapping a numpyro MCMC."""
+        """init_mcmc returns a WarmStartMCMC wrapping a numpyro MCMC."""
         sampler, data = rv_sampler_and_data
         result = sampler.init_mcmc(
             rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
         )
-        assert isinstance(result, _WarmStartMCMC)
+        assert isinstance(result, WarmStartMCMC)
 
     def test_init_params_keys_match_nonlinear(self, rv_samples, rv_sampler_and_data):
         """init_params dict contains all nonlinear parameter keys."""
@@ -329,13 +329,22 @@ class TestInitMcmc:
             ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
-        """Starting positions are the first num_chains posterior samples."""
+        """Starting positions, when transformed back, match the posterior."""
+        from numpyro.distributions import biject_to
+
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples, data, num_chains=3, num_warmup=10, num_samples=10
         )
+        # init_params are in unconstrained space.  Round-trip through the
+        # forward transform to recover the original constrained values.
+        from harv.likelihood.helpers import _unwrap_dist
+
+        d = _unwrap_dist(sampler.prior.nonlinear_priors["period"])
+        transform = biject_to(d.support)
+        recovered = np.asarray(transform(mcmc._init_params["period"]))
         expected = np.asarray(rv_samples.nonlinear["period"].value)[:3]
-        np.testing.assert_array_equal(np.asarray(mcmc._init_params["period"]), expected)
+        np.testing.assert_allclose(recovered, expected, rtol=1e-5)
 
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
         """init_mcmc raises ValueError when there are no posterior samples."""
@@ -345,24 +354,28 @@ class TestInitMcmc:
                 empty_rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
             )
 
-    def test_raises_when_fewer_samples_than_chains(
+    def test_broadcast_init_when_fewer_samples_than_chains(
         self, rv_samples, rv_sampler_and_data
     ):
-        """init_mcmc raises ValueError when n_samples < num_chains."""
+        """When n_samples < num_chains, init_params are scalar (broadcast)."""
         sampler, data = rv_sampler_and_data
-        with pytest.raises(ValueError, match="Fewer posterior samples"):
-            sampler.init_mcmc(
-                rv_samples,
-                data,
-                num_chains=N + 1,  # more chains than samples
-                num_warmup=10,
-                num_samples=10,
-            )
+        mcmc = sampler.init_mcmc(
+            rv_samples,
+            data,
+            num_chains=N + 5,  # more chains than samples
+            num_warmup=10,
+            num_samples=10,
+        )
+        # Scalar init values are broadcast by numpyro to all chains.
+        for key, val in mcmc._init_params.items():
+            assert (
+                val.ndim == 0
+            ), f"init_params['{key}'] should be scalar when broadcasting"
 
     def test_warm_start_mcmc_delegates_attributes(
         self, rv_samples, rv_sampler_and_data
     ):
-        """_WarmStartMCMC delegates unknown attributes to the underlying MCMC."""
+        """WarmStartMCMC delegates unknown attributes to the underlying MCMC."""
         sampler, data = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
@@ -396,12 +409,37 @@ class TestInitMcmc:
             assert key in posterior, f"Missing site '{key}' in posterior"
         assert posterior["period"].shape == (10,)  # 2 chains x 5 samples
 
+    def test_single_chain_produces_scalar_init_params(
+        self, rv_samples, rv_sampler_and_data
+    ):
+        """For num_chains=1, all init_params values are 0-d (scalar)."""
+        sampler, data = rv_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            rv_samples, data, num_chains=1, num_warmup=5, num_samples=5
+        )
+        for key, val in mcmc._init_params.items():
+            assert (
+                val.ndim == 0
+            ), f"init_params['{key}'] should be scalar for single chain"
+
+    def test_run_single_chain(self, rv_samples, rv_sampler_and_data):
+        """MCMC with num_chains=1 completes and produces expected shapes."""
+        sampler, data = rv_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            rv_samples, data, num_chains=1, num_warmup=3, num_samples=3
+        )
+        mcmc.run(jr.key(0))
+        posterior = mcmc.get_samples()
+        for key in sampler.prior.nonlinear_priors:
+            assert key in posterior
+        assert posterior["period"].shape == (3,)  # 1 chain x 3 samples
+
 
 class TestInitMcmcFull:
     """Tests for RejectionSampler.init_mcmc with marginalized=False."""
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
-        """init_mcmc(marginalized=False) returns a _WarmStartMCMC."""
+        """init_mcmc(marginalized=False) returns a WarmStartMCMC."""
         sampler, data = rv_sampler_and_data
         result = sampler.init_mcmc(
             rv_samples,
@@ -411,7 +449,7 @@ class TestInitMcmcFull:
             num_warmup=10,
             num_samples=10,
         )
-        assert isinstance(result, _WarmStartMCMC)
+        assert isinstance(result, WarmStartMCMC)
 
     def test_init_params_has_linear_site(self, rv_samples, rv_sampler_and_data):
         """Full model init_params includes '_linear', not individual named sites."""
@@ -512,7 +550,7 @@ class TestInitMcmcExtraModel:
             )
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
-        """init_mcmc with extra_model returns a _WarmStartMCMC."""
+        """init_mcmc with extra_model returns a WarmStartMCMC."""
         sampler, data = rv_sampler_and_data
         result = sampler.init_mcmc(
             rv_samples,
@@ -523,7 +561,7 @@ class TestInitMcmcExtraModel:
             num_warmup=5,
             num_samples=5,
         )
-        assert isinstance(result, _WarmStartMCMC)
+        assert isinstance(result, WarmStartMCMC)
 
     def test_init_params_includes_extra(self, rv_samples, rv_sampler_and_data):
         """init_params contains both nonlinear and extra_init_params entries."""
@@ -594,6 +632,321 @@ class TestInitMcmcExtraModel:
 
 
 # ---------------------------------------------------------------------------
+# Tests: init_mcmc with non-Gaussian linear priors (regression)
+# ---------------------------------------------------------------------------
+
+
+class TestInitMcmcNonGaussianLinear:
+    """Regression tests for init_mcmc when linear priors include non-Gaussian
+    distributions (e.g. HalfNormal for parallax) that must be explicitly
+    sampled rather than analytically marginalized.
+    """
+
+    @pytest.fixture
+    def astro_sampler_and_data(self):
+        """RejectionSampler + GaiaAstrometryData with HalfNormal parallax."""
+        from harv.data import GaiaAstrometryData
+
+        n_obs = 15
+        times = Q(jnp.linspace(0.0, 600.0, n_obs), "day")
+        data = GaiaAstrometryData(
+            time=times,
+            al_position=Q(jnp.zeros(n_obs), "mas"),
+            al_position_err=Q(jnp.ones(n_obs) * 0.1, "mas"),
+            scan_angle=Q(jnp.linspace(0.0, 3.14, n_obs), "rad"),
+            parallax_factor=jnp.full(n_obs, 0.5),
+        )
+        prior = RejectionPrior.default_gaia_astrometry(
+            period_min=Q(100.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(5.0, "AU"),
+            sigma_parallax=Q(10.0, "mas"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+        )
+        sampler = RejectionSampler(prior)
+        return sampler, data
+
+    def test_init_params_includes_explicit_linear(
+        self, astro_samples, astro_sampler_and_data
+    ):
+        """Non-Gaussian linear params appear in init_params when marginalized=True."""
+        sampler, data = astro_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            astro_samples, data, num_chains=2, num_warmup=5, num_samples=5
+        )
+        # HalfNormal parallax is not analytically marginalized, so it must
+        # appear as an explicit init_params entry.
+        assert "parallax" in mcmc._init_params
+
+    def test_init_params_excludes_marginalized_linear(
+        self, astro_samples, astro_sampler_and_data
+    ):
+        """Analytically marginalized linear params are NOT in init_params."""
+        sampler, data = astro_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            astro_samples, data, num_chains=2, num_warmup=5, num_samples=5
+        )
+        # ra0, dec0 have Normal priors and should be marginalized out.
+        assert "ra0" not in mcmc._init_params
+        assert "dec0" not in mcmc._init_params
+
+    def test_explicit_linear_shape(self, astro_samples, astro_sampler_and_data):
+        """Explicit linear init values have shape (num_chains,)."""
+        sampler, data = astro_sampler_and_data
+        num_chains = 3
+        mcmc = sampler.init_mcmc(
+            astro_samples, data, num_chains=num_chains, num_warmup=5, num_samples=5
+        )
+        assert mcmc._init_params["parallax"].shape == (num_chains,)
+
+    def test_run_marginalized_with_halfnormal_parallax(
+        self, astro_samples, astro_sampler_and_data
+    ):
+        """MCMC runs without error when parallax has a HalfNormal prior."""
+        sampler, data = astro_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            astro_samples,
+            data,
+            num_chains=2,
+            num_warmup=3,
+            num_samples=3,
+            chain_method="sequential",
+        )
+        mcmc.run(jr.key(99))
+        posterior = mcmc.get_samples()
+        # parallax must appear in posterior as an explicit site.
+        assert "parallax" in posterior
+        assert posterior["parallax"].shape == (6,)  # 2 chains x 3 samples
+
+    def test_single_chain_init_params_are_scalar(
+        self, astro_samples, astro_sampler_and_data
+    ):
+        """For num_chains=1, init_params values must be 0-d (scalar) arrays."""
+        sampler, data = astro_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            astro_samples, data, num_chains=1, num_warmup=3, num_samples=3
+        )
+        for key, val in mcmc._init_params.items():
+            assert val.ndim == 0, (
+                f"init_params['{key}'] has ndim={val.ndim} (shape {val.shape}), "
+                "expected scalar (0-d) for num_chains=1"
+            )
+
+    def test_run_single_chain_with_halfnormal_parallax(
+        self, astro_samples, astro_sampler_and_data
+    ):
+        """MCMC with num_chains=1 and HalfNormal parallax runs without error."""
+        sampler, data = astro_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            astro_samples,
+            data,
+            num_chains=1,
+            num_warmup=3,
+            num_samples=3,
+        )
+        mcmc.run(jr.key(42))
+        posterior = mcmc.get_samples()
+        assert "parallax" in posterior
+        assert posterior["parallax"].shape == (3,)  # 1 chain x 3 samples
+
+
+# ---------------------------------------------------------------------------
+# Tests: init_mcmc with combined (astrometry + RV) model + jitter (regression)
+# ---------------------------------------------------------------------------
+
+
+class TestInitMcmcCombinedWithJitter:
+    """Regression tests for init_mcmc on a combined astrometry+RV model.
+
+    These catch issues that previously only surfaced when running the full
+    getting-started notebook, such as:
+    - Constrained init_params causing pathologically tiny step sizes
+    - Shape mismatches for single-chain init with HalfNormal jitter priors
+    """
+
+    @pytest.fixture
+    def combined_sampler_and_data(self):
+        """Combined RejectionSampler + SourceData with jitter priors."""
+        import numpyro.distributions as ndist
+
+        from harv.data import GaiaAstrometryData, SourceData
+        from harv.distributions import QD
+
+        # Minimal astrometry data
+        n_ast = 15
+        times_ast = Q(jnp.linspace(0.0, 1000.0, n_ast), "day")
+        astro = GaiaAstrometryData(
+            time=times_ast,
+            al_position=Q(jnp.zeros(n_ast), "mas"),
+            al_position_err=Q(jnp.ones(n_ast) * 0.1, "mas"),
+            scan_angle=Q(jnp.linspace(0.0, 3.14, n_ast), "rad"),
+            parallax_factor=jnp.full(n_ast, 0.5),
+        )
+
+        # Minimal RV data
+        n_rv = 8
+        times_rv = Q(jnp.linspace(0.0, 800.0, n_rv), "day")
+        rv = RVData(
+            time=times_rv,
+            rv=Q(jnp.zeros(n_rv), "km/s"),
+            rv_err=Q(jnp.ones(n_rv) * 1.0, "km/s"),
+        )
+
+        source_data = SourceData(gaia=astro, rv=rv)
+
+        # Combined prior with mixed transform types:
+        # - Normal (unconstrained), Uniform (bounded), HalfNormal (positive)
+        nonlinear = {
+            "period": QD(ndist.Normal(300.0, 50.0), "day"),
+            "eccentricity": ndist.TruncatedNormal(0.3, 0.2, low=0.0, high=1.0),
+            "phase_peri": ndist.Uniform(0.0, 1.0),
+            "cos_i": ndist.Uniform(-1.0, 1.0),
+            "arg_peri": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+            "lon_asc_node": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+        }
+        linear = {
+            "ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "pmdec": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "parallax": QD(ndist.HalfNormal(10.0), "mas"),
+            "semi_major_axis": QD(ndist.Normal(0.0, 50.0), "mas"),
+            "rv_semiamp": QD(ndist.Normal(0.0, 30.0), "km/s"),
+            "v_sys": QD(ndist.Normal(0.0, 30.0), "km/s"),
+        }
+        jitter_priors = {
+            "rv": QD(ndist.HalfNormal(4.0), "km/s"),
+        }
+        prior = RejectionPrior(
+            nonlinear_priors=nonlinear,
+            linear_prior=linear,
+            jitter_priors=jitter_priors,
+        )
+        sampler = RejectionSampler(prior)
+        return sampler, source_data
+
+    @pytest.fixture
+    def combined_samples_with_jitter(self) -> Samples:
+        """Minimal combined Samples that include jitter_rv in nonlinear."""
+        nonlinear = {
+            "period": Q(jnp.linspace(280.0, 320.0, N), "day"),
+            "eccentricity": Q(jnp.linspace(0.1, 0.5, N), ""),
+            "phase_peri": Q(jnp.linspace(0.1, 0.9, N), ""),
+            "arg_peri": Q(jnp.linspace(0.5, 5.5, N), "rad"),
+            "cos_i": Q(jnp.linspace(-0.5, 0.5, N), ""),
+            "lon_asc_node": Q(jnp.linspace(0.5, 5.5, N), "rad"),
+            "jitter_rv": Q(jnp.linspace(1.0, 5.0, N), "km/s"),
+        }
+        linear = {
+            "ra0": Q(jnp.zeros(N), "mas"),
+            "dec0": Q(jnp.zeros(N), "mas"),
+            "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+            "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+            "parallax": Q(jnp.ones(N) * 3.0, "mas"),
+            "semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
+            "rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
+            "v_sys": Q(jnp.zeros(N), "km/s"),
+        }
+        return Samples(
+            nonlinear=nonlinear,
+            linear=linear,
+            orbit_cls=GaiaAstrometryParameters,
+            full_cls=(GaiaAstrometryParameters, RVParameters),
+            data_type="combined",
+            metadata={"t_ref": 0.0},
+        )
+
+    def test_init_params_include_jitter(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """Jitter site appears in init_params for combined model."""
+        sampler, data = combined_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            combined_samples_with_jitter,
+            data,
+            num_chains=2,
+            num_warmup=5,
+            num_samples=5,
+        )
+        assert "jitter_rv" in mcmc._init_params
+
+    def test_init_params_are_unconstrained(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """Init values for bounded params differ from raw constrained values.
+
+        This catches the bug where constrained values were passed directly,
+        causing numpyro to misinterpret them and produce tiny step sizes.
+        """
+        sampler, data = combined_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            combined_samples_with_jitter,
+            data,
+            num_chains=2,
+            num_warmup=5,
+            num_samples=5,
+        )
+        # For Uniform(0, 2*pi) arg_peri, unconstrained != constrained.
+        unconstrained = np.asarray(mcmc._init_params["arg_peri"])
+        constrained = np.asarray(
+            combined_samples_with_jitter.nonlinear["arg_peri"].value[:2]
+        )
+        # Unconstrained values should be logit-transformed, not raw angles.
+        assert not np.allclose(unconstrained, constrained, atol=0.01)
+
+    def test_run_marginalized_completes(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """Combined marginalized MCMC with jitter runs without error."""
+        sampler, data = combined_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            combined_samples_with_jitter,
+            data,
+            num_chains=1,
+            num_warmup=3,
+            num_samples=3,
+        )
+        mcmc.run(jr.key(0))
+        posterior = mcmc.get_samples()
+        # All nonlinear sites present
+        for key in sampler.prior.nonlinear_priors:
+            assert key in posterior
+        # Jitter site present
+        assert "jitter_rv" in posterior
+        # Explicit linear (HalfNormal parallax) present
+        assert "parallax" in posterior
+
+    def test_step_size_is_reasonable(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """MCMC step size should not be pathologically tiny.
+
+        Regression: when init_params were in constrained (instead of
+        unconstrained) space, numpyro applied the forward transform to
+        already-constrained values, placing the chain at a terrible point
+        with step_size ~ 1e-14.
+        """
+        sampler, data = combined_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            combined_samples_with_jitter,
+            data,
+            num_chains=1,
+            num_warmup=5,
+            num_samples=3,
+        )
+        mcmc.run(jr.key(42))
+        last_state = mcmc._mcmc.last_state
+        step_size = float(last_state.adapt_state.step_size)
+        # A healthy NUTS step size is typically 0.001–1.0.
+        # The old bug produced ~5e-14. Anything > 1e-6 is fine.
+        assert step_size > 1e-6, (
+            f"Step size {step_size:.2e} is pathologically small — "
+            "init_params may be in the wrong (constrained) space"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tests: Samples.plot (D4)
 # ---------------------------------------------------------------------------
 
@@ -628,10 +981,13 @@ class TestPlotRV:
         """n_samples controls how many posterior curves are drawn."""
         fig = rv_samples.plot(n_samples=3)
         ax = fig.axes[0]
+        # Adaptive alpha = max(0.08, min(0.6, 8/n)); for n=3 this is 0.6.
+        expected_alpha = max(0.08, min(0.6, 8.0 / 3))
         model_lines = [
             line
             for line in ax.lines
-            if line.get_alpha() is not None and line.get_alpha() < 0.5  # type: ignore[operator]
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
         ]
         assert len(model_lines) == 3
         plt.close("all")
