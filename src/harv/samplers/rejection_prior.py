@@ -17,6 +17,7 @@ import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
 
+from harv.custom_types import ScalarQAngle, ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import (
     LinearPriorDist,
@@ -274,16 +275,16 @@ class RejectionPrior(eqx.Module):
     def default_rv(
         cls,
         *,
-        period_min: Q["time"],
-        period_max: Q["time"],
-        sigma_K0: Q["speed"],
-        sigma_v0: Q["speed"],
-        P0: Q["time"] = Q(1.0, "yr"),
+        period_min: ScalarQTime,
+        period_max: ScalarQTime,
+        sigma_K0: ScalarQSpeed,
+        sigma_v0: ScalarQSpeed,
+        P0: ScalarQTime = Q(1.0, "yr"),
         offsets: dict[str, QuantityDistribution | None] | None = None,
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: Q["speed"] | None = None,
+        jitter_scale: ScalarQSpeed | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
@@ -370,17 +371,17 @@ class RejectionPrior(eqx.Module):
     def default_gaia_astrometry(
         cls,
         *,
-        period_min: Q["time"],
-        period_max: Q["time"],
-        sigma_a0: Q["length"],
-        sigma_parallax: Q["angle"],
-        sigma_pos: Q["angle"],
-        sigma_vtan: Q["speed"],
-        P0: Q["time"] = Q(1.0, "yr"),
+        period_min: ScalarQTime,
+        period_max: ScalarQTime,
+        sigma_a0: ScalarQLength,
+        sigma_parallax: ScalarQAngle,
+        sigma_pos: ScalarQAngle,
+        sigma_vtan: ScalarQSpeed,
+        P0: ScalarQTime = Q(1.0, "yr"),
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: Q["angle"] | None = None,
+        jitter_scale: ScalarQAngle | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
@@ -495,15 +496,15 @@ class RejectionPrior(eqx.Module):
     def default_sb2(
         cls,
         *,
-        period_min: Q["time"],
-        period_max: Q["time"],
-        sigma_K0: Q["speed"],
-        sigma_v0: Q["speed"],
-        P0: Q["time"] = Q(1.0, "yr"),
+        period_min: ScalarQTime,
+        period_max: ScalarQTime,
+        sigma_K0: ScalarQSpeed,
+        sigma_v0: ScalarQSpeed,
+        P0: ScalarQTime = Q(1.0, "yr"),
         marginalize_names: tuple[str, ...] | None = None,
         trend_order: int = 0,
         trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: Q["speed"] | None = None,
+        jitter_scale: ScalarQSpeed | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for SB2 (double-lined) radial velocity data.

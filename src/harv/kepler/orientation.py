@@ -134,9 +134,7 @@ class KeplerianOrientation(eqx.Module):
 
         inner_tmp = (u_ + v_) * (u_ - v_)
         # Guard against small negative from roundoff
-        inner = jnp.where(
-            inner_tmp < 0.0, Q.from_(0.0, inner_tmp.unit), inner_tmp
-        )
+        inner = jnp.where(inner_tmp < 0.0, Q.from_(0.0, inner_tmp.unit), inner_tmp)
         a = jnp.sqrt(u_ + jnp.sqrt(inner))
 
         # From algebraic manipulation of T-I
@@ -182,9 +180,7 @@ class KeplerianOrientation(eqx.Module):
     @property
     def lon_asc_node(self) -> ScalarQAngle:
         """Longitude of ascending node (Omega)."""
-        return Q.from_(
-            jnp.arctan2(self.sin_lon_asc_node, self.cos_lon_asc_node), "rad"
-        )
+        return Q.from_(jnp.arctan2(self.sin_lon_asc_node, self.cos_lon_asc_node), "rad")
 
     @property
     def inclination(self) -> ScalarQAngle:
@@ -260,9 +256,7 @@ class KeplerianOrientation(eqx.Module):
             The four Thiele-Innes constants.
         """
         a: jax.Array | ScalarQLength | ScalarQAngle = (
-            jnp.array(1.0)
-            if semi_major_axis is None
-            else Q.from_(semi_major_axis)
+            jnp.array(1.0) if semi_major_axis is None else Q.from_(semi_major_axis)
         )
 
         A, B, F, G = thiele_innes_ABFG(

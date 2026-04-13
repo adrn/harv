@@ -20,7 +20,7 @@ import jax.random as jr
 import numpy as np
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
-from unxt import Q, ustrip
+from unxt import AbstractQuantity, Q, ustrip
 
 from harv.data import (
     AbstractAstrometryData,

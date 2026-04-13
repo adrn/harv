@@ -204,7 +204,7 @@ class Samples(eqx.Module):
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
 
-    def __getitem__(self, key: str) -> AbstractQ | jnp.ndarray:
+    def __getitem__(self, key: str) -> AbstractQuantity | jnp.ndarray:
         """Get parameter samples with units restored.
 
         Parameters
@@ -273,7 +273,7 @@ class Samples(eqx.Module):
 
     def median(
         self, key: str | None = None
-    ) -> dict[str, AbstractQ | jnp.ndarray] | AbstractQ | jnp.ndarray:
+    ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
@@ -295,7 +295,7 @@ class Samples(eqx.Module):
         if key is not None:
             return jnp.median(self[key])
 
-        result: dict[str, AbstractQ | jnp.ndarray] = {}
+        result: dict[str, AbstractQuantity | jnp.ndarray] = {}
         for param_key in self.keys():
             try:
                 result[param_key] = jnp.median(self[param_key])
@@ -305,7 +305,7 @@ class Samples(eqx.Module):
 
     def percentile(
         self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
-    ) -> list[AbstractQ | jnp.ndarray]:
+    ) -> list[AbstractQuantity | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters
@@ -814,11 +814,7 @@ class Samples(eqx.Module):
         median_period = Q(median_period_val, time_unit)
 
         t_ref_raw = self.metadata.get("t_ref", 0.0)
-        t_ref = (
-            t_ref_raw
-            if isinstance(t_ref_raw, Q)
-            else Q(t_ref_raw, time_unit)
-        )
+        t_ref = t_ref_raw if isinstance(t_ref_raw, Q) else Q(t_ref_raw, time_unit)
 
         # Collect per-instrument datasets (multi-survey support).
         if isinstance(data, SourceData):
@@ -938,9 +934,7 @@ class Samples(eqx.Module):
                 )
                 t_grid = get_t_grid(all_times, median_period)
             else:
-                t_grid = (
-                    t_ref + Q(np.linspace(0.0, 1.0, 500), "") * median_period
-                )
+                t_grid = t_ref + Q(np.linspace(0.0, 1.0, 500), "") * median_period
 
             for i in range(n_draw):
                 period_i = Q(float(period_vals[i]), time_unit)
@@ -1000,11 +994,7 @@ class Samples(eqx.Module):
         sma_vals = np.asarray(sma_qty.value) if sma_qty is not None else None
 
         t_ref_raw = self.metadata.get("t_ref", 0.0)
-        t_ref = (
-            t_ref_raw
-            if isinstance(t_ref_raw, Q)
-            else Q(t_ref_raw, time_unit)
-        )
+        t_ref = t_ref_raw if isinstance(t_ref_raw, Q) else Q(t_ref_raw, time_unit)
 
         n_draw = min(n_samples, self.n_samples)
         for i in range(n_draw):

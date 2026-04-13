@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from unxt import Q, ustrip
 
-from .custom_types import BatchQTime
+from .custom_types import BatchQTime, NTime, ScalarQTime
 
 _DEFAULT_ERRORBAR_STYLE: dict[str, Any] = {
     "linestyle": "none",
@@ -86,12 +86,12 @@ def _plot_timeseries_errorbar(
 
 def get_t_grid(
     times: BatchQTime,
-    period: Q["time"],
+    period: ScalarQTime,
     *,
     span_factor: float = 0.1,
     n_points_per_period: int = 64,
     max_t_grid: int | None = None,
-) -> Q["time"]:
+) -> NTime:
     """Dense time grid spanning the observation baseline with a small buffer.
 
     Generates a regular grid of times suitable for plotting model orbits over

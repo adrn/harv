@@ -14,13 +14,14 @@ import equinox as eqx
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity
 
+from harv.custom_types import NTime
+
 from .datasets import (
     AbstractAstrometryData,
     AbstractData,
     DatasetType,
     RVData,
 )
-from harv.custom_types import NTime
 
 _DT = TypeVar("_DT", bound=DatasetType)
 

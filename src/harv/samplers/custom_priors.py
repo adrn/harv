@@ -4,8 +4,9 @@ from typing import Any
 
 import equinox as eqx
 import numpyro.distributions as dist
-from unxt import Q, ustrip
+from unxt import ustrip
 
+from harv.custom_types import ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
 from harv.likelihood.helpers import PriorDist
 
@@ -17,8 +18,8 @@ __all__ = (
 
 
 def _make_log_period_prior(
-    period_min: Q["time"],
-    period_max: Q["time"],
+    period_min: ScalarQTime,
+    period_max: ScalarQTime,
 ) -> PriorDist:
     return QuantityDistribution(
         dist.LogUniform(
@@ -62,8 +63,8 @@ class PeriodDependentKPrior(eqx.Module):
     Binary-star and Exoplanet Radial Velocity Data*.
     """
 
-    sigma_K0: Q["speed"]
-    P0: Q["time"]
+    sigma_K0: ScalarQSpeed
+    P0: ScalarQTime
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -131,8 +132,8 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     as an explicit (non-marginalized) linear parameter by default.
     """
 
-    sigma_a0: Q["length"]
-    P0: Q["time"]
+    sigma_a0: ScalarQLength
+    P0: ScalarQTime
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -194,7 +195,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     explicit (non-marginalized) linear parameter by default.
     """
 
-    sigma_v0: Q["speed"]
+    sigma_v0: ScalarQSpeed
 
     def __call__(self, params: Any) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.

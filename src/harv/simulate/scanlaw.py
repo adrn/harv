@@ -10,6 +10,8 @@ import numpy as np
 import pooch
 from unxt import Q, ustrip
 
+from harv.custom_types import ScalarQAngle
+
 SCANLAW_DATA_DOI = "10.5281/zenodo.17729248"
 SCANLAW_DATA_POOCH = pooch.create(
     path=pooch.os_cache("harv"),
@@ -105,7 +107,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
 
         return scans[np.argsort(scans["time_bjd"])]
 
-    def query(self, ra: Q["angle"], dec: Q["angle"]) -> np.ndarray:
+    def query(self, ra: ScalarQAngle, dec: ScalarQAngle) -> np.ndarray:
         """Query the scan data for a specific sky location.
 
         Parameters

@@ -1,9 +1,8 @@
-"""
-harv: Tools for inferring Keplerian orbital parameters of binary-star
-and star–exoplanet systems from time series data
+"""harv: Tools for inferring Keplerian orbital parameters.
 
-A JAX-based package for modeling Gaia DR4 epoch astrometry and radial velocities,
-featuring units-aware APIs (unxt), probabilistic modeling (numpyro), and flexible
+A JAX-based package for modeling binary-star and star-exoplanet systems with time series
+data, such as Gaia DR4 epoch astrometry and radial velocities. The package is units
+aware via unxt, supports probabilistic modeling with numpyro, and provides flexible
 Keplerian orbit frameworks for single and multi-body systems.
 """
 

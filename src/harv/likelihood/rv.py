@@ -114,8 +114,8 @@ class RVLikelihood(AbstractLikelihood[RVData, RVParameters]):
 
     When ``linear_marginalized_prior`` is provided and ``params`` is a
     :class:`MarginalizedParameters` instance, the likelihood analytically marginalizes
-    over the linear parameters (rv_semiamp, v_sys), and optionally per-instrument offsets
-    and polynomial trend coefficients.
+    over the linear parameters (rv_semiamp, v_sys), and optionally per-instrument
+    offsets and polynomial trend coefficients.
 
     When ``linear_marginalized_prior`` is ``None``, ``params`` must be a full
     :class:`RVParameters` and the likelihood is evaluated explicitly.

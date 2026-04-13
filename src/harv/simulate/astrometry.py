@@ -14,26 +14,30 @@ The astrometric model includes:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, uconvert, ustrip
 
+from harv.custom_types import (
+    BatchQAngle,
+    BatchQTime,
+    ScalarQAngle,
+    ScalarQAngularSpeed,
+    ScalarQTime,
+)
 from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
-
-if TYPE_CHECKING:
-    from harv.custom_types import AngularSpeed
 
 __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
 
 
 def fake_parallax_factor(
-    time: Q["time"],
-    ra: Q["angle"],
-    dec: Q["angle"],
-    scan_angle: Q["angle"],
+    time: BatchQTime,
+    ra: ScalarQAngle,
+    dec: ScalarQAngle,
+    scan_angle: BatchQAngle,
 ) -> jnp.ndarray:
     """Mock, super simplified parallax factor for a star at (ra, dec).
 
@@ -67,28 +71,28 @@ def fake_parallax_factor(
 def simulate_gaia_epoch_astrometry(
     seed: int = 42,
     n_obs: int = 100,
-    baseline: Q["time"] | None = None,
+    baseline: ScalarQTime | None = None,
     # Orbital parameters
-    period: Q["time"] | None = None,
+    period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: Q["time"] | None = None,
-    arg_peri: Q["angle"] | None = None,
-    lon_asc_node: Q["angle"] | None = None,
-    inclination: Q["angle"] | None = None,
-    semi_major_axis: Q["angle"] | None = None,
+    t_peri: ScalarQTime | None = None,
+    arg_peri: ScalarQAngle | None = None,
+    lon_asc_node: ScalarQAngle | None = None,
+    inclination: ScalarQAngle | None = None,
+    semi_major_axis: ScalarQAngle | None = None,
     # Sky position (for parallax factor calculation)
-    ra: Q["angle"] | None = None,
-    dec: Q["angle"] | None = None,
+    ra: ScalarQAngle | None = None,
+    dec: ScalarQAngle | None = None,
     # Astrometric parameters (small offsets in mas)
-    alpha0: Q["angle"] | None = None,
-    delta0: Q["angle"] | None = None,
-    mu_alpha: Q[AngularSpeed] | None = None,
-    mu_delta: Q[AngularSpeed] | None = None,
-    parallax: Q["angle"] | None = None,
+    alpha0: ScalarQAngle | None = None,
+    delta0: ScalarQAngle | None = None,
+    mu_alpha: ScalarQAngularSpeed | None = None,
+    mu_delta: ScalarQAngularSpeed | None = None,
+    parallax: ScalarQAngle | None = None,
     # Uncertainty
-    al_error: Q["angle"] | None = None,
+    al_error: ScalarQAngle | None = None,
     # Reference time
-    t_ref: Q["time"] | None = None,
+    t_ref: ScalarQTime | None = None,
 ) -> tuple[GaiaAstrometryData, dict[str, Any]]:
     """Simulate Gaia-like along-scan epoch astrometry.
 
@@ -181,9 +185,7 @@ def simulate_gaia_epoch_astrometry(
         eccentricity = rngs[2].uniform(0.0, 0.9)
 
     if t_peri is None:
-        t_peri = Q(
-            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
-        )
+        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
 
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -206,19 +208,11 @@ def simulate_gaia_epoch_astrometry(
     alpha0 = Q(0.0, "mas") if alpha0 is None else uconvert("mas", alpha0)
     delta0 = Q(0.0, "mas") if delta0 is None else uconvert("mas", delta0)
 
-    mu_alpha = (
-        Q(rngs[8].normal(0, 10), "mas/yr") if mu_alpha is None else mu_alpha
-    )
-    mu_delta = (
-        Q(rngs[9].normal(0, 10), "mas/yr") if mu_delta is None else mu_delta
-    )
-    parallax = (
-        Q(rngs[10].exponential(10.0), "mas") if parallax is None else parallax
-    )
+    mu_alpha = Q(rngs[8].normal(0, 10), "mas/yr") if mu_alpha is None else mu_alpha
+    mu_delta = Q(rngs[9].normal(0, 10), "mas/yr") if mu_delta is None else mu_delta
+    parallax = Q(rngs[10].exponential(10.0), "mas") if parallax is None else parallax
     al_error = (
-        Q(rngs[11].uniform(0.02, 0.1, n_obs), "mas")
-        if al_error is None
-        else al_error
+        Q(rngs[11].uniform(0.02, 0.1, n_obs), "mas") if al_error is None else al_error
     )
 
     if t_ref is None:

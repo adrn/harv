@@ -17,6 +17,13 @@ import quaxed.numpy as jnp
 from unxt import AbstractQuantity
 
 from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity
+from harv.plot import _plot_timeseries_errorbar
+
+# Optional dependency:
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None  # type: ignore[assignment]
 
 
 class AbstractData(eqx.Module):
@@ -106,10 +113,6 @@ class GaiaAstrometryData(AbstractAstrometryData):
         -------
         ax : matplotlib.axes.Axes
         """
-        import matplotlib.pyplot as plt
-
-        from harv.plot import _plot_timeseries_errorbar
-
         if ax is None:
             ax = plt.gca()
 
@@ -202,10 +205,6 @@ class RVData(AbstractData):
         >>> ax = data.plot(color="C1", markersize=6)  # override style
         >>> plt.close("all")
         """
-        import matplotlib.pyplot as plt
-
-        from harv.plot import _plot_timeseries_errorbar
-
         if ax is None:
             ax = plt.gca()
 

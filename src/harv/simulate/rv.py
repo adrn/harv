@@ -12,6 +12,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.data import RVData, SourceData
 from harv.kepler.orbits import rv_at_times
 
@@ -21,19 +22,19 @@ __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
 def simulate_rv_sb1_data(
     seed: int = 42,
     n_obs: int = 50,
-    baseline: Q["time"] | None = None,
+    baseline: ScalarQTime | None = None,
     # Orbital parameters
-    period: Q["time"] | None = None,
+    period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: Q["time"] | None = None,
-    arg_peri: Q["angle"] | None = None,
+    t_peri: ScalarQTime | None = None,
+    arg_peri: ScalarQAngle | None = None,
     # RV parameters
-    rv_semiamp: Q["speed"] | None = None,
-    v_sys: Q["speed"] | None = None,
+    rv_semiamp: ScalarQSpeed | None = None,
+    v_sys: ScalarQSpeed | None = None,
     # Uncertainty
-    rv_err: Q["speed"] | None = None,
+    rv_err: ScalarQSpeed | None = None,
     # Reference time
-    t_ref: Q["time"] | None = None,
+    t_ref: ScalarQTime | None = None,
     # Instrument
     instrument: str = "default",
 ) -> tuple[RVData, dict[str, Any]]:
@@ -109,9 +110,7 @@ def simulate_rv_sb1_data(
         eccentricity = rngs[2].uniform(0.0, 0.7)
 
     if t_peri is None:
-        t_peri = Q(
-            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
-        )
+        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
 
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -126,9 +125,7 @@ def simulate_rv_sb1_data(
         rv_err = Q(rngs[7].uniform(0.01, 0.5, n_obs), "km/s")
     else:
         # Broadcast scalar rv_err to per-observation array
-        rv_err = Q(
-            jnp.broadcast_to(ustrip(rv_err.unit, rv_err), (n_obs,)), rv_err.unit
-        )
+        rv_err = Q(jnp.broadcast_to(ustrip(rv_err.unit, rv_err), (n_obs,)), rv_err.unit)
 
     if t_ref is None:
         t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
@@ -169,20 +166,20 @@ def simulate_rv_sb1_data(
 
 
 def simulate_rv_multisurv_data(  # noqa: C901
-    instruments: dict[str, Q["speed"] | None],
+    instruments: dict[str, ScalarQSpeed | None],
     seed: int = 42,
     n_obs_per_instrument: int = 30,
-    baseline: Q["time"] | None = None,
+    baseline: ScalarQTime | None = None,
     # Shared orbital parameters
-    period: Q["time"] | None = None,
+    period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: Q["time"] | None = None,
-    arg_peri: Q["angle"] | None = None,
+    t_peri: ScalarQTime | None = None,
+    arg_peri: ScalarQAngle | None = None,
     # Shared RV amplitude and systemic velocity
-    rv_semiamp: Q["speed"] | None = None,
-    v_sys: Q["speed"] | None = None,
-    rv_err: Q["speed"] | None = None,
-    t_ref: Q["time"] | None = None,
+    rv_semiamp: ScalarQSpeed | None = None,
+    v_sys: ScalarQSpeed | None = None,
+    rv_err: ScalarQSpeed | None = None,
+    t_ref: ScalarQTime | None = None,
 ) -> tuple[SourceData, dict[str, Any]]:
     """Simulate multi-survey RV data with per-instrument zero-point offsets.
 
@@ -258,9 +255,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.7)
     if t_peri is None:
-        t_peri = Q(
-            rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit
-        )
+        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
     if rv_semiamp is None:

@@ -15,9 +15,9 @@ import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, Q, ustrip
 
 from harv.data import AbstractData
+from harv.distributions import QuantityDistribution
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.likelihood.params import AbstractParameters, MarginalizedParameters
-from harv.distributions import QuantityDistribution
 
 type PriorDist = dist.Distribution | QuantityDistribution
 type LinearPriorDist = (
