@@ -39,7 +39,8 @@ dependencies = [
 
 [tool.uv]
 override-dependencies = [
-    "quaxed @ git+https://github.com/GalacticDynamics/quaxed.git",
+    # "unxt @ file:///Users/aprice-whelan/projects/unxt",
+    "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
     "coordinax @ git+https://github.com/GalacticDynamics/coordinax.git",
     "numpyro-ext @ git+https://github.com/dfm/numpyro-ext.git"
 ]
