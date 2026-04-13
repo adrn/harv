@@ -5,16 +5,20 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 
+<div align="center">
+<img
+    src="https://raw.githubusercontent.com/adrn/harv/refs/heads/main/docs/_static/logo_med.png"
+    alt="harv logo"
+    width="200"
+>
+</div>
+
 **harv** is a Python package for inferring Keplerian orbital parameters of binary-star
 and star–exoplanet systems from time series data. Built on
 [JAX](https://github.com/google/jax), [NumPyro](https://github.com/pyro-ppl/numpyro),
 and [unxt](https://github.com/GalacticDynamics/unxt) for units-aware computation.
 
 It's pronounced _harvey_.
-
-<p align="center">
-<img src="https://raw.githubusercontent.com/adrn/harv/main/docs/_static/logo_med.png" alt="harv logo" width="200">
-</p>
 
 <!-- ### Key features
 
