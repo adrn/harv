@@ -46,7 +46,7 @@ __all__ = ["Samples"]
 # ---------------------------------------------------------------------------
 
 
-class _WarmStartMCMC:
+class WarmStartMCMC:
     """Wrapper around ``numpyro.infer.MCMC`` with pre-set warm-start init params.
 
     Constructed by :meth:`RejectionSampler.init_mcmc`. Provides the full numpyro MCMC
@@ -110,7 +110,7 @@ class _WarmStartMCMC:
 
     def __repr__(self) -> str:
         return (
-            f"_WarmStartMCMC("
+            f"WarmStartMCMC("
             f"num_chains={self._mcmc.num_chains}, "
             f"num_samples={self._mcmc.num_samples})"
         )
@@ -905,7 +905,7 @@ class Samples(eqx.Module):
         orbit_style = (plot_kwargs or {}).copy()
         orbit_style.setdefault("linestyle", "-")
         orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", 0.15)
+        orbit_style.setdefault("alpha", 0.05 + 4.0 / (n_samples + 4.0))
         orbit_style.setdefault("marker", "")
         orbit_style.setdefault("color", "#555555")
         orbit_style.setdefault("rasterized", True)
@@ -1099,7 +1099,7 @@ class Samples(eqx.Module):
         orbit_style = (plot_kwargs or {}).copy()
         orbit_style.setdefault("linestyle", "-")
         orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", 0.15)
+        orbit_style.setdefault("alpha", 0.05 + 4.0 / (n_samples + 4.0))
         orbit_style.setdefault("marker", "")
         orbit_style.setdefault("color", "#555555")
         orbit_style.setdefault("rasterized", True)

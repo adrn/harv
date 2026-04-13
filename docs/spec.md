@@ -192,7 +192,7 @@ src/harv/
 │   ├── rejection.py         # RejectionSampler
 │   ├── strategies.py        # DataTypeStrategy subclasses (RV, Astrometry, Composite)
 │   ├── numpyro.py           # Numpyro model builders for MCMC (internal)
-│   └── samples.py           # Samples container + _WarmStartMCMC
+│   └── samples.py           # Samples container + WarmStartMCMC
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
     ├── astrometry.py        # simulate_gaia_epoch_astrometry
@@ -1052,7 +1052,7 @@ The `batch_size` field controls how many samples are vmapped at once within a
 `init_mcmc` takes the `Samples` object returned by `run`, the observed data, and an
 optional numpyro kernel class. It builds a numpyro model automatically from the
 sampler's prior and data, draws one starting position per chain from the posterior,
-and returns a `_WarmStartMCMC` wrapper whose `run()` injects those positions
+and returns a `WarmStartMCMC` wrapper whose `run()` injects those positions
 automatically.
 
 Two model variants are supported via `marginalized`:

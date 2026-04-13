@@ -41,9 +41,56 @@ from harv.samplers.numpyro import (
     _build_marginalized_numpyro_model,
 )
 from harv.samplers.rejection_prior import RejectionPrior
-from harv.samplers.samples import Samples, _WarmStartMCMC
+from harv.samplers.samples import Samples, WarmStartMCMC
 
 __all__ = ["RejectionSampler"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _unconstrain_init_params(
+    init_params: dict[str, Any],
+    prior: RejectionPrior,
+) -> dict[str, Any]:
+    """Transform init_params from constrained to unconstrained space.
+
+    Numpyro's HMC/NUTS operates in unconstrained space and applies
+    ``biject_to(constraint)`` as the forward transform.  The init values
+    we build from the rejection-sampler posterior are in *constrained*
+    (natural) space, so we must apply the inverse transform before
+    passing them to ``WarmStartMCMC``.
+    """
+    from numpyro.distributions import biject_to
+
+    # Build a mapping: numpyro site name -> bare numpyro distribution.
+    # NOTE: the site names here (e.g. "jitter_{dt_label}") must match those
+    # created by _sample_nonlinear() in numpyro.py.  If naming conventions
+    # change in one place, they must change in the other.  Consider extracting
+    # a shared ``prior.site_distributions()`` method to eliminate the coupling.
+    site_dists: dict[str, dist.Distribution] = {}
+    for name, d in prior.nonlinear_priors.items():
+        site_dists[name] = _unwrap_dist(d)
+    if isinstance(prior.linear_prior, dict):
+        for name, d in prior.linear_prior.items():
+            if isinstance(d, (dist.Distribution, QuantityDistribution)):
+                site_dists[name] = _unwrap_dist(d)
+    if prior.jitter_priors is not None:
+        for dt_label, qd in prior.jitter_priors.items():
+            site_dists[f"jitter_{dt_label}"] = _unwrap_dist(qd)
+
+    out: dict[str, Any] = {}
+    for name, val in init_params.items():
+        d = site_dists.get(name)
+        if d is not None:
+            transform = biject_to(d.support)
+            out[name] = transform.inv(jnp.asarray(val))
+        else:
+            # Unknown site (e.g. "_linear", extra_model params) — pass through.
+            out[name] = val
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -325,13 +372,13 @@ class RejectionSampler(eqx.Module):
         kernel: type | None = None,
         num_chains: int = 4,
         **mcmc_kwargs: Any,
-    ) -> _WarmStartMCMC:
+    ) -> WarmStartMCMC:
         """Construct a numpyro MCMC object warm-started from rejection-sampler output.
 
         Builds a numpyro model from this sampler's prior and the observed data,
         draws one starting position per chain from ``samples``, and returns a
-        :class:`~harv.samplers.samples._WarmStartMCMC` whose
-        :meth:`~harv.samplers.samples._WarmStartMCMC.run` injects those positions
+        :class:`~harv.samplers.samples.WarmStartMCMC` whose
+        :meth:`~harv.samplers.samples.WarmStartMCMC.run` injects those positions
         automatically.
 
         Three model variants are supported:
@@ -406,7 +453,7 @@ class RejectionSampler(eqx.Module):
 
         Returns
         -------
-        mcmc : _WarmStartMCMC
+        mcmc : WarmStartMCMC
             Configured MCMC wrapper.  Call ``mcmc.run(jr.key(seed))`` to
             begin sampling.
 
@@ -484,13 +531,6 @@ class RejectionSampler(eqx.Module):
         if samples.n_samples == 0:
             msg = "Cannot initialise MCMC: no posterior samples available."
             raise ValueError(msg)
-        if samples.n_samples < num_chains:
-            msg = (
-                f"Fewer posterior samples ({samples.n_samples}) than requested "
-                f"chains ({num_chains}). Reduce num_chains or increase "
-                "n_prior_samples in RejectionSampler.run()."
-            )
-            raise ValueError(msg)
         if extra_model is not None and extra_init_params is None:
             msg = (
                 "extra_init_params is required when extra_model is provided. "
@@ -502,14 +542,48 @@ class RejectionSampler(eqx.Module):
         if kernel is None:
             kernel = _numpyro_infer.NUTS
 
-        # Take the first num_chains posterior samples as starting positions.
-        # Strip units from each nonlinear Q to get the raw array that
-        # matches what numpyro's prior model sampled (unit-free floats).
-        indices = list(range(num_chains))
-        init_params: dict[str, Any] = {
-            key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
-            for key_name, qty in samples.nonlinear.items()
-        }
+        # Take the first min(num_chains, n_samples) posterior samples as
+        # starting positions.  When there are fewer samples than chains,
+        # we use scalar (0-d) init values and let numpyro broadcast the
+        # single starting point to all chains.
+        _broadcast = samples.n_samples < num_chains
+        _scalar_init = num_chains == 1 or _broadcast
+        indices = list(range(min(num_chains, samples.n_samples)))
+        if _scalar_init:
+            init_params: dict[str, Any] = {
+                key_name: jnp.asarray(ustrip(str(qty.unit), qty)[0])
+                for key_name, qty in samples.nonlinear.items()
+            }
+        else:
+            init_params = {
+                key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
+                for key_name, qty in samples.nonlinear.items()
+            }
+
+        # Include init values for explicit (non-marginalized) linear params.
+        # These are linear params whose priors are non-Gaussian (e.g.
+        # HalfNormal) and are sampled as numpyro sites rather than
+        # analytically marginalized.  The numpyro model samples them in the
+        # *prior* unit, so we convert from the stored linear-sample unit back
+        # to the prior unit.
+        marg_names = self.prior.marginalize_names
+        if marg_names is not None and isinstance(self.prior.linear_prior, dict):
+            marg_set = set(marg_names)
+            for name, d in self.prior.linear_prior.items():
+                if name not in marg_set and name in samples.linear:
+                    qty = samples.linear[name]
+                    # The numpyro site value is in the prior's native unit.
+                    if isinstance(d, QuantityDistribution):
+                        prior_unit = str(d.unit)
+                        vals = ustrip(prior_unit, qty)
+                    else:
+                        vals = np.asarray(qty.value)
+                    if _scalar_init:
+                        init_params[name] = jnp.asarray(vals[0])
+                    else:
+                        init_params[name] = jnp.stack(
+                            [jnp.asarray(vals[i]) for i in indices]
+                        )
 
         if extra_model is not None:
             model = _build_extra_numpyro_model(self, data, extra_model, marginalized)
@@ -526,12 +600,21 @@ class RejectionSampler(eqx.Module):
                 lin_arr = np.column_stack(
                     [np.asarray(samples.linear[n].value) for n in lin_names]
                 )
-                init_params["_linear"] = jnp.stack(
-                    [jnp.asarray(lin_arr[i]) for i in indices]
-                )
+                if _scalar_init:
+                    init_params["_linear"] = jnp.asarray(lin_arr[0])
+                else:
+                    init_params["_linear"] = jnp.stack(
+                        [jnp.asarray(lin_arr[i]) for i in indices]
+                    )
+
+        # Transform init_params from constrained (natural) space to
+        # unconstrained space.  Numpyro's HMC/NUTS operates in unconstrained
+        # space and applies the forward transform internally, so the init
+        # values must already be unconstrained.
+        init_params = _unconstrain_init_params(init_params, self.prior)
 
         kernel_instance = kernel(model)
-        return _WarmStartMCMC(
+        return WarmStartMCMC(
             kernel_instance,
             _init_params=init_params,
             num_chains=num_chains,

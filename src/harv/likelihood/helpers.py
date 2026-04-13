@@ -111,8 +111,12 @@ def _resolve_linear_prior_mvn(
         locs.append(loc)
         scales.append(scale)
 
+    # Squeeze each entry to 0-d so that jnp.stack always sees
+    # uniform shapes—callable priors may return (1,)-shaped values
+    # when MCMC init_params carry a leading chain dimension.
     return dist.MultivariateNormal(
-        loc=jnp.array(locs), scale_tril=jnp.diag(jnp.array(scales))
+        loc=jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in locs]),
+        scale_tril=jnp.diag(jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in scales])),
     )
 
 
