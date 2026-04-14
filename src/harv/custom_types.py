@@ -43,7 +43,7 @@ BatchQDimless = Real[Q["dimensionless"], "*batch"]
 BatchQLength = Real[Q["length"], "*batch"]
 BatchQSpeed = Real[Q["speed"], "*batch"]
 BatchQTime = Real[Q["time"], "*batch"]
-BatchFloat = Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
+BatchFloat = Float[jax.Array, "*batch"] | BatchQDimless
 
 # Set of all Batch-level Quantity types that carry physical dimensions.
 # Used by AbstractParameters.__init_subclass__ to auto-detect which fields

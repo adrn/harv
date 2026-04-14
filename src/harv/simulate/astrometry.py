@@ -24,6 +24,7 @@ from harv.data import GaiaAstrometryData
 
 if TYPE_CHECKING:
     from harv.custom_types import (
+        BatchFloat,
         BatchQAngle,
         BatchQTime,
         ScalarQAngle,
@@ -81,9 +82,10 @@ def fake_parallax_factor(
     return P_alpha * jnp.cos(scan_angle) + P_delta * jnp.sin(scan_angle)
 
 
-def simulate_gaia_epoch_astrometry(
-    seed: int = 42,
-    n_obs: int = 100,
+def simulate_gaia_epoch_astrometry(  # noqa: C901
+    times: BatchQTime,
+    scan_angle: BatchQAngle,
+    parallax_factor: BatchFloat,
     baseline: ScalarQTime | None = None,
     # Orbital parameters
     period: ScalarQTime | None = None,
@@ -93,9 +95,6 @@ def simulate_gaia_epoch_astrometry(
     lon_asc_node: ScalarQAngle | None = None,
     inclination: ScalarQAngle | None = None,
     semi_major_axis: ScalarQAngle | None = None,
-    # Sky position (for parallax factor calculation)
-    ra: ScalarQAngle | None = None,
-    dec: ScalarQAngle | None = None,
     # Astrometric parameters (small offsets in mas)
     alpha0: ScalarQAngle | None = None,
     delta0: ScalarQAngle | None = None,
@@ -106,6 +105,7 @@ def simulate_gaia_epoch_astrometry(
     al_error: ScalarQAngle | None = None,
     # Reference time
     t_ref: ScalarQTime | None = None,
+    seed: int = 42,
 ) -> tuple[GaiaAstrometryData, dict[str, Any]]:
     """Simulate Gaia-like along-scan epoch astrometry.
 
@@ -115,10 +115,12 @@ def simulate_gaia_epoch_astrometry(
 
     Parameters
     ----------
-    seed : int, optional
-        Random seed for reproducibility. Default: 42.
-    n_obs : int, optional
-        Number of observations. Default: 100.
+    times : Q["time"], optional
+        Observation times. Default: 100 times evenly spaced over 5 years.
+    scan_angle : Q["angle"]
+        Gaia scan angles at each observation.
+    parallax_factor : BatchFloat
+        Pre-computed parallax factors.
     baseline : Q["time"], optional
         Time baseline for observations. Default: 5 years.
     period : Q["time"], optional
@@ -135,10 +137,6 @@ def simulate_gaia_epoch_astrometry(
         Orbital inclination. If None, randomly drawn from cos(i) ~ U(-1, 1).
     semi_major_axis : Q["angle"], optional
         Semi-major axis in angular units. If None, randomly drawn from [0.5, 50] mas.
-    ra : Q["angle"], optional
-        Right ascension of the source (for parallax factor). Default: 180 deg.
-    dec : Q["angle"], optional
-        Declination of the source (for parallax factor). Default: 45 deg.
     alpha0 : Q["angle"], optional
         Small RA offset from reference position at t_ref. Default: 0 mas.
         This is a linear parameter, not the absolute RA.
@@ -156,6 +154,8 @@ def simulate_gaia_epoch_astrometry(
         U(0.02, 0.1) mas for each observation.
     t_ref : Q["time"], optional
         Reference time for astrometry. If None, randomly chosen.
+    seed : int, optional
+        Random seed for reproducibility. Default: 42.
 
     Returns
     -------
@@ -188,6 +188,10 @@ def simulate_gaia_epoch_astrometry(
     rngs = [np.random.default_rng(s) for s in ss.spawn(14)]
     rng = rngs[0]
 
+    n_obs = len(times)
+    if len(parallax_factor) != n_obs or len(scan_angle) != n_obs:
+        raise ValueError("Length of parallax_factor and scan_angle must match times")
+
     if baseline is None:
         baseline = Q(5.0, "yr")
 
@@ -212,10 +216,6 @@ def simulate_gaia_epoch_astrometry(
     if semi_major_axis is None:
         semi_major_axis = Q(rngs[7].uniform(0.5, 50.0), "mas")
 
-    # Sky position for parallax factor calculation (absolute coordinates)
-    ra = Q(180.0, "deg") if ra is None else ra
-    dec = Q(45.0, "deg") if dec is None else dec
-
     # Astrometric offsets - these are small mas-scale deviations from reference
     # These are the LINEAR parameters in the astrometric model
     alpha0 = Q(0.0, "mas") if alpha0 is None else uconvert("mas", alpha0)
@@ -237,12 +237,6 @@ def simulate_gaia_epoch_astrometry(
         baseline.unit,
     )
     times = dt + t_ref
-
-    # Random scan angles
-    scan_angle: AbstractQuantity = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
-
-    # Fudged parallax factor (uses absolute sky position)
-    parallax_factor = fake_parallax_factor(times, ra, dec, scan_angle)
 
     # Compute true along-scan positions
     cos_psi = jnp.cos(scan_angle)
