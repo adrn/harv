@@ -6,6 +6,7 @@ from unxt import Q
 
 from harv.data import RVData
 from harv.distributions import QD
+from harv.model import Model
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 
@@ -42,8 +43,8 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        dict_sampler = RejectionSampler(dict_prior)
-        dict_samples = dict_sampler.run(data, n_prior_samples=n_prior, seed=0)
+        dict_sampler = RejectionSampler(Model(dict_prior, data))
+        dict_samples = dict_sampler.run(n_prior_samples=n_prior, seed=0)
 
         assert dict_samples.n_samples >= 0
         assert dict_samples.data_type == "rv"
@@ -66,8 +67,8 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(data, n_prior_samples=10_000, seed=1)
+        sampler = RejectionSampler(Model(prior, data))
+        samples = sampler.run(n_prior_samples=10_000, seed=1)
 
         assert samples.n_samples >= 0
         assert samples.data_type == "rv"
@@ -94,8 +95,8 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(data, n_prior_samples=10_000, seed=2)
+        sampler = RejectionSampler(Model(prior, data))
+        samples = sampler.run(n_prior_samples=10_000, seed=2)
 
         assert samples.n_samples >= 0
         assert samples.data_type == "rv"
@@ -120,8 +121,8 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(data, n_prior_samples=10_000, seed=3)
+        sampler = RejectionSampler(Model(prior, data))
+        samples = sampler.run(n_prior_samples=10_000, seed=3)
 
         assert samples.n_samples >= 0
         assert samples.data_type == "rv"
@@ -142,10 +143,10 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Delta(0.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
+        sampler = RejectionSampler(Model(prior, data))
         # When all linear params are Delta, build_gaussian_mvn raises ValueError.
         # This case is not yet supported -- just verify the error is clear.
         import pytest
 
         with pytest.raises(ValueError, match="No marginalized parameters remain"):
-            sampler.run(data, n_prior_samples=1_000, seed=4)
+            sampler.run(n_prior_samples=1_000, seed=4)

@@ -8,6 +8,8 @@ Keplerian orbit frameworks for single and multi-body systems.
 
 __all__ = (
     "GaiaAstrometryData",
+    "Model",
+    "NumpyroSampler",
     "QD",
     "QuantityDistribution",
     "RVData",
@@ -19,4 +21,5 @@ __all__ = (
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
 from harv.distributions import QD, QuantityDistribution
-from harv.samplers import RejectionPrior, RejectionSampler, Samples
+from harv.model import Model
+from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler, Samples

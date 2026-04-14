@@ -22,6 +22,7 @@ from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
 from harv.distributions import QD
+from harv.model import Model
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 
@@ -112,8 +113,8 @@ def test_combined_multisurv_raises_not_implemented():
     )
 
     prior = _make_combined_prior(period_min=10.0, period_max=500.0)
-    sampler = RejectionSampler(prior)
-    sampler.run(source_data, n_prior_samples=100, seed=0)
+    sampler = RejectionSampler(Model(prior, source_data))
+    sampler.run(n_prior_samples=100, seed=0)
 
 
 @pytest.mark.xfail(
@@ -144,8 +145,8 @@ def test_combined_multisurv_with_offsets_raises_not_implemented():
             "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
         },
     )
-    sampler = RejectionSampler(prior)
-    sampler.run(source_data, n_prior_samples=100, seed=0)
+    sampler = RejectionSampler(Model(prior, source_data))
+    sampler.run(n_prior_samples=100, seed=0)
 
 
 def test_combined_single_rv_plus_astrometry_runs():
@@ -160,8 +161,8 @@ def test_combined_single_rv_plus_astrometry_runs():
     source_data = SourceData(gaia=astro, rv=rv)
 
     prior = _make_combined_prior(period_min=10.0, period_max=500.0)
-    sampler = RejectionSampler(prior)
-    samples = sampler.run(source_data, n_prior_samples=1000, seed=0)
+    sampler = RejectionSampler(Model(prior, source_data))
+    samples = sampler.run(n_prior_samples=1000, seed=0)
 
     # Should return a Samples object (may have 0 accepted samples with
     # random data, but the run itself must not error).

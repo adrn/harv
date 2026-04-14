@@ -11,11 +11,14 @@ from .custom_priors import (
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
 )
+from .numpyro import NumpyroSampler
 from .rejection import RejectionSampler
 from .rejection_prior import RejectionPrior
 from .samples import Samples
 
+
 __all__ = [
+    "NumpyroSampler",
     "ParallaxDependentProperMotionPrior",
     "PeriodDependentKPrior",
     "PeriodDependentSemiMajorAxisPrior",

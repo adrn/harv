@@ -57,7 +57,7 @@ ______________________________________________________________________
    in a linear design matrix and can be analytically marginalized out). The rejection
    sampler exploits this split directly.
 
-1. **No global state.** Likelihoods close over data; samplers close over priors. All
+1. **No global state.** Likelihoods close over data; a `Model` combines prior and data;
    random state passes explicitly as JAX key values.
 
 ______________________________________________________________________
@@ -186,12 +186,12 @@ src/harv/
 │   ├── gaia_astrometry.py   # GaiaAstrometryLikelihood
 │   ├── composite.py         # CompositeLikelihood
 │   └── astrometry.py        # Stub: future absolute/relative astrometry
+├── model.py              # Model class combining prior + data
 ├── samplers/
 │   ├── rejection_prior.py   # RejectionPrior
 │   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
 │   ├── rejection.py         # RejectionSampler
-│   ├── strategies.py        # DataTypeStrategy subclasses (RV, Astrometry, Composite)
-│   ├── numpyro.py           # Numpyro model builders for MCMC (internal)
+│   ├── numpyro.py           # NumpyroSampler + numpyro model builders for MCMC
 │   └── samples.py           # Samples container + WarmStartMCMC
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
@@ -986,7 +986,7 @@ sampling efficient.
 
 | Field        | Type             | Description                                |
 | ------------ | ---------------- | ------------------------------------------ |
-| `prior`      | `RejectionPrior` | Prior configuration                        |
+| `model`      | `Model`          | Model combining prior and data             |
 | `batch_size` | `int` (static)   | Samples vmapped at once (default: 100,000) |
 
 ### Algorithm
@@ -1011,7 +1011,6 @@ sampling efficient.
 
 ```python
 sampler.run(
-    data: InputData,
     n_prior_samples: int,
     *,
     max_posterior_samples: int | None = None,
@@ -1019,27 +1018,18 @@ sampler.run(
 ) -> Samples
 ```
 
-### Data type inference and strategies
+### Data type inference
 
-`RejectionSampler` inspects the input data to infer a `DataTypeStrategy`:
+Data type inference and likelihood construction happen in `Model.__init__`. The
+`Model` inspects the input data to determine the data type:
 
-- `RVData` → `RVStrategy` (data_type `"rv"`)
-- `GaiaAstrometryData` → `AstrometryStrategy` (data_type `"astrometry"`)
-- `SourceData` with both data types → `CompositeStrategy` (data_type `"combined"`)
-- `SourceData` with multiple RV datasets → `RVStrategy` with indicator matrix
+- `RVData` → data_type `"rv"`
+- `GaiaAstrometryData` → data_type `"astrometry"`
+- `SourceData` with both data types → data_type `"combined"`
+- `SourceData` with multiple RV datasets → data_type `"rv"` with indicator matrix
 
-Each strategy encapsulates:
-
-- `extract_data(data) -> dict[str, AbstractData]` — extract/stack datasets
-- `build_likelihood(datasets, prior, data)` — construct the likelihood object(s)
-- `build_marginalized_params(values, time_unit, ...)` — construct `MarginalizedParameters`
-- `sample_linear_one(key, sample, prior, time_unit, lik)` — draw conditional linear params
-- `required_prior_params(prior) -> tuple[str, ...]` — parameter names needed in batched dict
-- `all_linear_names(prior, data) -> tuple[str, ...]` — all linear param names including offsets
-- `full_cls -> tuple[type[AbstractParameters], ...]` — the parameter class(es)
-
-`CompositeStrategy` composes `RVStrategy` and `AstrometryStrategy` sub-strategies,
-building a `CompositeLikelihood` with per-component params.
+The `Model` constructs the appropriate likelihood object(s) at init time and provides
+methods to build parameter structs and evaluate the log-probability.
 
 ### `batch_size` and GPU support
 
@@ -1047,13 +1037,13 @@ The `batch_size` field controls how many samples are vmapped at once within a
 `fori_loop`. On CPU, the default of 100,000 is appropriate. On GPU, set
 `batch_size = n_prior_samples` to let XLA fully utilize the device.
 
-### MCMC initialization
+### MCMC initialization (`NumpyroSampler`)
 
-`init_mcmc` takes the `Samples` object returned by `run`, the observed data, and an
-optional numpyro kernel class. It builds a numpyro model automatically from the
-sampler's prior and data, draws one starting position per chain from the posterior,
-and returns a `WarmStartMCMC` wrapper whose `run()` injects those positions
-automatically.
+MCMC functionality lives on `NumpyroSampler(model)`. `init_mcmc` takes the `Samples`
+object returned by `RejectionSampler.run()` and an optional numpyro kernel class. It
+builds a numpyro model automatically from the model's prior and data, draws one
+starting position per chain from the posterior, and returns a `WarmStartMCMC` wrapper
+whose `run()` injects those positions automatically.
 
 Two model variants are supported via `marginalized`:
 
@@ -1193,6 +1183,31 @@ The combined case (astrometry + multiple RV instruments) via `CompositeStrategy`
 partially implemented. Currently raises `NotImplementedError` if `SourceData`
 contains both `GaiaAstrometryData` and more than one `RVData`.
 
+### Batch inference over many datasets
+
+A common population-level workflow is: define a single prior, generate a large library
+of prior samples once, then run rejection sampling against many datasets (e.g. thousands
+of Gaia sources). The current API creates a separate `Model(prior, data)` and
+`RejectionSampler` per dataset, which means:
+
+1. **Redundant prior sampling** — the same prior draws are regenerated for every dataset
+   even though they only depend on the prior, not the data.
+2. **JIT retracing** — if datasets have different numbers of observations (different
+   array shapes), JAX recompiles the likelihood evaluation kernel for each new shape.
+
+The planned design separates prior sampling from likelihood evaluation:
+
+- **Prior samples are drawn once** and reused across all datasets.
+- **Likelihood evaluation is batched** over datasets, with automatic padding/masking
+  to a common observation count so that a single JIT-compiled kernel handles all
+  datasets without retracing.
+- A high-level entry point (e.g. a single function call) handles the
+  padding, batching, rejection step, and linear-parameter sampling internally,
+  so users do not need to manage these details.
+- The implementation should support **chunked/batched execution** over datasets to
+  control memory usage, and be designed with **multi-device and GPU parallelism** in
+  mind (e.g. `jax.pmap` or `jax.experimental.shard_map` over devices).
+
 ### Iterative rejection sampling
 
 The Joker's iterative scheme grows the sample batch exponentially until enough
@@ -1254,7 +1269,6 @@ Changes required:
 1. Replace `trend_order: int` fields with `trend_basis: TrendBasis | None`
    on `RVLikelihood` and `GaiaAstrometryLikelihood`.
 1. Derive `trend_column_names` from `trend_basis.names`.
-1. Update `strategies.py` to pass the basis object through.
 1. Update `RejectionPrior` factory methods to accept a basis.
 
 ______________________________________________________________________
@@ -1266,9 +1280,10 @@ The intended user-facing interface for common use cases:
 ```python
 import numpyro.distributions as dist
 from unxt import Q
+from harv import Model
 from harv.data import RVData, SourceData
 from harv.distributions import QD
-from harv.samplers import RejectionPrior, RejectionSampler
+from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler
 
 # Minimal RV-only case:
 data = RVData(time, rv, rv_err)
@@ -1278,11 +1293,12 @@ prior = RejectionPrior.default_rv(
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
 )
-sampler = RejectionSampler(prior)
-samples = sampler.run(data, n_prior_samples=500_000)
+model = Model(prior, data)
+sampler = RejectionSampler(model)
+samples = sampler.run(n_prior_samples=500_000)
 
 # With max posterior samples:
-samples = sampler.run(data, n_prior_samples=500_000, max_posterior_samples=128)
+samples = sampler.run(n_prior_samples=500_000, max_posterior_samples=128)
 
 # Multi-instrument RV with zero-point offsets:
 data = SourceData(
@@ -1299,8 +1315,9 @@ prior = RejectionPrior.default_rv(
         # keck is the reference instrument; its offset is fixed to 0
     },
 )
-sampler = RejectionSampler(prior)
-samples = sampler.run(data, n_prior_samples=500_000)
+model = Model(prior, data)
+sampler = RejectionSampler(model)
+samples = sampler.run(n_prior_samples=500_000)
 
 # Gaia astrometry only:
 prior = RejectionPrior.default_gaia_astrometry(
@@ -1311,8 +1328,13 @@ prior = RejectionPrior.default_gaia_astrometry(
     sigma_pos=Q(1e3, "mas"),
     sigma_vtan=Q(200, "km/s"),
 )
-sampler = RejectionSampler(prior)
-samples = sampler.run(gaia_data, n_prior_samples=1_000_000)
+model = Model(prior, gaia_data)
+sampler = RejectionSampler(model)
+samples = sampler.run(n_prior_samples=1_000_000)
+
+# MCMC continuation:
+mcmc = NumpyroSampler(model).init_mcmc(samples, num_chains=4, num_warmup=500, num_samples=2000)
+mcmc.run(jr.key(0))
 
 # Post-sampling analysis:
 samples["period"]          # Quantity in data time units

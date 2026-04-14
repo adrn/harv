@@ -1,30 +1,36 @@
-"""Numpyro model builders for the rejection sampler.
+"""Numpyro model builders and MCMC sampler for harv.
 
-This module provides the ``_ModelContext`` dataclass and the three numpyro
-model builder functions used by ``RejectionSampler.init_mcmc``.  The builders
-share pre-computed state via ``_build_model_context`` to avoid duplicating
-setup logic.
+This module provides the ``_ModelContext`` dataclass, the numpyro model builder
+functions, and the ``NumpyroSampler`` class that wraps MCMC warm-start
+initialization.  The builders share pre-computed state via
+``_build_model_context`` to avoid duplicating setup logic.
 """
+
+from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 import numpyro.distributions as dist
+from numpyro import infer as _numpyro_infer
 from unxt import Q
 from unxt.quantity import ustrip
 
-from harv.data import InputData
 from harv.distributions import QuantityDistribution
 from harv.likelihood.composite import CompositeLikelihood
 from harv.likelihood.helpers import _resolve_linear_prior_mvn, _unwrap_dist
-from harv.samplers._strategies import DataTypeStrategy, _jitter_units_from_prior
 
 if TYPE_CHECKING:
+    from harv.model import Model
     from harv.samplers.rejection_prior import RejectionPrior
+
+__all__ = ("NumpyroSampler",)
 
 # ---------------------------------------------------------------------------
 # Shared pre-computed context
@@ -42,17 +48,38 @@ def _iter_sub_likelihoods(lik: Any) -> tuple[tuple[str, Any], ...]:
     return (("primary", lik),)
 
 
+class _MergedParams:
+    """Attribute-access proxy that merges multiple sub-params objects.
+
+    For composite strategies, ``_sample_nonlinear`` returns a
+    ``dict[str, MarginalizedParameters]``.  Callable linear priors (e.g.
+    ``ParallaxDependentProperMotionPrior``) expect a single object with
+    attribute access like ``params.parallax``.  This wrapper delegates
+    attribute lookups to the first sub-params that has the requested field.
+    """
+
+    def __init__(self, sub_params: dict[str, Any]) -> None:
+        object.__setattr__(self, "_sub_params", sub_params)
+
+    def __getattr__(self, name: str) -> Any:
+        for p in object.__getattribute__(self, "_sub_params").values():
+            try:
+                return getattr(p, name)
+            except AttributeError:
+                continue
+        raise AttributeError(name)
+
+
 @dataclasses.dataclass(frozen=True)
 class _ModelContext:
     """Pre-computed shared state used by all numpyro model builders.
 
-    Component-generic: data-type-specific details live in the likelihood
-    object itself.  Adding a new data type requires only a new strategy --
-    no changes here.
+    Component-generic: data-type-specific details live in the ``Model`` and
+    its likelihood object.
     """
 
     prior: "RejectionPrior"
-    strategy: DataTypeStrategy
+    model: "Model"
     time_unit: str
     nonlinear_priors: dict[str, Any]
     lik: Any  # AbstractLikelihood or CompositeLikelihood
@@ -61,36 +88,17 @@ class _ModelContext:
 
 
 def _build_model_context(
-    sampler: Any,  # RejectionSampler (avoids circular import)
-    data: InputData,
+    model: "Model",
 ) -> _ModelContext:
-    """Pre-compute shared state for numpyro model builders.
-
-    Extracts the prior, strategy, data splits, time unit, likelihood,
-    component infos, linear parameter names, and unit info -- all the setup
-    that every builder needs (or a superset thereof).
-    """
-    prior = sampler.prior
-    strategy = sampler._infer_strategy(data)
-    datasets = strategy.extract_data(data)
-    _ref = next(iter(datasets.values()))
-    time_unit = str(_ref.time.unit)
-    nonlinear_priors = prior.nonlinear_priors
-
-    all_linear_names = strategy.all_linear_names(prior, data)
-
-    # Build likelihood and derive linear-param units for the model builders.
-    lik = strategy.build_likelihood(datasets, prior, data)
-    lp_units = lik.linear_param_units
-
+    """Pre-compute shared state for numpyro model builders from a Model."""
     return _ModelContext(
-        prior=prior,
-        strategy=strategy,
-        time_unit=time_unit,
-        nonlinear_priors=nonlinear_priors,
-        lik=lik,
-        all_linear_names=all_linear_names,
-        linear_param_units=lp_units,
+        prior=model.prior,
+        model=model,
+        time_unit=model.time_unit,
+        nonlinear_priors=model.prior.nonlinear_priors,
+        lik=model.likelihood,
+        all_linear_names=model.all_linear_names,
+        linear_param_units=model.linear_param_units,
     )
 
 
@@ -142,13 +150,7 @@ def _sample_nonlinear(
             jitter_key = f"_jitter_{dt_label}"
             values[jitter_key] = numpyro.sample(f"jitter_{dt_label}", _unwrap_dist(qd))
 
-    params = ctx.strategy.build_marginalized_params(
-        values,
-        ctx.time_unit,
-        ctx.prior.marginalize_names,
-        ctx.linear_param_units,
-        _jitter_units_from_prior(ctx.prior),
-    )
+    params = ctx.model._build_params_raw(values)
     return values, params
 
 
@@ -172,8 +174,7 @@ def _component_jitter(
 
 
 def _build_marginalized_numpyro_model(
-    sampler: Any,
-    data: InputData,
+    model: "Model",
 ) -> Callable[[], None]:
     """Build a marginalized numpyro model for MCMC.
 
@@ -184,69 +185,91 @@ def _build_marginalized_numpyro_model(
 
     Parameters
     ----------
-    sampler : RejectionSampler
-        The rejection sampler whose prior is used for the model.
-    data : AbstractData or SourceData
-        Observed data.  The data type determines which marginalized likelihood
-        class is instantiated.
+    model : Model
+        The model containing the prior, data, and pre-built likelihood.
 
     Returns
     -------
-    model : callable
-        A numpyro model with no required arguments.  Sample sites: the keys of
-        ``sampler.prior.nonlinear_priors`` (e.g. ``"period"``, ``"eccentricity"``).
+    model_fn : callable
+        A numpyro model with no required arguments.
     """
-    ctx = _build_model_context(sampler, data)
+    ctx = _build_model_context(model)
 
-    def model() -> None:
+    def model_fn() -> None:
         _, params = _sample_nonlinear(ctx)
         numpyro.factor("log_lik", ctx.lik.log_prob(params))
 
-    return model
+    return model_fn
 
 
 def _build_full_numpyro_model(
-    sampler: Any,
-    data: InputData,
+    model: "Model",
 ) -> Callable[[], None]:
     """Build a full (unmarginalized) numpyro model for MCMC.
 
     The returned callable samples both nonlinear and linear parameters explicitly.
     Linear parameters are sampled jointly as a single latent site ``"_linear"``
-    from the prior's ``MultivariateNormal`` (so the correlation structure of the
-    prior is preserved), then exposed as named ``deterministic`` sites (e.g.
-    ``"rv_semiamp"``, ``"v_sys"``) for convenient access via ``get_samples()``.  The
-    Gaussian data log-likelihood is evaluated directly at the sampled values.
+    from the prior's ``MultivariateNormal``.
 
     Parameters
     ----------
-    sampler : RejectionSampler
-        The rejection sampler whose prior is used for the model.
-    data : AbstractData or SourceData
-        Observed data.  The data type determines the design matrix and noise
-        model used for the likelihood.
+    model : Model
+        The model containing the prior, data, and pre-built likelihood.
 
     Returns
     -------
-    model : callable
-        A numpyro model with no required arguments.  Sample sites: keys of
-        ``sampler.prior.nonlinear_priors`` plus ``"_linear"`` (the joint linear
-        vector).  Deterministic sites: individual linear parameter names (e.g.
-        ``"rv_semiamp"``, ``"v_sys"``, ``"semi_major_axis"``).
+    model_fn : callable
+        A numpyro model with no required arguments.
     """
-    ctx = _build_model_context(sampler, data)
+    ctx = _build_model_context(model)
 
-    def model() -> None:
+    # Identify which linear priors are Gaussian (can go into the joint MVN)
+    # vs. non-Gaussian (sampled as separate sites by _sample_nonlinear).
+    marg_names = ctx.prior.marginalize_names
+    if isinstance(ctx.prior.linear_prior, dict) and marg_names is not None:
+        _marg_set = set(marg_names)
+        _gaussian_lp = {
+            n: d for n, d in ctx.prior.linear_prior.items() if n in _marg_set
+        }
+    elif isinstance(ctx.prior.linear_prior, dict):
+        _gaussian_lp = dict(ctx.prior.linear_prior)  # all Gaussian
+    else:
+        _gaussian_lp = ctx.prior.linear_prior  # pre-built MVN
+    _gaussian_names = (
+        list(_gaussian_lp.keys())
+        if isinstance(_gaussian_lp, dict)
+        else ctx.all_linear_names
+    )
+    _gaussian_units = {n: ctx.linear_param_units[n] for n in _gaussian_names}
+
+    def model_fn() -> None:
         values, params = _sample_nonlinear(ctx)
 
         # --- linear parameters ---
-        # Sample the full vector jointly to preserve the prior's covariance.
-        resolved_lp = _resolve_linear_prior_mvn(
-            ctx.prior.linear_prior, params, ctx.linear_param_units
-        )
+        # _sample_nonlinear already samples non-Gaussian linear priors (e.g.
+        # HalfNormal parallax) as separate numpyro sites.  Build the joint
+        # MVN only for the remaining Gaussian linear priors.
+        if isinstance(params, dict):
+            # Composite models: pre-resolve callable priors with a merged
+            # namespace, then pass a real sub-params to satisfy the type hint.
+            merged = _MergedParams(params)
+            _lp: dict[str, Any] = {}
+            for _name, _prior in _gaussian_lp.items():
+                if callable(_prior) and not isinstance(
+                    _prior, dist.Distribution | QuantityDistribution
+                ):
+                    _lp[_name] = _prior(merged)
+                else:
+                    _lp[_name] = _prior
+            any_sub = next(iter(params.values()))
+            resolved_lp = _resolve_linear_prior_mvn(_lp, any_sub, _gaussian_units)
+        else:
+            resolved_lp = _resolve_linear_prior_mvn(
+                _gaussian_lp, params, _gaussian_units
+            )
         linear_vec = numpyro.sample("_linear", resolved_lp)
-        # Expose each column as a named deterministic site.
-        for i, lname in enumerate(ctx.all_linear_names):
+        # Expose each Gaussian column as a named deterministic site.
+        for i, lname in enumerate(_gaussian_names):
             numpyro.deterministic(lname, linear_vec[i])
 
         # --- data log-likelihood (component loop) ---
@@ -254,11 +277,19 @@ def _build_full_numpyro_model(
 
         for _comp_name, comp_lik in _iter_sub_likelihoods(ctx.lik):
             comp_names = tuple(comp_lik.linear_param_units.keys())
-            global_indices = jnp.array(
-                [ctx.all_linear_names.index(n) for n in comp_names]
-            )
-            dm = comp_lik.design_matrix(params)
-            prediction = dm @ linear_vec[global_indices]
+            # Assemble this component's linear values from _linear (Gaussian)
+            # and values dict (explicit non-Gaussian, already sampled).
+            comp_vals = []
+            for n in comp_names:
+                if n in _gaussian_names:
+                    comp_vals.append(linear_vec[_gaussian_names.index(n)])
+                else:
+                    comp_vals.append(values[n])
+            comp_linear = jnp.stack(comp_vals)
+
+            sub_params = params[_comp_name] if isinstance(params, dict) else params
+            dm = comp_lik.design_matrix(sub_params)
+            prediction = dm @ comp_linear
             obs = ustrip(comp_lik.data._get_obs())
             err = ustrip(comp_lik.data._get_obs_err())
             jitter_val = _component_jitter(_comp_name, values, ctx.prior)
@@ -267,12 +298,11 @@ def _build_full_numpyro_model(
 
         numpyro.factor("log_lik", log_lik)
 
-    return model
+    return model_fn
 
 
 def _build_extra_numpyro_model(
-    sampler: Any,
-    data: InputData,
+    model: "Model",
     extra_model_fn: Callable[[dict[str, Any]], dict[str, Any]],
     marginalized: bool,
 ) -> Callable[[], None]:
@@ -280,90 +310,30 @@ def _build_extra_numpyro_model(
 
     Allows users to replace specific linear parameters (e.g. ``rv_semiamp``) with
     deterministic functions of additional physically-motivated parameters
-    (e.g. stellar masses and inclination).  ``extra_model_fn`` is called
-    inside the numpyro model after the nonlinear parameters have been
-    sampled; it may call ``numpyro.sample`` for any number of new sites and
-    must return a dict mapping linear parameter names to their computed values.
-
-    Linear parameters *not* returned by ``extra_model_fn`` are handled
-    according to ``marginalized``:
-
-    - ``True``: analytically marginalized over the residual observations
-      ``y - D_fixed @ fixed_vals``, using the marginal prior extracted from
-      ``sampler.prior.linear_prior``.
-    - ``False``: sampled explicitly as a joint latent site
-      ``"_linear_free"``; each component is also exposed as a named
-      ``deterministic`` site.
+    (e.g. stellar masses and inclination).
 
     Parameters
     ----------
-    sampler :
-        Rejection sampler providing the prior and strategy.
-    data :
-        Observed data.
+    model :
+        The model containing the prior, data, and pre-built likelihood.
     extra_model_fn :
         Callable ``(pars: dict[str, scalar]) -> dict[str, scalar]``.
-        ``pars`` contains the already-sampled nonlinear parameter values
-        keyed by name (e.g. ``pars["period"]`` in the data's time unit,
-        ``pars["eccentricity"]``, ...).  The callable may call
-        ``numpyro.sample`` internally.  It must return a dict whose keys
-        are a subset of the linear parameter names for this data type
-        (e.g. ``"rv_semiamp"`` or ``"v_sys"`` for RV data).
     marginalized :
         If ``True``, analytically marginalize the free linear parameters.
         If ``False``, sample them explicitly from their marginal prior.
 
     Returns
     -------
-    model : callable
+    model_fn : callable
         Numpyro model with no required arguments.
-
-    Notes
-    -----
-    The ``pars`` dict passed to ``extra_model_fn`` uses raw scalar values in
-    the same units as the prior.  In particular, ``pars["period"]`` is in the
-    time unit of the input data (e.g. days if ``data.time`` is in days).
-
-    Example -- replace ``rv_semiamp`` with a mass-function reparameterization::
-
-        import jax.numpy as jnp
-        import numpyro
-        import numpyro.distributions as dist
-
-        # Semi-amplitude constant: rv_semiamp [km/s] = K_FACTOR * f(masses, inc, P, e)
-        # (Lovis & Fischer 2010, converted to km/s with period in days)
-        _K_FACTOR = 28.4329  # km/s * day^(1/3) * M_sun^(-1/3)
-
-        def K_from_masses(m1, m2, inc, period_days, ecc):
-            return (
-                _K_FACTOR
-                * (m2 * jnp.sin(inc))
-                * (m1 + m2) ** (-2.0 / 3.0)
-                * (period_days / 365.25) ** (-1.0 / 3.0)
-                / jnp.sqrt(1.0 - ecc**2)
-            )
-
-        def mass_model(pars):
-            m1  = numpyro.sample("m1",  dist.Normal(1.0, 0.2))
-            m2  = numpyro.sample("m2",  dist.HalfNormal(1.0))
-            inc = numpyro.sample("inc", dist.Uniform(0.0, jnp.pi / 2))
-            K   = K_from_masses(m1, m2, inc,
-                                 pars["period"], pars["eccentricity"])
-            return {"rv_semiamp": K}
-
-    With this ``extra_model_fn``, ``rv_semiamp`` becomes a deterministic site in
-    ``get_samples()``; ``v_sys`` is analytically marginalized (if
-    ``marginalized=True``) or sampled from its marginal prior.
     """
-    ctx = _build_model_context(sampler, data)
+    ctx = _build_model_context(model)
 
-    def model() -> None:
+    def model_fn() -> None:
         # --- nonlinear parameters ---
         values, base_params = _sample_nonlinear(ctx)
 
         # --- extra model: sample physical params, get fixed linear values ---
-        # ``values`` contains raw scalar nonlinear parameters; period is in
-        # ``time_unit`` (the unit of data.time).
         fixed_linear: dict[str, Any] = extra_model_fn(values)
 
         # Validate returned keys at trace time (string comparison is static).
@@ -381,13 +351,10 @@ def _build_extra_numpyro_model(
         free_names = tuple(n for n in ctx.all_linear_names if n not in fixed_linear)
 
         if marginalized and free_names:
-            # Analytically marginalize free linear params by delegating to
-            # the likelihood's _build_marginalized_linear infrastructure.
-            # Fixed values are stored as non-marginalized fields (Quantities);
-            # the likelihood classifies them as "explicit" and subtracts
-            # their contribution before building MarginalizedLinear.
-            params = ctx.strategy.build_params_with_fixed_linear(
-                values, fixed_linear, ctx.linear_param_units, ctx.time_unit
+            # Analytically marginalize free linear params.
+            params = ctx.model._build_params_with_fixed_linear_raw(
+                values,
+                fixed_linear,
             )
             numpyro.factor("log_lik", ctx.lik.log_prob(params))
             return
@@ -458,4 +425,248 @@ def _build_extra_numpyro_model(
 
         numpyro.factor("log_lik", log_lik)
 
-    return model
+    return model_fn
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _unconstrain_init_params(
+    init_params: dict[str, Any],
+    prior: RejectionPrior,
+) -> dict[str, Any]:
+    """Transform init_params from constrained to unconstrained space.
+
+    Numpyro's HMC/NUTS operates in unconstrained space and applies
+    ``biject_to(constraint)`` as the forward transform.  The init values
+    we build from the rejection-sampler posterior are in *constrained*
+    (natural) space, so we must apply the inverse transform before
+    passing them to ``WarmStartMCMC``.
+    """
+    from numpyro.distributions import biject_to
+
+    # Build a mapping: numpyro site name -> bare numpyro distribution.
+    site_dists: dict[str, dist.Distribution] = {}
+    for name, d in prior.nonlinear_priors.items():
+        site_dists[name] = _unwrap_dist(d)
+    if isinstance(prior.linear_prior, dict):
+        for name, d in prior.linear_prior.items():
+            if isinstance(d, (dist.Distribution, QuantityDistribution)):
+                site_dists[name] = _unwrap_dist(d)
+    if prior.jitter_priors is not None:
+        for dt_label, qd in prior.jitter_priors.items():
+            site_dists[f"jitter_{dt_label}"] = _unwrap_dist(qd)
+
+    out: dict[str, Any] = {}
+    for name, val in init_params.items():
+        d = site_dists.get(name)
+        if d is not None:
+            transform = biject_to(d.support)
+            out[name] = transform.inv(jnp.asarray(val))
+        else:
+            out[name] = val
+    return out
+
+
+# ---------------------------------------------------------------------------
+# NumpyroSampler
+# ---------------------------------------------------------------------------
+
+# Lazy import to avoid circular import at module level.
+# Resolved at instance creation time (after all modules are loaded).
+from harv.samplers.samples import Samples, WarmStartMCMC  # noqa: E402
+
+
+class NumpyroSampler(eqx.Module):
+    """MCMC sampler for Keplerian orbital parameters using numpyro.
+
+    Builds a numpyro model from a :class:`~harv.model.Model` and provides
+    warm-started MCMC initialization from rejection-sampler output.
+
+    Parameters
+    ----------
+    model : Model
+        A pre-built model combining prior and data.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv import Model
+    >>> from harv.samplers import RejectionPrior, RejectionSampler, NumpyroSampler
+    >>> prior = RejectionPrior.default_rv(
+    ...     period_min=Q(2.0, "day"),
+    ...     period_max=Q(1000.0, "day"),
+    ...     sigma_K0=Q(30.0, "km/s"),
+    ...     sigma_v0=Q(50.0, "km/s"),
+    ... )
+    >>> model = Model(prior, rv_data)  # doctest: +SKIP
+    >>> sampler = RejectionSampler(model)  # doctest: +SKIP
+    >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
+    >>> mcmc_sampler = NumpyroSampler(model)  # doctest: +SKIP
+    >>> mcmc = mcmc_sampler.init_mcmc(samples)  # doctest: +SKIP
+    """
+
+    model: Model
+
+    def init_mcmc(
+        self,
+        samples: Samples,
+        *,
+        marginalized: bool = True,
+        extra_model: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        extra_init_params: dict[str, Any] | None = None,
+        kernel: type | None = None,
+        num_chains: int = 4,
+        **mcmc_kwargs: Any,
+    ) -> WarmStartMCMC:
+        """Construct a numpyro MCMC object warm-started from rejection-sampler output.
+
+        Builds a numpyro model from this sampler's model and observed data,
+        draws one starting position per chain from ``samples``, and returns a
+        :class:`~harv.samplers.samples.WarmStartMCMC` whose
+        :meth:`~harv.samplers.samples.WarmStartMCMC.run` injects those positions
+        automatically.
+
+        Three model variants are supported:
+
+        - **Marginalized** (``marginalized=True``, default): MCMC explores only
+          the nonlinear subspace; linear parameters are analytically marginalized.
+        - **Full** (``marginalized=False``): all parameters sampled jointly.
+        - **Extra model** (``extra_model`` provided): some linear parameters are
+          replaced by deterministic functions of new physical parameters sampled
+          inside ``extra_model``; the remaining linear parameters are either
+          analytically marginalized (``marginalized=True``) or sampled from their
+          marginal prior (``marginalized=False``).
+
+        Parameters
+        ----------
+        samples : Samples
+            Posterior samples produced by rejection sampling.  One sample per
+            chain is used as the MCMC warm-start position.
+        marginalized : bool, optional
+            If ``True`` (default) use the analytically-marginalized likelihood
+            for any linear parameters not provided by ``extra_model``.
+            If ``False``, sample those parameters explicitly from their
+            marginal prior.
+        extra_model : callable, optional
+            A function ``(pars: dict[str, scalar]) -> dict[str, scalar]`` that
+            is called inside the numpyro model after the nonlinear parameters
+            have been sampled.  ``pars`` contains the raw scalar nonlinear
+            parameter values keyed by name (e.g. ``pars["period"]`` in the
+            data's time unit, ``pars["eccentricity"]``, ...).  The function may
+            call ``numpyro.sample`` for any number of new sites (e.g. stellar
+            masses, inclination) and must return a dict mapping linear
+            parameter names (e.g. ``"rv_semiamp"``) to their computed values.
+            Any linear parameter not in the returned dict is handled by
+            ``marginalized``.
+        extra_init_params : dict, optional
+            Initial values for the parameters introduced by ``extra_model``,
+            one entry per chain.  Required when ``extra_model`` is provided.
+        kernel : type, optional
+            A numpyro MCMC kernel *class* (not an instance).
+            Defaults to ``numpyro.infer.NUTS``.
+        num_chains : int, optional
+            Number of independent MCMC chains.  Default: 4.
+        **mcmc_kwargs :
+            Forwarded unchanged to ``numpyro.infer.MCMC``.
+
+        Returns
+        -------
+        mcmc : WarmStartMCMC
+            Configured MCMC wrapper.  Call ``mcmc.run(jr.key(seed))`` to
+            begin sampling.
+
+        Raises
+        ------
+        ValueError
+            If there are no posterior samples, fewer samples than chains, or
+            ``extra_model`` is provided without ``extra_init_params``.
+        """
+        if samples.n_samples == 0:
+            msg = "Cannot initialise MCMC: no posterior samples available."
+            raise ValueError(msg)
+        if extra_model is not None and extra_init_params is None:
+            msg = (
+                "extra_init_params is required when extra_model is provided. "
+                "Provide initial values for each parameter introduced by extra_model "
+                "(one entry per chain, shape (num_chains,))."
+            )
+            raise ValueError(msg)
+
+        if kernel is None:
+            kernel = _numpyro_infer.NUTS
+
+        prior = self.model.prior
+
+        _broadcast = samples.n_samples < num_chains
+        _scalar_init = num_chains == 1 or _broadcast
+        indices = list(range(min(num_chains, samples.n_samples)))
+        if _scalar_init:
+            init_params: dict[str, Any] = {
+                key_name: jnp.asarray(ustrip(str(qty.unit), qty)[0])
+                for key_name, qty in samples.nonlinear.items()
+            }
+        else:
+            init_params = {
+                key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
+                for key_name, qty in samples.nonlinear.items()
+            }
+
+        # Include init values for explicit (non-marginalized) linear params.
+        marg_names = prior.marginalize_names
+        if marg_names is not None and isinstance(prior.linear_prior, dict):
+            marg_set = set(marg_names)
+            for name, d in prior.linear_prior.items():
+                if name not in marg_set and name in samples.linear:
+                    qty = samples.linear[name]
+                    if isinstance(d, QuantityDistribution):
+                        prior_unit = str(d.unit)
+                        vals = ustrip(prior_unit, qty)
+                    else:
+                        vals = np.asarray(qty.value)
+                    if _scalar_init:
+                        init_params[name] = jnp.asarray(vals[0])
+                    else:
+                        init_params[name] = jnp.stack(
+                            [jnp.asarray(vals[i]) for i in indices]
+                        )
+
+        if extra_model is not None:
+            numpyro_model = _build_extra_numpyro_model(
+                self.model, extra_model, marginalized
+            )
+            init_params.update(extra_init_params)  # type: ignore[arg-type]
+        elif marginalized:
+            numpyro_model = _build_marginalized_numpyro_model(self.model)
+        else:
+            numpyro_model = _build_full_numpyro_model(self.model)
+            if isinstance(prior.linear_prior, dict):
+                if marg_names is not None:
+                    _marg_set = set(marg_names)
+                else:
+                    _marg_set = set(prior.linear_prior.keys())
+                lin_names = [n for n in samples.linear if n in _marg_set]
+            else:
+                lin_names = list(samples.linear.keys())
+            if lin_names:
+                lin_arr = np.column_stack(
+                    [np.asarray(samples.linear[n].value) for n in lin_names]
+                )
+                if _scalar_init:
+                    init_params["_linear"] = jnp.asarray(lin_arr[0])
+                else:
+                    init_params["_linear"] = jnp.stack(
+                        [jnp.asarray(lin_arr[i]) for i in indices]
+                    )
+
+        init_params = _unconstrain_init_params(init_params, prior)
+
+        kernel_instance = kernel(numpyro_model)
+        return WarmStartMCMC(
+            kernel_instance,
+            _init_params=init_params,
+            num_chains=num_chains,
+            **mcmc_kwargs,
+        )

@@ -56,6 +56,7 @@ uv add git+https://github.com/adrn/harv
 
 ```python
 from unxt import Q
+from harv import Model
 from harv.data import RVData
 from harv.samplers import RejectionPrior, RejectionSampler
 
@@ -74,9 +75,12 @@ prior = RejectionPrior.default_rv(
     sigma_v0=Q(10, "km/s"),   # systemic velocity prior width
 )
 
+# Build a model (combines prior + data, constructs likelihood)
+model = Model(prior, data)
+
 # Run the rejection sampler
-sampler = RejectionSampler(prior)
-samples = sampler.run(data, n_prior_samples=1_000_000, seed=42)
+sampler = RejectionSampler(model)
+samples = sampler.run(n_prior_samples=1_000_000, seed=42)
 
 # Inspect results — quantities carry units:
 print(f"Accepted {samples.n_samples} posterior samples")
@@ -104,8 +108,9 @@ prior = RejectionPrior.default_gaia_astrometry(
     parallax=Q(5, "mas"),    # source parallax (for physical prior scaling)
 )
 
-sampler = RejectionSampler(prior)
-samples = sampler.run(astro_data, n_prior_samples=1_000_000, seed=42)
+model = Model(prior, astro_data)
+sampler = RejectionSampler(model)
+samples = sampler.run(n_prior_samples=1_000_000, seed=42)
 ```
 
 ### MCMC continuation
@@ -114,8 +119,10 @@ When the rejection sampler returns a small number of samples, you can refine wit
 NumPyro MCMC, started from the posterior samples:
 
 ```python
-samples = sampler.run(data, n_prior_samples=1_000_000, max_posterior_samples=128)
-mcmc = sampler.init_mcmc(samples, data)
+from harv.samplers import NumpyroSampler
+
+samples = sampler.run(n_prior_samples=1_000_000, max_posterior_samples=128)
+mcmc = NumpyroSampler(model).init_mcmc(samples)
 mcmc.run()
 ```
 

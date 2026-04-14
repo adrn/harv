@@ -14,6 +14,7 @@ from unxt import Q
 from harv.distributions import QD
 from harv.likelihood.gaia_astrometry import GaiaAstrometryLikelihood
 from harv.likelihood.params import GaiaAstrometryParameters
+from harv.model import Model
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
@@ -165,8 +166,8 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        sampler = RejectionSampler(prior, batch_size=10_000)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=42)
+        sampler = RejectionSampler(Model(prior, data), batch_size=10_000)
+        samples = sampler.run(n_prior_samples=50_000, seed=42)
 
         assert samples.n_samples > 0
         assert samples.data_type == "astrometry"
@@ -182,8 +183,8 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        sampler = RejectionSampler(prior, batch_size=10_000)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=43)
+        sampler = RejectionSampler(Model(prior, data), batch_size=10_000)
+        samples = sampler.run(n_prior_samples=50_000, seed=43)
 
         keys = samples.keys()
         for nl_key in (
@@ -217,9 +218,9 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        sampler = RejectionSampler(prior, batch_size=10_000)
-        s1 = sampler.run(data, n_prior_samples=20_000, seed=44)
-        s2 = sampler.run(data, n_prior_samples=20_000, seed=44)
+        sampler = RejectionSampler(Model(prior, data), batch_size=10_000)
+        s1 = sampler.run(n_prior_samples=20_000, seed=44)
+        s2 = sampler.run(n_prior_samples=20_000, seed=44)
 
         assert s1.n_samples == s2.n_samples
         np.testing.assert_array_equal(s1["period"].value, s2["period"].value)

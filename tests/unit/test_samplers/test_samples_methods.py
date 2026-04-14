@@ -2,7 +2,7 @@
 
 Both methods operate on an existing Samples object.  Rather than running the
 full rejection sampler (slow), tests build a minimal Samples instance directly
-using the constructor.
+using the constructor.  init_mcmc lives on NumpyroSampler.
 """
 
 import jax.numpy as jnp
@@ -20,7 +20,8 @@ from harv.likelihood.params import (
     GaiaAstrometryParameters,
     RVParameters,
 )
-from harv.samplers.rejection import RejectionSampler
+from harv.model import Model
+from harv.samplers.numpyro import NumpyroSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples, WarmStartMCMC
 
@@ -144,7 +145,7 @@ def empty_rv_samples() -> Samples:
 
 @pytest.fixture
 def rv_sampler_and_data():
-    """RejectionSampler + RVData used for init_mcmc tests."""
+    """NumpyroSampler + RVData used for init_mcmc tests."""
     times = Q(jnp.linspace(0.0, 100.0, 20), "day")
     rv = Q(jnp.zeros(20), "km/s")
     rv_err = Q(jnp.ones(20) * 2.0, "km/s")
@@ -155,8 +156,8 @@ def rv_sampler_and_data():
         sigma_K0=Q(30.0, "km/s"),
         sigma_v0=Q(30.0, "km/s"),
     )
-    sampler = RejectionSampler(prior)
-    return sampler, data
+    sampler = NumpyroSampler(Model(prior, data))
+    return sampler
 
 
 # ---------------------------------------------------------------------------
@@ -300,17 +301,17 @@ class TestInitMcmc:
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
         """init_mcmc returns a WarmStartMCMC wrapping a numpyro MCMC."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         result = sampler.init_mcmc(
-            rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
+            rv_samples, num_chains=2, num_warmup=10, num_samples=10
         )
         assert isinstance(result, WarmStartMCMC)
 
     def test_init_params_keys_match_nonlinear(self, rv_samples, rv_sampler_and_data):
         """init_params dict contains all nonlinear parameter keys."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
+            rv_samples, num_chains=2, num_warmup=10, num_samples=10
         )
         params = mcmc._init_params
         for key in rv_samples.nonlinear:
@@ -318,29 +319,29 @@ class TestInitMcmc:
 
     def test_init_params_shape_equals_num_chains(self, rv_samples, rv_sampler_and_data):
         """Each init_params array has shape (num_chains,)."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         num_chains = 3
         mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=num_chains, num_warmup=10, num_samples=10
+            rv_samples, num_chains=num_chains, num_warmup=10, num_samples=10
         )
         for key, arr in mcmc._init_params.items():
-            assert arr.shape == (
-                num_chains,
-            ), f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            assert arr.shape == (num_chains,), (
+                f"Expected shape ({num_chains},) for '{key}', got {arr.shape}"
+            )
 
     def test_init_params_values_from_posterior(self, rv_samples, rv_sampler_and_data):
         """Starting positions, when transformed back, match the posterior."""
         from numpyro.distributions import biject_to
 
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=3, num_warmup=10, num_samples=10
+            rv_samples, num_chains=3, num_warmup=10, num_samples=10
         )
         # init_params are in unconstrained space.  Round-trip through the
         # forward transform to recover the original constrained values.
         from harv.likelihood.helpers import _unwrap_dist
 
-        d = _unwrap_dist(sampler.prior.nonlinear_priors["period"])
+        d = _unwrap_dist(sampler.model.prior.nonlinear_priors["period"])
         transform = biject_to(d.support)
         recovered = np.asarray(transform(mcmc._init_params["period"]))
         expected = np.asarray(rv_samples.nonlinear["period"].value)[:3]
@@ -348,55 +349,53 @@ class TestInitMcmc:
 
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
         """init_mcmc raises ValueError when there are no posterior samples."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         with pytest.raises(ValueError, match="no posterior samples"):
             sampler.init_mcmc(
-                empty_rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
+                empty_rv_samples, num_chains=2, num_warmup=10, num_samples=10
             )
 
     def test_broadcast_init_when_fewer_samples_than_chains(
         self, rv_samples, rv_sampler_and_data
     ):
         """When n_samples < num_chains, init_params are scalar (broadcast)."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             num_chains=N + 5,  # more chains than samples
             num_warmup=10,
             num_samples=10,
         )
         # Scalar init values are broadcast by numpyro to all chains.
         for key, val in mcmc._init_params.items():
-            assert (
-                val.ndim == 0
-            ), f"init_params['{key}'] should be scalar when broadcasting"
+            assert val.ndim == 0, (
+                f"init_params['{key}'] should be scalar when broadcasting"
+            )
 
     def test_warm_start_mcmc_delegates_attributes(
         self, rv_samples, rv_sampler_and_data
     ):
         """WarmStartMCMC delegates unknown attributes to the underlying MCMC."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=2, num_warmup=10, num_samples=10
+            rv_samples, num_chains=2, num_warmup=10, num_samples=10
         )
         # num_chains is an attribute of the underlying numpyro MCMC object.
         assert mcmc.num_chains == 2
 
     def test_default_kernel_is_nuts(self, rv_samples, rv_sampler_and_data):
         """When kernel is omitted the default is NUTS."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
-            rv_samples, data, num_warmup=10, num_samples=10, num_chains=2
+            rv_samples, num_warmup=10, num_samples=10, num_chains=2
         )
         assert isinstance(mcmc._mcmc.sampler, infer.NUTS)
 
     def test_run_produces_posterior_samples(self, rv_samples, rv_sampler_and_data):
         """mcmc.run() completes and get_samples() returns the expected keys."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -405,7 +404,7 @@ class TestInitMcmc:
         mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
         # The auto-generated model samples all keys from prior.nonlinear_priors.
-        for key in sampler.prior.nonlinear_priors:
+        for key in sampler.model.prior.nonlinear_priors:
             assert key in posterior, f"Missing site '{key}' in posterior"
         assert posterior["period"].shape == (10,)  # 2 chains x 5 samples
 
@@ -413,37 +412,32 @@ class TestInitMcmc:
         self, rv_samples, rv_sampler_and_data
     ):
         """For num_chains=1, all init_params values are 0-d (scalar)."""
-        sampler, data = rv_sampler_and_data
-        mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=1, num_warmup=5, num_samples=5
-        )
+        sampler = rv_sampler_and_data
+        mcmc = sampler.init_mcmc(rv_samples, num_chains=1, num_warmup=5, num_samples=5)
         for key, val in mcmc._init_params.items():
-            assert (
-                val.ndim == 0
-            ), f"init_params['{key}'] should be scalar for single chain"
+            assert val.ndim == 0, (
+                f"init_params['{key}'] should be scalar for single chain"
+            )
 
     def test_run_single_chain(self, rv_samples, rv_sampler_and_data):
         """MCMC with num_chains=1 completes and produces expected shapes."""
-        sampler, data = rv_sampler_and_data
-        mcmc = sampler.init_mcmc(
-            rv_samples, data, num_chains=1, num_warmup=3, num_samples=3
-        )
+        sampler = rv_sampler_and_data
+        mcmc = sampler.init_mcmc(rv_samples, num_chains=1, num_warmup=3, num_samples=3)
         mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
-        for key in sampler.prior.nonlinear_priors:
+        for key in sampler.model.prior.nonlinear_priors:
             assert key in posterior
         assert posterior["period"].shape == (3,)  # 1 chain x 3 samples
 
 
 class TestInitMcmcFull:
-    """Tests for RejectionSampler.init_mcmc with marginalized=False."""
+    """Tests for NumpyroSampler.init_mcmc with marginalized=False."""
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
         """init_mcmc(marginalized=False) returns a WarmStartMCMC."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         result = sampler.init_mcmc(
             rv_samples,
-            data,
             marginalized=False,
             num_chains=2,
             num_warmup=10,
@@ -453,10 +447,9 @@ class TestInitMcmcFull:
 
     def test_init_params_has_linear_site(self, rv_samples, rv_sampler_and_data):
         """Full model init_params includes '_linear', not individual named sites."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             marginalized=False,
             num_chains=2,
             num_warmup=10,
@@ -469,11 +462,10 @@ class TestInitMcmcFull:
 
     def test_linear_init_shape(self, rv_samples, rv_sampler_and_data):
         """'_linear' init has shape (num_chains, n_linear)."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         num_chains = 2
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             marginalized=False,
             num_chains=num_chains,
             num_warmup=10,
@@ -484,10 +476,9 @@ class TestInitMcmcFull:
 
     def test_run_produces_named_linear_params(self, rv_samples, rv_sampler_and_data):
         """mcmc.run() produces named deterministic sites K, v0, etc."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             marginalized=False,
             num_chains=2,
             num_warmup=5,
@@ -497,7 +488,7 @@ class TestInitMcmcFull:
         mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
         # Nonlinear sites must be present.
-        for key in sampler.prior.nonlinear_priors:
+        for key in sampler.model.prior.nonlinear_priors:
             assert key in posterior, f"Missing nonlinear site '{key}'"
         # Named linear deterministic sites must be present.
         for name in rv_samples.linear:
@@ -507,10 +498,9 @@ class TestInitMcmcFull:
         self, rv_samples, rv_sampler_and_data
     ):
         """Marginalized model (default) does not put '_linear' in init_params."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             num_chains=2,
             num_warmup=10,
             num_samples=10,
@@ -519,12 +509,12 @@ class TestInitMcmcFull:
 
 
 # ---------------------------------------------------------------------------
-# Tests: RejectionSampler.init_mcmc with extra_model
+# Tests: NumpyroSampler.init_mcmc with extra_model
 # ---------------------------------------------------------------------------
 
 
 class TestInitMcmcExtraModel:
-    """Tests for init_mcmc with a physical reparameterization via extra_model."""
+    """Tests for NumpyroSampler.init_mcmc with a physical reparameterization via extra_model."""
 
     def _make_extra_model(self):
         """Return a minimal extra_model that fixes K to a constant."""
@@ -538,11 +528,10 @@ class TestInitMcmcExtraModel:
 
     def test_raises_without_extra_init_params(self, rv_samples, rv_sampler_and_data):
         """extra_model without extra_init_params raises ValueError."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         with pytest.raises(ValueError, match="extra_init_params is required"):
             sampler.init_mcmc(
                 rv_samples,
-                data,
                 extra_model=self._make_extra_model(),
                 num_chains=2,
                 num_warmup=5,
@@ -551,10 +540,9 @@ class TestInitMcmcExtraModel:
 
     def test_returns_warm_start_mcmc(self, rv_samples, rv_sampler_and_data):
         """init_mcmc with extra_model returns a WarmStartMCMC."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         result = sampler.init_mcmc(
             rv_samples,
-            data,
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             num_chains=2,
@@ -565,10 +553,9 @@ class TestInitMcmcExtraModel:
 
     def test_init_params_includes_extra(self, rv_samples, rv_sampler_and_data):
         """init_params contains both nonlinear and extra_init_params entries."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             num_chains=2,
@@ -582,10 +569,9 @@ class TestInitMcmcExtraModel:
 
     def test_run_extra_model_marginalized(self, rv_samples, rv_sampler_and_data):
         """extra_model + marginalized=True runs and returns expected sites."""
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             marginalized=True,
@@ -598,7 +584,7 @@ class TestInitMcmcExtraModel:
         posterior = mcmc.get_samples()
 
         # Nonlinear sites must be present.
-        for key in sampler.prior.nonlinear_priors:
+        for key in sampler.model.prior.nonlinear_priors:
             assert key in posterior
         # The extra-model site is present.
         assert "K_scale" in posterior
@@ -616,10 +602,9 @@ class TestInitMcmcExtraModel:
             x = numpyro.sample("x", ndist.Normal(0.0, 1.0))
             return {"not_a_real_param": x}
 
-        sampler, data = rv_sampler_and_data
+        sampler = rv_sampler_and_data
         mcmc = sampler.init_mcmc(
             rv_samples,
-            data,
             extra_model=bad_extra_model,
             extra_init_params={"x": jnp.zeros(2)},
             num_chains=2,
@@ -644,7 +629,7 @@ class TestInitMcmcNonGaussianLinear:
 
     @pytest.fixture
     def astro_sampler_and_data(self):
-        """RejectionSampler + GaiaAstrometryData with HalfNormal parallax."""
+        """NumpyroSampler + GaiaAstrometryData with HalfNormal parallax."""
         from harv.data import GaiaAstrometryData
 
         n_obs = 15
@@ -664,16 +649,16 @@ class TestInitMcmcNonGaussianLinear:
             sigma_pos=Q(100.0, "mas"),
             sigma_vtan=Q(50.0, "km/s"),
         )
-        sampler = RejectionSampler(prior)
-        return sampler, data
+        sampler = NumpyroSampler(Model(prior, data))
+        return sampler
 
     def test_init_params_includes_explicit_linear(
         self, astro_samples, astro_sampler_and_data
     ):
         """Non-Gaussian linear params appear in init_params when marginalized=True."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         mcmc = sampler.init_mcmc(
-            astro_samples, data, num_chains=2, num_warmup=5, num_samples=5
+            astro_samples, num_chains=2, num_warmup=5, num_samples=5
         )
         # HalfNormal parallax is not analytically marginalized, so it must
         # appear as an explicit init_params entry.
@@ -683,9 +668,9 @@ class TestInitMcmcNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """Analytically marginalized linear params are NOT in init_params."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         mcmc = sampler.init_mcmc(
-            astro_samples, data, num_chains=2, num_warmup=5, num_samples=5
+            astro_samples, num_chains=2, num_warmup=5, num_samples=5
         )
         # ra0, dec0 have Normal priors and should be marginalized out.
         assert "ra0" not in mcmc._init_params
@@ -693,10 +678,10 @@ class TestInitMcmcNonGaussianLinear:
 
     def test_explicit_linear_shape(self, astro_samples, astro_sampler_and_data):
         """Explicit linear init values have shape (num_chains,)."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         num_chains = 3
         mcmc = sampler.init_mcmc(
-            astro_samples, data, num_chains=num_chains, num_warmup=5, num_samples=5
+            astro_samples, num_chains=num_chains, num_warmup=5, num_samples=5
         )
         assert mcmc._init_params["parallax"].shape == (num_chains,)
 
@@ -704,10 +689,9 @@ class TestInitMcmcNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC runs without error when parallax has a HalfNormal prior."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         mcmc = sampler.init_mcmc(
             astro_samples,
-            data,
             num_chains=2,
             num_warmup=3,
             num_samples=3,
@@ -723,9 +707,9 @@ class TestInitMcmcNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """For num_chains=1, init_params values must be 0-d (scalar) arrays."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         mcmc = sampler.init_mcmc(
-            astro_samples, data, num_chains=1, num_warmup=3, num_samples=3
+            astro_samples, num_chains=1, num_warmup=3, num_samples=3
         )
         for key, val in mcmc._init_params.items():
             assert val.ndim == 0, (
@@ -737,10 +721,9 @@ class TestInitMcmcNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC with num_chains=1 and HalfNormal parallax runs without error."""
-        sampler, data = astro_sampler_and_data
+        sampler = astro_sampler_and_data
         mcmc = sampler.init_mcmc(
             astro_samples,
-            data,
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -767,7 +750,7 @@ class TestInitMcmcCombinedWithJitter:
 
     @pytest.fixture
     def combined_sampler_and_data(self):
-        """Combined RejectionSampler + SourceData with jitter priors."""
+        """Combined NumpyroSampler + SourceData with jitter priors."""
         import numpyro.distributions as ndist
 
         from harv.data import GaiaAstrometryData, SourceData
@@ -823,8 +806,8 @@ class TestInitMcmcCombinedWithJitter:
             linear_prior=linear,
             jitter_priors=jitter_priors,
         )
-        sampler = RejectionSampler(prior)
-        return sampler, source_data
+        sampler = NumpyroSampler(Model(prior, source_data))
+        return sampler
 
     @pytest.fixture
     def combined_samples_with_jitter(self) -> Samples:
@@ -861,10 +844,9 @@ class TestInitMcmcCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Jitter site appears in init_params for combined model."""
-        sampler, data = combined_sampler_and_data
+        sampler = combined_sampler_and_data
         mcmc = sampler.init_mcmc(
             combined_samples_with_jitter,
-            data,
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -879,10 +861,9 @@ class TestInitMcmcCombinedWithJitter:
         This catches the bug where constrained values were passed directly,
         causing numpyro to misinterpret them and produce tiny step sizes.
         """
-        sampler, data = combined_sampler_and_data
+        sampler = combined_sampler_and_data
         mcmc = sampler.init_mcmc(
             combined_samples_with_jitter,
-            data,
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -899,10 +880,9 @@ class TestInitMcmcCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Combined marginalized MCMC with jitter runs without error."""
-        sampler, data = combined_sampler_and_data
+        sampler = combined_sampler_and_data
         mcmc = sampler.init_mcmc(
             combined_samples_with_jitter,
-            data,
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -910,7 +890,7 @@ class TestInitMcmcCombinedWithJitter:
         mcmc.run(jr.key(0))
         posterior = mcmc.get_samples()
         # All nonlinear sites present
-        for key in sampler.prior.nonlinear_priors:
+        for key in sampler.model.prior.nonlinear_priors:
             assert key in posterior
         # Jitter site present
         assert "jitter_rv" in posterior
@@ -927,10 +907,9 @@ class TestInitMcmcCombinedWithJitter:
         already-constrained values, placing the chain at a terrible point
         with step_size ~ 1e-14.
         """
-        sampler, data = combined_sampler_and_data
+        sampler = combined_sampler_and_data
         mcmc = sampler.init_mcmc(
             combined_samples_with_jitter,
-            data,
             num_chains=1,
             num_warmup=5,
             num_samples=3,
@@ -944,6 +923,36 @@ class TestInitMcmcCombinedWithJitter:
             f"Step size {step_size:.2e} is pathologically small — "
             "init_params may be in the wrong (constrained) space"
         )
+
+    def test_run_full_completes(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """Combined full (non-marginalized) MCMC runs without error.
+
+        Regression: the full model previously failed on combined data because
+        (a) callable linear priors received a composite dict instead of a
+        single params object, and (b) init_params included explicit linear
+        keys (e.g. ``parallax``) that belong in ``_linear`` for the full model.
+        """
+        sampler = combined_sampler_and_data
+        mcmc = sampler.init_mcmc(
+            combined_samples_with_jitter,
+            num_chains=1,
+            num_warmup=3,
+            num_samples=3,
+            marginalized=False,
+        )
+        # ``parallax`` is an explicit (HalfNormal) linear param sampled as a
+        # separate numpyro site, not part of ``_linear``.
+        assert "parallax" in mcmc._init_params
+        assert "_linear" in mcmc._init_params
+        mcmc.run(jr.key(0))
+        posterior = mcmc.get_samples()
+        # All nonlinear sites present
+        for key in sampler.model.prior.nonlinear_priors:
+            assert key in posterior
+        # Linear parameters exposed as deterministic sites
+        assert "_linear" in posterior
 
 
 # ---------------------------------------------------------------------------

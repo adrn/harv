@@ -16,6 +16,7 @@ from harv.data import RVData, build_indicator_matrix
 from harv.distributions import QD
 from harv.likelihood.params import RVParameters
 from harv.likelihood.rv import RVLikelihood
+from harv.model import Model
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.rv import simulate_rv_multisurv_data
@@ -190,8 +191,8 @@ class TestMultiSurveyRejectionSampler:
                 "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(source_data, n_prior_samples=500_000, seed=10)
+        sampler = RejectionSampler(Model(prior, source_data))
+        samples = sampler.run(n_prior_samples=500_000, seed=10)
 
         period_samples = uconvert("day", samples["period"])
         period_true = uconvert("day", truth["period"])
@@ -223,8 +224,8 @@ class TestMultiSurveyRejectionSampler:
                 "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(source_data, n_prior_samples=50_000, seed=11)
+        sampler = RejectionSampler(Model(prior, source_data))
+        samples = sampler.run(n_prior_samples=50_000, seed=11)
 
         keys = samples.keys()
         for nonlinear_key in (
@@ -252,8 +253,8 @@ class TestMultiSurveyRejectionSampler:
                 "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(source_data, n_prior_samples=50_000, seed=12)
+        sampler = RejectionSampler(Model(prior, source_data))
+        samples = sampler.run(n_prior_samples=50_000, seed=12)
         assert "keck" not in samples.keys()  # noqa: SIM118
 
     def test_reproducibility(self, low_snr_data):
@@ -269,9 +270,9 @@ class TestMultiSurveyRejectionSampler:
                 "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(prior)
-        s1 = sampler.run(source_data, n_prior_samples=20_000, seed=20)
-        s2 = sampler.run(source_data, n_prior_samples=20_000, seed=20)
+        sampler = RejectionSampler(Model(prior, source_data))
+        s1 = sampler.run(n_prior_samples=20_000, seed=20)
+        s2 = sampler.run(n_prior_samples=20_000, seed=20)
 
         assert s1.n_samples == s2.n_samples
         if s1.n_samples > 0:
