@@ -22,6 +22,13 @@ and [unxt](https://github.com/GalacticDynamics/unxt) for units-aware computation
 
 It's pronounced _harvey_.
 
+## ⚠️ Warning! ⚠️
+
+`harv` is in rapid development and is pre-alpha. Meaning the API is not stable or
+guaranteed! Once the first version is released, we will have some guarantees about
+backwards compatibility, but there are no guarantees for API stability with the current
+development versions of this package. Sorry!
+
 <!-- ### Key features
 
 - **JAX-native** — JIT-compiled likelihoods and samplers; runs on CPU or GPU.
