@@ -1,20 +1,19 @@
 """Tests for dict-form linear prior (hybrid marginalization path)."""
 
 import jax.numpy as jnp
+import jax.random as jr
 import numpyro.distributions as dist
+import pytest
 from unxt import Q
 
 from harv.data import RVData
 from harv.distributions import QD
-from harv.model import Model
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 
 
 def _make_rv_data(n_obs: int = 30, seed: int = 42) -> RVData:
     """Tiny RV dataset for structural tests."""
-    import jax.random as jr
-
     key = jr.key(seed)
     times = Q(jnp.linspace(0.0, 200.0, n_obs), "day")
     rv = Q(jr.normal(key, (n_obs,)) * 5.0, "km/s")
@@ -43,13 +42,13 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        dict_sampler = RejectionSampler(Model(dict_prior, data))
-        dict_samples = dict_sampler.run(n_prior_samples=n_prior, seed=0)
+        dict_sampler = RejectionSampler(dict_prior)
+        dict_samples = dict_sampler.run(data, n_prior_samples=n_prior, seed=0)
 
         assert dict_samples.n_samples >= 0
-        assert dict_samples.data_type == "rv"
-        assert "rv_semiamp" in dict_samples.keys()
-        assert "v_sys" in dict_samples.keys()
+        assert dict_samples.data_type == "RVModel"
+        assert "rv_semiamp" in dict_samples
+        assert "v_sys" in dict_samples
 
     def test_explicit_rv_semiamp_gaussian_v_sys(self):
         """HalfNormal rv_semiamp (explicit) + Normal v_sys (marginalized)."""
@@ -67,13 +66,13 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(Model(prior, data))
-        samples = sampler.run(n_prior_samples=10_000, seed=1)
+        sampler = RejectionSampler(prior)
+        samples = sampler.run(data, n_prior_samples=10_000, seed=1)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "rv"
-        assert "rv_semiamp" in samples.keys()
-        assert "v_sys" in samples.keys()
+        assert samples.data_type == "RVModel"
+        assert "rv_semiamp" in samples
+        assert "v_sys" in samples
         # rv_semiamp was sampled from HalfNormal: all values should be >= 0
         if samples.n_samples > 0:
             K_vals = samples["rv_semiamp"]
@@ -95,11 +94,11 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(Model(prior, data))
-        samples = sampler.run(n_prior_samples=10_000, seed=2)
+        sampler = RejectionSampler(prior)
+        samples = sampler.run(data, n_prior_samples=10_000, seed=2)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "rv"
+        assert samples.data_type == "RVModel"
         # rv_semiamp should be fixed at 10.0 for all samples
         if samples.n_samples > 0:
             K_vals = samples["rv_semiamp"]
@@ -121,11 +120,35 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(Model(prior, data))
-        samples = sampler.run(n_prior_samples=10_000, seed=3)
+        sampler = RejectionSampler(prior)
+        samples = sampler.run(data, n_prior_samples=10_000, seed=3)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "rv"
+        assert samples.data_type == "RVModel"
+
+    def test_sampler_owned_marginalized_subset(self):
+        """Sampler-owned marginalized_names can force a Gaussian subset."""
+        data = _make_rv_data()
+
+        prior = RejectionPrior(
+            nonlinear_priors={
+                "period": QD(dist.LogUniform(50.0, 200.0), "day"),
+                "eccentricity": dist.Beta(0.867, 3.03),
+                "phase_peri": dist.Uniform(0.0, 1.0),
+                "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
+            },
+            linear_prior={
+                "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
+            },
+        )
+        sampler = RejectionSampler(prior, marginalized_names=("v_sys",))
+        samples = sampler.run(data, n_prior_samples=10_000, seed=30)
+
+        assert samples.n_samples >= 0
+        assert samples.data_type == "RVModel"
+        assert "rv_semiamp" in samples.linear
+        assert "v_sys" in samples.linear
 
     def test_all_fixed_delta(self):
         """Both rv_semiamp and v_sys as Delta (fully fixed linear params)."""
@@ -143,10 +166,8 @@ class TestDictLinearPriorRV:
                 "v_sys": QD(dist.Delta(0.0), "km/s"),
             },
         )
-        sampler = RejectionSampler(Model(prior, data))
+        sampler = RejectionSampler(prior)
         # When all linear params are Delta, build_gaussian_mvn raises ValueError.
         # This case is not yet supported -- just verify the error is clear.
-        import pytest
-
         with pytest.raises(ValueError, match="No marginalized parameters remain"):
-            sampler.run(n_prior_samples=1_000, seed=4)
+            sampler.run(data, n_prior_samples=1_000, seed=4)

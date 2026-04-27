@@ -5,10 +5,6 @@ import jax.numpy as jnp
 import pytest
 from unxt import Q
 
-from harv.likelihood.params import (
-    GaiaAstrometryParameters,
-    RVParameters,
-)
 from harv.samplers.samples import Samples
 
 
@@ -33,9 +29,7 @@ def _make_astro_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        orbit_cls=GaiaAstrometryParameters,
-        full_cls=(GaiaAstrometryParameters,),
-        data_type="astrometry",
+        data_type="gaia_astro",
         metadata={"t_ref": 0.0},
     )
 
@@ -48,7 +42,7 @@ class TestSamplesCreation:
         samples = _make_astro_samples()
 
         assert samples.n_samples == 3
-        assert samples.data_type == "astrometry"
+        assert samples.data_type == "gaia_astro"
 
     def test_n_samples_property(self):
         """Test that n_samples returns correct value."""
@@ -66,8 +60,6 @@ class TestSamplesCreation:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            orbit_cls=RVParameters,
-            full_cls=(RVParameters,),
             data_type="rv",
             metadata={},
         )
@@ -140,8 +132,6 @@ class TestSamplesAccess:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            orbit_cls=RVParameters,
-            full_cls=(RVParameters,),
             data_type="rv",
             metadata={},
         )
@@ -170,8 +160,6 @@ class TestSamplesRepr:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            orbit_cls=RVParameters,
-            full_cls=(RVParameters,),
             data_type="rv",
             metadata={},
         )

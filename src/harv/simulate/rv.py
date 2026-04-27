@@ -4,18 +4,14 @@ This module provides utilities for generating synthetic RV measurements
 for single-lined (SB1) and double-lined (SB2) spectroscopic binaries.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.data import RVData, SourceData
-
-if TYPE_CHECKING:
-    from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.kepler.orbits import rv_at_times
 
 __all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]

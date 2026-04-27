@@ -56,9 +56,9 @@ def _check_thiele_innes_round_trip(
             atol=atol,
         )
 
-        # Check symmetric solution: Omega -> Omega+pi, omega -> omega+pi Thiele-Innes constants are
-        # invariant under this transformation, so we can't distinguish without radial
-        # velocity data
+        # Check symmetric solution: Omega -> Omega+pi, omega -> omega+pi Thiele-Innes
+        # constants are invariant under this transformation, so we can't distinguish
+        # without radial velocity data
         sym_orientation = KeplerianOrientation.from_angles(
             arg_peri=orientation.arg_peri + Q(jnp.pi, "rad"),
             lon_asc_node=orientation.lon_asc_node + Q(jnp.pi, "rad"),

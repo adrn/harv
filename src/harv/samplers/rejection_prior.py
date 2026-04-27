@@ -7,7 +7,6 @@ The prior is agnostic to data type - it simply holds distributions for any/all
 parameters. The sampler validates which parameters are needed based on the data.
 """
 
-import warnings
 from typing import Any
 
 import equinox as eqx
@@ -19,16 +18,10 @@ from unxt import Q, ustrip
 
 from harv.custom_types import ScalarQAngle, ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
-from harv.likelihood.helpers import (
+from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
-    _needs_explicit_sampling,
     _unwrap_dist,
-)
-from harv.likelihood.params import (
-    GaiaAstrometryParameters,
-    RVParameters,
-    SB2RVParameters,
 )
 from harv.samplers.custom_priors import (
     ParallaxDependentProperMotionPrior,
@@ -46,41 +39,22 @@ def _apply_overrides(
     kwargs: dict[str, Any],
     nonlinear: dict[str, PriorDist],
     linear: dict[str, Any],
-    param_cls: type,
+    extension_priors: dict[str, PriorDist],
 ) -> None:
-    """Partition *kwargs* into nonlinear/linear overrides and apply them.
+    """Partition *kwargs* into nonlinear/linear/extension overrides and apply them.
 
-    Raises ``TypeError`` for any key that is not a recognized parameter name
-    in *param_cls*.
+    Known nonlinear and linear parameter names are applied directly to their
+    respective dicts.  Anything else is accepted without validation and placed
+    into *extension_priors* for later resolution at run-time when the sampler's
+    extensions are known.
     """
-    nl_names = set(param_cls.nonlinear_param_names)
-    lin_names = set(param_cls.linear_param_names)
-
     for name, value in kwargs.items():
-        if name in nl_names:
+        if name in nonlinear:
             nonlinear[name] = value
-        elif name in lin_names:
+        elif name in linear:
             linear[name] = value
         else:
-            msg = (
-                f"default_{param_cls.__name__!s}() got an unexpected keyword "
-                f"argument '{name}'. Valid parameter overrides: "
-                f"{sorted(nl_names | lin_names)}"
-            )
-            raise TypeError(msg)
-
-
-def _override_params_doc(param_cls: type) -> str:
-    """Build a docstring fragment listing valid per-parameter overrides."""
-    nl = ", ".join(f"``{n}``" for n in param_cls.nonlinear_param_names)
-    lin = ", ".join(f"``{n}``" for n in param_cls.linear_param_names)
-    return (
-        f"**kwargs\n"
-        f"            Per-parameter prior overrides.  Any nonlinear or linear\n"
-        f"            parameter name from ``{param_cls.__name__}`` is accepted.\n"
-        f"            Nonlinear: {nl}.\n"
-        f"            Linear: {lin}."
-    )
+            extension_priors[name] = value
 
 
 class RejectionPrior(eqx.Module):
@@ -92,10 +66,9 @@ class RejectionPrior(eqx.Module):
 
     **Nonlinear parameterization:**
 
-    Parameter names in ``nonlinear_priors`` match the field names of the orbit
-    parameter structs (``period``, ``eccentricity``, ``phase_peri``, ``arg_peri``,
-    ``cos_i``, ``lon_asc_node``). Distributions are sampled directly and the
-    resulting values are used as-is when constructing param structs.
+    Parameter names in ``nonlinear_priors`` match the field names of the
+    parameterization (``period``, ``eccentricity``, ``phase_peri``, ``arg_peri``,
+    ``cos_i``, ``lon_asc_node``). Distributions are sampled directly.
 
     **Common parameterizations:**
 
@@ -119,31 +92,20 @@ class RejectionPrior(eqx.Module):
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
         :class:`QuantityDistribution` wrapper for parameters with physical
-        units).  The sampler checks that this dict contains every field
-        required by the chosen orbit param class.
-    linear_prior: LinearPriorDist
-        Prior over the linear parameters.  Accepts several forms:
+        units).
+    linear_prior : dict[str, PriorDist | LinearPriorCallable]
+        Per-parameter priors for linear parameters. Each entry is classified:
 
-        TODO: changed to only take a dictionary
+        - ``dist.Normal`` or ``QD(Normal)`` -- Gaussian, analytically marginalized.
+        - ``LinearPriorCallable`` -- called with params to produce a Normal,
+          then marginalized.
+        - ``dist.HalfNormal``, ``dist.Delta``, etc. -- non-Gaussian, sampled
+          explicitly alongside nonlinear params.
 
-        - ``dist.MultivariateNormal`` -- joint Gaussian prior; all linear
-          parameters are analytically marginalized.
-        - ``QuantityDistribution`` wrapping a ``MultivariateNormal`` -- same
-          as above but with per-element unit tracking (tuple of unit strings).
-        - ``LinearPriorCallable`` -- callable returning a
-          ``MultivariateNormal`` given the nonlinear parameters.
-        - ``dict[str, PriorDist]`` -- per-parameter priors.  Each entry is
-          classified as Gaussian (``dist.Normal`` -> marginalized), fixed
-          (``dist.Delta`` -> subtracted from residuals), or explicit
-          (anything else -> sampled from prior, treated as fixed for
-          marginalization of the Gaussian subset).
-
-        Dimension must match the number of linear parameters (2 for RV,
-        6 for astrometry, 8 for combined).
-    offsets : dict[str, dist.Normal | None], optional
-        Multi-instrument offset priors. Keys are instrument names, values are
-        ``dist.Normal`` priors (or ``None`` for the reference instrument).
-        For RV data only.
+        When using ``default_rv()`` with ``offsets``, the non-reference offset
+        priors are automatically included in this dict.
+    extension_priors : dict[str, PriorDist]
+        Priors for extension parameters declared via ``extra_params()``.
 
     Examples
     --------
@@ -157,85 +119,20 @@ class RejectionPrior(eqx.Module):
     nonlinear_priors: dict[str, PriorDist]
     linear_prior: LinearPriorDist
 
-    # Which linear parameters to analytically marginalize.  ``None`` (default)
-    # means "all linear params in ``linear_prior``".  An explicit tuple names
-    # the subset to marginalize; the rest are sampled from ``linear_prior``
-    # alongside the nonlinear params during rejection sampling.
-    marginalize_names: tuple[str, ...] | None = None
-
-    # Multi-instrument offsets (RV only, optional)
-    # TODO: Changed type hint - this should be like offsets={"rv": {"ESPRESSO":
-    # dist.Normal(...), "HARPS": None}} to be more generalizable to other data types
-    # with linear params.
-    offsets: dict[str, dict[str, QuantityDistribution | None]] | None = None
-
-    # Polynomial trend support
-    trend_order: int = 0
-    trend_priors: dict[str, LinearPriorDist] | None = None
-
-    # Per-data-type jitter (excess variance) priors.
-    # Keys are data-type labels: ``"rv"``, ``"astrometry"``, ``"sb2"``.
-    # Values are distributions whose samples are added in quadrature to the
-    # observation uncertainties.  Use ``QuantityDistribution`` to attach
-    # physical units (e.g. ``QD(dist.HalfNormal(1.0), "km/s")``).
-    jitter_priors: dict[str, PriorDist] | None = None
-
-    # TODO: need to add something like this, to support, e.g., adding more complex model
-    # extensions. For example, might want to add a Gaussian Process RV model with its
-    # own hyperparameters to model a source with Keplerian + stellar activity.
-    # {"rv": {"gp_mean": ..., etc.}} and then somewhere else need to know to pass
-    # "gp_mean" to an extra_model function that constructs the GP model and incorporates
-    # it into the likelihood. A simpler example would be adding a linear trend to the RV
-    # model, which would add two linear parameters (slope and intercept of the trend)
-    # with some prior, and then need to be incorporated into the RV likelihood's design
-    # matrix and residuals. So we need a way to be able to add extra parameters that
-    # could be linear or nonlinear
-    # extra_priors: dict[str, dict[str, Any]] | None = None
-
-    def __check_init__(self) -> None:
-        # Validate marginalize_names against linear_prior keys.
-        if self.marginalize_names is not None and isinstance(self.linear_prior, dict):
-            unknown = set(self.marginalize_names) - set(self.linear_prior.keys())
-            if unknown:
-                msg = (
-                    f"marginalize_names contains unknown linear parameter(s): "
-                    f"{unknown}. Valid names: {tuple(self.linear_prior.keys())}"
-                )
-                raise ValueError(msg)
-
-        # Auto-classify non-Gaussian linear prior entries as explicit.
-        # Entries that cannot be analytically marginalized (e.g. HalfNormal,
-        # Uniform) are excluded from marginalize_names so the sampler draws
-        # from them alongside the nonlinear parameters.
-        if isinstance(self.linear_prior, dict):
-            explicit = {
-                n for n, d in self.linear_prior.items() if _needs_explicit_sampling(d)
-            }
-            if explicit:
-                if self.marginalize_names is None:
-                    # Default "marginalize all" -- exclude non-Gaussian entries.
-                    new_marg = tuple(n for n in self.linear_prior if n not in explicit)
-                else:
-                    # User-specified set -- also exclude non-Gaussian entries.
-                    new_marg = tuple(
-                        n for n in self.marginalize_names if n not in explicit
-                    )
-                warnings.warn(
-                    f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be "
-                    f"analytically marginalized and will be sampled explicitly. "
-                    f"Marginalized parameters: {new_marg}",
-                    stacklevel=2,
-                )
-                object.__setattr__(self, "marginalize_names", new_marg)
-
-        # TODO: validate offsets structure
-        # - Validate that within offsets["rv"], one value is None (reference instrument)
-        #   and the rest are dist.Normal.  Raise ValueError if not.
-        # - No "astrometry" key in offsets, NotImplementedError
+    # Priors for extension parameters (jitter, offsets, GP hyperparams, etc.).
+    # Keys are the parameter names declared by the extension via extra_params().
+    # Values are distributions (bare or QuantityDistribution).  These are not
+    # validated here -- the sampler checks at run-time that every extension
+    # parameter has a matching entry.
+    extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
 
     @property
     def n_nonlinear(self) -> int:
-        """Number of nonlinear parameters.
+        """Number of nonlinear parameters sampled by this prior.
+
+        Returns the count of base orbital parameters in ``nonlinear_priors``.
+        Extension parameters (e.g. jitter) are resolved at run time by the
+        sampler and are not included in this count.
 
         Examples
         --------
@@ -272,14 +169,21 @@ class RejectionPrior(eqx.Module):
         >>> import jax
         >>> from unxt import Q
         >>> from harv.samplers import RejectionPrior
-        >>> prior = RejectionPrior.default_rv(
-        ...     period_min=Q(2.0, "day"), period_max=Q(1000.0, "day"),
-        ...     sigma_K0=Q(30.0, "km/s"), sigma_v0=Q(50.0, "km/s"),
+        >>> sorted(
+        ...     RejectionPrior.default_rv(
+        ...         period_min=Q(2.0, "day"),
+        ...         period_max=Q(1000.0, "day"),
+        ...         sigma_K0=Q(30.0, "km/s"),
+        ...         sigma_v0=Q(50.0, "km/s"),
+        ...     ).sample_nonlinear(jax.random.key(0), 10).keys()
         ... )
-        >>> samples = prior.sample_nonlinear(jax.random.key(0), 10)
-        >>> sorted(samples.keys())
         ['arg_peri', 'eccentricity', 'period', 'phase_peri']
-        >>> samples["period"].shape
+        >>> RejectionPrior.default_rv(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... ).sample_nonlinear(jax.random.key(0), 10)["period"].shape
         (10,)
         """
         keys = jr.split(key, len(self.nonlinear_priors))
@@ -288,9 +192,7 @@ class RejectionPrior(eqx.Module):
             for (name, d), k in zip(self.nonlinear_priors.items(), keys, strict=True)
         }
 
-    # ------------------------------------------------------------------
-    # Default constructors
-    # ------------------------------------------------------------------
+    # Default / factory constructors:
 
     @classmethod
     def default_rv(
@@ -301,11 +203,6 @@ class RejectionPrior(eqx.Module):
         sigma_K0: ScalarQSpeed,
         sigma_v0: ScalarQSpeed,
         P0: ScalarQTime = Q(1.0, "yr"),
-        offsets: dict[str, QuantityDistribution | None] | None = None,
-        marginalize_names: tuple[str, ...] | None = None,
-        trend_order: int = 0,
-        trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: ScalarQSpeed | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
@@ -342,18 +239,14 @@ class RejectionPrior(eqx.Module):
             Reference period for the K prior scaling.  Default: 1 yr.
         offsets : dict[str, QuantityDistribution | None], optional
             Multi-instrument offset priors. Keys are instrument names, values are
-            ``QuantityDistribution`` priors (or ``None`` for the reference instrument).
-        marginalize_names : tuple[str, ...] | None
-            Subset of linear params to analytically marginalize.  ``None``
-            (default) means "all that can be".
-        trend_order : int, optional
-            Polynomial trend order.  Default: 0.
-        trend_priors : dict or None, optional
-            Per-trend-column priors.
-        jitter_scale : Q["speed"] or None, optional
-            Scale for the half-normal jitter (excess noise) prior.
+            ``QuantityDistribution`` priors (or ``None`` for the reference
+            instrument).  Non-reference priors are merged into ``linear_prior``
+            automatically; reference entries (``None``) are ignored.
         **kwargs : PriorDist
-            Override any default nonlinear or linear prior by name.
+            Override any default nonlinear or linear prior by name, or add
+            extension parameter priors for unknown names (e.g. ``jitter=QD(...)``,
+            ``espresso=QD(...)``).  Unknown names are not validated here -- the
+            sampler checks them at run-time against the declared extension params.
 
         Returns
         -------
@@ -364,34 +257,29 @@ class RejectionPrior(eqx.Module):
         --------
         Basic RV prior with log-uniform period and Kipping eccentricity:
 
-        >>> from unxt import Q
-        >>> from harv.samplers import RejectionPrior
-        >>> prior = RejectionPrior.default_rv(
-        ...     period_min=Q(2.0, "day"),
-        ...     period_max=Q(1000.0, "day"),
-        ...     sigma_K0=Q(30.0, "km/s"),
-        ...     sigma_v0=Q(50.0, "km/s"),
+        >>> from unxt import Q; from harv.samplers import RejectionPrior; sorted(
+        ...     RejectionPrior.default_rv(
+        ...         period_min=Q(2.0, "day"),
+        ...         period_max=Q(1000.0, "day"),
+        ...         sigma_K0=Q(30.0, "km/s"),
+        ...         sigma_v0=Q(50.0, "km/s"),
+        ...     ).nonlinear_priors.keys()
         ... )
-        >>> sorted(prior.nonlinear_priors.keys())
         ['arg_peri', 'eccentricity', 'period', 'phase_peri']
 
-        With jitter (excess noise) and multi-instrument offsets:
+        With jitter (from a ``Jitter`` extension) and a multi-survey offset:
 
-        >>> from harv.distributions import QuantityDistribution as QD
-        >>> import numpyro.distributions as dist
-        >>> prior = RejectionPrior.default_rv(
-        ...     period_min=Q(2.0, "day"),
-        ...     period_max=Q(1000.0, "day"),
-        ...     sigma_K0=Q(30.0, "km/s"),
-        ...     sigma_v0=Q(50.0, "km/s"),
-        ...     jitter_scale=Q(1.0, "km/s"),
-        ...     offsets={
-        ...         "survey1": None,
-        ...         "survey2": QD(dist.Normal(0.0, 5.0), "km/s"),
-        ...     },
+        >>> from unxt import Q; from harv.samplers import RejectionPrior; import numpyro.distributions as dist; from harv.distributions import QuantityDistribution as QD; sorted(
+        ...     RejectionPrior.default_rv(
+        ...         period_min=Q(2.0, "day"),
+        ...         period_max=Q(1000.0, "day"),
+        ...         sigma_K0=Q(30.0, "km/s"),
+        ...         sigma_v0=Q(50.0, "km/s"),
+        ...         jitter=QD(dist.HalfNormal(1.0), "km/s"),
+        ...         espresso=QD(dist.Normal(0.0, 5.0), "km/s"),
+        ...     ).extension_priors
         ... )
-        >>> prior.jitter_priors is not None
-        True
+        ['espresso', 'jitter']
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_log_period_prior(period_min, period_max),
@@ -407,25 +295,13 @@ class RejectionPrior(eqx.Module):
             ),
         }
 
-        _apply_overrides(kwargs, nonlinear, linear_prior, RVParameters)
-
-        jitter_priors = None
-        if jitter_scale is not None:
-            jitter_priors = {
-                "rv": QuantityDistribution(
-                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
-                    str(jitter_scale.unit),
-                )
-            }
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
 
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
-            marginalize_names=marginalize_names,
-            offsets={"rv": offsets},
-            trend_order=trend_order,
-            trend_priors=trend_priors,
-            jitter_priors=jitter_priors,
+            extension_priors=extension_priors,
         )
 
     @classmethod
@@ -439,10 +315,6 @@ class RejectionPrior(eqx.Module):
         sigma_pos: ScalarQAngle,
         sigma_vtan: ScalarQSpeed,
         P0: ScalarQTime = Q(1.0, "yr"),
-        marginalize_names: tuple[str, ...] | None = None,
-        trend_order: int = 0,
-        trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: ScalarQAngle | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
@@ -466,14 +338,24 @@ class RejectionPrior(eqx.Module):
         parallax can be biased.
 
         For **exoplanet** searches where the catalog parallax is trustworthy,
-        pass a ``Normal`` prior on parallax (which will be auto-classified as
-        marginalized) and a simple ``semi_major_axis`` prior that does not
-        depend on parallax::
+        pass a ``Normal`` prior on parallax (which will then be eligible for
+        analytic marginalization) and a simple ``semi_major_axis`` prior that
+        does not depend on parallax. Then set ``marginalized_names`` on the
+        sampler::
 
             prior = RejectionPrior.default_gaia_astrometry(
                 ...,
-                marginalize_names=("parallax", "ra0", "dec0", "pmra", "pmdec",
-                                   "semi_major_axis"),
+            )
+            sampler = RejectionSampler(
+                prior,
+                marginalized_names=(
+                    "parallax",
+                    "ra0",
+                    "dec0",
+                    "pmra",
+                    "pmdec",
+                    "semi_major_axis",
+                ),
             )
 
         Parameters
@@ -495,18 +377,9 @@ class RejectionPrior(eqx.Module):
             proper motion via the sampled parallax.
         P0 : Q["time"]
             Reference period for the semi-major axis scaling.  Default: 1 yr.
-        marginalize_names : tuple[str, ...] | None
-            Subset of linear params to analytically marginalize.  ``None``
-            (default) means "all that can be" -- ``__check_init__`` will
-            automatically classify ``HalfNormal`` entries as explicit.
-        trend_order : int, optional
-            Polynomial trend order.  Default: 0.
-        trend_priors : dict or None, optional
-            Per-trend-column priors.
-        jitter_scale : Q["angle"] or None, optional
-            Scale for the half-normal jitter (excess noise) prior.
         **kwargs : PriorDist
-            Override any default nonlinear or linear prior by name.
+            Override any default nonlinear or linear prior by name, or add
+            extension parameter priors for unknown names.
 
         Returns
         -------
@@ -557,24 +430,13 @@ class RejectionPrior(eqx.Module):
             ),
         }
 
-        _apply_overrides(kwargs, nonlinear, linear_prior, GaiaAstrometryParameters)
-
-        jitter_priors = None
-        if jitter_scale is not None:
-            jitter_priors = {
-                "astrometry": QuantityDistribution(
-                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
-                    str(jitter_scale.unit),
-                )
-            }
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
 
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
-            marginalize_names=marginalize_names,
-            trend_order=trend_order,
-            trend_priors=trend_priors,
-            jitter_priors=jitter_priors,
+            extension_priors=extension_priors,
         )
 
     @classmethod
@@ -586,10 +448,6 @@ class RejectionPrior(eqx.Module):
         sigma_K0: ScalarQSpeed,
         sigma_v0: ScalarQSpeed,
         P0: ScalarQTime = Q(1.0, "yr"),
-        marginalize_names: tuple[str, ...] | None = None,
-        trend_order: int = 0,
-        trend_priors: dict[str, LinearPriorDist] | None = None,
-        jitter_scale: ScalarQSpeed | None = None,
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for SB2 (double-lined) radial velocity data.
@@ -609,14 +467,6 @@ class RejectionPrior(eqx.Module):
             Systemic velocity prior scale.
         P0 : Q["time"]
             Reference period for the K prior scaling.  Default: 1 yr.
-        marginalize_names : tuple[str, ...] | None
-            Subset of linear params to analytically marginalize.
-        trend_order : int
-            Polynomial trend order (default 0).
-        trend_priors : dict or None
-            Per-trend-column priors.
-        jitter_scale : Q["speed"] or None, optional
-            Scale for the half-normal jitter (excess noise) prior.
         **kwargs : PriorDist
             Override any default nonlinear or linear prior by name.
 
@@ -628,15 +478,23 @@ class RejectionPrior(eqx.Module):
         --------
         >>> from unxt import Q
         >>> from harv.samplers import RejectionPrior
-        >>> prior = RejectionPrior.default_sb2(
-        ...     period_min=Q(2.0, "day"),
-        ...     period_max=Q(1000.0, "day"),
-        ...     sigma_K0=Q(30.0, "km/s"),
-        ...     sigma_v0=Q(50.0, "km/s"),
+        >>> sorted(
+        ...     RejectionPrior.default_sb2(
+        ...         period_min=Q(2.0, "day"),
+        ...         period_max=Q(1000.0, "day"),
+        ...         sigma_K0=Q(30.0, "km/s"),
+        ...         sigma_v0=Q(50.0, "km/s"),
+        ...     ).nonlinear_priors.keys()
         ... )
-        >>> sorted(prior.nonlinear_priors.keys())
         ['arg_peri', 'eccentricity', 'period', 'phase_peri']
-        >>> sorted(k for k in prior.linear_prior)
+        >>> sorted(
+        ...     RejectionPrior.default_sb2(
+        ...         period_min=Q(2.0, "day"),
+        ...         period_max=Q(1000.0, "day"),
+        ...         sigma_K0=Q(30.0, "km/s"),
+        ...         sigma_v0=Q(50.0, "km/s"),
+        ...     ).linear_prior
+        ... )
         ['rv_semiamp_1', 'rv_semiamp_2', 'v_sys']
         """
         nonlinear: dict[str, PriorDist] = {
@@ -654,40 +512,11 @@ class RejectionPrior(eqx.Module):
             ),
         }
 
-        _apply_overrides(kwargs, nonlinear, linear_prior, SB2RVParameters)
-
-        jitter_priors = None
-        if jitter_scale is not None:
-            jitter_priors = {
-                "rv": QuantityDistribution(
-                    dist.HalfNormal(ustrip(str(jitter_scale.unit), jitter_scale)),
-                    str(jitter_scale.unit),
-                )
-            }
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
 
         return cls(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
-            marginalize_names=marginalize_names,
-            trend_order=trend_order,
-            trend_priors=trend_priors,
-            jitter_priors=jitter_priors,
+            extension_priors=extension_priors,
         )
-
-
-# Inject per-parameter override docs into the default_* method docstrings.
-RejectionPrior.default_rv.__func__.__doc__ = (
-    RejectionPrior.default_rv.__func__.__doc__.replace(
-        "{overrides}", _override_params_doc(RVParameters)
-    )
-)
-RejectionPrior.default_gaia_astrometry.__func__.__doc__ = (
-    RejectionPrior.default_gaia_astrometry.__func__.__doc__.replace(
-        "{overrides}", _override_params_doc(GaiaAstrometryParameters)
-    )
-)
-RejectionPrior.default_sb2.__func__.__doc__ = (
-    RejectionPrior.default_sb2.__func__.__doc__.replace(
-        "{overrides}", _override_params_doc(SB2RVParameters)
-    )
-)

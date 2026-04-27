@@ -12,25 +12,21 @@ The astrometric model includes:
 - Keplerian orbital motion parameterized by Thiele-Innes constants
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, uconvert, ustrip
 
+from harv.custom_types import (
+    BatchFloat,
+    BatchQAngle,
+    BatchQTime,
+    ScalarQAngle,
+    ScalarQAngularSpeed,
+    ScalarQTime,
+)
 from harv.data import GaiaAstrometryData
-
-if TYPE_CHECKING:
-    from harv.custom_types import (
-        BatchFloat,
-        BatchQAngle,
-        BatchQTime,
-        ScalarQAngle,
-        ScalarQAngularSpeed,
-        ScalarQTime,
-    )
 from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
 
 __all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
@@ -83,10 +79,12 @@ def fake_parallax_factor(
 
 
 def simulate_gaia_epoch_astrometry(  # noqa: C901
-    times: BatchQTime,
-    scan_angle: BatchQAngle,
-    parallax_factor: BatchFloat,
+    times: BatchQTime | None = None,
+    scan_angle: BatchQAngle | None = None,
+    parallax_factor: BatchFloat | None = None,
     baseline: ScalarQTime | None = None,
+    # Observation count (used when times/scan_angle/parallax_factor are None)
+    n_obs: int = 50,
     # Orbital parameters
     period: ScalarQTime | None = None,
     eccentricity: float | None = None,
@@ -123,6 +121,9 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         Pre-computed parallax factors.
     baseline : Q["time"], optional
         Time baseline for observations. Default: 5 years.
+    n_obs : int, optional
+        Number of observations to simulate (used if times/scan_angle/parallax_factor are
+        None).
     period : Q["time"], optional
         Orbital period. If None, randomly drawn from [0, 3] years.
     eccentricity : float, optional
@@ -188,12 +189,20 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     rngs = [np.random.default_rng(s) for s in ss.spawn(14)]
     rng = rngs[0]
 
-    n_obs = len(times)
-    if len(parallax_factor) != n_obs or len(scan_angle) != n_obs:
-        raise ValueError("Length of parallax_factor and scan_angle must match times")
-
     if baseline is None:
         baseline = Q(5.0, "yr")
+
+    # Generate observation infrastructure if not provided
+    if times is not None:
+        n_obs = len(times)
+    if scan_angle is None:
+        scan_angle = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
+    if parallax_factor is None:
+        parallax_factor = jnp.asarray(rng.uniform(-1.0, 1.0, n_obs))
+    if times is not None and (
+        len(parallax_factor) != n_obs or len(scan_angle) != n_obs
+    ):
+        raise ValueError("Length of parallax_factor and scan_angle must match times")
 
     if period is None:
         period = Q(rngs[1].uniform(0.3, 3.0), "yr")
@@ -227,16 +236,22 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     al_error = (
         Q(rngs[11].uniform(0.02, 0.1, n_obs), "mas") if al_error is None else al_error
     )
+    # Broadcast scalar al_error to per-observation array
+    if jnp.ndim(al_error) == 0:
+        al_error = Q(jnp.full(n_obs, ustrip("mas", al_error)), "mas")
 
     if t_ref is None:
         t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
-    dt: AbstractQuantity = Q(
-        jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
-        baseline.unit,
-    )
-    times = dt + t_ref
+    if times is None:
+        dt: AbstractQuantity = Q(
+            jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
+            baseline.unit,
+        )
+        times = dt + t_ref
+    else:
+        dt = times - t_ref
 
     # Compute true along-scan positions
     cos_psi = jnp.cos(scan_angle)

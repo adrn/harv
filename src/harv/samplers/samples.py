@@ -4,8 +4,6 @@ This module provides the Samples class which stores posterior samples from
 rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +11,7 @@ import equinox as eqx
 import h5py
 import numpy as np
 import quaxed.numpy as jnp
-from numpyro import infer as _numpyro_infer
 from unxt import AbstractQuantity, Q, ustrip
-
-from harv.data import RVData, SourceData
-from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
-from harv.likelihood.params import (
-    GaiaAstrometryParameters,
-    RVParameters,
-)
-from harv.plot import get_t_grid
 
 try:
     import arviz as az
@@ -31,101 +20,10 @@ try:
 except ImportError:
     HAS_ARVIZ = False
 
-try:
-    import matplotlib.pyplot as plt
-
-    HAS_MPL = True
-except ImportError:
-    HAS_MPL = False
-
 __all__ = ["Samples"]
 
 
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-
-class WarmStartMCMC:
-    """Wrapper around ``numpyro.infer.MCMC`` with pre-set warm-start init params.
-
-    Constructed by :meth:`RejectionSampler.init_mcmc`. Provides the full numpyro MCMC
-    API via attribute delegation; only :meth:`run` is overridden to inject the
-    rejection-sampler posterior positions as starting points unless the caller
-    explicitly passes their own ``init_params``.
-
-    Parameters
-    ----------
-    sampler :
-        An instantiated numpyro MCMC kernel (e.g. ``NUTS(model)``).
-    _init_params : dict[str, np.ndarray]
-        Per-chain initial parameter values, shape ``(num_chains,)`` per key.
-        Keys must match the numpyro site names used in the kernel's model.
-    **mcmc_kwargs :
-        Forwarded unchanged to ``numpyro.infer.MCMC.__init__``.
-    """
-
-    def __init__(
-        self,
-        sampler: Any,
-        *,
-        _init_params: dict[str, Any],
-        **mcmc_kwargs: Any,
-    ) -> None:
-        self._mcmc = _numpyro_infer.MCMC(sampler, **mcmc_kwargs)
-        self._init_params = _init_params
-
-    def run(
-        self,
-        rng_key: Any,
-        *args: Any,
-        init_params: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Run MCMC, using rejection-sampler positions as starting points.
-
-        Parameters
-        ----------
-        rng_key :
-            JAX key passed to the underlying ``numpyro.infer.MCMC.run``.
-        *args :
-            Positional arguments forwarded to ``MCMC.run``.
-        init_params : dict, optional
-            If provided, overrides the warm-start positions supplied at
-            construction time.
-        **kwargs :
-            Keyword arguments forwarded to ``MCMC.run``.
-        """
-        self._mcmc.run(
-            rng_key,
-            *args,
-            init_params=init_params if init_params is not None else self._init_params,
-            **kwargs,
-        )
-
-    def __getattr__(self, name: str) -> Any:
-        # Delegate everything else (get_samples, print_summary, ...) to the
-        # underlying numpyro MCMC object.
-        return getattr(self._mcmc, name)
-
-    def __repr__(self) -> str:
-        return (
-            f"WarmStartMCMC("
-            f"num_chains={self._mcmc.num_chains}, "
-            f"num_samples={self._mcmc.num_samples})"
-        )
-
-
-# Maps stored class-name strings back to classes for HDF5 round-trips.
-_ORBIT_CLS_BY_NAME: dict[str, type] = {
-    "RVParameters": RVParameters,
-    "GaiaAstrometryParameters": GaiaAstrometryParameters,
-}
-_FULL_CLS_BY_NAME: dict[str, type] = {
-    "RVParameters": RVParameters,
-    "GaiaAstrometryParameters": GaiaAstrometryParameters,
-}
-
+# TODO: is this really the right place to have this?
 # Nonlinear parameter units (fixed by physics).
 _NONLINEAR_UNITS: dict[str, str] = {
     "period": "",  # filled from data at construction time
@@ -138,7 +36,7 @@ _NONLINEAR_UNITS: dict[str, str] = {
 
 
 class Samples(eqx.Module):
-    """Container for rejection sampler posterior samples.
+    """Container for posterior samples.
 
     Stores both nonlinear and linear parameter samples as :class:`~unxt.Q`
     objects with units baked in. Provides dict-like access, statistical summaries,
@@ -157,17 +55,15 @@ class Samples(eqx.Module):
         Keys: e.g. ``"rv_semiamp"``, ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``,
         ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"`` for
         astrometry.  Units are data-driven (e.g. ``"km/s"`` for RV).
-    orbit_cls : type
-        Nonlinear parameter class (e.g. ``RVParameters``).
-    full_cls : tuple[type, ...]
-        Ordered tuple of full parameter classes.
+    data_type : str
+        Informational label identifying the model that produced these samples
+        (e.g. ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``).
+        Stored in HDF5 for round-tripping.
     metadata : dict[str, Any], optional
         Additional metadata (``t_ref``, acceptance rate, etc.).
-    extra_linear_names : tuple[str, ...]
-        Names of per-instrument RV offset parameters beyond the base linear
-        set (e.g. ``("instr2_offset",)`` for multi-survey data).
-    data_type : str
-        One of ``"rv"``, ``"astrometry"``, or ``"combined"``.
+    linear_extension_names : tuple[str, ...]
+        Names of linear parameters introduced by extensions (instrument
+        offsets, polynomial trends, etc.) beyond the base linear set.
 
     Examples
     --------
@@ -175,7 +71,6 @@ class Samples(eqx.Module):
     be constructed directly for testing or manual use:
 
     >>> from unxt import Q
-    >>> from harv.likelihood.params import RVParameters
     >>> from harv.samplers.samples import Samples
     >>> samples = Samples(
     ...     nonlinear={
@@ -188,10 +83,8 @@ class Samples(eqx.Module):
     ...         "rv_semiamp": Q([10.0, 11.0, 9.5], "km/s"),
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
-    ...     orbit_cls=RVParameters,
-    ...     full_cls=(RVParameters,),
-    ...     metadata={"t_ref": Q(0.0, "day")},
     ...     data_type="rv",
+    ...     metadata={"t_ref": Q(0.0, "day")},
     ... )
     >>> samples.n_samples
     3
@@ -206,12 +99,10 @@ class Samples(eqx.Module):
     linear: dict[str, Q]
 
     # Static fields -- not JAX leaves
-    orbit_cls: type = eqx.field(static=True)
-    full_cls: tuple[type, ...] = eqx.field(static=True)
-    metadata: dict[str, Any] = eqx.field(static=True)
-    # Names of per-instrument offsets stored in `linear` beyond the base set.
-    extra_linear_names: tuple[str, ...] = eqx.field(static=True, default=())
     data_type: str = eqx.field(static=True, default="")
+    metadata: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    # Names of linear params introduced by extensions (offsets, trends, etc.).
+    linear_extension_names: tuple[str, ...] = eqx.field(static=True, default=())
 
     @property
     def n_samples(self) -> int:
@@ -229,23 +120,29 @@ class Samples(eqx.Module):
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
 
-    def __getitem__(self, key: str) -> AbstractQuantity | jnp.ndarray:
-        """Get parameter samples with units restored.
+    def __getitem__(
+        self, key: str | int | slice | np.ndarray
+    ) -> "AbstractQuantity | jnp.ndarray | Samples":
+        """Get parameter samples by name, or return a sliced ``Samples``.
 
         Parameters
         ----------
-        key : str
-            Parameter name.
+        key : str or int or slice or array
+            If ``str``, returns the named parameter array (with units).
+            If ``int``, ``slice``, or boolean/integer array, returns a new
+            ``Samples`` with all parameter arrays sliced along the sample axis.
+            Integer keys are converted to length-1 slices to preserve 1-d shape.
 
         Returns
         -------
-        values : Q | jnp.ndarray
-            Parameter samples with appropriate units.
+        values : Q or jnp.ndarray
+            When ``key`` is a string.
+        sliced : Samples
+            When ``key`` is an int, slice, or array index.
 
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.likelihood.params import RVParameters
         >>> from harv.samplers.samples import Samples
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 101.0], "day"),
@@ -254,14 +151,31 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
-        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
-        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ...     data_type="rv",
+        ...     metadata={"t_ref": Q(0.0, "day")},
         ... )
         >>> samples["period"].unit
         Unit("d")
         >>> samples["rv_semiamp"].shape
         (2,)
+        >>> samples[:1].n_samples
+        1
+        >>> samples[0].n_samples
+        1
         """
+        if not isinstance(key, str):
+            # int/slice/array index — return a sliced Samples preserving 1-d shape
+            idx = slice(key, key + 1) if isinstance(key, int) else key
+            sliced_nl = {k: v[idx] for k, v in self.nonlinear.items()}
+            sliced_lin = {k: v[idx] for k, v in self.linear.items()}
+            return Samples(
+                nonlinear=sliced_nl,
+                linear=sliced_lin,
+                data_type=self.data_type,
+                metadata=self.metadata,
+                linear_extension_names=self.linear_extension_names,
+            )
+
         if key in self.nonlinear:
             return self.nonlinear[key]
 
@@ -330,7 +244,6 @@ class Samples(eqx.Module):
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.likelihood.params import RVParameters
         >>> from harv.samplers.samples import Samples
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 102.0], "day"),
@@ -339,8 +252,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
-        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ...     data_type="rv",
+        ...     metadata={"t_ref": Q(0.0, "day")},
         ... )
         >>> med = samples.median("period")
         >>> med.unit
@@ -381,7 +294,6 @@ class Samples(eqx.Module):
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.likelihood.params import RVParameters
         >>> from harv.samplers.samples import Samples
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 102.0], "day"),
@@ -390,8 +302,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
-        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ...     data_type="rv",
+        ...     metadata={"t_ref": Q(0.0, "day")},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
         >>> len(samples.percentile("period", [5, 50, 95]))
@@ -422,7 +334,6 @@ class Samples(eqx.Module):
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.likelihood.params import RVParameters
         >>> from harv.samplers.samples import Samples
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 102.0], "day"),
@@ -431,8 +342,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     orbit_cls=RVParameters, full_cls=(RVParameters,),
-        ...     metadata={"t_ref": Q(0.0, "day")}, data_type="rv",
+        ...     data_type="rv",
+        ...     metadata={"t_ref": Q(0.0, "day")},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
         >>> sorted(summary.keys())
@@ -491,14 +402,12 @@ class Samples(eqx.Module):
                 ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
-            # Store class references and metadata
+            # Store metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["orbit_cls"] = self.orbit_cls.__name__
             meta_group.attrs["data_type"] = self.data_type
-            meta_group.attrs["full_cls"] = ",".join(
-                cls.__name__ for cls in self.full_cls
+            meta_group.attrs["linear_extension_names"] = ",".join(
+                self.linear_extension_names
             )
-            meta_group.attrs["extra_linear_names"] = ",".join(self.extra_linear_names)
             meta_group.attrs["n_samples"] = self.n_samples
 
             # Store custom metadata
@@ -534,28 +443,14 @@ class Samples(eqx.Module):
         filename = Path(filename)
 
         with h5py.File(filename, "r") as f:
-            # Load class references
             meta = f["metadata"]
-            orbit_cls_name = meta.attrs["orbit_cls"]
-            full_cls_names = meta.attrs["full_cls"].split(",")
 
-            orbit_cls = _ORBIT_CLS_BY_NAME[orbit_cls_name]
-            full_cls = tuple(_FULL_CLS_BY_NAME[n] for n in full_cls_names)
+            data_type: str = meta.attrs.get("data_type", "")
 
-            # data_type: read from file, or infer for old files
-            _DATA_TYPE_BY_OLD_CLS = {
-                "CombinedOrbitParameters": "combined",
-                "RVMarginalizedParameters": "rv",
-                "RVParameters": "rv",
-                "GaiaAstrometryMarginalizedParameters": "astrometry",
-                "GaiaAstrometryParameters": "astrometry",
-            }
-            data_type: str = meta.attrs.get(
-                "data_type", _DATA_TYPE_BY_OLD_CLS.get(orbit_cls_name, "")
+            raw_extra = meta.attrs.get("linear_extension_names", "") or meta.attrs.get(
+                "offset_names", ""
             )
-
-            raw_extra = meta.attrs.get("extra_linear_names", "")
-            extra_linear_names: tuple[str, ...] = (
+            linear_extension_names: tuple[str, ...] = (
                 tuple(raw_extra.split(",")) if raw_extra else ()
             )
 
@@ -563,14 +458,10 @@ class Samples(eqx.Module):
             metadata: dict[str, Any] = {}
             for key in meta.attrs:
                 if key in [
-                    "orbit_cls",
-                    "full_cls",
-                    "extra_linear_names",
+                    "linear_extension_names",
+                    "offset_names",
                     "n_samples",
                     "data_type",
-                    # old-format keys -- skip, handled separately
-                    "linear_param_units",
-                    "time_unit",
                 ]:
                     continue
                 if key.endswith("_value"):
@@ -598,12 +489,58 @@ class Samples(eqx.Module):
         return cls(
             nonlinear=nonlinear,
             linear=linear,
-            orbit_cls=orbit_cls,
-            full_cls=full_cls,
-            extra_linear_names=extra_linear_names,
             data_type=data_type,
+            linear_extension_names=linear_extension_names,
             metadata=metadata,
         )
+
+    def to_arviz(self, params: list[str] | None = None) -> Any:
+        """Export samples to an ``arviz.InferenceData`` object.
+
+        Parameters
+        ----------
+        params : list of str, optional
+            Parameters to include.  If ``None``, all parameters returned by
+            :meth:`keys` are included.
+
+        Returns
+        -------
+        idata : arviz.InferenceData
+            Inference data suitable for ``arviz.plot_pair``, ``arviz.summary``, etc.
+
+        Raises
+        ------
+        ImportError
+            If ``arviz`` is not installed.
+
+        Examples
+        --------
+        >>> idata = samples.to_arviz(["period", "eccentricity"])  # doctest: +SKIP
+        """
+        if not HAS_ARVIZ:
+            msg = "arviz is required for to_arviz()."
+            raise ImportError(msg)
+
+        if params is None:
+            params = self.keys()
+
+        data_dict: dict[str, Any] = {}
+        for param in params:
+            try:
+                values = self[param]
+                if isinstance(values, Q):
+                    var_name = f"{param} [{values.unit}]"
+                    data_dict[var_name] = np.asarray(values.value)[None, :]
+                else:
+                    data_dict[param] = np.asarray(values)[None, :]
+            except (KeyError, ValueError):
+                continue
+
+        if len(data_dict) == 0:
+            msg = "No valid parameters found"
+            raise ValueError(msg)
+
+        return az.from_dict(posterior=data_dict)
 
     def plot_corner(  # noqa: C901
         self,
@@ -646,23 +583,9 @@ class Samples(eqx.Module):
             msg = "arviz is required for corner plots."
             raise ImportError(msg)
 
-        # Select default parameters based on data type
+        # Select default parameters based on available params
         if params is None:
-            if self.data_type == "astrometry":
-                params = ["period", "eccentricity", "parallax", "semi_major_axis"]
-            elif self.data_type == "rv":
-                params = ["period", "eccentricity", "rv_semiamp", "v_sys"]
-            elif self.data_type == "combined":
-                params = [
-                    "period",
-                    "eccentricity",
-                    "parallax",
-                    "semi_major_axis",
-                    "rv_semiamp",
-                ]
-            else:
-                # Fallback: use first 4 available parameters
-                params = self.keys()[:4]
+            params = self.keys()
 
         # Build data dictionary for arviz InferenceData
         data_dict = {}
@@ -703,7 +626,7 @@ class Samples(eqx.Module):
         # Set default plot kwargs
         default_kwargs: dict[str, Any] = {
             "var_names": var_names,
-            "kind": "kde",
+            "kind": "scatter",
             "marginals": True,
             "point_estimate": "median",
         }
@@ -718,447 +641,3 @@ class Samples(eqx.Module):
 
         # Create corner plot
         return az.plot_pair(idata, **default_kwargs)
-
-    def plot(
-        self,
-        data: Any = None,
-        *,
-        n_samples: int = 50,
-        phase_fold: bool = False,
-        apply_mean_offsets: bool = True,
-        plot_kwargs: dict[str, Any] | None = None,
-        data_plot_kwargs: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """RV curve and/or astrometric orbit on sky.
-
-        Selects panels automatically based on ``data_type``:
-
-        - ``"rv"`` -- RV curve (time-domain or phase-folded); ``data`` must be
-          a ``RVData`` or ``SourceData`` containing RV datasets.
-        - ``"astrometry"`` -- on-sky orbital ellipses drawn from posterior
-          samples; ``data`` is not required (orbit shape comes from samples).
-        - ``"combined"`` -- both panels side by side; ``data`` must be a
-          ``SourceData`` containing both ``GaiaAstrometryData`` and at least
-          one ``RVData``.
-
-        Parameters
-        ----------
-        data : RVData or SourceData, optional
-            Observed data to overplot on the RV panel.  Required for ``"rv"``
-            and ``"combined"`` data types; optional for ``"astrometry"``.
-        n_samples : int, optional
-            Number of posterior orbit curves to draw.  Default: 50.
-        phase_fold : bool, optional
-            If ``True``, fold the RV data and model curves to orbital phase
-            using the median posterior period.  The mean v_sys is subtracted
-            from the data so the y-axis shows the intrinsic RV variation.
-            If ``False`` (default), plot RV vs time in the reference frame.
-        apply_mean_offsets : bool, optional
-            When ``True`` (default), shift each non-reference instrument's data
-            points by the posterior mean offset so they land in the reference
-            frame and can be compared directly to the model curves.  Has no
-            effect when there are no multi-instrument offsets.
-        plot_kwargs : dict, optional
-            Style overrides for orbit model curves (passed to
-            ``ax.plot()``).  Defaults: thin grey lines with no markers.
-        data_plot_kwargs : dict, optional
-            Style overrides for data points (passed to ``ax.errorbar()``).
-            Defaults: filled circles with error bars.
-        **kwargs :
-            Additional keyword arguments forwarded to
-            ``matplotlib.pyplot.subplots``.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The figure containing the plot(s).
-
-        Raises
-        ------
-        ImportError
-            If matplotlib is not installed.
-        ValueError
-            If the data type is unknown.
-
-        Examples
-        --------
-        Plot RV curve with observed data:
-
-        >>> fig = samples.plot(data=rv_data)  # doctest: +SKIP
-
-        Phase-folded RV plot:
-
-        >>> fig = samples.plot(data=rv_data, phase_fold=True)  # doctest: +SKIP
-
-        Astrometric orbit on sky (no data needed):
-
-        >>> fig = samples.plot()  # doctest: +SKIP
-
-        Custom styling:
-
-        >>> fig = samples.plot(  # doctest: +SKIP
-        ...     data=rv_data,
-        ...     n_samples=100,
-        ...     plot_kwargs={"color": "C3", "alpha": 0.3},
-        ... )
-        """
-        if not HAS_MPL:
-            msg = "matplotlib is required for plotting. "
-            raise ImportError(msg)
-
-        if plot_kwargs is None:
-            plot_kwargs = {}
-        if data_plot_kwargs is None:
-            data_plot_kwargs = {}
-
-        dt = self.data_type
-        if dt == "rv":
-            fig, ax = plt.subplots(**kwargs)
-            self._draw_rv(
-                data,
-                ax=ax,
-                n_samples=n_samples,
-                plt=plt,
-                phase_fold=phase_fold,
-                apply_mean_offsets=apply_mean_offsets,
-                plot_kwargs=plot_kwargs,
-                data_plot_kwargs=data_plot_kwargs,
-            )
-            fig.tight_layout()
-            return fig
-        if dt == "astrometry":
-            fig, ax = plt.subplots(**kwargs)
-            self._draw_astrometry(
-                ax=ax,
-                n_samples=n_samples,
-                plot_kwargs=plot_kwargs,
-            )
-            fig.tight_layout()
-            return fig
-        if dt == "combined":
-            figsize = kwargs.pop("figsize", (12, 5))
-            fig, axes = plt.subplots(1, 2, figsize=figsize, **kwargs)
-            self._draw_rv(
-                data,
-                ax=axes[0],
-                n_samples=n_samples,
-                plt=plt,
-                phase_fold=phase_fold,
-                apply_mean_offsets=apply_mean_offsets,
-                plot_kwargs=plot_kwargs,
-                data_plot_kwargs=data_plot_kwargs,
-            )
-            self._draw_astrometry(
-                ax=axes[1],
-                n_samples=n_samples,
-                plot_kwargs=plot_kwargs,
-            )
-            fig.tight_layout()
-            return fig
-        msg = f"Unknown data_type '{dt}' for plot()."
-        raise ValueError(msg)
-
-    # ------------------------------------------------------------------
-    # Private drawing helpers (draw into a caller-supplied Axes object)
-    # ------------------------------------------------------------------
-
-    def _draw_rv(  # noqa: C901
-        self,
-        data: Any,
-        *,
-        ax: Any,
-        n_samples: int,
-        plt: Any,
-        phase_fold: bool = False,
-        apply_mean_offsets: bool = True,
-        plot_kwargs: dict[str, Any] | None = None,
-        data_plot_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """RV curve (time-domain or phase-folded) drawn into *ax*.
-
-        Parameters
-        ----------
-        data : RVData or SourceData or None
-            Observed RV data to overplot.
-        ax : matplotlib.axes.Axes
-            Axes to draw into.
-        n_samples : int
-            Number of posterior samples to draw as model curves.
-        plt : module
-            The matplotlib.pyplot module.
-        phase_fold :
-            When ``True`` fold data and model to orbital phase using the median
-            period and subtract the mean v_sys so the y-axis shows only the
-            intrinsic RV variation.  The mean anomaly is computed correctly
-            even when individual samples have periods that differ from the
-            median folding period.
-        apply_mean_offsets :
-            When ``True``, shift each non-reference instrument's data points
-            by the posterior mean offset so they fall in the reference frame.
-        plot_kwargs :
-            Style overrides for orbit model curves (passed to ``ax.plot()``).
-        data_plot_kwargs :
-            Style overrides for data points (passed to ``ax.errorbar()``).
-        """
-        # How many curves we will actually draw.
-        n_draw = min(n_samples, self.n_samples)
-
-        # Orbit curve style defaults (thin lines, no markers)
-        orbit_style = (plot_kwargs or {}).copy()
-        orbit_style.setdefault("linestyle", "-")
-        orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", max(0.08, min(0.6, 8.0 / n_draw)))
-        orbit_style.setdefault("marker", "")
-        orbit_style.setdefault("color", "#555555")
-        orbit_style.setdefault("rasterized", True)
-
-        # Data style defaults (error bars with filled circles)
-        data_style = (data_plot_kwargs or {}).copy()
-        data_style.setdefault("linestyle", "none")
-        data_style.setdefault("marker", "o")
-        data_style.setdefault("markersize", 4.0)
-        data_style.setdefault("elinewidth", 1.0)
-        data_style.setdefault("capsize", 0)
-        data_style.setdefault("zorder", 10)
-
-        period_qty = self.nonlinear["period"]
-        ecc_qty = self.nonlinear["eccentricity"]
-        phase_peri_qty = self.nonlinear["phase_peri"]
-        arg_peri_qty = self.nonlinear["arg_peri"]
-
-        time_unit = str(period_qty.unit)
-        period_vals = np.asarray(period_qty.value)  # plain (n,) for indexing
-
-        K_qty = self.linear["rv_semiamp"]
-        v0_qty = self.linear["v_sys"]
-        rv_unit = str(K_qty.unit)
-        K_vals = np.asarray(K_qty.value)
-        v0_vals = np.asarray(v0_qty.value)
-
-        median_period_val = float(np.median(period_vals))
-        median_period = Q(median_period_val, time_unit)
-
-        t_ref_raw = self.metadata.get("t_ref", 0.0)
-        t_ref = t_ref_raw if isinstance(t_ref_raw, Q) else Q(t_ref_raw, time_unit)
-
-        # Collect per-instrument datasets (multi-survey support).
-        if isinstance(data, SourceData):
-            rv_datasets: dict[str, RVData] = data.get_datasets_by_type(RVData)
-        elif isinstance(data, RVData):
-            rv_datasets = {"data": data}
-        elif data is None:
-            rv_datasets = {}
-        else:
-            msg = "data must be RVData or SourceData for data_type='rv'."
-            raise ValueError(msg)
-
-        # Per-instrument mean offsets (extra linear params beyond rv_semiamp and v_sys).
-        mean_offsets: dict[str, Q] = {
-            name: Q(float(np.mean(np.asarray(self.linear[name].value))), rv_unit)
-            for name in self.extra_linear_names
-        }
-
-        # Mean v_sys used to centre phase-folded plots on zero.
-        mean_v0 = Q(float(np.mean(v0_vals)), rv_unit)
-
-        colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-
-        # --- Data points ---
-        for color_idx, (instr_name, rv_data) in enumerate(rv_datasets.items()):
-            rv_obs = rv_data.rv
-            rv_err = rv_data.rv_err
-
-            # Shift non-reference instrument data into the reference frame.
-            if apply_mean_offsets and instr_name in mean_offsets:
-                rv_obs = rv_obs - mean_offsets[instr_name]
-
-            if phase_fold:
-                x_data = ustrip(
-                    "",
-                    ((rv_data.time - t_ref) / median_period) % Q(1.0, ""),
-                )
-                rv_obs = rv_obs - mean_v0
-            else:
-                x_data = ustrip(time_unit, rv_data.time)
-
-            # Per-instrument style: start from data_style defaults, then
-            # set color from the color cycle for multi-instrument plots.
-            instr_style = data_style.copy()
-            if "color" not in data_plot_kwargs:
-                instr_style["color"] = colors[color_idx % len(colors)]
-            label = instr_name if len(rv_datasets) > 1 else "data"
-            instr_style.setdefault("label", label)
-            ax.errorbar(
-                x_data,
-                ustrip(rv_unit, rv_obs),
-                yerr=ustrip(rv_unit, rv_err),
-                **instr_style,
-            )
-
-        # --- Posterior model curves ---
-        ecc_vals = np.asarray(ecc_qty.value)
-        phase_peri_vals = np.asarray(phase_peri_qty.value)
-        arg_peri_vals = np.asarray(arg_peri_qty.value)
-
-        if phase_fold:
-            # For each sample, evaluate the model in the sample's OWN orbital phase
-            # frame (times = t_peri_i + phi * P_i) and then convert those times to
-            # the DATA's display phase ((t - t_ref) / P_median mod 1).
-            # This guarantees the model curve is x-aligned with every data point,
-            # even when the sample's period differs from the reference period.
-            phi_grid = np.linspace(0.0, 1.0, 500)
-            for i in range(n_draw):
-                period_i = Q(float(period_vals[i]), time_unit)
-                ecc_i = float(ecc_vals[i])
-                phase_peri_i = float(phase_peri_vals[i])
-                arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
-                K_i = Q(float(K_vals[i]), rv_unit)
-                # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-                t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
-                # Times in sample i's own frame: one complete orbit from periastron.
-                t_model = t_peri_i + Q(phi_grid, "") * period_i
-                rv_model = rv_at_times(
-                    t_model,
-                    period_i,
-                    ecc_i,
-                    t_peri_i,
-                    arg_peri_i,
-                    K_i,
-                    Q(0.0, rv_unit),
-                )
-                # Map model times to data display phase.
-                x_model = np.asarray(
-                    ustrip("", (t_model - t_ref) / median_period % Q(1.0, ""))
-                )
-                rv_vals = np.asarray(ustrip(rv_unit, rv_model))
-                # Sort by display phase; insert NaN breaks at wrap-around jumps
-                # so matplotlib does not draw a line across the plot.
-                idx_sort = np.argsort(x_model)
-                x_sorted = x_model[idx_sort]
-                rv_sorted = rv_vals[idx_sort]
-                gaps = np.where(np.diff(x_sorted) < -0.5)[0] + 1
-                x_plot = np.insert(x_sorted.astype(float), gaps, np.nan)
-                rv_plot = np.insert(rv_sorted.astype(float), gaps, np.nan)
-                ax.plot(x_plot, rv_plot, **orbit_style)
-
-            ax.set_xlabel("Orbital phase")
-            ax.set_ylabel(f"RV $-$ $v_0$ [{rv_unit}]")
-            ax.set_xlim(0.0, 1.0)
-            ax.set_title(
-                f"Phase-folded RV  (median P = {median_period_val:.1f} {time_unit})"
-            )
-        else:
-            # Time-domain: dense grid spanning all observations.
-            if rv_datasets:
-                all_times = Q(
-                    jnp.concatenate(
-                        [rv_data.time.value for rv_data in rv_datasets.values()]
-                    ),
-                    time_unit,
-                )
-                t_grid = get_t_grid(all_times, median_period)
-            else:
-                t_grid = t_ref + Q(np.linspace(0.0, 1.0, 500), "") * median_period
-
-            for i in range(n_draw):
-                period_i = Q(float(period_vals[i]), time_unit)
-                ecc_i = float(ecc_vals[i])
-                phase_peri_i = float(phase_peri_vals[i])
-                arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
-                K_i = Q(float(K_vals[i]), rv_unit)
-                v0_i = Q(float(v0_vals[i]), rv_unit)
-                # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-                t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
-                rv_model = rv_at_times(
-                    t_grid, period_i, ecc_i, t_peri_i, arg_peri_i, K_i, v0_i
-                )
-                ax.plot(
-                    ustrip(time_unit, t_grid),
-                    ustrip(rv_unit, rv_model),
-                    **orbit_style,
-                )
-
-            ax.set_xlabel(f"Time [{time_unit}]")
-            ax.set_ylabel(f"RV [{rv_unit}]")
-            ax.set_title(f"RV (median P = {median_period_val:.1f} {time_unit})")
-
-        if rv_datasets:
-            ax.legend(loc="best")
-
-    def _draw_astrometry(
-        self,
-        *,
-        ax: Any,
-        n_samples: int,
-        plot_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """On-sky orbital ellipses drawn into *ax* for each posterior sample.
-
-        Gaia along-scan measurements are 1-D projections and cannot be plotted
-        directly as 2-D sky positions, so only the model orbit curves are shown.
-        """
-        n_draw = min(n_samples, self.n_samples)
-
-        orbit_style = (plot_kwargs or {}).copy()
-        orbit_style.setdefault("linestyle", "-")
-        orbit_style.setdefault("linewidth", 0.5)
-        orbit_style.setdefault("alpha", max(0.08, min(0.6, 8.0 / n_draw)))
-        orbit_style.setdefault("marker", "")
-        orbit_style.setdefault("color", "#555555")
-        orbit_style.setdefault("rasterized", True)
-        sma_qty = self.linear.get("semi_major_axis")
-        sma_unit = str(sma_qty.unit) if sma_qty is not None else "mas"
-
-        period_qty = self.nonlinear["period"]
-        time_unit = str(period_qty.unit)
-        period_vals = np.asarray(period_qty.value)
-        ecc_vals = np.asarray(self.nonlinear["eccentricity"].value)
-        phase_peri_vals = np.asarray(self.nonlinear["phase_peri"].value)
-        arg_peri_vals = np.asarray(self.nonlinear["arg_peri"].value)
-        cos_i_vals = np.asarray(self.nonlinear["cos_i"].value)
-        lon_asc_vals = np.asarray(self.nonlinear["lon_asc_node"].value)
-        sma_vals = np.asarray(sma_qty.value) if sma_qty is not None else None
-
-        t_ref_raw = self.metadata.get("t_ref", 0.0)
-        t_ref = t_ref_raw if isinstance(t_ref_raw, Q) else Q(t_ref_raw, time_unit)
-
-        for i in range(n_draw):
-            period_i = Q(float(period_vals[i]), time_unit)
-            ecc_i = float(ecc_vals[i])
-            phase_peri_i = float(phase_peri_vals[i])
-            arg_peri_i = Q(float(arg_peri_vals[i]), "rad")
-            cos_i_i = float(cos_i_vals[i])
-            lon_asc_i = Q(float(lon_asc_vals[i]), "rad")
-            sma_val = float(sma_vals[i]) if sma_vals is not None else 1.0
-            sma_i = Q(sma_val, sma_unit)
-            # t_peri: phase_peri * period (no t_ref), matches _solve_kepler
-            t_peri_i = Q(phase_peri_i * float(period_vals[i]), time_unit)
-
-            # One full orbit: phi in [0, 1] -> times spanning exactly one period.
-            # Use t_ref as origin so the ellipse is centered near the observations.
-            phi_grid = np.linspace(0.0, 1.0, 500)
-            times_grid = t_ref + Q(phi_grid, "") * period_i
-
-            delta_ra, delta_dec = astrometric_orbit_at_times(
-                times_grid,
-                period_i,
-                ecc_i,
-                t_peri_i,
-                arg_peri_i,
-                cos_i_i,
-                lon_asc_i,
-                sma_i,
-            )
-            ax.plot(
-                np.asarray(ustrip(sma_unit, delta_ra)),
-                np.asarray(ustrip(sma_unit, delta_dec)),
-                **orbit_style,
-            )
-
-        ax.set_xlabel(rf"$\Delta$RA [{sma_unit}]")
-        ax.set_ylabel(rf"$\Delta$Dec [{sma_unit}]")
-        ax.set_aspect("equal")
-        ax.axhline(0, color="k", lw=0.5, ls="--")
-        ax.axvline(0, color="k", lw=0.5, ls="--")
-        ax.set_title("Orbit on sky")

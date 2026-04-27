@@ -129,8 +129,8 @@ NumPyro MCMC, started from the posterior samples:
 from harv.samplers import NumpyroSampler
 
 samples = sampler.run(n_prior_samples=1_000_000, max_posterior_samples=128)
-mcmc = NumpyroSampler(model).init_mcmc(samples)
-mcmc.run()
+mcmc_sampler = NumpyroSampler(model=model, prior=prior)
+mcmc_samples = mcmc_sampler.run(samples, seed=0)
 ```
 
 ## How it works

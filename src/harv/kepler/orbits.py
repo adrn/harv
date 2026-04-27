@@ -22,7 +22,7 @@ from typing import cast
 import quaxed.numpy as jnp
 from jaxoplanet.core.kepler import kepler
 from unxt import Q
-from unxt.quantity import ustrip
+from unxt.quantity import AllowValue, ustrip
 
 from harv.custom_types import (
     BatchFloat,
@@ -92,9 +92,11 @@ def rv_shape(
     >>> shape = rv_shape(sin_f, cos_f, 0.3, Q(0.5, "rad"))
     """
     cos_wf = jnp.cos(arg_peri) * cos_f - jnp.sin(arg_peri) * sin_f
+    ecc = ustrip(AllowValue, "", eccentricity)
+
     # cast: jnp ops on Quantity inputs return AbstractQuantity (quax dispatch),
     # which mypy cannot verify is a subtype of BatchFloat without the hint.
-    return cast("BatchFloat", cos_wf + eccentricity * jnp.cos(arg_peri))
+    return cast("BatchFloat", cos_wf + ecc * jnp.cos(arg_peri))
 
 
 def thiele_innes_ABFG(
@@ -180,7 +182,7 @@ def compute_true_anomaly_components(
     ... )
     """
     M = mean_anomaly(time - t_peri, period)
-    return true_anomaly_from_mean(M, eccentricity)
+    return true_anomaly_from_mean(M, ustrip(AllowValue, "", eccentricity))
 
 
 def rv_at_times(

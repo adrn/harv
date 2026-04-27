@@ -8,7 +8,7 @@ from unxt import ustrip
 
 from harv.custom_types import ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
-from harv.likelihood.helpers import PriorDist
+from harv.models._helpers import PriorDist
 
 __all__ = (
     "ParallaxDependentProperMotionPrior",

@@ -77,7 +77,7 @@ class TestRvShape:
         # At f=0, cos(omega+0) + e*cos(omega) = cos(omega)(1+e)
         omega = 0.5
         e = 0.3
-        result = rv_shape(0.0, 1.0, e, omega)
+        result = rv_shape(jnp.array(0.0), jnp.array(1.0), e, omega)
         expected = jnp.cos(omega) * (1 + e)
         assert jnp.allclose(result, expected, atol=1e-7)
 
@@ -91,7 +91,7 @@ class TestRvShape:
         assert jnp.allclose(result, expected, atol=1e-7)
 
     def test_jit(self) -> None:
-        result = jax.jit(rv_shape)(0.6, 0.8, 0.2, 1.2)
+        result = jax.jit(rv_shape)(jnp.array(0.6), jnp.array(0.8), 0.2, 1.2)
         assert jnp.isfinite(result)
 
     def test_vmap(self) -> None:

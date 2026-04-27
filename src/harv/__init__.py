@@ -6,20 +6,61 @@ aware via unxt, supports probabilistic modeling with numpyro, and provides flexi
 Keplerian orbit frameworks for single and multi-body systems.
 """
 
+# TODO: need to figure out what is available at top level. Gut feeling is we leave
+# harv.io things as harv.io.load_sampler and harv.plot.plot_rv, and Abstract classes
+# should be under harv.models, but what should be accessible at top level?
 __all__ = (
+    # Data containers
     "GaiaAstrometryData",
-    "Model",
-    "NumpyroSampler",
+    "RVData",
+    "SourceData",
+    # Distributions
     "QD",
     "QuantityDistribution",
-    "RVData",
+    # Models API
+    "AbstractComponentModel",
+    "AbstractExtension",
+    "AbstractParameterization",
+    "EcoswEsinwRV",
+    "GP",
+    "GaiaAstrometryModel",
+    "Jitter",
+    "JointModel",
+    "MultiSurveyOffset",
+    "ParamInfo",
+    "MonomialTrend",
+    "RVModel",
+    "StandardGaiaAstrometry",
+    "StandardRV",
+    "gaia_astrometry_model",
+    "rv_model",
+    # Samplers
+    "NumpyroSampler",
     "RejectionPrior",
     "RejectionSampler",
     "Samples",
-    "SourceData",
 )
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
 from harv.distributions import QD, QuantityDistribution
-from harv.model import Model
+from harv.extensions import (
+    AbstractExtension,
+    GP,
+    Jitter,
+    MultiSurveyOffset,
+    ParamInfo,
+    MonomialTrend,
+)
+from harv.models import (
+    AbstractComponentModel,
+    AbstractParameterization,
+    EcoswEsinwRV,
+    GaiaAstrometryModel,
+    JointModel,
+    RVModel,
+    StandardGaiaAstrometry,
+    StandardRV,
+    gaia_astrometry_model,
+    rv_model,
+)
 from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler, Samples

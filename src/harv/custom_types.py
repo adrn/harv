@@ -5,7 +5,7 @@ from typing import Any, Literal
 import jax
 import numpy as np
 from jaxtyping import Float, Int, Real
-from unxt import Q
+from unxt import AbstractQuantity, Q
 from unxt.quantity import AllowValue, ustrip
 
 Angle = Literal["angle"]
@@ -23,6 +23,7 @@ ScalarQLength = Real[Q["length"], ""]
 ScalarQMass = Real[Q["mass"], ""]
 ScalarQSpeed = Real[Q["speed"], ""]
 ScalarQTime = Real[Q["time"], ""]
+ScalarQAny = Real[AbstractQuantity, ""]
 
 NAngle = Real[Q["angle"], "n"]
 NDimless = Real[Q["dimensionless"], "n"]
@@ -30,6 +31,7 @@ NTime = Real[Q["time"], "n"]
 NVelocity = Real[Q["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
+NQAny = Real[AbstractQuantity, ""]
 
 Vec3QLength = Real[Q["length"], "3"]
 Vec3QSpeed = Real[Q["speed"], "3"]
@@ -48,7 +50,7 @@ BatchFloat = Float[jax.Array, "*batch"] | BatchQDimless
 # Set of all Batch-level Quantity types that carry physical dimensions.
 # Used by AbstractParameters.__init_subclass__ to auto-detect which fields
 # require a QDistribution prior.
-DIMENSIONED_BATCH_TYPES: frozenset = frozenset(
+DIMENSIONED_BATCH_TYPES: frozenset[type] = frozenset(
     {
         BatchQAngle,
         BatchQAngularSpeed,

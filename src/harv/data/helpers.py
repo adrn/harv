@@ -7,12 +7,52 @@ __all__ = (
 
 from dataclasses import fields
 
+import equinox as eqx
 import jax
+import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 from unxt.quantity import AllowValue
 
 from .datasets import AbstractData
+
+
+def _synchronize_t_refs(
+    datasets: dict[str, AbstractData],
+) -> dict[str, AbstractData]:
+    """Return datasets with a shared t_ref equal to the mean of all observation times.
+
+    When multiple datasets are combined (e.g. in SourceData, SystemData, or a
+    JointModel), the shared ``phase_peri`` parameter is interpreted as a fraction of
+    the orbit relative to ``t_ref``.  All component datasets must therefore use the
+    same reference epoch.  This function computes the global mean time and rebuilds
+    each dataset with that shared value.
+
+    Parameters
+    ----------
+    datasets : dict[str, AbstractData]
+        Named datasets, possibly with different ``t_ref`` values.
+
+    Returns
+    -------
+    dict[str, AbstractData]
+        Same datasets with ``t_ref`` replaced by the global mean time.
+    """
+    if len(datasets) <= 1:
+        return dict(datasets)
+
+    first = next(iter(datasets.values()))
+    time_unit = str(first.time.unit)
+
+    all_times = np.concatenate(
+        [np.asarray(ustrip(time_unit, ds.time)) for ds in datasets.values()]
+    )
+    shared_t_ref = Q(float(np.mean(all_times)), time_unit)
+
+    return {
+        name: eqx.tree_at(lambda d: d.t_ref, ds, shared_t_ref)
+        for name, ds in datasets.items()
+    }
 
 
 def stack_datasets(

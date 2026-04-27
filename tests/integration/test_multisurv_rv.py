@@ -12,21 +12,20 @@ import pytest
 import quaxed.numpy as jnp
 from unxt import Q, uconvert
 
-from harv.data import RVData, build_indicator_matrix
+from harv.data import RVData
 from harv.distributions import QD
-from harv.likelihood.params import RVParameters
-from harv.likelihood.rv import RVLikelihood
-from harv.model import Model
+from harv.extensions import MultiSurveyOffset
+from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.rv import simulate_rv_multisurv_data
 
 
-class TestMultiSurveyLikelihood:
-    """Unit-style tests for RVLikelihood."""
+class TestMultiSurveyModel:
+    """Unit-style tests for RVModel with MultiSurveyOffset."""
 
     def test_log_prob_finite(self):
-        """Likelihood returns a finite scalar at arbitrary parameters."""
+        """Model returns a finite scalar at arbitrary parameters."""
         source_data, _ = simulate_rv_multisurv_data(
             instruments={"keck": None, "espresso": Q(2.0, "km/s")},
             seed=1,
@@ -35,40 +34,32 @@ class TestMultiSurveyLikelihood:
             rv_semiamp=Q(5.0, "km/s"),
             rv_err=Q(3.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RVData)
-        stacked, indicator, instrument_names = build_indicator_matrix(
-            rv_datasets, reference="keck"
+        stacked, indicator, instrument_names = source_data.indicator_data_by_type(
+            RVData,
+            reference="keck",
         )
 
         linear_prior = {
             "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
-        }
-        offsets_prior = {
             "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
         }
-        lik = RVLikelihood(
+        model = RVModel(
             data=stacked,
-            linear_marginalized_prior=linear_prior,
-            offsets_marginalized_prior=offsets_prior,
-            indicator_matrix=indicator,
-            instrument_names=instrument_names,
+            linear_prior=linear_prior,
+            extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
-        params = RVParameters.marginalized(
-            period=Q(50.0, "day"),
-            eccentricity=0.2,
-            phase_peri=0.5,
-            arg_peri=1.0,
-        )
-        log_lik = lik.log_prob(params)
+        nl = {
+            "period": Q(50.0, "day"),
+            "eccentricity": 0.2,
+            "phase_peri": 0.5,
+            "arg_peri": Q(1.0, "rad"),
+        }
+        log_lik = model.log_prob(nl)
         assert jnp.isfinite(log_lik)
 
     def test_log_prob_higher_than_single_instrument(self):
-        """Multi-survey likelihood with correct offset is higher than without.
-
-        When the data has a known instrument offset, a model that accounts for it
-        should fit better (higher log-lik) than one that ignores the offset.
-        """
+        """Multi-survey model with correct offset is higher than without."""
         source_data, _ = simulate_rv_multisurv_data(
             instruments={"keck": None, "espresso": Q(10.0, "km/s")},
             seed=2,
@@ -78,43 +69,37 @@ class TestMultiSurveyLikelihood:
             rv_semiamp=Q(3.0, "km/s"),
             rv_err=Q(2.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RVData)
-        stacked, indicator, instrument_names = build_indicator_matrix(
-            rv_datasets, reference="keck"
+        stacked, indicator, instrument_names = source_data.indicator_data_by_type(
+            RVData,
+            reference="keck",
         )
 
-        # Multi-survey: prior on rv_semiamp, v_sys, + espresso offset
-        linear_prior = {
+        linear_prior_base = {
             "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
         }
-        offsets_prior = {
+        linear_prior_multi = {
+            **linear_prior_base,
             "espresso": QD(dist.Normal(0.0, 15.0), "km/s"),
         }
-        lik_multi = RVLikelihood(
+        model_multi = RVModel(
             data=stacked,
-            linear_marginalized_prior=linear_prior,
-            offsets_marginalized_prior=offsets_prior,
-            indicator_matrix=indicator,
-            instrument_names=instrument_names,
+            linear_prior=linear_prior_multi,
+            extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
-
-        # Single-instrument: prior on rv_semiamp, v_sys only, ignoring offset
-        lik_single = RVLikelihood(
+        model_single = RVModel(
             data=stacked,
-            linear_marginalized_prior=linear_prior,
+            linear_prior=linear_prior_base,
         )
 
-        params = RVParameters.marginalized(
-            period=Q(100.0, "day"),
-            eccentricity=0.0,
-            phase_peri=0.5,
-            arg_peri=0.0,
-        )
-        log_lik_multi = lik_multi.log_prob(params)
-        log_lik_single = lik_single.log_prob(params)
-
-        # Multi-survey model has more flexibility to fit the offset -> higher log-lik
+        nl = {
+            "period": Q(100.0, "day"),
+            "eccentricity": 0.0,
+            "phase_peri": 0.5,
+            "arg_peri": Q(0.0, "rad"),
+        }
+        log_lik_multi = model_multi.log_prob(nl)
+        log_lik_single = model_single.log_prob(nl)
         assert log_lik_multi > log_lik_single
 
     def test_vmap_batch(self):
@@ -127,34 +112,30 @@ class TestMultiSurveyLikelihood:
             rv_semiamp=Q(4.0, "km/s"),
             rv_err=Q(2.0, "km/s"),
         )
-        rv_datasets = source_data.get_datasets_by_type(RVData)
-        stacked, indicator, instrument_names = build_indicator_matrix(
-            rv_datasets, reference="keck"
+        stacked, indicator, instrument_names = source_data.indicator_data_by_type(
+            RVData,
+            reference="keck",
         )
 
         linear_prior = {
             "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
-        }
-        offsets_prior = {
             "hires": QD(dist.Normal(0.0, 5.0), "km/s"),
         }
-        lik = RVLikelihood(
+        model = RVModel(
             data=stacked,
-            linear_marginalized_prior=linear_prior,
-            offsets_marginalized_prior=offsets_prior,
-            indicator_matrix=indicator,
-            instrument_names=instrument_names,
+            linear_prior=linear_prior,
+            extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
 
         n = 8
-        params_batch = RVParameters.marginalized(
-            period=Q(jnp.ones(n) * 30.0, "day"),
-            eccentricity=jnp.linspace(0.0, 0.5, n),
-            phase_peri=jnp.linspace(0.0, 1.0, n),
-            arg_peri=jnp.ones(n) * 1.0,
-        )
-        log_liks = jax.jit(jax.vmap(lik.log_prob))(params_batch)
+        nl_batch = {
+            "period": Q(jnp.ones(n) * 30.0, "day"),
+            "eccentricity": jnp.linspace(0.0, 0.5, n),
+            "phase_peri": jnp.linspace(0.0, 1.0, n),
+            "arg_peri": Q(jnp.ones(n) * 1.0, "rad"),
+        }
+        log_liks = jax.jit(jax.vmap(model.log_prob))(nl_batch)
 
         assert log_liks.shape == (n,)
         assert jnp.all(jnp.isfinite(log_liks))
@@ -178,6 +159,24 @@ class TestMultiSurveyRejectionSampler:
         )
         return source_data, true
 
+    def _make_sampler(self, source_data, prior):
+        """Build a sampler with MultiSurveyOffset extension (expert path)."""
+        stacked, indicator, instrument_names = source_data.indicator_data_by_type(
+            RVData,
+            reference="keck",
+        )
+        # Merge extension_priors (offset priors) into linear_prior for the model.
+        # For MultiSurveyOffset all extension params are linear, so merging is safe.
+        # Use from_model since MultiSurveyOffset requires structural info that
+        # cannot be inferred from the prior alone.
+        merged_linear = {**prior.linear_prior, **prior.extension_priors}
+        model = RVModel(
+            data=stacked,
+            linear_prior=merged_linear,
+            extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
+        )
+        return RejectionSampler.from_model(model=model, prior=prior)
+
     def test_sampler_runs_and_returns_samples(self, low_snr_data):
         """Rejection sampler completes and returns a valid Samples object."""
         source_data, truth = low_snr_data
@@ -186,12 +185,9 @@ class TestMultiSurveyRejectionSampler:
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
-            offsets={
-                "keck": None,
-                "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
+            harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = RejectionSampler(Model(prior, source_data))
+        sampler = self._make_sampler(source_data, prior)
         samples = sampler.run(n_prior_samples=500_000, seed=10)
 
         period_samples = uconvert("day", samples["period"])
@@ -209,7 +205,7 @@ class TestMultiSurveyRejectionSampler:
         assert jnp.all(jnp.abs(K_samples - K_true).value < 1.0)
 
         assert samples.n_samples > 0
-        assert samples.data_type == "rv"
+        assert samples.data_type == "RVModel"
 
     def test_samples_have_correct_keys(self, low_snr_data):
         """Samples object has all expected parameter keys, including offset."""
@@ -219,12 +215,9 @@ class TestMultiSurveyRejectionSampler:
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
-            offsets={
-                "keck": None,
-                "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
+            harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = RejectionSampler(Model(prior, source_data))
+        sampler = self._make_sampler(source_data, prior)
         samples = sampler.run(n_prior_samples=50_000, seed=11)
 
         keys = samples.keys()
@@ -248,12 +241,9 @@ class TestMultiSurveyRejectionSampler:
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
-            offsets={
-                "keck": None,
-                "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
+            harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = RejectionSampler(Model(prior, source_data))
+        sampler = self._make_sampler(source_data, prior)
         samples = sampler.run(n_prior_samples=50_000, seed=12)
         assert "keck" not in samples.keys()  # noqa: SIM118
 
@@ -265,12 +255,9 @@ class TestMultiSurveyRejectionSampler:
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
-            offsets={
-                "keck": None,
-                "harps": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
+            harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = RejectionSampler(Model(prior, source_data))
+        sampler = self._make_sampler(source_data, prior)
         s1 = sampler.run(n_prior_samples=20_000, seed=20)
         s2 = sampler.run(n_prior_samples=20_000, seed=20)
 
