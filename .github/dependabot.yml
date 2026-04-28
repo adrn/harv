@@ -13,3 +13,7 @@ updates:
       actions:
         patterns:
           - "*"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "monthly"
