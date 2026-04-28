@@ -4,6 +4,7 @@ This module provides the Samples class which stores posterior samples from
 rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -599,15 +600,30 @@ class Samples(eqx.Module):
         if params is None:
             params = self.keys()
 
+        num_chains: int = int(self.metadata.get("num_chains", 1))
+        n_per_chain, remainder = divmod(self.n_samples, num_chains)
+        if remainder != 0:
+            # Fall back to treating all samples as a single chain.
+            num_chains = 1
+            n_per_chain = self.n_samples
+            warnings.warn(
+                "Number of samples is not divisible by num_chains. "
+                "Falling back to a single chain.",
+                category=UserWarning,
+                stacklevel=1,
+            )
+
         data_dict: dict[str, Any] = {}
         for param in params:
             try:
                 values = self[param]
                 if isinstance(values, Q):
                     var_name = f"{param} [{values.unit}]"
-                    data_dict[var_name] = np.asarray(values.value)[None, :]
+                    arr = np.asarray(values.value).reshape(num_chains, n_per_chain)
                 else:
-                    data_dict[param] = np.asarray(values)[None, :]
+                    arr = np.asarray(values).reshape(num_chains, n_per_chain)
+                    var_name = param
+                data_dict[var_name] = arr
             except (KeyError, ValueError):
                 continue
 

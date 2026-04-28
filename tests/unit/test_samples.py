@@ -185,6 +185,75 @@ class TestSamplesJAX:
         )
 
 
+class TestSamplesToArviz:
+    """Tests for Samples.to_arviz chain-reshape behaviour."""
+
+    def test_single_chain_shape(self):
+        """Without num_chains metadata, to_arviz produces (1, n_samples) arrays."""
+        pytest.importorskip("arviz")
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0, 101.0, 99.5, 100.5]), "day"),
+                "eccentricity": Q(jnp.array([0.1, 0.15, 0.12, 0.11]), ""),
+                "phase_peri": Q(jnp.array([0.3, 0.31, 0.29, 0.28]), ""),
+                "arg_peri": Q(jnp.array([1.0, 1.1, 0.9, 1.2]), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([10.0, 11.0, 9.5, 10.5]), "km/s"),
+                "v_sys": Q(jnp.array([5.0, 5.1, 4.9, 5.2]), "km/s"),
+            },
+            data_type="rv",
+            metadata={},
+        )
+        idata = samples.to_arviz(["period", "eccentricity"])
+        period_arr = idata.posterior["period [d]"].values
+        assert period_arr.shape == (1, 4)
+
+    def test_multi_chain_shape(self):
+        """With num_chains=2 in metadata, to_arviz produces (2, n_per_chain) arrays."""
+        pytest.importorskip("arviz")
+        # 6 samples = 2 chains x 3 draws
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.arange(6, dtype=float) + 100.0, "day"),
+                "eccentricity": Q(jnp.full(6, 0.1), ""),
+                "phase_peri": Q(jnp.full(6, 0.3), ""),
+                "arg_peri": Q(jnp.full(6, 1.0), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.full(6, 10.0), "km/s"),
+                "v_sys": Q(jnp.full(6, 0.0), "km/s"),
+            },
+            data_type="rv",
+            metadata={"num_chains": 2},
+        )
+        idata = samples.to_arviz(["period"])
+        period_arr = idata.posterior["period [d]"].values
+        assert period_arr.shape == (2, 3)
+
+    def test_indivisible_falls_back_to_one_chain(self):
+        """When n_samples % num_chains != 0, fall back to a single chain."""
+        pytest.importorskip("arviz")
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0, 101.0, 99.5]), "day"),
+                "eccentricity": Q(jnp.full(3, 0.1), ""),
+                "phase_peri": Q(jnp.full(3, 0.3), ""),
+                "arg_peri": Q(jnp.full(3, 1.0), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.full(3, 10.0), "km/s"),
+                "v_sys": Q(jnp.full(3, 0.0), "km/s"),
+            },
+            data_type="rv",
+            metadata={"num_chains": 2},  # 3 % 2 != 0
+        )
+        with pytest.warns(UserWarning, match="not divisible by num_chains"):
+            idata = samples.to_arviz(["period"])
+        period_arr = idata.posterior["period [d]"].values
+        assert period_arr.shape == (1, 3)
+
+
 def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
     """RV-only Samples with controllable rv_semiamp signs."""
     n = len(K_values)

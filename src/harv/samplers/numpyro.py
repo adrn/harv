@@ -471,6 +471,7 @@ class NumpyroSampler(eqx.Module):
             nonlinear_extension_priors=nonlinear_extension_priors,
             effective_marginalized_names=effective_marginalized_names,
             linear_extension_names=linear_extension_names,
+            num_chains=num_chains,
         )
 
     def _build_init_params(  # noqa: C901
@@ -582,6 +583,7 @@ class NumpyroSampler(eqx.Module):
         nonlinear_extension_priors: dict[str, Any],
         effective_marginalized_names: tuple[str, ...] | None,
         linear_extension_names: tuple[str, ...],
+        num_chains: int = 1,
     ) -> Samples:
         """Convert a numpyro posterior dict into a :class:`Samples` container."""
         prior = self.prior
@@ -621,7 +623,7 @@ class NumpyroSampler(eqx.Module):
         elif hasattr(model, "data") and hasattr(model.data, "t_ref"):
             t_ref = model.data.t_ref
 
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] = {"num_chains": num_chains}
         if t_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
