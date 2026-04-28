@@ -34,8 +34,8 @@ _DT = TypeVar("_DT", bound=DatasetType)
 class AbstractDatasetContainer(eqx.Module):
     """Base class providing a dict-like interface over named datasets.
 
-    Subclasses (SystemData, SourceData) share this common interface
-    but carry different semantic meaning.
+    Subclasses (SystemData, SourceData) share this common interface but carry different
+    semantic meaning.
     """
 
     _datasets: dict[str, DatasetType]
@@ -62,10 +62,30 @@ class AbstractDatasetContainer(eqx.Module):
         return iter(self._datasets.items())
 
     def get_datasets_by_type(self, data_type: type[_DT]) -> dict[str, _DT]:
-        """Get all datasets/components of a specific data type."""
+        """Get all datasets/components of a specific data type.
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by.
+
+        Examples
+        --------
+        >>> from harv.data.datasets import RVData, GaiaAstrometryData
+        >>> from harv.data.containers import SourceData
+        >>> source_data = SourceData(
+        ...     keck_rv=RVData(...),
+        ...     gaia=GaiaAstrometryData(...),
+        ... )
+        >>> source_data.get_datasets_by_type(RVData)
+        {'keck_rv': RVData(...)}
+        >>> source_data.get_datasets_by_type(GaiaAstrometryData)
+        {'gaia': GaiaAstrometryData(...)}
+        """
         return {k: v for k, v in self._datasets.items() if isinstance(v, data_type)}
 
     def _require_datasets_by_type(self, data_type: type[_DT]) -> dict[str, _DT]:
+        """Like get_datasets_by_type but raises if no datasets of the requested type."""
         datasets = self.get_datasets_by_type(data_type)
         if not datasets:
             msg = f"No datasets of type {data_type.__name__} found"
@@ -73,7 +93,26 @@ class AbstractDatasetContainer(eqx.Module):
         return datasets
 
     def stacked_by_type(self, data_type: type[_DT]) -> _DT:
-        """Stack all datasets of the requested type."""
+        """Stack all datasets of the requested type.
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
+            stacking.
+
+        Examples
+        --------
+        >>> from harv.data.datasets import RVData, GaiaAstrometryData
+        >>> from harv.data.containers import SourceData
+        >>> source_data = SourceData(
+        ...     keck_rv=RVData(...),
+        ...     wiyn_rv=RVData(...),
+        ...     gaia=GaiaAstrometryData(...),
+        ... )
+        >>> source_data.stacked_by_type(RVData)
+        RVData(...)
+        """
         return cast("_DT", stack_datasets(self._require_datasets_by_type(data_type)))
 
     def indicator_data_by_type(
@@ -81,7 +120,22 @@ class AbstractDatasetContainer(eqx.Module):
         data_type: type[_DT],
         reference: str,
     ) -> tuple[_DT, jax.Array | None, tuple[str, ...] | None]:
-        """Return stacked data and indicator flags for one dataset type."""
+        """Return stacked data and indicator flags for one dataset type.
+
+        This is a convenience wrapper around get_datasets_by_type +
+        build_indicator_matrix for use in extensions that need to build a kernel matrix
+        across multiple datasets of the same type (e.g. multiple RV instruments).
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
+            stacking.
+        reference : str
+            Name of the reference dataset to use for time coordinates and metadata. Must
+            be one of the keys in the returned dict from
+            get_datasets_by_type(data_type).
+        """
         datasets = self._require_datasets_by_type(data_type)
         stacked, indicator, names = build_indicator_matrix(datasets, reference)
         return cast("_DT", stacked), indicator, names
@@ -90,9 +144,8 @@ class AbstractDatasetContainer(eqx.Module):
 class SystemData(AbstractDatasetContainer):
     """Container for a multi-component system.
 
-    Each named component holds the same concrete data class representing
-    observations of a distinct physical body or photocenter in a
-    gravitationally bound system.
+    Each named component holds the same concrete data class representing observations of
+    a distinct physical body or photocenter in a gravitationally bound system.
     """
 
     _dataset_type: type[AbstractData] = eqx.field(static=True)
@@ -122,8 +175,8 @@ class SystemData(AbstractDatasetContainer):
             "dict[str, DatasetType]",
             _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
         )
-        object.__setattr__(self, "_datasets", datasets)
-        object.__setattr__(self, "_dataset_type", type(next(iter(datasets.values()))))
+        self._datasets = datasets
+        self._dataset_type = next(iter(dataset_types))
 
     @property
     def dataset_type(self) -> type[AbstractData]:

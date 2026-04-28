@@ -18,7 +18,7 @@ import numpy as np
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
-from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity
+from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity, ScalarQTime
 
 # Optional dependency:
 try:
@@ -41,14 +41,16 @@ class AbstractData(eqx.Module):
 
     _: KW_ONLY
 
-    t_ref: NTime | None = None
+    t_ref: ScalarQTime | None = None
     """Reference epoch. If None, uses mean observation time."""
 
     def __check_init__(self) -> None:
         """Compute t_ref from mean time if not provided."""
         if self.t_ref is None:
+            # TODO: This is ugly - do we really need a concrete numpy mean here?
             # Use concrete NumPy mean so t_ref is a plain Python float wrapped in Q.
-            # This avoids placing a JAX-traced array in a static metadata field downstream.
+            # This avoids placing a JAX-traced array in a static metadata field
+            # downstream.
             time_unit = str(self.time.unit)
             t_mean = float(np.mean(np.asarray(ustrip(time_unit, self.time))))
             object.__setattr__(self, "t_ref", Q(t_mean, time_unit))
@@ -191,7 +193,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
         >>> ax = data.plot()
         >>> plt.close("all")
         """
-        from harv.plot import plot_timeseries_errorbar  # noqa: PLC0415 - circular imp.
+        from harv.plot import plot_timeseries_errorbar  # - circular imp.
 
         al_unit = al_unit or str(self.al_position.unit)
         return plot_timeseries_errorbar(
@@ -302,7 +304,7 @@ class RVData(AbstractData):
         >>> ax = data.plot(phase_fold=Q(50.0, "day"))  # phase-folded
         >>> plt.close("all")
         """
-        from harv.plot import plot_timeseries_errorbar  # noqa: PLC0415 - circular imp.
+        from harv.plot import plot_timeseries_errorbar  # - circular imp.
 
         if phase_fold is not None and relative_to_t_ref:
             msg = "phase_fold and relative_to_t_ref are mutually exclusive"

@@ -416,7 +416,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         raise ImportError(msg)
 
     if phase_fold_median and extensions:
-        from .extensions.gp import GP  # noqa: PLC0415
+        from .extensions.gp import GP
 
         if any(isinstance(ext, GP) for ext in extensions):
             warnings.warn(

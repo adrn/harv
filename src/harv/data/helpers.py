@@ -9,10 +9,8 @@ from dataclasses import fields
 
 import equinox as eqx
 import jax
-import numpy as np
 import quaxed.numpy as jnp
-from unxt import AbstractQuantity, Q, ustrip
-from unxt.quantity import AllowValue
+from unxt import AbstractQuantity
 
 from .datasets import AbstractData
 
@@ -22,7 +20,7 @@ def _synchronize_t_refs(
 ) -> dict[str, AbstractData]:
     """Return datasets with a shared t_ref equal to the mean of all observation times.
 
-    When multiple datasets are combined (e.g. in SourceData, SystemData, or a
+    When multiple datasets are combined (e.g., in SourceData, SystemData, or a
     JointModel), the shared ``phase_peri`` parameter is interpreted as a fraction of
     the orbit relative to ``t_ref``.  All component datasets must therefore use the
     same reference epoch.  This function computes the global mean time and rebuilds
@@ -41,13 +39,8 @@ def _synchronize_t_refs(
     if len(datasets) <= 1:
         return dict(datasets)
 
-    first = next(iter(datasets.values()))
-    time_unit = str(first.time.unit)
-
-    all_times = np.concatenate(
-        [np.asarray(ustrip(time_unit, ds.time)) for ds in datasets.values()]
-    )
-    shared_t_ref = Q(float(np.mean(all_times)), time_unit)
+    all_times = jnp.concatenate([ds.time for ds in datasets.values()])
+    shared_t_ref = jnp.mean(all_times)
 
     return {
         name: eqx.tree_at(lambda d: d.t_ref, ds, shared_t_ref)
@@ -102,10 +95,8 @@ def stack_datasets(
     ref = next(iter(datasets.values()))
 
     # units for each field:
-    all_units = {
-        field.name: str(getattr(ref, field.name).unit)
-        if hasattr(getattr(ref, field.name), "unit")
-        else ""
+    all_fields = {
+        field.name
         for field in fields(ref)
         if field.name != "t_ref"  # scalar, not array -- skip and recompute below
     }
@@ -114,23 +105,13 @@ def stack_datasets(
     # that all fields are present in all datasets and are array-valued (so they can be
     # concatenated). That's true for current datasets, but we might want to relax these
     # assumptions in the future.
-    all_data: dict[str, AbstractQuantity] = {
-        name: Q(
-            jnp.concatenate(
-                [
-                    ustrip(AllowValue, unit, getattr(ds, name))
-                    for ds in datasets.values()
-                ]
-            ),
-            unit,
-        )
-        for name, unit in all_units.items()
+    all_data: dict[str, AbstractQuantity | jax.Array] = {
+        name: jnp.concatenate([getattr(ds, name) for ds in datasets.values()])
+        for name in all_fields
     }
     # NOTE: t_ref is recomputed from the stacked time by __check_init__
     # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
-    # class docstrings) about how t_ref is handled when stacking datasets, since it's
-    # not just concatenated but recomputed from the mean time. A potentially better
-    # thing to do would be to check if one t_ref is set (use that), else throw an error.
+    # class docstrings) about how t_ref is handled when stacking datasets.
     return type(ref)(**all_data)
 
 
@@ -142,8 +123,8 @@ def build_indicator_matrix(
     Parameters
     ----------
     datasets : dict[str, AbstractData]
-        Ordered mapping of instrument name -> dataset.  Dict order must match
-        the order used when stacking (see :func:`stack_datasets`).
+        Ordered mapping of instrument name -> dataset.  Dict order must match the order
+        used when stacking (see :func:`stack_datasets`).
     reference : str
         Name of the reference instrument (its observations get no offset
         column).
