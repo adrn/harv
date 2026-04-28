@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import pytest
 from unxt import Q
 
+from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.samplers.samples import Samples
 
 
@@ -182,3 +183,230 @@ class TestSamplesJAX:
         assert jnp.allclose(
             reconstructed["eccentricity"].value, samples["eccentricity"].value
         )
+
+
+def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
+    """RV-only Samples with controllable rv_semiamp signs."""
+    n = len(K_values)
+    return Samples(
+        nonlinear={
+            "period": Q(jnp.full(n, 100.0), "day"),
+            "eccentricity": Q(jnp.full(n, 0.3), ""),
+            "phase_peri": Q(jnp.full(n, 0.25), ""),
+            "arg_peri": Q(jnp.linspace(0.5, 2.5, n), "rad"),
+        },
+        linear={
+            "rv_semiamp": Q(jnp.asarray(K_values), "km/s"),
+            "v_sys": Q(jnp.full(n, 5.0), "km/s"),
+        },
+        data_type="rv",
+        metadata={"t_ref": Q(0.0, "day")},
+    )
+
+
+def _make_astro_samples_with_signs(a_values: list[float]) -> Samples:
+    """Astrometry-only Samples with controllable semi_major_axis signs."""
+    n = len(a_values)
+    return Samples(
+        nonlinear={
+            "period": Q(jnp.full(n, 300.0), "day"),
+            "eccentricity": Q(jnp.full(n, 0.3), ""),
+            "phase_peri": Q(jnp.full(n, 0.1), ""),
+            "arg_peri": Q(jnp.linspace(0.5, 2.5, n), "rad"),
+            "cos_i": Q(jnp.full(n, 0.4), ""),
+            "lon_asc_node": Q(jnp.full(n, 0.8), "rad"),
+        },
+        linear={
+            "ra0": Q(jnp.zeros(n), "mas"),
+            "dec0": Q(jnp.zeros(n), "mas"),
+            "pmra": Q(jnp.zeros(n), "mas/yr"),
+            "pmdec": Q(jnp.zeros(n), "mas/yr"),
+            "parallax": Q(jnp.full(n, 5.0), "mas"),
+            "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
+        },
+        data_type="gaia_astro",
+        metadata={"t_ref": Q(0.0, "day")},
+    )
+
+
+def _make_joint_samples_with_signs(
+    K_values: list[float], a_values: list[float]
+) -> Samples:
+    """Joint RV+astrometry Samples with controllable K and a signs."""
+    assert len(K_values) == len(a_values)
+    n = len(K_values)
+    return Samples(
+        nonlinear={
+            "period": Q(jnp.full(n, 300.0), "day"),
+            "eccentricity": Q(jnp.full(n, 0.3), ""),
+            "phase_peri": Q(jnp.full(n, 0.1), ""),
+            "arg_peri": Q(jnp.linspace(0.5, 2.5, n), "rad"),
+            "cos_i": Q(jnp.full(n, 0.4), ""),
+            "lon_asc_node": Q(jnp.full(n, 0.8), "rad"),
+        },
+        linear={
+            "rv_semiamp": Q(jnp.asarray(K_values), "km/s"),
+            "v_sys": Q(jnp.zeros(n), "km/s"),
+            "ra0": Q(jnp.zeros(n), "mas"),
+            "dec0": Q(jnp.zeros(n), "mas"),
+            "pmra": Q(jnp.zeros(n), "mas/yr"),
+            "pmdec": Q(jnp.zeros(n), "mas/yr"),
+            "parallax": Q(jnp.full(n, 5.0), "mas"),
+            "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
+        },
+        data_type="joint",
+        metadata={"t_ref": Q(0.0, "day")},
+    )
+
+
+class TestSamplesWrapAngles:
+    """Tests for Samples.wrap_angles."""
+
+    def test_rv_only_flips_negative_K(self):
+        """Negative rv_semiamp entries flip to positive; arg_peri shifts by pi."""
+        samples = _make_rv_samples_with_signs([-10.0, 12.0, -8.0, 5.0])
+        old_omega = samples["arg_peri"].value
+        wrapped = samples.wrap_angles()
+        new_K = wrapped["rv_semiamp"].value
+        new_omega = wrapped["arg_peri"].value
+        assert bool((new_K >= 0).all())
+        # Flipped indices: 0, 2.  Positive entries unchanged.
+        assert jnp.allclose(new_K, jnp.array([10.0, 12.0, 8.0, 5.0]))
+        expected_omega = jnp.where(
+            jnp.array([True, False, True, False]),
+            jnp.mod(old_omega + jnp.pi, 2 * jnp.pi),
+            old_omega,
+        )
+        assert jnp.allclose(new_omega, expected_omega)
+
+    def test_astrometry_only_flips_negative_a(self):
+        """When no rv_semiamp present, fall back to semi_major_axis trigger."""
+        samples = _make_astro_samples_with_signs([-1.5, 2.0, -0.5])
+        old_omega = samples["arg_peri"].value
+        wrapped = samples.wrap_angles()
+        new_a = wrapped["semi_major_axis"].value
+        new_omega = wrapped["arg_peri"].value
+        assert bool((new_a >= 0).all())
+        assert jnp.allclose(new_a, jnp.array([1.5, 2.0, 0.5]))
+        expected_omega = jnp.where(
+            jnp.array([True, False, True]),
+            jnp.mod(old_omega + jnp.pi, 2 * jnp.pi),
+            old_omega,
+        )
+        assert jnp.allclose(new_omega, expected_omega)
+
+    def test_joint_flips_both_K_and_a_together(self):
+        """In a joint fit, K<0 implies a flip on both K and a."""
+        # K and a both negative for first two, both positive for last two.
+        samples = _make_joint_samples_with_signs(
+            K_values=[-10.0, -8.0, 5.0, 7.0],
+            a_values=[-2.0, -1.5, 1.0, 1.2],
+        )
+        wrapped = samples.wrap_angles()
+        assert jnp.allclose(
+            wrapped["rv_semiamp"].value, jnp.array([10.0, 8.0, 5.0, 7.0])
+        )
+        assert jnp.allclose(
+            wrapped["semi_major_axis"].value, jnp.array([2.0, 1.5, 1.0, 1.2])
+        )
+
+    def test_rv_invariance(self):
+        """rv_at_times produces identical signals before and after wrap_angles."""
+        samples = _make_rv_samples_with_signs([-10.0, 12.0, -8.0])
+        wrapped = samples.wrap_angles()
+        times = Q(jnp.linspace(0.0, 300.0, 25), "day")
+        for i in range(samples.n_samples):
+            kwargs_orig = {
+                "period": samples["period"][i],
+                "eccentricity": samples["eccentricity"][i],
+                "t_peri": samples["t_peri"][i],
+                "arg_peri": samples["arg_peri"][i],
+                "rv_semiamp": samples["rv_semiamp"][i],
+                "v_sys": samples["v_sys"][i],
+            }
+            kwargs_wrap = {
+                "period": wrapped["period"][i],
+                "eccentricity": wrapped["eccentricity"][i],
+                "t_peri": wrapped["t_peri"][i],
+                "arg_peri": wrapped["arg_peri"][i],
+                "rv_semiamp": wrapped["rv_semiamp"][i],
+                "v_sys": wrapped["v_sys"][i],
+            }
+            rv_orig = rv_at_times(times, **kwargs_orig)
+            rv_wrap = rv_at_times(times, **kwargs_wrap)
+            assert jnp.allclose(rv_orig.value, rv_wrap.value, atol=1e-10)
+
+    def test_astrometry_invariance(self):
+        """astrometric_orbit_at_times unchanged after wrap_angles."""
+        samples = _make_astro_samples_with_signs([-1.5, 2.0, -0.5])
+        wrapped = samples.wrap_angles()
+        times = Q(jnp.linspace(0.0, 600.0, 25), "day")
+        for i in range(samples.n_samples):
+            kwargs_orig = {
+                "period": samples["period"][i],
+                "eccentricity": samples["eccentricity"][i],
+                "t_peri": samples["t_peri"][i],
+                "arg_peri": samples["arg_peri"][i],
+                "cos_i": samples["cos_i"][i],
+                "lon_asc_node": samples["lon_asc_node"][i],
+                "semi_major_axis": samples["semi_major_axis"][i],
+            }
+            kwargs_wrap = {
+                "period": wrapped["period"][i],
+                "eccentricity": wrapped["eccentricity"][i],
+                "t_peri": wrapped["t_peri"][i],
+                "arg_peri": wrapped["arg_peri"][i],
+                "cos_i": wrapped["cos_i"][i],
+                "lon_asc_node": wrapped["lon_asc_node"][i],
+                "semi_major_axis": wrapped["semi_major_axis"][i],
+            }
+            dra_orig, ddec_orig = astrometric_orbit_at_times(times, **kwargs_orig)
+            dra_wrap, ddec_wrap = astrometric_orbit_at_times(times, **kwargs_wrap)
+            assert jnp.allclose(dra_orig.value, dra_wrap.value, atol=1e-10)
+            assert jnp.allclose(ddec_orig.value, ddec_wrap.value, atol=1e-10)
+
+    def test_no_op_when_all_positive(self):
+        """wrap_angles is a no-op when no entries need flipping."""
+        samples = _make_rv_samples_with_signs([10.0, 12.0, 8.0])
+        wrapped = samples.wrap_angles()
+        assert jnp.allclose(wrapped["rv_semiamp"].value, samples["rv_semiamp"].value)
+        assert jnp.allclose(wrapped["arg_peri"].value, samples["arg_peri"].value)
+
+    def test_no_op_when_arg_peri_absent(self):
+        """wrap_angles is a no-op when arg_peri is missing from nonlinear."""
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0, 200.0]), "day"),
+                "eccentricity": Q(jnp.array([0.1, 0.2]), ""),
+                "phase_peri": Q(jnp.array([0.0, 0.5]), ""),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([-1.0, 3.0]), "km/s"),
+                "v_sys": Q(jnp.array([2.0, 4.0]), "km/s"),
+            },
+            data_type="rv",
+            metadata={},
+        )
+        wrapped = samples.wrap_angles()
+        assert wrapped is samples
+
+    def test_wrapped_omega_is_in_canonical_range(self):
+        """Shifted arg_peri values land in [0, 2*pi)."""
+        # arg_peri values near 2*pi-epsilon -> +pi -> wrap into low end of range.
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0, 100.0]), "day"),
+                "eccentricity": Q(jnp.array([0.1, 0.1]), ""),
+                "phase_peri": Q(jnp.array([0.0, 0.0]), ""),
+                "arg_peri": Q(jnp.array([6.0, 0.5]), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([-1.0, -1.0]), "km/s"),
+                "v_sys": Q(jnp.array([0.0, 0.0]), "km/s"),
+            },
+            data_type="rv",
+            metadata={},
+        )
+        wrapped = samples.wrap_angles()
+        new_omega = wrapped["arg_peri"].value
+        assert bool(((new_omega >= 0) & (new_omega < 2 * jnp.pi)).all())

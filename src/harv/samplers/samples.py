@@ -225,6 +225,81 @@ class Samples(eqx.Module):
             f"parameters={len(self.keys())})"
         )
 
+    def wrap_angles(self) -> "Samples":
+        """Wrap negative ``rv_semiamp`` / ``semi_major_axis`` to positive.
+
+        For samples with negative ``rv_semiamp`` (or, in astrometry fits, negative
+        ``semi_major_axis``) the orbit is physically equivalent to the positive case
+        with ``arg_peri -> arg_peri + pi``. This method returns a new :class:`Samples`
+        where:
+
+        * negative ``rv_semiamp`` and ``semi_major_axis`` entries are flipped to
+          positive,
+        * the corresponding ``arg_peri`` values are shifted by ``pi`` and wrapped to
+          ``[0, 2*pi)``.
+
+        No-op when ``arg_peri`` is absent from ``nonlinear``, when neither
+        ``rv_semiamp`` nor ``semi_major_axis`` is in ``linear``, or when no entries are
+        negative.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 100.0], "day"),
+        ...                "eccentricity": Q([0.1, 0.1], ""),
+        ...                "phase_peri": Q([0.3, 0.3], ""),
+        ...                "arg_peri": Q([1.0, 1.0], "rad")},
+        ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
+        ...             "v_sys": Q([0.0, 0.0], "km/s")},
+        ...     data_type="rv",
+        ...     metadata={"t_ref": Q(0.0, "day")},
+        ... )
+        >>> wrapped = samples.wrap_angles()
+        >>> bool((wrapped["rv_semiamp"].value >= 0).all())
+        True
+        """
+        if "arg_peri" not in self.nonlinear:
+            return self
+
+        K = self.linear.get("rv_semiamp")
+        a = self.linear.get("semi_major_axis")
+
+        if K is not None:
+            flip = K.value < 0
+        elif a is not None:
+            flip = a.value < 0
+        else:
+            return self
+
+        if not jnp.any(flip):
+            return self
+
+        new_lin = dict(self.linear)
+        if K is not None:
+            new_lin["rv_semiamp"] = Q(jnp.where(flip, -K.value, K.value), K.unit)
+        if a is not None:
+            new_lin["semi_major_axis"] = Q(jnp.where(flip, -a.value, a.value), a.unit)
+
+        arg_peri = self.nonlinear["arg_peri"]
+
+        new_nl = dict(self.nonlinear)
+        new_nl["arg_peri"] = Q(
+            jnp.where(
+                flip, jnp.mod(arg_peri.value + jnp.pi, 2.0 * jnp.pi), arg_peri.value
+            ),
+            arg_peri.unit,
+        )
+
+        return Samples(
+            nonlinear=new_nl,
+            linear=new_lin,
+            data_type=self.data_type,
+            metadata=self.metadata,
+            linear_extension_names=self.linear_extension_names,
+        )
+
     def median(
         self, key: str | None = None
     ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:

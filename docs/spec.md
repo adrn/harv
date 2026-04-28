@@ -279,13 +279,12 @@ RV(t) = K · [cos(ω + f(t)) + e · cos(ω)] + v₀
 where K is the semi-amplitude, ω is the argument of pericenter, and v₀ is the
 systemic velocity.
 
-`RVData` has a `plot(ax, *, rv_unit=None, add_labels=True, relative_to_t_ref=False,
-phase_fold=None, **kwargs)` method that renders the observations as error-bars on the
+`RVData` has a `plot(ax, *, rv_unit=None, add_labels=True, relative_to_t_ref=False, phase_fold=None, **kwargs)` method that renders the observations as error-bars on the
 given matplotlib `Axes`. Default style: black markers with grey error bars; all keyword
 arguments are forwarded to `ax.errorbar()` and override the defaults.
 
 - `phase_fold`: a `Q["time"]` period. When provided, the x-axis shows
-  `(time - t_ref) / phase_fold mod 1` (orbital phase in [0, 1)) instead of absolute
+  `(time - t_ref) / phase_fold mod 1` (orbital phase in \[0, 1)) instead of absolute
   time. Mutually exclusive with `relative_to_t_ref`.
 
 ### Indexing data objects
@@ -884,12 +883,12 @@ per-parameter linear prior. It is an `eqx.Module`.
 
 ### Fields
 
-| Field               | Type                                           | Description                                                           |
-| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------- |
-| `nonlinear_priors`  | `dict[str, PriorDist]`                         | Nonlinear parameter priors                                            |
-| `linear_prior`      | `LinearPriorDist`                              | Per-parameter linear priors                                           |
-| `offsets` parameter | `dict[str, QD \| None] \| None` (factory only) | Offset priors; non-ref entries merged into `linear_prior`             |
-| `extension_priors`  | `dict[str, PriorDist]` (KW_ONLY, default `{}`) | Priors for extension params (jitter, GP hyperparams, etc.)            |
+| Field               | Type                                           | Description                                                |
+| ------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| `nonlinear_priors`  | `dict[str, PriorDist]`                         | Nonlinear parameter priors                                 |
+| `linear_prior`      | `LinearPriorDist`                              | Per-parameter linear priors                                |
+| `offsets` parameter | `dict[str, QD \| None] \| None` (factory only) | Offset priors; non-ref entries merged into `linear_prior`  |
+| `extension_priors`  | `dict[str, PriorDist]` (KW_ONLY, default `{}`) | Priors for extension params (jitter, GP hyperparams, etc.) |
 
 ### Constructing a prior
 
@@ -1033,7 +1032,7 @@ Jitter requires **two** things:
 
 1. A prior — supplied as `jitter=QD(...)` in `**kwargs` to any `default_*` method, or
    directly in `extension_priors` when constructing `RejectionPrior` manually.
-2. A `Jitter` extension — passed as `extensions=(Jitter(param_unit=...), ...)` to the
+1. A `Jitter` extension — passed as `extensions=(Jitter(param_unit=...), ...)` to the
    sampler. The sampler validates at run time that every declared extension parameter
    has a matching entry in `prior.extension_priors`.
 
@@ -1094,13 +1093,13 @@ sampling efficient.
 
 ### Fields
 
-| Field              | Type                                   | Description                                         |
-| ------------------ | -------------------------------------- | --------------------------------------------------- |
-| `prior`            | `RejectionPrior`                       | Prior distributions for sampling                    |
-| `parameterization` | `AbstractParameterization \| None`     | Optional custom reparameterization (default: `None`) |
-| `extensions`       | `tuple[AbstractExtension, ...]`        | Additional model extensions (default: `()`)         |
-| `marginalized_names` | `tuple[str, ...] \| None`            | Optional subset of linear params to analytically marginalize |
-| `batch_size`       | `int` (static)                         | Samples vmapped at once (default: 100,000)          |
+| Field                | Type                               | Description                                                  |
+| -------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `prior`              | `RejectionPrior`                   | Prior distributions for sampling                             |
+| `parameterization`   | `AbstractParameterization \| None` | Optional custom reparameterization (default: `None`)         |
+| `extensions`         | `tuple[AbstractExtension, ...]`    | Additional model extensions (default: `()`)                  |
+| `marginalized_names` | `tuple[str, ...] \| None`          | Optional subset of linear params to analytically marginalize |
+| `batch_size`         | `int` (static)                     | Samples vmapped at once (default: 100,000)                   |
 
 ### Algorithm
 
@@ -1110,19 +1109,19 @@ sampling efficient.
 
 1. **Likelihood evaluation** (batched). For each batch of `batch_size` samples,
    wrap unit-bearing parameters as `Quantity` objects and evaluate
-  `jax.vmap(model.log_prob)(values)`. If `marginalized_names` is not set, the
-  model auto-classifies which linear params to marginalize from its own
-  `linear_prior`. If `marginalized_names` is set on the sampler, that subset is
-  passed through explicitly.
+   `jax.vmap(model.log_prob)(values)`. If `marginalized_names` is not set, the
+   model auto-classifies which linear params to marginalize from its own
+   `linear_prior`. If `marginalized_names` is set on the sampler, that subset is
+   passed through explicitly.
    Evaluated via `jax.lax.fori_loop` to bound memory.
 
 1. **Rejection.** Normalize weights to `max` and accept samples where
    `Uniform() < weight`.
 
 1. **Linear parameter sampling.** For each accepted nonlinear sample, call
-  `model.sample_conditional_linear(values, key)` to draw the marginalized
-  linear parameters from their conditional posterior, honoring the sampler's
-  `marginalized_names` override when present.
+   `model.sample_conditional_linear(values, key)` to draw the marginalized
+   linear parameters from their conditional posterior, honoring the sampler's
+   `marginalized_names` override when present.
 
 1. **Return** a `Samples` object.
 
@@ -1196,13 +1195,13 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 
 ### Fields
 
-| Field          | Type                       | Description                                                  |
-| -------------- | -------------------------- | ------------------------------------------------------------ |
-| `nonlinear`    | `dict[str, Q]`             | Nonlinear parameter samples with units                       |
-| `linear`       | `dict[str, Q]`             | Linear parameter samples with units                          |
-| `metadata`     | `dict[str, Any]` (static)  | Contains `t_ref` and extra info                              |
-| `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)   |
-| `data_type`    | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
+| Field                    | Type                       | Description                                                  |
+| ------------------------ | -------------------------- | ------------------------------------------------------------ |
+| `nonlinear`              | `dict[str, Q]`             | Nonlinear parameter samples with units                       |
+| `linear`                 | `dict[str, Q]`             | Linear parameter samples with units                          |
+| `metadata`               | `dict[str, Any]` (static)  | Contains `t_ref` and extra info                              |
+| `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)         |
+| `data_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
 
 ### Dict-style and index access
 
@@ -1235,6 +1234,12 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
 - `median(key=None)` — median of one key or all keys
 - `percentile(key, percentiles=(16, 50, 84))` — compute percentiles
 - `summary(params=None)` — dict of statistics (median, mean, std, p16, p84)
+- `wrap_angles() -> Samples` — return a new `Samples` where any negative
+  `rv_semiamp` and/or `semi_major_axis` entries are flipped to positive and the
+  corresponding `arg_peri` values are shifted by `pi` (mod `2*pi`). The orbit
+  predicted by the wrapped sample is identical to the original; the convention
+  it enforces is `K >= 0`, `a >= 0`, `arg_peri in [0, 2*pi)`. No-op when
+  `arg_peri` is missing or no entries are negative.
 - `to_arviz(params=None)` -- export to `arviz.InferenceData`
 - `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz
@@ -1315,7 +1320,7 @@ Draw a two-panel figure for Gaia epoch astrometry posteriors:
    is true, the median parallax contribution is also subtracted (parallax has
    annual period and would smear when folded at the orbital period), and only
    the reference orbit is drawn.
-2. **Sky-projected orbital ellipse** for the median-period sample (delegates to
+1. **Sky-projected orbital ellipse** for the median-period sample (delegates to
    `plot_gaia_sky_orbit`).
 
 When `axes=None`, a new 1x2 figure is created and returned; otherwise draws into
