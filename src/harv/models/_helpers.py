@@ -14,13 +14,13 @@ from unxt.quantity import AllowValue, ustrip
 from harv.distributions import QuantityDistribution
 
 type PriorDist = dist.Distribution | QuantityDistribution
-"""Union type for prior distributions (bare numpyro or unit-aware)."""
+# Union type for prior distributions (bare numpyro or unit-aware).
 
 type LinearPriorCallable = Callable[..., QuantityDistribution | dist.Normal]
-"""Callable that returns a Normal-like prior given nonlinear parameter values."""
+# Callable that returns a Normal-like prior given nonlinear parameter values.
 
 type LinearPriorDist = dict[str, PriorDist | LinearPriorCallable]
-"""Per-parameter linear prior dictionary."""
+# Per-parameter linear prior dictionary.
 
 
 def _unwrap_dist(v: PriorDist) -> dist.Distribution:
