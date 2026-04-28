@@ -262,9 +262,9 @@ class TestNumericalEquivalence:
         ll_std = std_model.log_prob(nl_std, linear_values=linear)
         ll_eco = eco_model.log_prob(nl_eco, linear_values=linear)
 
-        assert jnp.allclose(
-            ll_std, ll_eco, atol=1e-6
-        ), f"std={float(ll_std)}, eco={float(ll_eco)}"
+        assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
+            f"std={float(ll_std)}, eco={float(ll_eco)}"
+        )
 
     def test_marginalized_equivalence(self):
         data = _make_rv_data(n_obs=30)
@@ -293,6 +293,6 @@ class TestNumericalEquivalence:
         ll_std = std_model.log_prob(nl_std)
         ll_eco = eco_model.log_prob(nl_eco)
 
-        assert jnp.allclose(
-            ll_std, ll_eco, atol=1e-6
-        ), f"std={float(ll_std)}, eco={float(ll_eco)}"
+        assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
+            f"std={float(ll_std)}, eco={float(ll_eco)}"
+        )

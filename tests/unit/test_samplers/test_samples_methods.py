@@ -894,8 +894,9 @@ class TestPlotRV:
             metadata=rv_samples.metadata,
         )
         gp = GP(
-            kernel_builder=lambda hp: tinygp.kernels.ExpSquared(hp["gp_scale"])
-            * hp["gp_amp"] ** 2,
+            kernel_builder=lambda hp: (
+                tinygp.kernels.ExpSquared(hp["gp_scale"]) * hp["gp_amp"] ** 2
+            ),
             hyperparams=(
                 ParamInfo("gp_amp", "km/s"),
                 ParamInfo("gp_scale", "day"),

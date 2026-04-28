@@ -72,9 +72,9 @@ def _check_thiele_innes_round_trip(
             atol=atol,
         )
 
-        assert (
-            match_primary or match_sym
-        ), "Recovered orientation does not match original or symmetric solution."
+        assert match_primary or match_sym, (
+            "Recovered orientation does not match original or symmetric solution."
+        )
     else:
         # For specific expected orientation (e.g., symmetry tests), compare components
         assert jnp.allclose(

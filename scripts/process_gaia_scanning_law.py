@@ -268,6 +268,6 @@ if __name__ == "__main__":
     grp.add_argument("--level", type=int, default=6, help="HEALPix level (default 6)")
     args = parser.parse_args()
 
-    nside = args.nside if args.nside else 2**args.level
+    nside = args.nside or 2**args.level
 
     main(scan_law_file=args.scan_law_file, output_path=args.output_path, nside=nside)
