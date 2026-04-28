@@ -31,7 +31,7 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
-from harv.models.parametrizations import AbstractParameterization
+from harv.models.parameterizations import AbstractParameterization
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
@@ -242,7 +242,7 @@ class NumpyroSampler(eqx.Module):
         Prior distributions for nonlinear (and optionally linear) parameters.
     parameterization : AbstractParameterization or None, optional
         Orbital parameterization. For RV data defaults to
-        :class:`~harv.models.parametrizations.rv.StandardRV`. Ignored for Gaia
+        :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
         astrometry data.
     extensions : tuple of AbstractExtension, optional
         Model extensions (jitter, trends, offsets, GP).

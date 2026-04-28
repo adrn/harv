@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 
 from harv.extensions.base import ParamInfo
-from harv.models.parametrizations.gaia import StandardGaiaAstrometry
-from harv.models.parametrizations.rv import StandardRV
+from harv.models.parameterizations.gaia import StandardGaiaAstrometry
+from harv.models.parameterizations.rv import StandardRV
 
 
 class TestStandardRV:

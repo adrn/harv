@@ -19,7 +19,7 @@ import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Q
-from unxt.quantity import AllowValue, ustrip
+from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
 from harv.extensions.base import AbstractExtension, ParamInfo
@@ -27,62 +27,13 @@ from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
     _needs_explicit_sampling,
+    _resolve_prior_to_mvn,
     _unwrap_dist,
 )
 
 
-def _resolve_prior_to_mvn(
-    prior_dict: dict[str, PriorDist | LinearPriorCallable],
-    nl_values: dict[str, Any],
-    unit_dict: dict[str, str],
-    extra_values: dict[str, Any] | None = None,
-) -> dist.MultivariateNormal:
-    """Build diagonal MVN from per-parameter priors."""
-    locs: list[Any] = []
-    scales: list[Any] = []
-    # Build a namespace proxy for any LinearPriorCallable that needs it.
-    # Include explicit linear values so that callables depending on
-    # explicitly-sampled linear params (e.g. parallax) can resolve.
-    proxy_values = dict(nl_values)
-    if extra_values:
-        proxy_values.update(extra_values)
-    params_proxy = types.SimpleNamespace(**proxy_values)
-    for name, prior in prior_dict.items():
-        target_u = unit_dict.get(name, "")
-        resolved = None
-
-        if isinstance(prior, (dist.Distribution, QuantityDistribution)):
-            resolved = prior
-        elif callable(prior):
-            resolved = prior(params_proxy)
-
-        expected_msg = (
-            f"Expected Normal inside QuantityDistribution for {name}, "
-            f"got {type(resolved)}"
-        )
-        if isinstance(resolved, QuantityDistribution):
-            prior_unit = cast("str", resolved.unit)
-            inner = resolved.distribution
-            if not isinstance(inner, dist.Normal):
-                raise TypeError(expected_msg)
-            loc = ustrip(AllowValue, target_u, Q(inner.loc, prior_unit))
-            scale = ustrip(AllowValue, target_u, Q(inner.scale, prior_unit))
-        elif isinstance(resolved, dist.Normal):
-            loc = resolved.loc
-            scale = resolved.scale
-        else:
-            raise TypeError(expected_msg)
-        locs.append(loc)
-        scales.append(scale)
-
-    return dist.MultivariateNormal(
-        loc=jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in locs]),
-        scale_tril=jnp.diag(jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in scales])),
-    )
-
-
 class _MargComponents(NamedTuple):
-    """Return type of ``_build_marginalized_linear``."""
+    """Internal return type of ``_build_marginalized_linear``."""
 
     dist: MarginalizedLinear
     obs: jax.Array
@@ -235,10 +186,10 @@ class AbstractComponentModel(eqx.Module):
     def params_marginalized(self) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized in log_prob.
 
-        These have Gaussian (or callable-returning-Normal) priors and are
-        integrated out analytically via the Woodbury identity rather than
-        sampled.  Their values are NOT required in the ``values`` dict; they
-        are recovered afterward via :meth:`sample_conditional_linear`.
+        These have Gaussian (or callable-returning-Normal) priors and are integrated out
+        analytically via the Woodbury identity rather than sampled.  Their values are
+        NOT required in the ``values`` dict; they are recovered afterward via
+        :meth:`sample_conditional_linear`.
 
         Examples
         --------

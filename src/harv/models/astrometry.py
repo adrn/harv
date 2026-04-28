@@ -1,14 +1,14 @@
 """Concrete Gaia epoch-astrometry component model.
 
-:class:`GaiaAstrometryModel` wraps :class:`~harv.data.GaiaAstrometryData`,
-a parameterization (default
-:class:`~harv.models.parametrizations.gaia.StandardGaiaAstrometry`),
-and optional extensions to provide ``log_prob`` and
-``sample_conditional_linear``.
+:class:`GaiaAstrometryModel` wraps :class:`~harv.data.GaiaAstrometryData`, a
+parameterization (default
+:class:`~harv.models.parameterizations.gaia.StandardGaiaAstrometry`), and optional
+extensions to provide ``log_prob`` and ``sample_conditional_linear``.
 """
 
 __all__ = ("GaiaAstrometryModel",)
 
+from dataclasses import KW_ONLY
 from typing import Any, final
 
 import jax
@@ -19,11 +19,7 @@ from harv.data import GaiaAstrometryData
 from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
-from harv.models.parametrizations.gaia import StandardGaiaAstrometry
-
-# Internal time unit for proper-motion columns in the design matrix (must
-# match the convention in the existing GaiaAstrometryLikelihood).
-_AST_TIME_UNIT = "yr"
+from harv.models.parameterizations.gaia import StandardGaiaAstrometry
 
 
 @final
@@ -43,6 +39,9 @@ class GaiaAstrometryModel(AbstractComponentModel):
         Model extensions (jitter, trends, ...).
     linear_prior : dict or None
         Per-parameter priors for analytic marginalization.
+    pm_time_unit : str or None
+        If not None, override the proper motion units in the design matrix to use this
+        unit instead of the default (obs_unit / yr).
 
     Examples
     --------
@@ -66,6 +65,8 @@ class GaiaAstrometryModel(AbstractComponentModel):
     parameterization: StandardGaiaAstrometry = StandardGaiaAstrometry()
     linear_prior: dict[str, Any] | None = None
     extensions: tuple[AbstractExtension, ...] = ()
+    _: KW_ONLY
+    pm_time_unit: str = "yr"
 
     def _param_infos(self) -> tuple[ParamInfo, ...]:
         base = self.parameterization.params()
@@ -83,8 +84,8 @@ class GaiaAstrometryModel(AbstractComponentModel):
         units: dict[str, str] = {
             "ra0": u,
             "dec0": u,
-            "pmra": f"{u}/{_AST_TIME_UNIT}",
-            "pmdec": f"{u}/{_AST_TIME_UNIT}",
+            "pmra": f"{u}/{self.pm_time_unit}",
+            "pmdec": f"{u}/{self.pm_time_unit}",
             "parallax": u,
             "semi_major_axis": u,
         }
@@ -116,7 +117,7 @@ class GaiaAstrometryModel(AbstractComponentModel):
         sin_f, cos_f = self._solve_kepler(nl_values)
 
         # Prepare auxiliary data arrays
-        dt = jnp.array(ustrip(_AST_TIME_UNIT, self.data.time - self.data.t_ref))
+        dt = jnp.array(ustrip(self.pm_time_unit, self.data.time - self.data.t_ref))
         scan_angle_rad = ustrip("rad", self.data.scan_angle)
         sin_psi = jnp.sin(scan_angle_rad)
         cos_psi = jnp.cos(scan_angle_rad)

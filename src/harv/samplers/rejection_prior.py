@@ -41,12 +41,12 @@ def _apply_overrides(
     linear: dict[str, Any],
     extension_priors: dict[str, PriorDist],
 ) -> None:
-    """Partition *kwargs* into nonlinear/linear/extension overrides and apply them.
+    """Partition *kwargs* into nonlinear/linear/extension overrides *in place*.
 
-    Known nonlinear and linear parameter names are applied directly to their
-    respective dicts.  Anything else is accepted without validation and placed
-    into *extension_priors* for later resolution at run-time when the sampler's
-    extensions are known.
+    Known nonlinear and linear parameter names are added directly to their respective
+    dicts - in place!  Anything else is accepted without validation and placed into
+    *extension_priors* for later resolution at run-time when the sampler's extensions
+    are known.
     """
     for name, value in kwargs.items():
         if name in nonlinear:
@@ -61,49 +61,51 @@ class RejectionPrior(eqx.Module):
     """Prior distribution for rejection sampling of Keplerian orbits.
 
     This class encapsulates the prior distributions for both nonlinear and linear
-    parameters. It is agnostic to data type - the sampler determines which
-    parameters are required based on the provided data.
+    parameters. It is agnostic to data type - the sampler determines which parameters
+    are required based on the provided data.
+
+    We recommend using the "default" factory constructors (e.g. ``default_rv()``,
+    ``default_gaia_astrometry()``, etc.), which set up sensible priors for common use
+    cases.
 
     **Nonlinear parameterization:**
 
-    Parameter names in ``nonlinear_priors`` match the field names of the
-    parameterization (``period``, ``eccentricity``, ``phase_peri``, ``arg_peri``,
-    ``cos_i``, ``lon_asc_node``). Distributions are sampled directly.
+    Parameter names in ``nonlinear_priors`` must match the field names of the
+    parameterization, for example, ``period``, ``eccentricity``, ``phase_peri``, etc.
+    These parameters are sampled explicitly.
 
-    **Common parameterizations:**
+    See the options available in `harv.models.parameterizations`.
 
-    **Radial Velocity:**
-        - Nonlinear keys: ``period``, ``eccentricity``, ``phase_peri``, ``arg_peri``
-        - Linear params: rv_semiamp, v_sys
+    **Default parameterizations:**
 
-    **Astrometry:**
-        - Nonlinear keys: ``period``, ``eccentricity``, ``phase_peri``, ``cos_i``,
+    Radial Velocity:
+        - Nonlinear: ``period``, ``eccentricity``, ``phase_peri``, ``arg_peri``
+        - Linear: ``rv_semiamp``, ``v_sys``
+
+    Astrometry:
+        - Nonlinear: ``period``, ``eccentricity``, ``phase_peri``, ``cos_i``,
           ``arg_peri``, ``lon_asc_node``
-        - Linear params: ra0, dec0, pmra, pmdec, parallax, semi_major_axis
-
-    **Combined (astrometry + RV):**
-        - Nonlinear keys: same as astrometry
-        - Linear params: ra0, dec0, pmra, pmdec, parallax, semi_major_axis, rv_semiamp,
-          v_sys
+        - Linear params: ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``,
+          ``semi_major_axis``
 
     Parameters
     ----------
     nonlinear_priors : dict[str, PriorDist]
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
-        :class:`QuantityDistribution` wrapper for parameters with physical
-        units).
+        :class:`QuantityDistribution` wrapper for parameters with physical units).
     linear_prior : dict[str, PriorDist | LinearPriorCallable]
         Per-parameter priors for linear parameters. Each entry is classified:
 
-        - ``dist.Normal`` or ``QD(Normal)`` -- Gaussian, analytically marginalized.
-        - ``LinearPriorCallable`` -- called with params to produce a Normal,
-          then marginalized.
+        - ``dist.Normal`` or ``QD(Normal)`` -- Gaussian, can be analytically
+          marginalized.
+        - ``LinearPriorCallable`` -- called with nonlinear params to produce a Normal,
+          can be marginalized.
         - ``dist.HalfNormal``, ``dist.Delta``, etc. -- non-Gaussian, sampled
           explicitly alongside nonlinear params.
 
         When using ``default_rv()`` with ``offsets``, the non-reference offset
-        priors are automatically included in this dict.
+        priors are automatically included as linear parameters.
     extension_priors : dict[str, PriorDist]
         Priors for extension parameters declared via ``extra_params()``.
 
@@ -207,9 +209,9 @@ class RejectionPrior(eqx.Module):
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
 
-        The default linear prior follows thejoker's default: the RV semi-amplitude
-        :math:`K` is assigned a zero-mean Gaussian whose width scales with period and
-        eccentricity,
+        The default linear prior for the RV semi-amplitude ,:math:`K`, has a standard
+        deviation that scales with period and eccentricity to keep the prior
+        approximately constant in companion mass at fixed primary mass:
 
         .. math::
 
@@ -217,36 +219,35 @@ class RejectionPrior(eqx.Module):
                 \left(\frac{P}{P_0}\right)^{-1/3}
                 \left(1 - e^2\right)^{-1/2}
 
-        keeping the prior approximately constant in companion mass at fixed
-        primary mass.  The systemic velocity :math:`v_0` has a fixed Gaussian
-        prior with scale ``sigma_v0``.
+        The systemic velocity :math:`v_0` has a fixed Gaussian prior with specified
+        scale ``sigma_v0``.
 
         Parameters
         ----------
         period_min : Q["time"]
-            Lower bound for the log-uniform period prior.  Pass a
-            ``Quantity`` with time units (e.g. ``u.Q(50, "day")``) so
-            the sampler can convert to whatever unit the data uses.
+            Lower bound for the log-uniform period prior.  Pass a ``Quantity`` with time
+            units (e.g. ``u.Q(50, "day")``) so the sampler can convert to whatever unit
+            the data uses.
         period_max : Q["time"]
-            Upper bound for the log-uniform period prior (same unit as
-            ``period_min``).
+            Upper bound for the log-uniform period prior (same unit as ``period_min``).
         sigma_K0 : Q["speed"]
-            RV semi-amplitude scale at the reference period ``P0``. For
-            binary-star systems, a reasonable value is around 30 km/s.
+            RV semi-amplitude scale at the reference period ``P0``. For binary-star
+            systems, a reasonable value is around 30 km/s. For exoplanets, something
+            less than 1 km/s might be appropriate.
         sigma_v0 : Q["speed"]
             Systemic velocity prior scale.
         P0 : Q["time"]
             Reference period for the K prior scaling.  Default: 1 yr.
         offsets : dict[str, QuantityDistribution | None], optional
             Multi-instrument offset priors. Keys are instrument names, values are
-            ``QuantityDistribution`` priors (or ``None`` for the reference
-            instrument).  Non-reference priors are merged into ``linear_prior``
-            automatically; reference entries (``None``) are ignored.
+            ``QuantityDistribution`` priors (or ``None`` for the reference instrument).
+            Non-reference priors are merged into ``linear_prior`` automatically;
+            reference entries (``None``) are ignored.
         **kwargs : PriorDist
-            Override any default nonlinear or linear prior by name, or add
-            extension parameter priors for unknown names (e.g. ``jitter=QD(...)``,
-            ``espresso=QD(...)``).  Unknown names are not validated here -- the
-            sampler checks them at run-time against the declared extension params.
+            Override any default nonlinear or linear prior by name, or add extension
+            parameter priors for unknown names (e.g. ``jitter=QD(...)``,
+            ``espresso=QD(...)``).  Unknown names are not validated here -- the sampler
+            checks them at run-time against the declared extension params.
 
         Returns
         -------
@@ -269,7 +270,11 @@ class RejectionPrior(eqx.Module):
 
         With jitter (from a ``Jitter`` extension) and a multi-survey offset:
 
-        >>> from unxt import Q; from harv.samplers import RejectionPrior; import numpyro.distributions as dist; from harv.distributions import QuantityDistribution as QD; sorted(
+        >>> from unxt import Q
+        >>> from harv.samplers import RejectionPrior
+        >>> import numpyro.distributions as dist
+        >>> from harv.distributions import QuantityDistribution as QD
+        >>> sorted(
         ...     RejectionPrior.default_rv(
         ...         period_min=Q(2.0, "day"),
         ...         period_max=Q(1000.0, "day"),
@@ -319,8 +324,8 @@ class RejectionPrior(eqx.Module):
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
 
-        The default semi-major axis prior scales with period and parallax so
-        that it is approximately constant in companion mass:
+        The default semi-major axis prior scales with period and parallax so that it is
+        approximately constant in companion mass:
 
         .. math::
 
@@ -328,35 +333,21 @@ class RejectionPrior(eqx.Module):
                 \left(\frac{P}{P_0}\right)^{2/3}
                 \varpi
 
-        where :math:`\sigma_{a,0}` is in physical length units (AU) and
-        :math:`\varpi` is the parallax in mas.
+        where :math:`\sigma_{a,0}` is in physical length units (AU) and :math:`\varpi`
+        is the parallax in mas.
 
-        Parallax is **explicitly sampled** (not analytically marginalized) by
-        default because the Gaia catalog parallax is derived from the same
-        epoch data being fitted -- using it as a strong prior would double-count
-        information.  For massive companions or black holes the catalog
-        parallax can be biased.
+        The proper motion priors are Gaussian with a standard deviation that also scales
+        with the parallax to keep the prior approximately constant in transverse
+        velocity.
 
-        For **exoplanet** searches where the catalog parallax is trustworthy,
-        pass a ``Normal`` prior on parallax (which will then be eligible for
-        analytic marginalization) and a simple ``semi_major_axis`` prior that
-        does not depend on parallax. Then set ``marginalized_names`` on the
-        sampler::
+        Parallax is explicitly sampled here (not analytically marginalized) by
+        specifying it as a :class:`~numpyro.distributions.HalfNormal` distribution even
+        though it is a linear parameter. This is needed for the semi-major axis and
+        proper motion priors above.
 
-            prior = RejectionPrior.default_gaia_astrometry(
-                ...,
-            )
-            sampler = RejectionSampler(
-                prior,
-                marginalized_names=(
-                    "parallax",
-                    "ra0",
-                    "dec0",
-                    "pmra",
-                    "pmdec",
-                    "semi_major_axis",
-                ),
-            )
+        If the catalog parallax is trustworthy (e.g., for exoplanet cases), you can
+        instead pass a tight Gaussian prior on parallax, which will then get
+        marginalized by default in the sampler.
 
         Parameters
         ----------
@@ -365,21 +356,21 @@ class RejectionPrior(eqx.Module):
         period_max : Q["time"]
             Upper bound for the log-uniform period prior.
         sigma_a0 : Q["length"]
-            Semi-major axis scale in physical length units (e.g. AU) at
-            reference period ``P0``.
+            Semi-major axis scale in physical length units (e.g. AU) at reference period
+            ``P0``.
         sigma_parallax : Q["angle"]
             Scale for the half-normal parallax prior (mas).
         sigma_pos : Q["angle"]
             Scale for the position (ra0, dec0) Gaussian priors (mas).
         sigma_vtan : Q["speed"]
-            Transverse-velocity dispersion scale (e.g. km/s) for the
-            proper-motion (pmra, pmdec) priors.  Converted to angular
-            proper motion via the sampled parallax.
+            Transverse-velocity dispersion scale (e.g. km/s) for the proper-motion
+            (pmra, pmdec) priors.  Converted to angular proper motion via the sampled
+            parallax.
         P0 : Q["time"]
             Reference period for the semi-major axis scaling.  Default: 1 yr.
         **kwargs : PriorDist
-            Override any default nonlinear or linear prior by name, or add
-            extension parameter priors for unknown names.
+            Override any default nonlinear or linear prior by name, or add extension
+            parameter priors for unknown names.
 
         Returns
         -------

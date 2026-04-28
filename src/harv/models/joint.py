@@ -78,12 +78,11 @@ def _synchronize_component_t_refs(
 ) -> dict[str, AbstractComponentModel]:
     """Return components with all component data sharing a common t_ref.
 
-    All component models share ``phase_peri``, which is interpreted as a
-    fraction of the orbit elapsed since ``t_ref``.  When component datasets
-    have different reference epochs the same ``phase_peri`` value maps to
-    different absolute periastron times, corrupting a joint fit.  This
-    function computes the global mean observation time across all components
-    and rebuilds each component with that shared epoch.
+    All component models share ``phase_peri``, which is interpreted as a fraction of the
+    orbit elapsed since ``t_ref``.  When component datasets have different reference
+    epochs the same ``phase_peri`` value maps to different absolute periastron times,
+    corrupting a joint fit.  This function computes the global mean observation time
+    across all components and rebuilds each component with that shared epoch.
     """
     if len(components) <= 1:
         return dict(components)
@@ -283,8 +282,10 @@ class JointModel(eqx.Module):
         >>> from harv.data import RVData
         >>> from harv.models import RVModel
         >>> from harv.models.joint import JointModel
-        >>> d = RVData(time=Q([0., 50.], "day"), rv=Q([1., -1.], "km/s"),
-        ...           rv_err=Q([0.5, 0.5], "km/s"))
+        >>> d = RVData(
+        ...     time=Q([0., 50.], "day"), rv=Q([1., -1.], "km/s"),
+        ...     rv_err=Q([0.5, 0.5], "km/s")
+        ... )
         >>> joint = JointModel.for_sb2(
         ...     {"primary": RVModel(data=d), "secondary": RVModel(data=d)}
         ... )

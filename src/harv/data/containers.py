@@ -12,8 +12,6 @@ from typing import TypeVar, cast
 
 import equinox as eqx
 import jax
-import quaxed.numpy as jnp
-from unxt import AbstractQuantity
 
 from harv.custom_types import NTime
 from harv.data.datasets import (
@@ -186,6 +184,7 @@ class SystemData(AbstractDatasetContainer):
     @property
     def t_ref(self) -> NTime:
         """Reference epoch from the first component."""
+        # TODO: this shouldn't exist!
         return next(iter(self._datasets.values())).t_ref
 
     def stacked(self) -> DatasetType:
@@ -199,20 +198,12 @@ class SystemData(AbstractDatasetContainer):
         """Return stacked data and component-indicator flags."""
         return build_indicator_matrix(self._datasets, reference)
 
-    def _get_obs(self) -> AbstractQuantity:
-        """Concatenated observations across all components (key order)."""
-        return jnp.concatenate([ds._get_obs() for ds in self._datasets.values()])
-
-    def _get_obs_err(self) -> AbstractQuantity:
-        """Concatenated uncertainties across all components (key order)."""
-        return jnp.concatenate([ds._get_obs_err() for ds in self._datasets.values()])
-
 
 class SourceData(AbstractDatasetContainer):
     """Container for multiple named datasets for a single source.
 
-    Accepts arbitrary named datasets via keyword arguments. Names are
-    user-defined and can be anything (e.g., gaia, keck_rv, hst_imaging).
+    Accepts arbitrary named datasets via keyword arguments. Names are user-defined and
+    can be anything (e.g., gaia, keck_rv, hst_imaging).
     """
 
     def __init__(self, **datasets: DatasetType) -> None:

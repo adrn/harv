@@ -7,7 +7,7 @@ from unxt import Q
 from harv.data import RVData
 from harv.extensions.jitter import Jitter
 from harv.models.factories import rv_model
-from harv.models.parametrizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 from harv.models.rv import RVModel
 
 

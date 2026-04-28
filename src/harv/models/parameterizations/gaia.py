@@ -14,29 +14,44 @@ import quaxed.numpy as jnp
 
 from harv.extensions.base import ParamInfo
 from harv.kepler.orbits import thiele_innes_ABFG
-from harv.models.parametrizations._base import AbstractParameterization
+from harv.models.parameterizations._base import AbstractParameterization
 
 
 @final
 class StandardGaiaAstrometry(AbstractParameterization):
     """Standard Gaia astrometry parameterization.
 
-    Nonlinear: period, eccentricity, phase_peri, arg_peri,
-    lon_asc_node, cos_i.
+    The default harv parameterization for Gaia epoch astrometry modeling uses the
+    following parameters:
 
-    Linear: ra0, dec0, pmra, pmdec, parallax, semi_major_axis.
+        - Nonlinear:
+            - ``period`` - orbital period
+            - ``eccentricity`` - orbital eccentricity
+            - ``phase_peri`` - phase at which the mean anomaly is zero (i.e.
+              periastron passage), using a time system relative to the data's reference
+              time
+            - ``arg_peri`` - argument of periastron
+            - ``lon_asc_node`` - longitude of the ascending node
+            - ``cos_i`` - cosine of the inclination
+        - Linear:
+            - ``ra0`` - right ascension at the reference epoch
+            - ``dec0`` - declination at the reference epoch
+            - ``pmra`` - proper motion in right ascension
+            - ``pmdec`` - proper motion in declination
+            - ``parallax`` - parallax
+            - ``semi_major_axis`` - semi-major axis
 
     The design matrix has shape ``(n_obs, 6)`` with columns
     ``[ra0, dec0, pmra, pmdec, parallax, a_orbit]``.
 
     Parameters are defined in the Gaia local-plane coordinate (LPC) convention
-    from Lindegren & Bastian (GAIA-C3-TN-LU-LL-061-08, Eqs. 4, 6, 8).
+    from Lindegren & Bastian (GAIA-C3-TN-LU-LL-061-08).
 
     Examples
     --------
-    >>> from harv.models.parametrizations.gaia import StandardGaiaAstrometry
+    >>> from harv.models.parameterizations.gaia import StandardGaiaAstrometry
     >>> p = StandardGaiaAstrometry()
-    >>> [pi.name for pi in p.nonlinear_params()]
+    >>> [pp.name for pp in p.nonlinear_params()]
     ['period', 'eccentricity', 'phase_peri', 'arg_peri', 'lon_asc_node', 'cos_i']
     """
 

@@ -1,8 +1,4 @@
-"""Unit tests for GaiaAstrometryModel.
-
-Includes numerical equivalence tests against the existing
-GaiaAstrometryLikelihood.
-"""
+"""Unit tests for GaiaAstrometryModel."""
 
 import jax
 import jax.numpy as jnp

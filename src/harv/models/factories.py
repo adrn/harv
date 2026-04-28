@@ -14,7 +14,7 @@ import numpyro.distributions as dist
 from harv.data import GaiaAstrometryData, RVData
 from harv.extensions.base import AbstractExtension
 from harv.models.astrometry import GaiaAstrometryModel
-from harv.models.parametrizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 from harv.models.rv import RVModel
 
 

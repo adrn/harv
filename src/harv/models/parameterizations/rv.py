@@ -19,35 +19,36 @@ import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
 from harv.extensions.base import ParamInfo
-from harv.kepler.orbits import rv_shape as _rv_shape
-from harv.models.parametrizations._base import AbstractParameterization
-
-
-def _build_rv_design_col(
-    sin_f: jax.Array,
-    cos_f: jax.Array,
-    eccentricity: float | jax.Array,
-    arg_peri: float | jax.Array,
-) -> jax.Array:
-    """Single column: the RV shape function (dimensionless)."""
-    return _rv_shape(sin_f, cos_f, eccentricity, arg_peri)
+from harv.kepler.orbits import rv_shape
+from harv.models.parameterizations._base import AbstractParameterization
 
 
 @final
 class StandardRV(AbstractParameterization):
-    """Standard RV parameterization: (period, ecc, phase_peri, omega, K, v_sys).
+    """Standard RV parameterization.
 
-    Nonlinear: period, eccentricity, phase_peri, arg_peri.
-    Linear: rv_semiamp, v_sys.
+    The default harv parameterization for radial velocity modeling uses the following
+    Keplerian parameters:
 
-    The design matrix has shape ``(n_obs, 2)`` with columns ``[X(t), 1]``
-    where ``X(t) = cos(omega + f(t)) + e * cos(omega)`` is the RV shape.
+        - Nonlinear:
+            - ``period`` - orbital period
+            - ``eccentricity`` - orbital eccentricity
+            - ``phase_peri`` - phase at which the mean anomaly is zero (i.e.
+              periastron passage), using a time system relative to the data's reference
+              time
+            - ``arg_peri`` - argument of periastron
+        - Linear:
+            - ``rv_semiamp`` - sometimes called "K", the RV semi-amplitude
+            - ``v_sys`` - systemic velocity
+
+    The design matrix has shape ``(n_obs, 2)`` with columns ``[zd(t), 1]`` where
+    ``zd(t) = cos(omega + f(t)) + e * cos(omega)`` is the RV shape function.
 
     Examples
     --------
-    >>> from harv.models.parametrizations.rv import StandardRV
+    >>> from harv.models.parameterizations.rv import StandardRV
     >>> p = StandardRV()
-    >>> [pi.name for pi in p.params()]
+    >>> [pp.name for pp in p.params()]
     ['period', 'eccentricity', 'phase_peri', 'arg_peri', 'rv_semiamp', 'v_sys']
     """
 
@@ -88,14 +89,14 @@ class StandardRV(AbstractParameterization):
         cos_f : jax.Array, shape (n_obs,)
             Cosine of true anomaly (unit-stripped).
         nl_values : dict
-            Must contain ``"eccentricity"`` and ``"arg_peri"`` (both
-            unit-stripped scalars).
+            Must contain ``"eccentricity"`` and ``"arg_peri"`` (both unit-stripped
+            scalars).
 
         Returns
         -------
         jax.Array, shape (n_obs, 2)
         """
-        rv_col = _build_rv_design_col(
+        rv_col = rv_shape(
             sin_f, cos_f, nl_values["eccentricity"], nl_values["arg_peri"]
         )
         return jnp.column_stack([rv_col, jnp.ones_like(rv_col)])
@@ -105,16 +106,24 @@ class StandardRV(AbstractParameterization):
 class EcoswEsinwRV(AbstractParameterization):
     """Alternative RV parameterization using ``e*cos(w)`` and ``e*sin(w)``.
 
-    Replaces the ``(eccentricity, arg_peri)`` pair with
-    ``(ecosw, esinw)`` = ``(e*cos(omega), e*sin(omega))``, which has better
-    sampling geometry for low eccentricities.
+    Replaces the ``(eccentricity, arg_peri)`` pair with ``(ecosw, esinw)`` =
+    ``(e*cos(omega), e*sin(omega))``, which often has better sampling geometry for low
+    eccentricities:
 
-    Nonlinear: period, ecosw, esinw, phase_peri.
-    Linear: rv_semiamp, v_sys.
+        - Nonlinear:
+            - ``period`` - the orbital period
+            - ``ecosw`` - the eccentricity times cosine of argument of periastron
+            - ``esinw`` - the eccentricity times sine of argument of periastron
+            - ``phase_peri`` - the phase at which the mean anomaly is zero (i.e.
+              periastron passage), using a time system relative to the data's reference
+              time
+        - Linear:
+            - ``rv_semiamp`` - sometimes called "K", the RV semi-amplitude
+            - ``v_sys`` - the systemic velocity
 
     Examples
     --------
-    >>> from harv.models.parametrizations.rv import EcoswEsinwRV
+    >>> from harv.models.parameterizations.rv import EcoswEsinwRV
     >>> p = EcoswEsinwRV()
     >>> [pi.name for pi in p.params()]
     ['period', 'ecosw', 'esinw', 'phase_peri', 'rv_semiamp', 'v_sys']
@@ -159,8 +168,8 @@ class EcoswEsinwRV(AbstractParameterization):
         cos_f : jax.Array, shape (n_obs,)
             Cosine of true anomaly (unit-stripped).
         nl_values : dict
-            Must contain ``"ecosw"`` and ``"esinw"`` (dimensionless scalars).
-            The eccentricity and arg_peri are derived internally.
+            Must contain ``"ecosw"`` and ``"esinw"`` (dimensionless scalars). The
+            eccentricity and arg_peri are derived internally.
 
         Returns
         -------
@@ -170,5 +179,5 @@ class EcoswEsinwRV(AbstractParameterization):
         esinw = nl_values["esinw"]
         ecc = jnp.sqrt(ecosw**2 + esinw**2)
         arg_peri = jnp.arctan2(esinw, ecosw)
-        rv_col = _build_rv_design_col(sin_f, cos_f, ecc, arg_peri)
+        rv_col = rv_shape(sin_f, cos_f, ecc, arg_peri)
         return jnp.column_stack([rv_col, jnp.ones_like(rv_col)])

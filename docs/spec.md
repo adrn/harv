@@ -179,7 +179,7 @@ src/harv/
 │   ├── nbody_system.py      # AbstractNBodySystem, TwoBodySystem
 │   └── constants.py         # G, c
 ├── models/                  # Component models (likelihood + parameterization)
-│   ├── parametrizations/    # Parameter declarations and design matrices
+│   ├── parameterizations/    # Parameter declarations and design matrices
 │   │   ├── _base.py         # AbstractParameterization base class
 │   │   ├── rv.py            # StandardRV, EcoswEsinwRV
 │   │   └── gaia.py          # StandardGaiaAstrometry
@@ -443,7 +443,7 @@ ______________________________________________________________________
 
 The package follows a five-layer separation of concerns:
 
-1. **Parameterizations** (`harv.models.parametrizations`) -- declare parameter
+1. **Parameterizations** (`harv.models.parameterizations`) -- declare parameter
    names, units, roles (linear / nonlinear), and build design matrices. This is
    the single source of truth for what parameters a model has.
 
@@ -478,7 +478,7 @@ Parameter names must not contain `"."` -- dots are reserved for
 
 ______________________________________________________________________
 
-## Parameterizations (`harv.models.parametrizations`)
+## Parameterizations (`harv.models.parameterizations`)
 
 ### `AbstractParameterization`
 
@@ -1553,7 +1553,7 @@ samples = sampler.run(data, n_prior_samples=500_000)
 samples = sampler.run(data, n_prior_samples=500_000, max_posterior_samples=128)
 
 # --- RV with custom extensions and parameterization ---
-from harv.models.parametrizations.rv import EcoswEsinwRV
+from harv.models.parameterizations.rv import EcoswEsinwRV
 sampler = RejectionSampler(
     prior,
     parameterization=EcoswEsinwRV(),

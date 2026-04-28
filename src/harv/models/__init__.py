@@ -8,12 +8,12 @@ This subpackage contains:
 - Built-in factory functions: ``rv_model()``, ``gaia_astrometry_model()``.
 """
 
-from harv.models import parametrizations
+from harv.models import parameterizations
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.component import AbstractComponentModel
 from harv.models.factories import gaia_astrometry_model, rv_model
 from harv.models.joint import JointModel
-from harv.models.parametrizations import (
+from harv.models.parameterizations import (
     AbstractParameterization,
     EcoswEsinwRV,
     StandardGaiaAstrometry,
@@ -31,6 +31,6 @@ __all__ = (
     "StandardGaiaAstrometry",
     "StandardRV",
     "gaia_astrometry_model",
-    "parametrizations",
+    "parameterizations",
     "rv_model",
 )

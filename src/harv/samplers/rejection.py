@@ -18,7 +18,7 @@ from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import AbstractComponentModel
 from harv.models.factories import _build_model
 from harv.models.joint import JointModel
-from harv.models.parametrizations import AbstractParameterization
+from harv.models.parameterizations import AbstractParameterization
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
@@ -341,9 +341,9 @@ def _wrap_unit_values(
 class RejectionSampler(eqx.Module):
     """Rejection sampler for Keplerian orbital parameters.
 
-    This class implements rejection sampling with analytical marginalization over
-    linear parameters. Data is passed to :meth:`run` rather than at construction,
-    so the same configured sampler can be applied to multiple datasets.
+    This class implements rejection sampling with analytical marginalization over linear
+    parameters. Data is passed to :meth:`run` rather than at construction, so the same
+    configured sampler can be applied to multiple datasets.
 
     Parameters
     ----------
@@ -351,13 +351,23 @@ class RejectionSampler(eqx.Module):
         Prior distributions for nonlinear (and optionally linear) parameters.
     parameterization : AbstractParameterization or None, optional
         Orbital parameterization. For RV data defaults to
-        :class:`~harv.models.parametrizations.rv.StandardRV`. Ignored for Gaia
+        :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
         astrometry data.
     extensions : tuple of AbstractExtension, optional
         Model extensions (jitter, trends, offsets, GP).
+    marginalized_names : tuple of str or None, optional
+        Linear parameter names to analytically marginalize. If None, all linear
+        parameters are marginalized. Ignored if the effective linear prior is None.
     batch_size : int, optional
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
+    model : AbstractComponentModel or JointModel, optional
+        Pre-built model to use for sampling. If provided, the model's parameterization
+        and extensions are used and the ``parameterization`` and ``extensions`` fields
+        are ignored. This is an expert bypass path for users who want to build a custom
+        model and use the rejection sampler for inference. If not provided, a model will
+        be constructed at run-time from the provided ``parameterization`` and
+        ``extensions``.
 
     See Also
     --------

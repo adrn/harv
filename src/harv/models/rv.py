@@ -1,7 +1,7 @@
 """Concrete RV component model.
 
 :class:`RVModel` wraps an :class:`~harv.data.RVData`, a parameterization
-(default :class:`~harv.models.parametrizations.rv.StandardRV`), and optional
+(default :class:`~harv.models.parameterizations.rv.StandardRV`), and optional
 extensions to provide ``log_prob`` and ``sample_conditional_linear``.
 """
 
@@ -17,7 +17,7 @@ from harv.data import RVData
 from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
-from harv.models.parametrizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 
 # Type alias for any RV parameterization
 RVParameterizationType = StandardRV | EcoswEsinwRV
@@ -27,9 +27,9 @@ RVParameterizationType = StandardRV | EcoswEsinwRV
 class RVModel(AbstractComponentModel):
     """Radial-velocity component model.
 
-    Supports marginalized and explicit likelihood evaluation. Extensions
-    (jitter, trends, offsets) modify the design matrix and/or covariance
-    via the standard :class:`~harv.extensions.base.AbstractExtension` hooks.
+    Supports marginalized and explicit likelihood evaluation. Extensions (jitter,
+    trends, offsets) modify the design matrix and/or covariance via "extensions"
+    (:class:`~harv.extensions.base.AbstractExtension` subclass instances).
 
     Parameters
     ----------
@@ -37,7 +37,6 @@ class RVModel(AbstractComponentModel):
         Observed radial velocities.
     parameterization : StandardRV
         Declares parameter names/roles and builds the base design matrix.
-        Default is the standard ``(K, omega)`` parameterization.
     extensions : tuple of Extension
         Model extensions (jitter, trends, offsets, GP, ...).
     linear_prior : dict or None

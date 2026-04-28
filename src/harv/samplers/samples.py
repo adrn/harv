@@ -24,47 +24,34 @@ except ImportError:
 __all__ = ["Samples"]
 
 
-# TODO: is this really the right place to have this?
-# Nonlinear parameter units (fixed by physics).
-_NONLINEAR_UNITS: dict[str, str] = {
-    "period": "",  # filled from data at construction time
-    "eccentricity": "",
-    "phase_peri": "",
-    "arg_peri": "rad",
-    "cos_i": "",
-    "lon_asc_node": "rad",
-}
-
-
 class Samples(eqx.Module):
     """Container for posterior samples.
 
-    Stores both nonlinear and linear parameter samples as :class:`~unxt.Q`
-    objects with units baked in. Provides dict-like access, statistical summaries,
-    and visualization tools.
+    Stores both nonlinear and linear parameter samples as :class:`~unxt.Q` objects with
+    units baked in. Provides dict-like access, statistical summaries, and visualization
+    tools.
 
     Parameters
     ----------
     nonlinear : dict[str, Q]
-        Nonlinear parameter samples, one Q per parameter.
-        Keys: ``"period"``, ``"eccentricity"``, ``"phase_peri"``,
-        and optionally ``"arg_peri"``, ``"cos_i"``, ``"lon_asc_node"``.
-        Units: period has time units; angles have ``"rad"``; dimensionless
-        parameters have unit ``""``.
+        Nonlinear parameter samples, one Q per parameter. Keys: ``"period"``,
+        ``"eccentricity"``, ``"phase_peri"``, and optionally ``"arg_peri"``,
+        ``"cos_i"``, ``"lon_asc_node"``. Units: period has time units; angles have
+        ``"rad"``; dimensionless parameters have unit ``""``.
     linear : dict[str, Q]
-        Linear parameter samples, one Q per parameter.
-        Keys: e.g. ``"rv_semiamp"``, ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``,
-        ``"pmra"``, ``"pmdec"``, ``"parallax"``, ``"semi_major_axis"`` for
-        astrometry.  Units are data-driven (e.g. ``"km/s"`` for RV).
+        Linear parameter samples, one Q per parameter. Keys: e.g. ``"rv_semiamp"``,
+        ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``, ``"pmra"``, ``"pmdec"``,
+        ``"parallax"``, ``"semi_major_axis"`` for astrometry.  Units are data-driven
+        (e.g. ``"km/s"`` for RV).
     data_type : str
-        Informational label identifying the model that produced these samples
-        (e.g. ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``).
-        Stored in HDF5 for round-tripping.
+        Informational label identifying the model that produced these samples (e.g.
+        ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``). Stored in HDF5 for
+        round-tripping.
     metadata : dict[str, Any], optional
-        Additional metadata (``t_ref``, acceptance rate, etc.).
+        Additional metadata (``t_ref``, ``num_chains``, acceptance rate, etc.).
     linear_extension_names : tuple[str, ...]
-        Names of linear parameters introduced by extensions (instrument
-        offsets, polynomial trends, etc.) beyond the base linear set.
+        Names of linear parameters introduced by extensions (instrument offsets,
+        polynomial trends, etc.) beyond the base linear set.
 
     Examples
     --------

@@ -53,9 +53,8 @@ class PeriodDependentKPrior(eqx.Module):
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable`
-    and is the default ``linear_prior`` returned by
-    :meth:`RejectionPrior.default_rv`.
+    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable` and is
+    the default ``linear_prior`` returned by :meth:`RejectionPrior.default_rv`.
 
     See Also
     --------
@@ -123,9 +122,6 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     where :math:`\sigma_{a,0}` is in physical length units (e.g. AU) and
     :math:`\varpi` is the parallax in mas.  Since 1 AU at 1 mas parallax
     subtends 1 mas, the product gives the angular semi-major axis in mas.
-
-    Unlike the RV amplitude, the astrometric semi-major axis has **no**
-    eccentricity dependence.
 
     Parameters
     ----------
