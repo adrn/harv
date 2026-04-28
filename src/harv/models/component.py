@@ -655,7 +655,7 @@ def _sample_nonlinear_params(
     for name, d in nonlinear_priors.items():
         values[name] = numpyro.sample(
             name,
-            cast("dist.Distribution", _unwrap_dist(d)),
+            _unwrap_dist(d),
         )
     return values
 
@@ -728,10 +728,7 @@ def _build_marginalized_component_model(
         explicit_linear_proxy: dict[str, Any] = {}
 
         for name, prior_dist in explicit_direct_prior.items():
-            raw = numpyro.sample(
-                name,
-                cast("dist.Distribution", _unwrap_dist(prior_dist)),
-            )
+            raw = numpyro.sample(name, _unwrap_dist(prior_dist))
             target_unit = param_units.get(name, "")
             if isinstance(prior_dist, QuantityDistribution) and target_unit:
                 raw = ustrip(target_unit, Q(raw, cast("str", prior_dist.unit)))
@@ -802,11 +799,11 @@ def _build_full_component_model(  # noqa: C901
         # Sample non-Gaussian linear params individually
         linear_values: dict[str, Any] = {}
         for name, d in explicit_lp.items():
+            target_u = param_units.get(name, "")
             raw = numpyro.sample(
                 name,
-                cast("dist.Distribution", _unwrap_dist(d)),
+                _unwrap_dist(d),
             )
-            target_u = param_units.get(name, "")
             if isinstance(d, QuantityDistribution) and target_u:
                 raw = ustrip(target_u, Q(raw, cast("str", d.unit)))
             linear_values[name] = raw

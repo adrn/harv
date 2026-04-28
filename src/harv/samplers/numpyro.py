@@ -175,7 +175,7 @@ def _build_extra_numpyro_model(  # noqa: C901
         }
 
         for name, prior_dist in explicit_direct_prior.items():
-            raw = numpyro.sample(name, _unwrap_dist(prior_dist))  # type: ignore[arg-type]
+            raw = numpyro.sample(name, _unwrap_dist(prior_dist))
             target_unit = param_units.get(name, "")
             if isinstance(prior_dist, QuantityDistribution) and target_unit:
                 raw = ustrip(target_unit, Q(raw, str(prior_dist.unit)))

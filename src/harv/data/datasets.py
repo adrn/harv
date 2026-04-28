@@ -24,7 +24,7 @@ from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity, ScalarQTime
 try:
     import matplotlib.pyplot as plt
 except ImportError:
-    plt = None
+    plt = None  # type: ignore[assignment]
 
 
 class AbstractData(eqx.Module):

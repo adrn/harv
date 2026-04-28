@@ -65,12 +65,12 @@ class QuantityDistribution(eqx.Module):
         For tuple units (multivariate with mixed units), returns a raw array --
         the consumer splits by parameter name and attaches per-element units.
         """
-        raw = self.distribution.sample(key, sample_shape)
+        raw = self.distribution.sample(key, sample_shape)  # type: ignore[arg-type]
         if isinstance(self.unit, str):
             return Q(raw, self.unit)
         return raw
 
-    def log_prob(self, value: Any) -> jax.Array:
+    def log_prob(self, value: Any) -> Any:
         """Evaluate log-probability, stripping units if present."""
         if isinstance(self.unit, str) and isinstance(value, Q):
             return self.distribution.log_prob(ustrip(self.unit, value))

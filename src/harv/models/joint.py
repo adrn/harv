@@ -400,10 +400,12 @@ class JointModel(eqx.Module):
         Parameters
         ----------
         nl_values : dict
-            Flat dict of parameter values. Shared orbital params use bare
-            names (``"period"``, ``"eccentricity"``, etc.). Component-specific
-            nonlinear params use ``"component.param"`` convention (e.g.
-            ``"rv.jitter"``).
+            Flat dict of parameter values. Shared orbital params use bare names
+            (``"period"``, ``"eccentricity"``, etc.). Component-specific nonlinear
+            params use ``"component.param"`` convention (e.g. ``"rv.jitter"``).
+        marginalized_names : tuple of str or None
+            Optional linear parameter names to marginalize. Component-qualified names
+            are accepted (e.g. ``"rv.parallax"`` or just ``"parallax"`` if unambiguous).
 
         Returns
         -------
@@ -677,8 +679,8 @@ class JointModel(eqx.Module):
                     raw = numpyro.sample(name, _unwrap_dist(d))
                     target_u = pu.get(name, "")
                     if isinstance(d, QuantityDistribution) and target_u:
-                        raw = ustrip(target_u, Q(raw, cast("str", d.unit)))
-                    all_explicit[name] = raw
+                        raw = ustrip(target_u, Q(raw, str(d.unit)))
+                    all_explicit[name] = jnp.asarray(raw)
 
             # Sample all Gaussian linear params jointly as a single _linear site
             all_linear: dict[str, jax.Array] = {}
@@ -724,7 +726,7 @@ class JointModel(eqx.Module):
                         jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in all_scales])
                     ),
                 )
-                linear_vec = numpyro.sample("_linear", mvn)
+                linear_vec = cast("jax.Array", numpyro.sample("_linear", mvn))
                 for i, lname in enumerate(_all_gaussian_names):
                     numpyro.deterministic(lname, linear_vec[i])
                     all_linear[lname] = linear_vec[i]

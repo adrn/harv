@@ -111,7 +111,7 @@ class AbstractDatasetContainer(eqx.Module):
         >>> source_data.stacked_by_type(RVData)
         RVData(...)
         """
-        return cast("_DT", stack_datasets(self._require_datasets_by_type(data_type)))
+        return stack_datasets(self._require_datasets_by_type(data_type))
 
     def indicator_data_by_type(
         self,
@@ -136,7 +136,7 @@ class AbstractDatasetContainer(eqx.Module):
         """
         datasets = self._require_datasets_by_type(data_type)
         stacked, indicator, names = build_indicator_matrix(datasets, reference)
-        return cast("_DT", stacked), indicator, names
+        return stacked, indicator, names
 
 
 class SystemData(AbstractDatasetContainer):
@@ -182,7 +182,7 @@ class SystemData(AbstractDatasetContainer):
         return self._dataset_type
 
     @property
-    def t_ref(self) -> NTime:
+    def t_ref(self) -> NTime | None:
         """Reference epoch from the first component."""
         # TODO: this shouldn't exist!
         return next(iter(self._datasets.values())).t_ref

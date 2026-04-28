@@ -6,7 +6,7 @@ rejection sampling with dict-like access, unit handling, and analysis tools.
 
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 import equinox as eqx
 import h5py
@@ -108,9 +108,13 @@ class Samples(eqx.Module):
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
 
-    def __getitem__(
-        self, key: str | int | slice | np.ndarray
-    ) -> "AbstractQuantity | jnp.ndarray | Samples":
+    @overload
+    def __getitem__(self, key: str) -> "Q": ...
+
+    @overload
+    def __getitem__(self, key: int | slice | np.ndarray) -> "Samples": ...
+
+    def __getitem__(self, key: str | int | slice | np.ndarray) -> "Q | Samples":
         """Get parameter samples by name, or return a sliced ``Samples``.
 
         Parameters
@@ -172,7 +176,7 @@ class Samples(eqx.Module):
 
         if key == "log_period":
             period = self.nonlinear["period"]
-            return jnp.log10(ustrip(str(period.unit), period))
+            return jnp.log10(ustrip(str(period.unit), period))  # type: ignore[return-value]
 
         if key == "t_peri":
             # Express t_peri in absolute time: t_ref + phase_peri * period.
@@ -255,9 +259,11 @@ class Samples(eqx.Module):
         a = self.linear.get("semi_major_axis")
 
         if K is not None:
-            flip = K.value < 0
+            K_val = ustrip(str(K.unit), K)
+            flip = K_val < 0
         elif a is not None:
-            flip = a.value < 0
+            a_val = ustrip(str(a.unit), a)
+            flip = a_val < 0
         else:
             return self
 
@@ -266,17 +272,18 @@ class Samples(eqx.Module):
 
         new_lin = dict(self.linear)
         if K is not None:
-            new_lin["rv_semiamp"] = Q(jnp.where(flip, -K.value, K.value), K.unit)
+            K_val = ustrip(str(K.unit), K)
+            new_lin["rv_semiamp"] = Q(jnp.where(flip, -K_val, K_val), K.unit)
         if a is not None:
-            new_lin["semi_major_axis"] = Q(jnp.where(flip, -a.value, a.value), a.unit)
+            a_val = ustrip(str(a.unit), a)
+            new_lin["semi_major_axis"] = Q(jnp.where(flip, -a_val, a_val), a.unit)
 
         arg_peri = self.nonlinear["arg_peri"]
+        arg_val = ustrip(str(arg_peri.unit), arg_peri)
 
         new_nl = dict(self.nonlinear)
         new_nl["arg_peri"] = Q(
-            jnp.where(
-                flip, jnp.mod(arg_peri.value + jnp.pi, 2.0 * jnp.pi), arg_peri.value
-            ),
+            jnp.where(flip, jnp.mod(arg_val + jnp.pi, 2.0 * jnp.pi), arg_val),
             arg_peri.unit,
         )
 

@@ -66,8 +66,8 @@ class StandardGaiaAstrometry(AbstractParameterization):
             ParamInfo("cos_i", ""),
             ParamInfo("ra0", "angle", linear=True),
             ParamInfo("dec0", "angle", linear=True),
-            ParamInfo("pmra", "angular speed", linear=True),
-            ParamInfo("pmdec", "angular speed", linear=True),
+            ParamInfo("pmra", "angular_speed", linear=True),
+            ParamInfo("pmdec", "angular_speed", linear=True),
             ParamInfo("parallax", "angle", linear=True),
             ParamInfo("semi_major_axis", "angle", linear=True),
         )

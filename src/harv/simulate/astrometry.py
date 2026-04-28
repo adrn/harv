@@ -12,7 +12,7 @@ The astrometric model includes:
 - Keplerian orbital motion parameterized by Thiele-Innes constants
 """
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import quaxed.numpy as jnp
@@ -22,6 +22,7 @@ from harv.custom_types import (
     BatchFloat,
     BatchQAngle,
     BatchQTime,
+    QAngle,
     ScalarQAngle,
     ScalarQAngularSpeed,
     ScalarQTime,
@@ -37,7 +38,7 @@ def fake_parallax_factor(
     ra: ScalarQAngle,
     dec: ScalarQAngle,
     scan_angle: BatchQAngle,
-) -> jnp.ndarray:
+) -> AbstractQuantity:
     """Mock, super simplified parallax factor for a star at (ra, dec).
 
     This is a simplified analytical model for the parallax factor, assuming
@@ -227,8 +228,8 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
 
     # Astrometric offsets - these are small mas-scale deviations from reference
     # These are the LINEAR parameters in the astrometric model
-    alpha0 = Q(0.0, "mas") if alpha0 is None else uconvert("mas", alpha0)
-    delta0 = Q(0.0, "mas") if delta0 is None else uconvert("mas", delta0)
+    alpha0 = Q(0.0, "mas") if alpha0 is None else cast("Q", uconvert("mas", alpha0))
+    delta0 = Q(0.0, "mas") if delta0 is None else cast("Q", uconvert("mas", delta0))
 
     mu_alpha = Q(rngs[8].normal(0, 10), "mas/yr") if mu_alpha is None else mu_alpha
     mu_delta = Q(rngs[9].normal(0, 10), "mas/yr") if mu_delta is None else mu_delta
@@ -323,10 +324,10 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
 
     data = GaiaAstrometryData(
         time=times,
-        al_position=y_al,
+        al_position=QAngle.from_(y_al),
         al_position_err=al_error,
         scan_angle=scan_angle,
-        parallax_factor=parallax_factor,
+        parallax_factor=jnp.asarray(parallax_factor),
         t_ref=t_ref,
     )
 

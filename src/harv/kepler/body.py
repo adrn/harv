@@ -7,12 +7,13 @@ import astropy.units as apyu
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from unxt import Q, ustrip
+from unxt import ustrip
 
 from harv.custom_types import (
     BatchQTime,
     BatchVec3QLength,
     BatchVec3QSpeed,
+    QTime,
     ScalarFloat,
     ScalarQLength,
     ScalarQMass,
@@ -77,7 +78,7 @@ class KeplerianBody(eqx.Module):
     t_peri: ScalarQTime
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
-    ecc_zero_tol: ScalarFloat = jnp.finfo(float).eps * 10.0  # type: ignore[no-untyped-call]
+    ecc_zero_tol: ScalarFloat = jnp.finfo(float).eps * 10.0
 
     def __check_init__(self) -> None:
         # Trace-friendly eccentricity bounds check (works inside jit/vmap)
@@ -141,7 +142,7 @@ class KeplerianBody(eqx.Module):
         orbit: KeplerianBody
             The body's orbit about the system barycenter.
         """
-        period = Q["time"].from_(period)
+        period = QTime.from_(period)
         a_rel = jnp.cbrt((G * m_total * period**2) / (4 * jnp.pi**2))
         a_body = a_rel * (1 - m_body / m_total)
 
@@ -192,13 +193,13 @@ class KeplerianBody(eqx.Module):
         Uses a circular shortcut when eccentricity is effectively zero.
         """
         M = mean_anomaly(time - self.t_peri, self.period)
-        M_raw = ustrip("rad", M)
+        M_raw = jnp.asarray(ustrip("rad", M))
         sin_f, cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),
             lambda: (jnp.sin(M_raw), jnp.cos(M_raw)),
             lambda: true_anomaly_from_mean(M, self.eccentricity),
         )
-        return sin_f, cos_f, M_raw
+        return cast("jax.Array", sin_f), cast("jax.Array", cos_f), M_raw
 
     def get_position(
         self, time: BatchQTime, orientation: KeplerianOrientation | None = None
@@ -244,12 +245,12 @@ class KeplerianBody(eqx.Module):
         # Radius and kinematic rates
         r = a * (1 - e**2) / (1 + e * cos_f)
 
-        def _vel_circular():  # type: ignore[no-untyped-def] # noqa: ANN202
+        def _vel_circular():  # noqa: ANN202
             vx = (-n * a) * sin_f
             vy = (n * a) * cos_f
             return vx, vy
 
-        def _vel_eccentric():  # type: ignore[no-untyped-def] # noqa: ANN202
+        def _vel_eccentric():  # noqa: ANN202
             rdot = n * a * e * sin_f / jnp.sqrt(1 - e**2)
             fdot = n * (1 + e * cos_f) ** 2 / (1 - e**2) ** 1.5
             vx = rdot * cos_f - r * fdot * sin_f

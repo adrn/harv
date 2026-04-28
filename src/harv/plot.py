@@ -14,7 +14,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
 
-from harv.custom_types import BatchQTime, NQAny, NTime, ScalarQTime
+from harv.custom_types import BatchQTime, NQAny, NTime, QTime, ScalarQTime
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
 from harv.extensions.multi_survey import MultiSurveyOffset
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -24,12 +24,12 @@ try:
     import matplotlib as mpl
     import matplotlib.pyplot as plt
 except ImportError:
-    plt = None
+    plt = None  # type: ignore[assignment]
 
 try:
     import tinygp
 except ImportError:
-    tinygp = None
+    tinygp = None  # type: ignore[assignment]
 
 
 # Default styles:
@@ -216,13 +216,13 @@ def _get_sample_scalar_value(samples: Any, name: str, sample_index: int) -> floa
     candidate_names: list[str] = []
     for mapping in (samples.nonlinear, samples.linear):
         if name in mapping:
-            candidate_names.append(name)
+            candidate_names.append(name)  # noqa: PERF401
 
     suffix = f".{name}"
     for mapping in (samples.nonlinear, samples.linear):
         for key in mapping:
             if key.endswith(suffix):
-                candidate_names.append(key)
+                candidate_names.append(key)  # noqa: PERF401
 
     candidate_names = list(dict.fromkeys(candidate_names))
     if not candidate_names:
@@ -473,7 +473,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     )
 
     # Extract median period and t_ref for phase-folding and plotting
-    median_period: Q["time"] = jnp.median(samples["period"])
+    median_period = QTime.from_(jnp.median(samples["period"]))
     ref_idx = int(jnp.argmin(jnp.abs(samples["period"] - median_period)))
     ref_period = samples["period"][ref_idx]
     ref_t_peri = samples["t_peri"][ref_idx]
@@ -599,8 +599,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     else:
         # don't phase fold:
         if rv_datasets:
-            all_times = jnp.concatenate(
-                [rv_data.time for rv_data in rv_datasets.values()]
+            all_times = QTime.from_(
+                jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
             )
             t_grid = get_t_grid(all_times, median_period)
         else:

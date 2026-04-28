@@ -6,13 +6,16 @@ __all__ = (
 )
 
 from dataclasses import fields
+from typing import TYPE_CHECKING
 
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from unxt import AbstractQuantity
 
 from .datasets import AbstractData
+
+if TYPE_CHECKING:
+    from unxt import AbstractQuantity
 
 
 def _synchronize_t_refs(
@@ -48,9 +51,9 @@ def _synchronize_t_refs(
     }
 
 
-def stack_datasets(
-    datasets: dict[str, AbstractData],
-) -> AbstractData:
+def stack_datasets[DT: AbstractData](
+    datasets: dict[str, DT],
+) -> DT:
     """Concatenate multiple datasets in dict order into a single one.
 
     Parameters
@@ -112,12 +115,12 @@ def stack_datasets(
     # NOTE: t_ref is recomputed from the stacked time by __check_init__
     # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
     # class docstrings) about how t_ref is handled when stacking datasets.
-    return type(ref)(**all_data)
+    return type(ref)(**all_data)  # type: ignore[invalid-argument-type]
 
 
-def build_indicator_matrix(
-    datasets: dict[str, AbstractData], reference: str
-) -> tuple[AbstractData, jax.Array | None, tuple[str, ...] | None]:
+def build_indicator_matrix[DT: AbstractData](
+    datasets: dict[str, DT], reference: str
+) -> tuple[DT, jax.Array | None, tuple[str, ...] | None]:
     """Build indicator matrix for multi-survey data of the same type.
 
     Parameters

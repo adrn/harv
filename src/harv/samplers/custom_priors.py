@@ -23,8 +23,8 @@ def _make_log_period_prior(
 ) -> PriorDist:
     return QuantityDistribution(
         dist.LogUniform(
-            period_min.value,
-            ustrip(period_min.unit, period_max),
+            ustrip(str(period_min.unit), period_min),
+            ustrip(str(period_min.unit), period_max),
         ),
         str(period_min.unit),
     )

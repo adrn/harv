@@ -53,7 +53,7 @@ class KeplerianOrientation(eqx.Module):
                 jnp.isclose(
                     x,
                     1.0,
-                    atol=jnp.finfo(float).eps,  # type: ignore[no-untyped-call]
+                    atol=jnp.finfo(float).eps,
                 )
             ),
             "Argument of pericenter sin/cos values are not normalized",
@@ -66,7 +66,7 @@ class KeplerianOrientation(eqx.Module):
                 jnp.isclose(
                     x,
                     1.0,
-                    atol=jnp.finfo(float).eps,  # type: ignore[no-untyped-call]
+                    atol=jnp.finfo(float).eps,
                 )
             ),
             "Longitude of ascending node sin/cos values are not normalized",
@@ -79,7 +79,7 @@ class KeplerianOrientation(eqx.Module):
                 jnp.isclose(
                     x,
                     1.0,
-                    atol=jnp.finfo(float).eps,  # type: ignore[no-untyped-call]
+                    atol=jnp.finfo(float).eps,
                 )
             ),
             "Inclination sin/cos values are not normalized",

@@ -9,15 +9,23 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import AllowValue, ustrip
 
 Angle = Literal["angle"]
-AngularSpeed = Literal["angular speed"]
+AngularSpeed = Literal["angular_speed"]
 Length = Literal["length"]
 Mass = Literal["mass"]
 Speed = Literal["speed"]
 Time = Literal["time"]
 Dimless = Literal["dimensionless"]
 
+QAngle = Q["angle"]
+QAngularSpeed = Q["angular_speed"]
+QDimless = Q["dimensionless"]
+QLength = Q["length"]
+QMass = Q["mass"]
+QSpeed = Q["speed"]
+QTime = Q["time"]
+
 ScalarQAngle = Real[Q["angle"], ""]
-ScalarQAngularSpeed = Real[Q["angular speed"], ""]
+ScalarQAngularSpeed = Real[Q["angular_speed"], ""]
 ScalarQDimless = Real[Q["dimensionless"], ""]
 ScalarQLength = Real[Q["length"], ""]
 ScalarQMass = Real[Q["mass"], ""]
@@ -40,7 +48,7 @@ BatchVec3QLength = Real[Q["length"], "3 *batch"]
 BatchVec3QSpeed = Real[Q["speed"], "3 *batch"]
 
 BatchQAngle = Real[Q["angle"], "*batch"]
-BatchQAngularSpeed = Real[Q["angular speed"], "*batch"]
+BatchQAngularSpeed = Real[Q["angular_speed"], "*batch"]
 BatchQDimless = Real[Q["dimensionless"], "*batch"]
 BatchQLength = Real[Q["length"], "*batch"]
 BatchQSpeed = Real[Q["speed"], "*batch"]
@@ -50,7 +58,7 @@ BatchFloat = Float[jax.Array, "*batch"] | BatchQDimless
 # Set of all Batch-level Quantity types that carry physical dimensions.
 # Used by AbstractParameters.__init_subclass__ to auto-detect which fields
 # require a QDistribution prior.
-DIMENSIONED_BATCH_TYPES: frozenset[type] = frozenset(
+DIMENSIONED_BATCH_TYPES: frozenset[Any] = frozenset(
     {
         BatchQAngle,
         BatchQAngularSpeed,

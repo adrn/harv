@@ -296,7 +296,8 @@ class RejectionPrior(eqx.Module):
         linear_prior: dict[str, Any] = {
             "rv_semiamp": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
             "v_sys": QuantityDistribution(
-                dist.Normal(0.0, sigma_v0.value), str(sigma_v0.unit)
+                dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
+                str(sigma_v0.unit),
             ),
         }
 
@@ -499,7 +500,8 @@ class RejectionPrior(eqx.Module):
             "rv_semiamp_1": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
             "rv_semiamp_2": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
             "v_sys": QuantityDistribution(
-                dist.Normal(0.0, sigma_v0.value), str(sigma_v0.unit)
+                dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
+                str(sigma_v0.unit),
             ),
         }
 

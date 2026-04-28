@@ -22,7 +22,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Check code style
-        run: uv run ruff check src
+        run: uv run ruff check src docs tests
 
       - name: Check formatting
-        run: uv run ruff format --check src
+        run: uv run ruff format --check src docs tests
+
+      - name: Check type annotations
+        run: uv run ty check src docs tests

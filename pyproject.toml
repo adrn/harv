@@ -62,7 +62,6 @@ dev = [
     "pre-commit",
     "twine",
     "ruff",
-    "mypy>=1.19.1",
     "ty>=0.0.22",
 ]
 docs = [
@@ -148,65 +147,65 @@ precision = 2
 # Tool configuration
 ################################################################################
 
-[tool.mypy]
-  disable_error_code = [
-    "name-defined",  # for jaxtyping
-  ]
+# [tool.mypy]
+#   disable_error_code = [
+#     "name-defined",  # for jaxtyping
+#   ]
 
-  disallow_incomplete_defs = false
-  disallow_subclassing_any = false
-  disallow_untyped_defs = false
-  enable_error_code = [
-    "ignore-without-code", "redundant-expr", "truthy-bool"
-]
-  files = ["src", "tests"]
-  python_version = "3.12"
-  strict = true
-  warn_return_any = false
-  warn_unreachable = true
-  warn_unused_configs = true
+#   disallow_incomplete_defs = false
+#   disallow_subclassing_any = false
+#   disallow_untyped_defs = false
+#   enable_error_code = [
+#     "ignore-without-code", "redundant-expr", "truthy-bool"
+# ]
+#   files = ["src", "tests"]
+#   python_version = "3.12"
+#   strict = true
+#   warn_return_any = false
+#   warn_unreachable = true
+#   warn_unused_configs = true
 
-  [[tool.mypy.overrides]]
-    disable_error_code = ["untyped-decorator"]
-    disallow_incomplete_defs = true
-    disallow_untyped_defs = true
-    module = "harv.*"
+#   [[tool.mypy.overrides]]
+#     disable_error_code = ["untyped-decorator"]
+#     disallow_incomplete_defs = true
+#     disallow_untyped_defs = true
+#     module = "harv.*"
 
-  [[tool.mypy.overrides]]
-    # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
-    # available when those packages are installed. Suppress errors that vary
-    # between environments so that both `uv run mypy` and pre-commit agree.
-    disable_error_code = ["arg-type", "assignment", "attr-defined"]
-    module = "harv.simulate.*"
+#   [[tool.mypy.overrides]]
+#     # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
+#     # available when those packages are installed. Suppress errors that vary
+#     # between environments so that both `uv run mypy` and pre-commit agree.
+#     disable_error_code = ["arg-type", "assignment", "attr-defined"]
+#     module = "harv.simulate.*"
 
-  [[tool.mypy.overrides]]
-    # cast() calls in orbits.py are required when unxt is installed (standalone
-    # mypy) but appear redundant when unxt is absent (pre-commit environment).
-    disable_error_code = ["redundant-cast"]
-    module = "harv.kepler.orbits"
+#   [[tool.mypy.overrides]]
+#     # cast() calls in orbits.py are required when unxt is installed (standalone
+#     # mypy) but appear redundant when unxt is absent (pre-commit environment).
+#     disable_error_code = ["redundant-cast"]
+#     module = "harv.kepler.orbits"
 
-  [[tool.mypy.overrides]]
-    ignore_missing_imports = true
-    module = [
-      "astropy.*",
-      "coordinax.*",
-      "equinox.*",
-      "h5py.*",
-      "healpy.*",
-      "hypothesis.*",
-      "jax.*",
-      "jaxoplanet.*",
-      "jaxtyping.*",
-      "numpy.*",
-      "numpyro.*",
-      "numpyro_ext.*",
-      "pandas.*",
-      "plum.*",
-      "pooch.*",
-      "quax.*",
-      "quaxed.*",
-      "unxt.*",
-    ]
+#   [[tool.mypy.overrides]]
+#     ignore_missing_imports = true
+#     module = [
+#       "astropy.*",
+#       "coordinax.*",
+#       "equinox.*",
+#       "h5py.*",
+#       "healpy.*",
+#       "hypothesis.*",
+#       "jax.*",
+#       "jaxoplanet.*",
+#       "jaxtyping.*",
+#       "numpy.*",
+#       "numpyro.*",
+#       "numpyro_ext.*",
+#       "pandas.*",
+#       "plum.*",
+#       "pooch.*",
+#       "quax.*",
+#       "quaxed.*",
+#       "unxt.*",
+#     ]
 
 [tool.ruff]
 line-length = 88
@@ -256,6 +255,7 @@ ignore = [
     "UP037",   # Remove quote from type annotation  <- jaxtyping
     "N802",    # Function name should be lowercase
     "N815",    # Variable name {name} should be lowercase
+    "N816",    # should not be mixedCase
     "N817",    # CamelCase
 ]
 exclude = [
@@ -272,9 +272,7 @@ exclude = [
 ]
 "tests/**/*.py" = [
     "ANN202", # Missing type annotation"
-    "D101",  # Missing docstring in public class
-    "D102",  # Missing docstring in public method
-    "D104",  # Missing docstring in public package
+    "D",  # documentation not important for tests
     "S101",  # Use of assert detected' ignored because we are using pytest.
     "INP001",  # Insecure input ignored because we are testing.
     "ANN201",  # Missing type annotation for {return} ignored because all tests return `None`.
@@ -291,6 +289,7 @@ exclude = [
     "E402",  # module-import-not-at-top-of-file
     "T201",  # print
     "FBT003",  # boolean-positional-value-in-call
+    "A004",  # astropy.io.ascii - shadows built-in ascii
 ]
 "docs/_static/*" = ["ALL"]
 
@@ -299,11 +298,24 @@ case-sensitive = true
 known-first-party = ["src", "harv"]
 
 [tool.ty.rules]
-# TODO: these are currently ty bugs that can't handle some of the parametric Quantity
-# type annotations. Hopefully these can eventually be removed?
-unused-type-ignore-comment = "ignore"
-unresolved-import = "ignore"
-unresolved-reference = "ignore"
+
+    [[tool.ty.overrides]]
+    # NOTE: this is needed because of a bug or issue in the way ty and jaxtyping
+    # interact. ty treats parametric string, e.g., Q["angle"] as a forward reference
+    # (PEP 484 semantics), then fails to resolve angle as a Python name. The string is
+    # actually a runtime dimension descriptor consumed by unxt/jaxtyping — not a forward
+    # annotation.
+    include = ["src/harv/custom_types.py"]
+    rules = { unresolved-reference = "ignore" }
+
+    [[tool.ty.overrides]]
+    include = ["src/harv/plot.py"]
+    rules = { possibly-missing-attribute = "ignore" }
+
+    [[tool.ty.overrides]]
+    include = ["src/harv/kepler/constants.py"]
+    rules = { unresolved-import = "ignore" }
+
 
 [tool.pydoclint]
 style = "numpy"

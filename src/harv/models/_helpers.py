@@ -23,7 +23,7 @@ type LinearPriorDist = dict[str, PriorDist | LinearPriorCallable]
 # Per-parameter linear prior dictionary.
 
 
-def _unwrap_dist(v: PriorDist) -> dist.Distribution:
+def _unwrap_dist(v: PriorDist) -> Any:
     """Extract the underlying numpyro distribution from a PriorDist."""
     if isinstance(v, QuantityDistribution):
         return v.distribution

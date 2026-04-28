@@ -76,7 +76,7 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 | `ScalarQMass`         | `Real[Q["mass"], ""]`                                                   | Scalar mass quantities                        |
 | `ScalarQSpeed`        | `Real[Q["speed"], ""]`                                                  | Scalar velocity quantities                    |
 | `ScalarQAngle`        | `Real[Q["angle"], ""]`                                                  | Scalar angle quantities                       |
-| `ScalarQAngularSpeed` | `Real[Q["angular speed"], ""]`                                          | Scalar angular speed quantities               |
+| `ScalarQAngularSpeed` | `Real[Q["angular_speed"], ""]`                                          | Scalar angular speed quantities               |
 | `ScalarQDimless`      | `Real[Q["dimensionless"], ""]`                                          | Scalar dimensionless quantities               |
 | `Vec3QLength`         | `Real[Q["length"], "3"]`                                                | 3-vector position returns                     |
 | `Vec3QSpeed`          | `Real[Q["speed"], "3"]`                                                 | 3-vector velocity returns                     |
