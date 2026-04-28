@@ -266,7 +266,7 @@ def _gp_plot_signal(
     """Return the GP conditional mean used to overlay time-domain RV curves."""
     if tinygp is None:
         msg = "tinygp is required for GP plotting support"
-        raise ImportError(msg) from err
+        raise ImportError(msg)
 
     kernel = ext.kernel_builder(hp)
     gp = tinygp.GaussianProcess(kernel, data_times, diag=data_err**2)
@@ -286,7 +286,7 @@ def _plot_extension_extra_noise(
     block with an optional plotting capability/protocol instead of adding plot
     hooks back onto the base extension API.
     """
-    from .extensions.jitter import Jitter
+    from .extensions.jitter import Jitter  # noqa: PLC0415
 
     if isinstance(ext, Jitter):
         return jnp.asarray(hp["jitter"])
@@ -302,7 +302,7 @@ def _plot_extension_rv_signal(
     data_times: Any,
 ) -> Any | None:
     """Private plotting adapter for extension-driven RV curve adjustments."""
-    from .extensions.gp import GP
+    from .extensions.gp import GP  # noqa: PLC0415
 
     if isinstance(ext, GP):
         return _gp_plot_signal(ext, hp, residuals, data_err, t_grid, data_times)
@@ -416,7 +416,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         raise ImportError(msg)
 
     if phase_fold_median and extensions:
-        from .extensions.gp import GP
+        from .extensions.gp import GP  # noqa: PLC0415
 
         if any(isinstance(ext, GP) for ext in extensions):
             warnings.warn(

@@ -287,6 +287,12 @@ exclude = [
     "RUF002",  # ambiguous unicode
     "RUF003",  # ambiguous unicode
 ]
+"docs/**/*" = [
+    "E402",  # module-import-not-at-top-of-file
+    "T201",  # print
+    "FBT003",  # boolean-positional-value-in-call
+]
+"docs/_static/*" = ["ALL"]
 
 [tool.ruff.lint.isort]
 case-sensitive = true

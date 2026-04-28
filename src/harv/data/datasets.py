@@ -193,7 +193,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
         >>> ax = data.plot()
         >>> plt.close("all")
         """
-        from harv.plot import plot_timeseries_errorbar  # - circular imp.
+        from harv.plot import plot_timeseries_errorbar  # noqa: PLC0415 - circular imp.
 
         al_unit = al_unit or str(self.al_position.unit)
         return plot_timeseries_errorbar(
@@ -304,7 +304,7 @@ class RVData(AbstractData):
         >>> ax = data.plot(phase_fold=Q(50.0, "day"))  # phase-folded
         >>> plt.close("all")
         """
-        from harv.plot import plot_timeseries_errorbar  # - circular imp.
+        from harv.plot import plot_timeseries_errorbar  # noqa: PLC0415 - circular imp.
 
         if phase_fold is not None and relative_to_t_ref:
             msg = "phase_fold and relative_to_t_ref are mutually exclusive"
