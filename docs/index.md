@@ -1,6 +1,6 @@
-# Welcome to harv's Documentation '
+# harv
 
-## Overview
+## Introduction
 
 :::{toctree}
 :maxdepth: 2
@@ -8,40 +8,32 @@
 :caption: Contents:
 
 Home <self>
-construction-paths
 :::
 
-This is the landing page of your docs. you can update it as you'd like to.
-This documentation example uses myst markdown as the primary documentation syntax.
+harv is ...
 
-:::{button-link} <https://www.pyopensci.org/python-package-guide/documentation/hosting-tools/myst-markdown-rst-doc-syntax.html>
+<!-- The Joker [1] is a custom Monte Carlo sampler for the two-body problem that generates posterior samplings in Keplerian orbital parameters given radial velocity observations of stars. It is designed to deliver converged posterior samplings even when the radial velocity measurements are sparse or very noisy. It is therefore useful for constraining the orbital properties of binary star or star-planet systems. Though it fundamentally assumes that any system has two massive bodies (and only the primary is observed), The Joker can also be used for hierarchical systems in which the velocity perturbations from a third or other bodies are much longer than the dominant companion. See the paper [2] for more details about the method and applications. -->
+
+<!-- :::{button-link} <https://www.pyopensci.org/python-package-guide/documentation/hosting-tools/myst-markdown-rst-doc-syntax.html>
 :color: primary
-:class: sd-rounded-pill float-left
+:class: sd-rounded-pill float-left -->
 
-Learn more about myst in our pyOpenSci packaging guide.
-
-:::
-
-Myst is a version of markdown that has more formatting flexibility.
-This is what a sphinx directive looks like using myst markdown formatting:
-
-```markdown
 :::{toctree}
-:maxdepth: 2
+:maxdepth: 1
+:hidden:
 :caption: Contents:
+
+self
+concepts
+gotchas
+tutorials/index
 :::
 
-```
+## Overview
 
-If you see syntax like the syntax below, you are looking at rst.
-
-```rst
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-```
+TODO: describe harv
 
 ## Copyright
 
-- Copyright © 2025 adrn.
+- Copyright © 2026 TODO.
 - Free software distributed under the MIT License.
