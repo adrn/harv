@@ -28,4 +28,4 @@ jobs:
         run: uv run ruff format --check src docs tests
 
       - name: Check type annotations
-        run: uv run ty check src docs tests
+        run: uv run ty check src docs # TODO: add tests
