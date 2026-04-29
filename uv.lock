@@ -10,7 +10,7 @@ resolution-markers = [
 overrides = [
     { name = "coordinax", git = "https://github.com/GalacticDynamics/coordinax.git" },
     { name = "numpyro-ext", git = "https://github.com/dfm/numpyro-ext.git" },
-    { name = "unxt", git = "https://github.com/adrn/unxt.git?rev=quantity-stub" },
+    { name = "unxt", git = "https://github.com/adrn/unxt.git?rev=a78e1965f5033c31e8ab519848b3ff0a01e9e9ab" },
 ]
 
 [[package]]
@@ -874,6 +874,7 @@ dev = [
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
     { name = "sybil" },
+    { name = "tinygp" },
     { name = "twine" },
     { name = "ty" },
 ]
@@ -893,6 +894,7 @@ extra = [
     { name = "gaiaunlimited" },
     { name = "matplotlib" },
     { name = "setuptools" },
+    { name = "tinygp" },
 ]
 test = [
     { name = "beartype" },
@@ -947,6 +949,7 @@ dev = [
     { name = "sphinx-copybutton", specifier = ">=0.5.2" },
     { name = "sphinx-design", specifier = ">=0.6.1" },
     { name = "sybil", specifier = ">=10.0.1" },
+    { name = "tinygp", specifier = ">=0.3.1" },
     { name = "twine" },
     { name = "ty", specifier = ">=0.0.22" },
 ]
@@ -966,6 +969,7 @@ extra = [
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "setuptools" },
+    { name = "tinygp", specifier = ">=0.3.1" },
 ]
 test = [
     { name = "beartype" },
@@ -2870,6 +2874,19 @@ wheels = [
 ]
 
 [[package]]
+name = "tinygp"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/75/416a47815e1f95b0d595dc4309a4feeecf178385f7fd219df5cda52f5138/tinygp-0.3.1.tar.gz", hash = "sha256:14cd14dc4d33e15ac58a91b8aab71fb234524ccd1b52e40dc80fdf08d1f045d6", size = 174542, upload-time = "2026-03-15T14:46:37.952Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/ed/511ae07f5616833d27904bcffc194c9ef1712d2a1cdfbc6cd3700ee6e2db/tinygp-0.3.1-py3-none-any.whl", hash = "sha256:893169e1722b67279c33a17559cefa3179d05e0b9bd0db15b2a38d06b79138a4", size = 45215, upload-time = "2026-03-15T14:46:36.708Z" },
+]
+
+[[package]]
 name = "tomli-w"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3000,8 +3017,8 @@ wheels = [
 
 [[package]]
 name = "unxt"
-version = "0.1.dev488"
-source = { git = "https://github.com/adrn/unxt.git?rev=quantity-stub#d63cafa377ca2d9ab7f1795683b6966eb843b177" }
+version = "0.1.dev490"
+source = { git = "https://github.com/adrn/unxt.git?rev=a78e1965f5033c31e8ab519848b3ff0a01e9e9ab#a78e1965f5033c31e8ab519848b3ff0a01e9e9ab" }
 dependencies = [
     { name = "astropy" },
     { name = "dataclassish" },
@@ -3024,8 +3041,8 @@ dependencies = [
 
 [[package]]
 name = "unxt-api"
-version = "0.1.dev488"
-source = { git = "https://github.com/adrn/unxt.git?subdirectory=packages%2Funxt-api&rev=quantity-stub#d63cafa377ca2d9ab7f1795683b6966eb843b177" }
+version = "0.1.dev490"
+source = { git = "https://github.com/adrn/unxt.git?subdirectory=packages%2Funxt-api&rev=a78e1965f5033c31e8ab519848b3ff0a01e9e9ab#a78e1965f5033c31e8ab519848b3ff0a01e9e9ab" }
 dependencies = [
     { name = "plum-dispatch" },
 ]

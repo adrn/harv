@@ -46,7 +46,7 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check src # TODO: remove "src" to do all
+        entry: uv run ty check src docs # TODO: remove "src docs" to do all
         language: system
         types: [python]
         pass_filenames: false

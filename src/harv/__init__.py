@@ -39,6 +39,9 @@ __all__ = (
     "RejectionPrior",
     "RejectionSampler",
     "Samples",
+    # Modules:
+    "data",
+    "plot",
 )
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
@@ -64,3 +67,5 @@ from harv.models import (
     rv_model,
 )
 from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler, Samples
+from harv import data
+from harv import plot

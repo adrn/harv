@@ -205,7 +205,7 @@ def get_t_grid(
 
 def get_alpha(n: int) -> float:
     """Get alpha (transparency) for plotting many samples, to avoid overplotting."""
-    return max(0.02, min(0.8, 8.0 / n))
+    return max(0.08, min(0.8, 8.0 / n))
 
 
 # --- Hacky, extension-specific plotting helpers ---
@@ -334,6 +334,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     extensions: tuple[Any, ...] = (),
     *,
     n_samples: int | None = 128,
+    relative_to_t_ref: bool = False,
+    relative_to_median_v_sys: bool = False,
     phase_fold_median: bool = False,
     apply_median_offsets: bool = True,
     plot_kwargs: dict[str, Any] | None = None,
@@ -365,6 +367,12 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     n_samples : int | None, optional
         Number of posterior curves to draw.  Set to None to draw all samples.  Default:
         128.
+    relative_to_t_ref : bool, optional
+        Whether to plot time relative to the reference epoch (t_ref) of the data.
+    relative_to_median_v_sys : bool, optional
+        Whether to shift all curves by the median systemic velocity (v_sys) of the
+        samples, so that the curves show only the relative RV variations. Only applies
+        when a "v_sys" parameter is present in the samples. Default: False.
     phase_fold_median : bool, optional
         If ``True``, fold data and model to orbital phase using the sample closest to
         the median period. Phase zero is set to that sample's ``t_peri`` value. Only
@@ -522,7 +530,14 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                     jnp.stack(per_sample), axis=0
                 )
 
-    # Colour cycler for instruments
+    # If a user specified, a global shift:
+    median_v0 = (
+        jnp.median(samples["v_sys"])
+        if relative_to_median_v_sys and "v_sys" in samples
+        else Q(0.0, rv_unit)
+    )
+
+    # Color cycler for instruments
     if color_cycler is not None:
         colors = list(color_cycler.by_key()["color"])
     else:
@@ -547,11 +562,12 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
         plot_timeseries_errorbar(
             rv_data.time,
-            rv_obs,
+            rv_obs - median_v0,
             rv_err,
             time_unit=time_unit,
             obs_unit=rv_unit,
             t_ref=phase_zero,
+            relative_to_t_ref=relative_to_t_ref,
             phase_fold=phase_fold,
             ax=ax,
             **instr_style,
@@ -570,11 +586,12 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             rv_err_wide = jnp.sqrt(rv_err**2 + median_extra_err**2)
             plot_timeseries_errorbar(
                 rv_data.time,
-                rv_obs,
+                rv_obs - median_v0,
                 rv_err_wide,
                 time_unit=time_unit,
                 obs_unit=rv_unit,
                 t_ref=phase_zero,
+                relative_to_t_ref=relative_to_t_ref,
                 phase_fold=phase_fold,
                 ax=ax,
                 **wide_style,
@@ -607,6 +624,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             t_grid = ref_t_peri + Q(phase_grid, "") * median_period
 
         x_plot = ustrip(time_unit, t_grid)
+
+        if relative_to_t_ref:
+            x_plot = x_plot - ustrip(time_unit, t_ref)
 
         ax_set_info = {
             "xlabel": f"time [{time_unit}]",
@@ -662,7 +682,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                         if contrib is not None:
                             rv_model = rv_model + Q(contrib, rv_unit)
 
-                ax.plot(x_plot, ustrip(rv_unit, rv_model), **orbit_style)
+                ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **orbit_style)
     else:
         # data=None: draw orbit curves using bare parameter keys (no component context)
         for i in draw_indices:
@@ -675,7 +695,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 "v_sys": samples["v_sys"][i],
             }
             rv_model = rv_at_times(t_grid, **sample_data)
-            ax.plot(x_plot, ustrip(rv_unit, rv_model), **orbit_style)
+            ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **orbit_style)
 
     ax.legend(loc="best")
     ax.set(**ax_set_info)

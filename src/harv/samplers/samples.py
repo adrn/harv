@@ -682,7 +682,11 @@ class Samples(eqx.Module):
                 values = self[param]
                 if isinstance(values, Q):
                     # Store with unit in variable name
-                    var_name = f"{param} [{values.unit}]"
+                    var_name = (
+                        f"{param} [{values.unit}]"
+                        if values.unit and str(values.unit) != ""
+                        else param
+                    )
                     data_dict[var_name] = np.asarray(values.value)[None, :]
                     var_names.append(var_name)
                     # Handle truths/reference values
@@ -713,7 +717,7 @@ class Samples(eqx.Module):
             "var_names": var_names,
             "kind": "scatter",
             "marginals": True,
-            "point_estimate": "median",
+            "point_estimate": None,
         }
 
         # Add reference values if provided

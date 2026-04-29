@@ -40,7 +40,8 @@ dependencies = [
 [tool.uv]
 override-dependencies = [
     # "unxt @ file:///Users/aprice-whelan/projects/unxt",
-    "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
+    # "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
+    "unxt @ git+https://github.com/adrn/unxt.git@a78e1965f5033c31e8ab519848b3ff0a01e9e9ab",
     "coordinax @ git+https://github.com/GalacticDynamics/coordinax.git",
     "numpyro-ext @ git+https://github.com/dfm/numpyro-ext.git"
 ]
@@ -51,6 +52,7 @@ extra = [
     "setuptools",  # needed for gaiaunlimited for pkg_resources...
     "arviz>=0.22.0", # TODO: pinned because I had kernel issues
     "matplotlib>=3.10.7",
+    "tinygp>=0.3.1",
 ]
 dev = [
     {include-group = "extra"},
