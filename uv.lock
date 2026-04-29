@@ -8,7 +8,6 @@ resolution-markers = [
 
 [manifest]
 overrides = [
-    { name = "coordinax", git = "https://github.com/GalacticDynamics/coordinax.git" },
     { name = "numpyro-ext", git = "https://github.com/dfm/numpyro-ext.git" },
     { name = "unxt", git = "https://github.com/adrn/unxt.git?rev=a78e1965f5033c31e8ab519848b3ff0a01e9e9ab" },
 ]
@@ -449,29 +448,6 @@ wheels = [
 ]
 
 [[package]]
-name = "coordinax"
-version = "0.23.2.dev6+g44cc2ff02"
-source = { git = "https://github.com/GalacticDynamics/coordinax.git#44cc2ff027327a428f19aa6b00421a6a9cecb905" }
-dependencies = [
-    { name = "astropy" },
-    { name = "beartype" },
-    { name = "dataclassish" },
-    { name = "equinox" },
-    { name = "jax" },
-    { name = "jaxlib" },
-    { name = "jaxtyping" },
-    { name = "optional-dependencies" },
-    { name = "plum-dispatch" },
-    { name = "quax" },
-    { name = "quax-blocks" },
-    { name = "quaxed" },
-    { name = "typing-extensions" },
-    { name = "unxt" },
-    { name = "wadler-lindig" },
-    { name = "xmmutablemap" },
-]
-
-[[package]]
 name = "corner"
 version = "2.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -834,17 +810,13 @@ wheels = [
 name = "harv"
 source = { editable = "." }
 dependencies = [
-    { name = "coordinax" },
     { name = "equinox" },
     { name = "h5py" },
-    { name = "healpy" },
     { name = "jax" },
     { name = "jaxoplanet" },
     { name = "jaxtyping" },
-    { name = "jedi" },
     { name = "numpyro" },
     { name = "numpyro-ext" },
-    { name = "pooch" },
     { name = "quaxed" },
     { name = "unxt" },
 ]
@@ -856,10 +828,13 @@ dev = [
     { name = "corner" },
     { name = "gaiaunlimited" },
     { name = "hatch" },
+    { name = "healpy" },
     { name = "ipykernel" },
     { name = "ipywidgets" },
+    { name = "jedi" },
     { name = "matplotlib" },
     { name = "myst-parser" },
+    { name = "pooch" },
     { name = "pre-commit" },
     { name = "pydata-sphinx-theme" },
     { name = "pytest" },
@@ -892,7 +867,9 @@ docs = [
 extra = [
     { name = "arviz" },
     { name = "gaiaunlimited" },
+    { name = "healpy" },
     { name = "matplotlib" },
+    { name = "pooch" },
     { name = "setuptools" },
     { name = "tinygp" },
 ]
@@ -908,17 +885,13 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "coordinax", specifier = ">=0.23.1" },
     { name = "equinox", specifier = ">=0.13.2" },
     { name = "h5py", specifier = ">=3.15.1" },
-    { name = "healpy", specifier = ">=1.18.1" },
     { name = "jax", specifier = "==0.8.1" },
     { name = "jaxoplanet", specifier = ">=0.1.0" },
     { name = "jaxtyping", specifier = ">=0.3.3" },
-    { name = "jedi", specifier = "==0.19.1" },
     { name = "numpyro", specifier = ">=0.15.0" },
     { name = "numpyro-ext", specifier = ">=0.0.4" },
-    { name = "pooch", specifier = ">=1.8.2" },
     { name = "quaxed", specifier = ">=0.10.4" },
     { name = "unxt", specifier = ">=1.7.2" },
 ]
@@ -930,11 +903,14 @@ dev = [
     { name = "corner", specifier = ">=2.2.3" },
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "hatch" },
+    { name = "healpy", specifier = ">=1.18.1" },
     { name = "ipykernel" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "ipywidgets" },
+    { name = "jedi", specifier = "==0.19.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "myst-parser", specifier = ">=4.0" },
+    { name = "pooch", specifier = ">=1.8.2" },
     { name = "pre-commit" },
     { name = "pydata-sphinx-theme", specifier = "~=0.16" },
     { name = "pytest" },
@@ -967,7 +943,9 @@ docs = [
 extra = [
     { name = "arviz", specifier = ">=0.22.0" },
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
+    { name = "healpy", specifier = ">=1.18.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "pooch", specifier = ">=1.8.2" },
     { name = "setuptools" },
     { name = "tinygp", specifier = ">=0.3.1" },
 ]
