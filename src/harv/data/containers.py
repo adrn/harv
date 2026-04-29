@@ -71,13 +71,13 @@ class AbstractDatasetContainer(eqx.Module):
         --------
         >>> from harv.data.datasets import RVData, GaiaAstrometryData
         >>> from harv.data.containers import SourceData
-        >>> source_data = SourceData(
+        >>> source_data = SourceData(  # doctest: +SKIP
         ...     keck_rv=RVData(...),
         ...     gaia=GaiaAstrometryData(...),
         ... )
-        >>> source_data.get_datasets_by_type(RVData)
+        >>> source_data.get_datasets_by_type(RVData)  # doctest: +SKIP
         {'keck_rv': RVData(...)}
-        >>> source_data.get_datasets_by_type(GaiaAstrometryData)
+        >>> source_data.get_datasets_by_type(GaiaAstrometryData)  # doctest: +SKIP
         {'gaia': GaiaAstrometryData(...)}
         """
         return {k: v for k, v in self._datasets.items() if isinstance(v, data_type)}
@@ -103,12 +103,12 @@ class AbstractDatasetContainer(eqx.Module):
         --------
         >>> from harv.data.datasets import RVData, GaiaAstrometryData
         >>> from harv.data.containers import SourceData
-        >>> source_data = SourceData(
+        >>> source_data = SourceData(  # doctest: +SKIP
         ...     keck_rv=RVData(...),
         ...     wiyn_rv=RVData(...),
         ...     gaia=GaiaAstrometryData(...),
         ... )
-        >>> source_data.stacked_by_type(RVData)
+        >>> source_data.stacked_by_type(RVData)  # doctest: +SKIP
         RVData(...)
         """
         return stack_datasets(self._require_datasets_by_type(data_type))
