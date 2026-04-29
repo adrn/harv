@@ -121,7 +121,7 @@ allow-direct-references = true
 
 ######## Configure pytest for your test suite ########
 [tool.pytest.ini_options]
-testpaths = ["tests", "src"] # tests/ for unit/integration, src/ for doctests via Sybil
+testpaths = ["README.md", "tests", "src"]
 markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.mark.raises
 
 [tool.coverage.paths]

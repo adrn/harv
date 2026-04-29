@@ -59,35 +59,32 @@ uv add git+https://github.com/adrn/harv
 
 ## Quickstart
 
-### Radial velocity fitting
+TODO: move to a quickstart page in documentation and link here.
+
+### Radial velocity modeling
 
 ```python
 from unxt import Q
-from harv import Model
-from harv.data import RVData
-from harv.samplers import RejectionPrior, RejectionSampler
+import harv
 
 # Load or create RV data with explicit units - some sample RV data:
-data = RVData(
+data = harv.RVData(
     time=Q([56000.0, 56100.0, 56250.0, 56400.0, 56600.0], "day"),
     rv=Q([12.3, -8.7, 5.1, -14.2, 10.8], "km/s"),
     rv_err=Q([1.2, 0.9, 1.1, 0.8, 1.0], "km/s"),
 )
 
 # Set up a prior with default structure (log-uniform in period, etc.)
-prior = RejectionPrior.default_rv(
+prior = harv.RejectionPrior.default_rv(
     period_min=Q(10, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),   # RV semi-amplitude scale
     sigma_v0=Q(10, "km/s"),   # systemic velocity prior width
 )
 
-# Build a model (combines prior + data, constructs likelihood)
-model = Model(prior, data)
-
 # Run the rejection sampler
-sampler = RejectionSampler(model)
-samples = sampler.run(n_prior_samples=1_000_000, seed=42)
+sampler = harv.RejectionSampler(prior, )
+samples = sampler.run(data, n_prior_samples=1_000_000, seed=42)
 
 # Inspect results — quantities carry units:
 print(f"Accepted {samples.n_samples} posterior samples")
@@ -97,7 +94,7 @@ print(f"Eccentricity: {samples['eccentricity']}")
 
 ### Gaia epoch astrometry
 
-```python
+```py
 from harv.data import GaiaAstrometryData
 
 astro_data = GaiaAstrometryData(
@@ -125,7 +122,7 @@ samples = sampler.run(n_prior_samples=1_000_000, seed=42)
 When the rejection sampler returns a small number of samples, you can refine with
 NumPyro MCMC, started from the posterior samples:
 
-```python
+```py
 from harv.samplers import NumpyroSampler
 
 samples = sampler.run(n_prior_samples=1_000_000, max_posterior_samples=128)
