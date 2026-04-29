@@ -8,19 +8,22 @@ __all__ = (
 )
 
 from collections.abc import Iterator
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import equinox as eqx
-import quaxed.numpy as jnp
-from unxt import AbstractQuantity
+import jax
 
 from harv.custom_types import NTime
-
-from .datasets import (
+from harv.data.datasets import (
     AbstractAstrometryData,
     AbstractData,
     DatasetType,
     RVData,
+)
+from harv.data.helpers import (
+    _synchronize_t_refs,
+    build_indicator_matrix,
+    stack_datasets,
 )
 
 _DT = TypeVar("_DT", bound=DatasetType)
@@ -29,8 +32,8 @@ _DT = TypeVar("_DT", bound=DatasetType)
 class AbstractDatasetContainer(eqx.Module):
     """Base class providing a dict-like interface over named datasets.
 
-    Subclasses (``SystemData``, ``SourceData``) share this common interface
-    but carry different semantic meaning.
+    Subclasses (SystemData, SourceData) share this common interface but carry different
+    semantic meaning.
     """
 
     _datasets: dict[str, DatasetType]
@@ -56,98 +59,151 @@ class AbstractDatasetContainer(eqx.Module):
         """(name, dataset) pairs."""
         return iter(self._datasets.items())
 
-    def get_datasets_by_type(self, dtype: type[_DT]) -> dict[str, _DT]:
-        """Get all datasets/components of a specific data type."""
-        return {k: v for k, v in self._datasets.items() if isinstance(v, dtype)}
+    def get_datasets_by_type(self, data_type: type[_DT]) -> dict[str, _DT]:
+        """Get all datasets/components of a specific data type.
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by.
+
+        Examples
+        --------
+        >>> from harv.data.datasets import RVData, GaiaAstrometryData
+        >>> from harv.data.containers import SourceData
+        >>> source_data = SourceData(  # doctest: +SKIP
+        ...     keck_rv=RVData(...),
+        ...     gaia=GaiaAstrometryData(...),
+        ... )
+        >>> source_data.get_datasets_by_type(RVData)  # doctest: +SKIP
+        {'keck_rv': RVData(...)}
+        >>> source_data.get_datasets_by_type(GaiaAstrometryData)  # doctest: +SKIP
+        {'gaia': GaiaAstrometryData(...)}
+        """
+        return {k: v for k, v in self._datasets.items() if isinstance(v, data_type)}
+
+    def _require_datasets_by_type(self, data_type: type[_DT]) -> dict[str, _DT]:
+        """Like get_datasets_by_type but raises if no datasets of the requested type."""
+        datasets = self.get_datasets_by_type(data_type)
+        if not datasets:
+            msg = f"No datasets of type {data_type.__name__} found"
+            raise ValueError(msg)
+        return datasets
+
+    def stacked_by_type(self, data_type: type[_DT]) -> _DT:
+        """Stack all datasets of the requested type.
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
+            stacking.
+
+        Examples
+        --------
+        >>> from harv.data.datasets import RVData, GaiaAstrometryData
+        >>> from harv.data.containers import SourceData
+        >>> source_data = SourceData(  # doctest: +SKIP
+        ...     keck_rv=RVData(...),
+        ...     wiyn_rv=RVData(...),
+        ...     gaia=GaiaAstrometryData(...),
+        ... )
+        >>> source_data.stacked_by_type(RVData)  # doctest: +SKIP
+        RVData(...)
+        """
+        return stack_datasets(self._require_datasets_by_type(data_type))
+
+    def indicator_data_by_type(
+        self,
+        data_type: type[_DT],
+        reference: str,
+    ) -> tuple[_DT, jax.Array | None, tuple[str, ...] | None]:
+        """Return stacked data and indicator flags for one dataset type.
+
+        This is a convenience wrapper around get_datasets_by_type +
+        build_indicator_matrix for use in extensions that need to build a kernel matrix
+        across multiple datasets of the same type (e.g. multiple RV instruments).
+
+        Parameters
+        ----------
+        data_type : type
+            Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
+            stacking.
+        reference : str
+            Name of the reference dataset to use for time coordinates and metadata. Must
+            be one of the keys in the returned dict from
+            get_datasets_by_type(data_type).
+        """
+        datasets = self._require_datasets_by_type(data_type)
+        stacked, indicator, names = build_indicator_matrix(datasets, reference)
+        return stacked, indicator, names
 
 
 class SystemData(AbstractDatasetContainer):
     """Container for a multi-component system.
 
-    Each named component holds a :class:`DatasetType` (e.g. :class:`RVData`,
-    :class:`GaiaAstrometryData`) representing observations of a distinct
-    physical body or photocenter in a gravitationally bound system.
-
-    Unlike :class:`SourceData` (multiple instruments observing the *same*
-    source), ``SystemData`` represents *resolved components* of a multi-body
-    system (e.g. primary and secondary in an SB2).  The two containers may
-    eventually be composed: ``SystemData`` for per-component spectroscopy,
-    with a separate ``GaiaAstrometryData`` (or ``SourceData``) for the
-    unresolved photocenter astrometry.
-
-    Parameters are passed as keyword arguments where the key is the component
-    name and the value is the dataset.
-
-    Examples
-    --------
-    >>> from unxt import Q
-    >>> from harv.data import RVData
-    >>> from harv.data.containers import SystemData
-    >>> primary = RVData(
-    ...     time=Q([0.0, 50.0, 100.0], "day"),
-    ...     rv=Q([10.0, -5.0, 8.0], "km/s"),
-    ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
-    ... )
-    >>> secondary = RVData(
-    ...     time=Q([0.0, 50.0, 100.0], "day"),
-    ...     rv=Q([-20.0, 10.0, -16.0], "km/s"),
-    ...     rv_err=Q([1.0, 1.0, 1.0], "km/s"),
-    ... )
-    >>> data = SystemData(primary=primary, secondary=secondary)
-    >>> list(data.keys())
-    ['primary', 'secondary']
-    >>> data["primary"].n_times
-    3
+    Each named component holds the same concrete data class representing observations of
+    a distinct physical body or photocenter in a gravitationally bound system.
     """
+
+    _dataset_type: type[AbstractData] = eqx.field(static=True)
 
     def __init__(self, **datasets: DatasetType) -> None:
         if not datasets:
             raise ValueError("At least one component must be provided")
+
+        type_map: dict[str, str] = {}
         for name, ds in datasets.items():
             if not isinstance(ds, AbstractData):
                 raise TypeError(
                     f"Component '{name}' must be an AbstractData subclass "
                     f"(RVData, GaiaAstrometryData, ...), got {type(ds).__name__}"
                 )
-        object.__setattr__(self, "_datasets", datasets)
+            type_map[name] = type(ds).__name__
+
+        dataset_types = {type(ds) for ds in datasets.values()}
+        if len(dataset_types) != 1:
+            msg = (
+                "SystemData requires all component datasets to have the same "
+                f"concrete data class; got {type_map}"
+            )
+            raise TypeError(msg)
+
+        datasets = cast(
+            "dict[str, DatasetType]",
+            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
+        )
+        self._datasets = datasets
+        self._dataset_type = next(iter(dataset_types))
 
     @property
-    def t_ref(self) -> NTime:
+    def dataset_type(self) -> type[AbstractData]:
+        """Concrete dataset class shared by all components."""
+        return self._dataset_type
+
+    @property
+    def t_ref(self) -> NTime | None:
         """Reference epoch from the first component."""
+        # TODO: this shouldn't exist!
         return next(iter(self._datasets.values())).t_ref
 
-    def _get_obs(self) -> AbstractQuantity:
-        """Concatenated observations across all components (key order)."""
-        return jnp.concatenate([ds._get_obs() for ds in self._datasets.values()])
+    def stacked(self) -> DatasetType:
+        """Stack all component datasets."""
+        return stack_datasets(self._datasets)
 
-    def _get_obs_err(self) -> AbstractQuantity:
-        """Concatenated uncertainties across all components (key order)."""
-        return jnp.concatenate([ds._get_obs_err() for ds in self._datasets.values()])
+    def indicator_data(
+        self,
+        reference: str,
+    ) -> tuple[DatasetType, jax.Array | None, tuple[str, ...] | None]:
+        """Return stacked data and component-indicator flags."""
+        return build_indicator_matrix(self._datasets, reference)
 
 
 class SourceData(AbstractDatasetContainer):
     """Container for multiple named datasets for a single source.
 
-    Accepts arbitrary named datasets via keyword arguments. Names are
-    user-defined and can be anything (e.g., 'gaia', 'keck_rv', 'hst_imaging').
-
-    Examples
-    --------
-    >>> from unxt import Q
-    >>> from harv.data import RVData, SourceData
-    >>> rv1 = RVData(
-    ...     time=Q([0.0, 50.0], "day"),
-    ...     rv=Q([1.0, -2.0], "km/s"),
-    ...     rv_err=Q([0.5, 0.5], "km/s"),
-    ... )
-    >>> rv2 = RVData(
-    ...     time=Q([10.0, 60.0], "day"),
-    ...     rv=Q([0.5, -1.5], "km/s"),
-    ...     rv_err=Q([0.3, 0.3], "km/s"),
-    ... )
-    >>> src = SourceData(survey1=rv1, survey2=rv2)
-    >>> list(src.keys())
-    ['survey1', 'survey2']
+    Accepts arbitrary named datasets via keyword arguments. Names are user-defined and
+    can be anything (e.g., gaia, keck_rv, hst_imaging).
     """
 
     def __init__(self, **datasets: DatasetType) -> None:
@@ -159,6 +215,10 @@ class SourceData(AbstractDatasetContainer):
                     f"Dataset '{name}' must be AbstractAstrometryData or "
                     f"RVData, got {type(ds).__name__}"
                 )
+        datasets = cast(
+            "dict[str, DatasetType]",
+            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
+        )
         object.__setattr__(self, "_datasets", datasets)
 
     def _n_astrometry(self) -> int:

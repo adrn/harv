@@ -66,7 +66,8 @@ def _check_thiele_innes_round_trip(
         atol=atol,
     )
 
-    # Symmetric solution: Omega -> Omega+pi, omega -> omega+pi (T-I invariant under this transform)
+    # Symmetric solution: Omega -> Omega+pi, omega -> omega+pi (T-I invariant under this
+    # transform)
     sym_orientation = KeplerianOrientation.from_angles(
         arg_peri=orientation.arg_peri + Q(jnp.pi, "rad"),
         lon_asc_node=orientation.lon_asc_node + Q(jnp.pi, "rad"),
@@ -79,9 +80,9 @@ def _check_thiele_innes_round_trip(
         atol=atol,
     )
 
-    assert (
-        match_primary or match_sym
-    ), "Recovered orientation does not match original or symmetric solution."
+    assert match_primary or match_sym, (
+        "Recovered orientation does not match original or symmetric solution."
+    )
 
     # Check Thiele-Innes constants are preserved
     roundtrip_constants = roundtrip_orientation.thiele_innes_constants(roundtrip_a)

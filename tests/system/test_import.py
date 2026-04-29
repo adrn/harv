@@ -26,4 +26,4 @@
 
 def test_import():
     """Test that the package can be imported."""
-    import harv  # noqa: F401
+    import harv  # noqa: F401, PLC0415

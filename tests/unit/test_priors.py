@@ -12,22 +12,22 @@ from harv.samplers.custom_priors import (
 from harv.samplers.rejection_prior import RejectionPrior
 
 # Common default_rv kwargs used throughout tests
-_DEFAULT_RV_KWARGS = dict(
-    period_min=Q(50.0, "day"),
-    period_max=Q(200.0, "day"),
-    sigma_K0=Q(30.0, "km/s"),
-    sigma_v0=Q(30.0, "km/s"),
-)
+_DEFAULT_RV_KWARGS = {
+    "period_min": Q(50.0, "day"),
+    "period_max": Q(200.0, "day"),
+    "sigma_K0": Q(30.0, "km/s"),
+    "sigma_v0": Q(30.0, "km/s"),
+}
 
 # Common default_gaia_astrometry kwargs used throughout tests
-_DEFAULT_ASTRO_KWARGS = dict(
-    period_min=Q(50.0, "day"),
-    period_max=Q(200.0, "day"),
-    sigma_a0=Q(1e3, "AU"),
-    sigma_parallax=Q(100.0, "mas"),
-    sigma_pos=Q(1e3, "mas"),
-    sigma_vtan=Q(200.0, "km/s"),
-)
+_DEFAULT_ASTRO_KWARGS = {
+    "period_min": Q(50.0, "day"),
+    "period_max": Q(200.0, "day"),
+    "sigma_a0": Q(1e3, "AU"),
+    "sigma_parallax": Q(100.0, "mas"),
+    "sigma_pos": Q(1e3, "mas"),
+    "sigma_vtan": Q(200.0, "km/s"),
+}
 
 
 class TestRejectionPriorAstrometry:
@@ -131,22 +131,20 @@ class TestRejectionPriorRV:
         assert "cos_i" not in prior.nonlinear_priors
         assert "lon_asc_node" not in prior.nonlinear_priors
 
-    def test_rv_with_offsets(self):
-        """Test RV prior with multi-instrument offsets."""
-        offsets = {
-            "keck": None,  # Reference instrument
-            "espresso": QD(dist.Normal(0, 5.0), "km/s"),
-            "harps": QD(dist.Normal(0, 10.0), "km/s"),
-        }
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, offsets=offsets)
+    def test_rv_with_extension_priors(self):
+        """Test RV prior with multi-instrument offset extension priors."""
+        prior = RejectionPrior.default_rv(
+            **_DEFAULT_RV_KWARGS,
+            espresso=QD(dist.Normal(0, 5.0), "km/s"),
+            harps=QD(dist.Normal(0, 10.0), "km/s"),
+        )
 
-        assert prior.offsets is not None
-        # offsets is now {"rv": {...}}
-        rv_offsets = prior.offsets["rv"]
-        assert len(rv_offsets) == 3
-        # Count non-None offsets (reference instrument has None)
-        n_offsets = sum(1 for v in rv_offsets.values() if v is not None)
-        assert n_offsets == 2  # espresso and harps
+        # Extension priors are stored in extension_priors, not linear_prior
+        assert "espresso" in prior.extension_priors
+        assert "harps" in prior.extension_priors
+        # They are not in linear_prior (routing happens at run-time)
+        assert "espresso" not in prior.linear_prior
+        assert "harps" not in prior.linear_prior
 
     def test_rv_prior_sampling(self):
         """Test sampling from RV prior."""
@@ -189,12 +187,12 @@ class TestParameterOverrides:
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
         assert prior.linear_prior["v_sys"] is custom_v0
 
-    def test_rv_invalid_kwarg_raises(self):
-        """Unknown kwarg name raises TypeError."""
-        import pytest
-
-        with pytest.raises(TypeError, match="unexpected keyword argument 'bogus'"):
-            RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, bogus=dist.Normal(0, 1))
+    def test_rv_unknown_kwarg_becomes_extension_prior(self):
+        """Unknown kwarg is accepted and stored in extension_priors."""
+        bogus_dist = dist.Normal(0, 1)
+        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, bogus=bogus_dist)
+        assert "bogus" in prior.extension_priors
+        assert prior.extension_priors["bogus"] is bogus_dist
 
     def test_astro_override_nonlinear(self):
         """Nonlinear prior can be overridden in astrometry constructor."""
@@ -212,14 +210,14 @@ class TestParameterOverrides:
         )
         assert prior.linear_prior["parallax"] is custom_parallax
 
-    def test_astro_invalid_kwarg_raises(self):
-        """Unknown kwarg name raises TypeError in astrometry constructor."""
-        import pytest
-
-        with pytest.raises(TypeError, match="unexpected keyword argument 'fake'"):
-            RejectionPrior.default_gaia_astrometry(
-                **_DEFAULT_ASTRO_KWARGS, fake=dist.Normal(0, 1)
-            )
+    def test_astro_unknown_kwarg_becomes_extension_prior(self):
+        """Unknown kwarg is accepted and stored in extension_priors."""
+        fake_dist = dist.Normal(0, 1)
+        prior = RejectionPrior.default_gaia_astrometry(
+            **_DEFAULT_ASTRO_KWARGS, fake=fake_dist
+        )
+        assert "fake" in prior.extension_priors
+        assert prior.extension_priors["fake"] is fake_dist
 
 
 class TestPriorValidation:
@@ -357,20 +355,16 @@ class TestPriorProperties:
         rv_prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
         assert rv_prior.n_nonlinear == 4
 
-    def test_parameter_counting_rv_with_offsets(self):
-        """Test that RV with offsets still has 4 nonlinear parameters."""
+    def test_parameter_counting_rv_with_extension_priors(self):
+        """Test that RV with extension priors still has 4 nonlinear parameters."""
         rv_prior_offsets = RejectionPrior.default_rv(
             **_DEFAULT_RV_KWARGS,
-            offsets={
-                "inst1": None,
-                "inst2": QD(dist.Normal(0, 5), "km/s"),
-            },
+            inst2=QD(dist.Normal(0, 5), "km/s"),
         )
         assert rv_prior_offsets.n_nonlinear == 4
-        assert rv_prior_offsets.offsets is not None
-        rv_offsets = rv_prior_offsets.offsets["rv"]
-        n_offsets = sum(1 for v in rv_offsets.values() if v is not None)
-        assert n_offsets == 1
+        assert "inst2" in rv_prior_offsets.extension_priors
+        # inst2 is NOT in linear_prior until routing happens at run-time
+        assert "inst2" not in rv_prior_offsets.linear_prior
 
     def test_reproducible_sampling(self):
         """Test that sampling is reproducible with same seed."""

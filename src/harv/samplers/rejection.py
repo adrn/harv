@@ -1,59 +1,381 @@
-"""Rejection sampler for orbital parameter inference.
+"""Rejection sampler for orbital parameter inference."""
 
-This module implements rejection sampling with analytical marginalization over
-linear parameters. The sampler draws samples from the prior distribution over
-nonlinear parameters, evaluates the marginalized likelihood, and performs
-rejection sampling to obtain posterior samples.
-
-The sampler accepts a :class:`~harv.model.Model` that pre-computes the
-likelihood and provides parameter-building methods.  Numpyro model builder
-helpers live in ``_numpyro.py``.
-"""
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+import uuid
+import warnings
+from collections.abc import Mapping
+from typing import Any, NamedTuple, cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-from unxt import AbstractQuantity, Q, ustrip
+from unxt import AbstractQuantity, Q
+from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.likelihood.helpers import _unwrap_dist
+from harv.extensions.base import AbstractExtension
+from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
+from harv.models.component import AbstractComponentModel
+from harv.models.factories import _build_model
+from harv.models.joint import JointModel
+from harv.models.parameterizations import AbstractParameterization
+from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
-if TYPE_CHECKING:
-    from harv.model import Model
-
-__all__ = ["RejectionSampler"]
+__all__ = ("RejectionSampler",)
 
 
-# ---------------------------------------------------------------------------
-# Sampler
-# ---------------------------------------------------------------------------
+class _PreparedSamplerModel(NamedTuple):
+    """Normalized model-preparation bundle shared across sampler entry paths."""
+
+    model: AbstractComponentModel | JointModel
+    nonlinear_extension_priors: dict[str, Any]
+    effective_linear_prior: dict[str, Any] | None
+    effective_marginalized_names: tuple[str, ...] | None
+    linear_extension_names: tuple[str, ...]
+
+
+def _lookup_extension_prior(
+    extension_priors: Mapping[str, Any],
+    param_name: str,
+    *,
+    component_name: str = "",
+) -> Any | None:
+    """Get an extension prior by component-qualified or bare parameter name."""
+    if component_name:
+        qualified_name = f"{component_name}.{param_name}"
+        if qualified_name in extension_priors:
+            return extension_priors[qualified_name]
+    return extension_priors.get(param_name)
+
+
+def _resolve_effective_marginalized_names(
+    effective_linear_prior: dict[str, Any] | None,
+    marginalized_names: tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
+    """Resolve and validate the effective marginalized linear parameter subset."""
+    if effective_linear_prior is None:
+        return marginalized_names
+
+    if marginalized_names is not None:
+        unknown = set(marginalized_names) - set(effective_linear_prior)
+        if unknown:
+            msg = (
+                "marginalized_names contains unknown linear parameter(s): "
+                f"{unknown}. Valid names: {tuple(effective_linear_prior.keys())}"
+            )
+            raise ValueError(msg)
+
+    explicit = {
+        name
+        for name, prior_dist in effective_linear_prior.items()
+        if _needs_explicit_sampling(prior_dist)
+    }
+    if not explicit:
+        return marginalized_names
+
+    if marginalized_names is None:
+        resolved_names = tuple(
+            name for name in effective_linear_prior if name not in explicit
+        )
+    else:
+        resolved_names = tuple(
+            name for name in marginalized_names if name not in explicit
+        )
+
+    warnings.warn(
+        f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
+        f"marginalized and will be sampled explicitly. Marginalized parameters: "
+        f"{resolved_names}",
+        stacklevel=3,
+    )
+    return resolved_names
+
+
+def _effective_linear_prior_from_model(
+    model: AbstractComponentModel | JointModel,
+) -> dict[str, Any] | None:
+    """Collect the effective linear prior dict from a pre-built model."""
+    if isinstance(model, JointModel):
+        merged_linear_prior: dict[str, Any] = {}
+        for component in model.components.values():
+            if component.linear_prior is None:
+                continue
+            merged_linear_prior.update(component.linear_prior)
+        return merged_linear_prior or None
+    return model.linear_prior
+
+
+def _resolve_extension_priors(
+    prior: RejectionPrior,
+    extensions: tuple[AbstractExtension, ...],
+    marginalized_names: tuple[str, ...] | None,
+) -> tuple[
+    dict[str, Any],  # nonlinear_extension_priors: param_name -> prior
+    dict[str, Any] | None,
+    # effective_linear_prior: merged base + extension linear priors
+    tuple[str, ...],  # linear_extension_names from linear=True extension params
+    tuple[str, ...] | None,
+    # effective marginalized_names (auto-classification applied)
+]:
+    """Validate and route extension priors to nonlinear/linear dicts.
+
+    Called at sampler run-time when the full extension list is known.
+    Raises ``ValueError`` if any extension declares a parameter not in
+    ``prior.extension_priors``.
+
+    Parameters
+    ----------
+    prior : RejectionPrior
+        Prior with ``extension_priors`` populated by the user.
+    extensions : tuple of AbstractExtension
+        The sampler's extension list (jitter, offsets, GP, etc.).
+    marginalized_names : tuple of str or None
+        Requested linear parameter names to analytically marginalize.
+
+    Returns
+    -------
+    nonlinear_extension_priors : dict
+        Extension nonlinear params keyed by ``param_name``.
+    effective_linear_prior : dict or None
+        Base linear prior merged with extension linear params.
+    linear_extension_names : tuple of str
+        Names of extension linear params (instrument offsets, trends, etc.).
+    effective_marginalized_names : tuple of str or None
+        Effective marginalize set after auto-classifying non-Gaussian entries.
+    """
+    nonlinear_extension_priors: dict[str, Any] = {}
+    effective_linear_prior: dict[str, Any] | None = (
+        dict(prior.linear_prior)
+        if isinstance(prior.linear_prior, dict)
+        else prior.linear_prior
+    )
+    linear_extension_names: list[str] = []
+
+    for ext in extensions:
+        for p in ext.extra_params():
+            if p.name not in prior.extension_priors:
+                raise ValueError(
+                    f"Extension '{type(ext).__name__}' requires a prior for "
+                    f"parameter '{p.name}'. Pass it as a keyword argument: "
+                    f"RejectionPrior.default_rv(..., {p.name}=QD(...)) or "
+                    f"set extension_priors={{'{p.name}': QD(...)}} directly."
+                )
+            if p.linear:
+                if effective_linear_prior is None:
+                    msg = (
+                        "Cannot add linear extension priors when "
+                        "effective_linear_prior "
+                        "is None. Build the model in explicit mode only when no linear "
+                        "extensions are present."
+                    )
+                    raise ValueError(msg)
+                effective_linear_prior[p.name] = prior.extension_priors[p.name]
+                linear_extension_names.append(p.name)
+            else:
+                nonlinear_extension_priors[p.name] = prior.extension_priors[p.name]
+
+    effective_marginalized_names = _resolve_effective_marginalized_names(
+        effective_linear_prior,
+        marginalized_names,
+    )
+
+    return (
+        nonlinear_extension_priors,
+        effective_linear_prior,
+        tuple(linear_extension_names),
+        effective_marginalized_names,
+    )
+
+
+def _nonlinear_extension_priors_from_model(
+    prior: RejectionPrior,
+    model: AbstractComponentModel | JointModel,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Derive nonlinear extension priors and linear extension names from a model.
+
+    Walks the model's extensions, looks up matching priors in
+    ``prior.extension_priors``, and routes them by the ``linear`` flag on
+    each param. Component-qualified names (for example ``"rv.jitter"``)
+    are preferred when the model is a :class:`JointModel`, but bare names are
+    accepted as a fallback for backward compatibility.
+
+    Used for the ``from_model`` expert path, where ``_resolve_extension_priors``
+    is not called.
+
+    Returns
+    -------
+    nonlinear_extension_priors : dict[str, PriorDist]
+        Extension nonlinear params, keyed by model-key convention.
+    linear_extension_names : tuple[str, ...]
+        Names of extension linear (offset) params.
+    """
+    if isinstance(model, JointModel):
+        comp_extensions: list[tuple[str, Any]] = [
+            (comp_name, ext)
+            for comp_name, comp in model.components.items()
+            for ext in comp.extensions
+        ]
+    else:
+        comp_extensions = [("", ext) for ext in model.extensions]
+
+    nonlinear_extension_priors: dict[str, Any] = {}
+    linear_extension_names: list[str] = []
+
+    for comp_name, ext in comp_extensions:
+        for p in ext.extra_params():
+            extension_prior = _lookup_extension_prior(
+                prior.extension_priors,
+                p.name,
+                component_name=comp_name,
+            )
+            if extension_prior is None:
+                continue
+            model_key = f"{comp_name}.{p.name}" if comp_name else p.name
+            if p.linear:
+                linear_extension_names.append(p.name)
+            else:
+                nonlinear_extension_priors[model_key] = extension_prior
+
+    return nonlinear_extension_priors, tuple(linear_extension_names)
+
+
+def _ext_nonlinear_from_model(
+    prior: RejectionPrior,
+    model: AbstractComponentModel | JointModel,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Backward-compatible alias for nonlinear extension prior extraction."""
+    return _nonlinear_extension_priors_from_model(prior, model)
+
+
+def _ext_nonlinear_model_keys(
+    nonlinear_extension_priors: dict[str, Any],
+    model: AbstractComponentModel | JointModel,
+) -> dict[str, str]:
+    """Map bare nonlinear extension names to the keys used in model.log_prob."""
+    if not isinstance(model, JointModel):
+        return {name: name for name in nonlinear_extension_priors}
+
+    per_component_names = model._per_component_nonlinear_names()
+    name_to_model_key: dict[str, str] = {}
+    for component_name, nonlinear_names in per_component_names.items():
+        for param_name in nonlinear_names:
+            if param_name in nonlinear_extension_priors:
+                name_to_model_key[param_name] = f"{component_name}.{param_name}"
+
+    for name in nonlinear_extension_priors:
+        if name not in name_to_model_key:
+            name_to_model_key[name] = name
+    return name_to_model_key
+
+
+def _prepare_sampler_model(
+    prior: RejectionPrior,
+    model: AbstractComponentModel | JointModel | None,
+    data: Any,
+    extensions: tuple[AbstractExtension, ...],
+    parameterization: AbstractParameterization | None,
+    marginalized_names: tuple[str, ...] | None,
+) -> _PreparedSamplerModel:
+    """Prepare a normalized model/prior bundle for rejection or MCMC sampling."""
+    if model is not None:
+        nonlinear_extension_priors, linear_extension_names = (
+            _nonlinear_extension_priors_from_model(prior, model)
+        )
+        effective_linear_prior = _effective_linear_prior_from_model(model)
+        effective_marginalized_names = _resolve_effective_marginalized_names(
+            effective_linear_prior,
+            marginalized_names,
+        )
+        return _PreparedSamplerModel(
+            model=model,
+            nonlinear_extension_priors=nonlinear_extension_priors,
+            effective_linear_prior=effective_linear_prior,
+            effective_marginalized_names=effective_marginalized_names,
+            linear_extension_names=linear_extension_names,
+        )
+
+    if data is None:
+        msg = "data must be provided when no pre-built model is attached to the sampler"
+        raise ValueError(msg)
+
+    (
+        nonlinear_extension_priors,
+        effective_linear_prior,
+        linear_extension_names,
+        effective_marginalized_names,
+    ) = _resolve_extension_priors(prior, extensions, marginalized_names)
+
+    model = _build_model(
+        data,
+        effective_linear_prior,
+        extensions,
+        cast("Any", parameterization),
+    )
+    return _PreparedSamplerModel(
+        model=model,
+        nonlinear_extension_priors=nonlinear_extension_priors,
+        effective_linear_prior=effective_linear_prior,
+        effective_marginalized_names=effective_marginalized_names,
+        linear_extension_names=linear_extension_names,
+    )
+
+
+def _wrap_unit_values(
+    values: dict[str, Any],
+    nonlinear_priors: dict[str, Any],
+    base_names: frozenset[str],
+) -> dict[str, Any]:
+    """Wrap QuantityDistribution-sampled base params in Q objects.
+
+    Extension params (jitter, etc.) are left as raw scalars.
+    TODO: why are the extension params left as raw scalars?
+    """
+    result = dict(values)
+    for name, d in nonlinear_priors.items():
+        if isinstance(d, QuantityDistribution) and name in base_names:
+            result[name] = Q(result[name], str(d.unit))
+    return result
 
 
 class RejectionSampler(eqx.Module):
     """Rejection sampler for Keplerian orbital parameters.
 
-    This class implements rejection sampling with analytical marginalization
-    over linear parameters. It supports both astrometric and radial velocity
-    data.
+    This class implements rejection sampling with analytical marginalization over linear
+    parameters. Data is passed to :meth:`run` rather than at construction, so the same
+    configured sampler can be applied to multiple datasets.
 
     Parameters
     ----------
-    model : Model
-        A pre-built model combining prior and data.
+    prior : RejectionPrior
+        Prior distributions for nonlinear (and optionally linear) parameters.
+    parameterization : AbstractParameterization or None, optional
+        Orbital parameterization. For RV data defaults to
+        :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
+        astrometry data.
+    extensions : tuple of AbstractExtension, optional
+        Model extensions (jitter, trends, offsets, GP).
+    marginalized_names : tuple of str or None, optional
+        Linear parameter names to analytically marginalize. If None, all linear
+        parameters are marginalized. Ignored if the effective linear prior is None.
     batch_size : int, optional
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
+    model : AbstractComponentModel or JointModel, optional
+        Pre-built model to use for sampling. If provided, the model's parameterization
+        and extensions are used and the ``parameterization`` and ``extensions`` fields
+        are ignored. This is an expert bypass path for users who want to build a custom
+        model and use the rejection sampler for inference. If not provided, a model will
+        be constructed at run-time from the provided ``parameterization`` and
+        ``extensions``.
+
+    See Also
+    --------
+    RejectionSampler.from_model : Expert path for pre-built models.
 
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv import Model
     >>> from harv.samplers import RejectionPrior, RejectionSampler
     >>> prior = RejectionPrior.default_rv(
     ...     period_min=Q(2.0, "day"),
@@ -61,77 +383,153 @@ class RejectionSampler(eqx.Module):
     ...     sigma_K0=Q(30.0, "km/s"),
     ...     sigma_v0=Q(50.0, "km/s"),
     ... )
-    >>> sampler = RejectionSampler(Model(prior, rv_data))  # doctest: +SKIP
+    >>> sampler = RejectionSampler(prior)
     >>> sampler.batch_size
     100000
 
-    Run rejection sampling (expensive):
+    Run rejection sampling:
 
-    >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
+    >>> samples = sampler.run(data, n_prior_samples=100_000)  # doctest: +SKIP
     """
 
-    model: Model
+    prior: RejectionPrior
+    parameterization: AbstractParameterization | None = None
+    extensions: tuple[AbstractExtension, ...] = ()
+    marginalized_names: tuple[str, ...] | None = None
     batch_size: int = eqx.field(static=True, default=100_000)
+    model: AbstractComponentModel | JointModel | None = None
 
-    def run(
-        self,
-        n_prior_samples: int,
+    def __check_init__(self) -> None:
+        if self.model is not None and (
+            self.parameterization is not None or self.extensions
+        ):
+            msg = (
+                "Cannot specify parameterization or extensions when model is provided. "
+                "Use RejectionSampler.from_model(model, prior) and configure the "
+                "model directly."
+            )
+            raise ValueError(msg)
+
+    @classmethod
+    def from_model(
+        cls,
+        model: AbstractComponentModel | JointModel,
+        prior: RejectionPrior,
         *,
+        batch_size: int = 100_000,
+    ) -> "RejectionSampler":
+        """Construct from a pre-built model (expert bypass path).
+
+        Use this when you need full control over model construction,
+        parameterization, or extensions and want to bypass the automatic
+        model-building in :meth:`run`. With this constructor, omit ``data``
+        when calling :meth:`run`.
+
+        Parameters
+        ----------
+        model : AbstractComponentModel or JointModel
+            A fully constructed model with data and extensions attached.
+        prior : RejectionPrior
+            Prior distributions compatible with the model's parameters.
+        batch_size : int, optional
+            Number of samples to process per batch. Default: 100_000.
+        marginalized_names : tuple[str, ...] | None, optional
+            Linear parameter names to analytically marginalize. ``None``
+            means auto-classify from the effective linear prior.
+
+        Returns
+        -------
+        RejectionSampler
+
+        Examples
+        --------
+        >>> sampler = RejectionSampler.from_model(model, prior)  # doctest: +SKIP
+        >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
+        """
+        return cls(prior, batch_size=batch_size, model=model)
+
+    def run(  # noqa: C901
+        self,
+        data: Any = None,
+        *,
+        n_prior_samples: int,
         max_posterior_samples: int | None = None,
-        seed: int = 0,
+        seed: int | None = None,
     ) -> Samples:
         """Run rejection sampling.
 
         Parameters
         ----------
+        data : RVData or GaiaAstrometryData, optional
+            Observed data to condition on. Required unless the sampler was
+            constructed via :meth:`from_model`.
         n_prior_samples
             Number of samples to draw from the prior.
         max_posterior_samples
             Maximum number of posterior samples to return. If None, returns all
             accepted samples.
         seed
-            Random seed for reproducibility. Default: 0.
+            Random number seed. If not specified, picks a seed based on the
+            current time.
 
         Returns
         -------
         samples
             Posterior samples container.
-
-        Examples
-        --------
-        >>> from unxt import Q  # doctest: +SKIP
-        >>> from harv import Model  # doctest: +SKIP
-        >>> from harv.samplers import RejectionPrior, RejectionSampler  # doctest: +SKIP
-        >>> from harv.simulate.rv import simulate_rv_sb1_data  # doctest: +SKIP
-        >>> rv_data, _ = simulate_rv_sb1_data()  # doctest: +SKIP
-        >>> prior = RejectionPrior.default_rv(  # doctest: +SKIP
-        ...     period_min=Q(2.0, "day"),
-        ...     period_max=Q(1000.0, "day"),
-        ...     sigma_K0=Q(30.0, "km/s"),
-        ...     sigma_v0=Q(50.0, "km/s"),
-        ... )
-        >>> sampler = RejectionSampler(Model(prior, rv_data))  # doctest: +SKIP
-        >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
-        >>> samples.n_samples  # doctest: +SKIP
-        42
         """
-        model = self.model
+        try:
+            prepared = _prepare_sampler_model(
+                self.prior,
+                self.model,
+                data,
+                self.extensions,
+                self.parameterization,
+                self.marginalized_names,
+            )
+        except ValueError as err:
+            if self.model is None and data is None:
+                msg = (
+                    "data must be provided unless the sampler was constructed via "
+                    "RejectionSampler.from_model(). Got data=None and no "
+                    "pre-built model."
+                )
+                raise ValueError(msg) from err
+            raise
 
-        key = jr.key(seed)
+        model = prepared.model
+        nonlinear_extension_priors = prepared.nonlinear_extension_priors
+        effective_linear_prior = prepared.effective_linear_prior or {}
+        effective_marginalized_names = prepared.effective_marginalized_names
+        linear_extension_names = prepared.linear_extension_names
+
+        # if not specified, pick a different random seed each run:
+        _seed: int = uuid.uuid4().int >> 96 if seed is None else seed
+
+        key = jr.key(_seed)
         sample_key, rej_key = jr.split(key)
 
+        # generate prior samples and evaluate (marginalized) log likelihoods in batches
+        # TODO: only return accepted samples and acceptance rate to conserve memory?
+
         prior_samples, log_likelihoods = self._sample_prior_and_evaluate_batched(
+            model,
             sample_key,
             n_prior_samples,
+            nonlinear_extension_priors,
+            effective_linear_prior,
+            effective_marginalized_names,
         )
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
 
         linear_key = jr.fold_in(key, 2)
+        # TODO: support oversampling of linear parameters?
         linear_samples = self._sample_linear_parameters(
+            model,
             linear_key,
             accepted_nonlinear,
+            effective_marginalized_names,
         )
 
         if max_posterior_samples is not None:
@@ -147,71 +545,64 @@ class RejectionSampler(eqx.Module):
                 accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
                 linear_samples = {k: v[idx] for k, v in linear_samples.items()}
 
-        time_unit = model.time_unit
+        # Build nonlinear dict as Quantities with units from the prior.
+        # Base orbital params come from prior.nonlinear_priors.
+        # Extension nonlinear params (e.g. jitter) come from the prepared model-key map.
+        _nl_keys = set(self.prior.nonlinear_priors)
+        _all_nl_priors: dict[str, Any] = dict(self.prior.nonlinear_priors)
+        _all_nl_priors.update(nonlinear_extension_priors)
 
-        extra_linear_names: tuple[str, ...] = ()
-        if model.prior.offsets is not None:
-            extra_linear_names = tuple(
-                k for k, v in model.prior.offsets.items() if v is not None
+        nonlinear_q: dict[str, AbstractQuantity] = {}
+        for k, v in accepted_nonlinear.items():
+            if k not in _all_nl_priors:
+                continue
+            d = _all_nl_priors[k]
+            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
+            nonlinear_q[k] = Q(v, unit)
+
+        # Get t_ref from the model's data
+        t_ref: Any = None
+        if isinstance(model, JointModel):
+            first_comp = next(iter(model.components.values()))
+            if hasattr(first_comp, "data") and hasattr(first_comp.data, "t_ref"):
+                t_ref = first_comp.data.t_ref
+        elif hasattr(model, "data") and hasattr(model.data, "t_ref"):
+            t_ref = model.data.t_ref
+
+        metadata: dict[str, Any] = {}
+        if t_ref is not None:
+            # Strip to a plain Python float so a JAX-traced array never lands in a
+            # static metadata dict (which would trigger an equinox UserWarning).
+            _t_unit = str(t_ref.unit) if hasattr(t_ref, "unit") else ""
+            metadata["t_ref"] = (
+                float(ustrip(_t_unit, t_ref)) if _t_unit else float(t_ref)
             )
-
-        # Build nonlinear dict as Quantities with units baked in.
-        # Only include actual nonlinear parameters (not explicit-linear ones
-        # that may also be in accepted_nonlinear due to partial marginalization).
-        _nl_units: dict[str, str] = {
-            "period": time_unit,
-            "eccentricity": "",
-            "phase_peri": "",
-            "arg_peri": "rad",
-            "cos_i": "",
-            "lon_asc_node": "rad",
-        }
-        _nl_keys = set(model.prior.nonlinear_priors)
-        nonlinear_q: dict[str, AbstractQuantity] = {
-            k: Q(v, _nl_units.get(k, ""))
-            for k, v in accepted_nonlinear.items()
-            if k in _nl_keys
-        }
-
-        # Include jitter samples (keyed by user-friendly names like
-        # "jitter_rv", "jitter_astrometry") in the nonlinear dict.
-        if model.prior.jitter_priors is not None:
-            for dt_label, d in model.prior.jitter_priors.items():
-                values_key = f"_jitter_{dt_label}"
-                user_key = f"jitter_{dt_label}"
-                if values_key in accepted_nonlinear:
-                    unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
-                    nonlinear_q[user_key] = Q(accepted_nonlinear[values_key], unit)
+            metadata["t_ref_unit"] = _t_unit
 
         return Samples(
-            nonlinear=nonlinear_q,
-            linear=linear_samples,
-            orbit_cls=model.full_cls[0],
-            full_cls=model.full_cls,
-            data_type=model.data_type,
-            metadata={"t_ref": model.t_ref},
-            extra_linear_names=extra_linear_names,
+            nonlinear=cast("dict[str, Q]", nonlinear_q),
+            linear=cast("dict[str, Q]", linear_samples),
+            data_type=type(model).__name__,
+            metadata=metadata,
+            linear_extension_names=linear_extension_names,
         )
 
     @eqx.filter_jit
-    def _sample_prior_and_evaluate_batched(
+    def _sample_prior_and_evaluate_batched(  # noqa: C901
         self,
+        model: AbstractComponentModel | JointModel,
         key: jax.Array,
         n_prior_samples: int,
+        ext_nl_priors: dict[str, Any],
+        eff_linear: dict[str, Any],
+        marginalize_names: "tuple[str, ...] | None",
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Sample prior and evaluate likelihoods in batches.
 
-        The pre-built likelihood from ``self.model`` is evaluated with
-        ``jax.vmap`` inside a ``fori_loop`` over batches of ``batch_size``
-        samples.
-
-        Instead of zero-padding the last batch, we oversample so that every
-        evaluation uses a real prior draw.  The returned arrays are trimmed to
-        ``n_prior_samples``.
+        The model's ``log_prob`` is called either in auto mode or with the
+        sampler-resolved ``marginalized_names`` override.
         """
-        model = self.model
-        prior = model.prior
-        lik = model.likelihood
+        prior = self.prior
 
         n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
         n_total = n_batches * self.batch_size
@@ -219,77 +610,58 @@ class RejectionSampler(eqx.Module):
         key, nl_key = jr.split(key)
         prior_samples = prior.sample_nonlinear(nl_key, n_total)
 
-        time_unit = model.time_unit
+        base_names = model._base_nonlinear_names()
 
-        # Convert period samples from the prior's unit to the data's time
-        # unit.  When the period prior is a bare distribution (not wrapped in
-        # QDistribution), assume values are already in time_unit.
-        _p_prior = prior.nonlinear_priors.get("period")
-        _p_unit = (
-            str(_p_prior.unit) if isinstance(_p_prior, QuantityDistribution) else ""
-        )
-        if _p_unit:
-            period_converted = ustrip(time_unit, Q(prior_samples["period"], _p_unit))
-            prior_samples["period"] = period_converted
+        # Sample explicit linear params (non-Gaussian, not analytically marginalized).
+        # Use the effective marginalize_names computed by _resolve_extension_priors
+        # (which auto-classified non-Gaussian entries at run-time).
+        if isinstance(eff_linear, dict):
+            if marginalize_names is not None:
+                marg_set = set(marginalize_names)
+                for name, d in eff_linear.items():
+                    if name not in marg_set:
+                        key, k = jr.split(key)
+                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
+            else:
+                # marginalize_names is None => auto-marginalize Gaussians, sample rest
+                for name, d in eff_linear.items():
+                    if _needs_explicit_sampling(d):
+                        key, k = jr.split(key)
+                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
 
-        # Sample explicit linear params (those not being marginalized).
-        marg_names = prior.marginalize_names
-        if isinstance(prior.linear_prior, dict) and marg_names is not None:
-            marg_set = set(marg_names)
-            explicit_linear = {
-                name: d
-                for name, d in prior.linear_prior.items()
-                if name not in marg_set
-            }
-            if explicit_linear:
-                key, lin_key = jr.split(key)
-                lin_keys = jr.split(lin_key, len(explicit_linear))
-                lp_units = lik.linear_param_units
-                for (name, d), k in zip(explicit_linear.items(), lin_keys, strict=True):
-                    raw = _unwrap_dist(d).sample(k, (n_total,))
-                    # Convert to data units if the prior carries a unit.
-                    target_u = lp_units.get(name, "")
-                    if isinstance(d, QuantityDistribution) and target_u:
-                        raw = ustrip(target_u, Q(raw, str(d.unit)))
-                    prior_samples[name] = raw
+        # Sample extension nonlinear parameters (jitter, GP hypers, etc.).
+        if ext_nl_priors:
+            key, ext_key = jr.split(key)
+            ext_keys = jr.split(ext_key, len(ext_nl_priors))
+            for (model_key, d), k in zip(ext_nl_priors.items(), ext_keys, strict=True):
+                prior_samples[model_key] = _unwrap_dist(d).sample(k, (n_total,))
 
-        # Sample jitter parameters from jitter_priors (keyed by data type).
-        # Each jitter sample is stored with a namespaced key (e.g.
-        # "_jitter_rv") that the model maps to the "jitter" param field.
-        _jitter_keys: list[str] = []
-        if prior.jitter_priors is not None:
-            key, jit_key = jr.split(key)
-            jit_keys = jr.split(jit_key, len(prior.jitter_priors))
-            for (dt_label, d), k in zip(
-                prior.jitter_priors.items(), jit_keys, strict=True
-            ):
-                values_key = f"_jitter_{dt_label}"
-                _jitter_keys.append(values_key)
-                prior_samples[values_key] = _unwrap_dist(d).sample(k, (n_total,))
+        model_keys = tuple(prior_samples.keys())
 
-        # Reshape all parameter arrays into (n_batches, batch_size).
-        _zeros = jnp.zeros(n_total)
-        _required_keys = list(model.required_prior_params)
-        _required_keys.extend(_jitter_keys)
+        # Reshape into (n_batches, batch_size).
         batched: dict[str, jax.Array] = {
-            k: prior_samples.get(k, _zeros).reshape(n_batches, self.batch_size)
-            for k in _required_keys
+            k: prior_samples[k].reshape(n_batches, self.batch_size) for k in model_keys
         }
 
-        # Static list of keys for dict reconstruction inside the fori_loop.
-        _keys = tuple(batched.keys())
-
         def body_fn(i: int, acc: jax.Array) -> jax.Array:
-            values = {k: batched[k][i] for k in _keys}
-            params = model._build_params_raw(values)
-            return acc.at[i].set(jax.vmap(lik.log_prob)(params))
+            raw = {k: batched[k][i] for k in model_keys}
+            wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
+            if marginalize_names is None:
+                return acc.at[i].set(jax.vmap(model.log_prob)(wrapped))
+            return acc.at[i].set(
+                jax.vmap(
+                    lambda sample: model.log_prob(
+                        sample,
+                        marginalized_names=marginalize_names,
+                    )
+                )(wrapped)
+            )
 
         log_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
 
-        # Trim oversampled entries to match the requested count.
-        trimmed = {k: v[:n_prior_samples] for k, v in prior_samples.items()}
+        trimmed = {k: prior_samples[k][:n_prior_samples] for k in model_keys}
         return trimmed, log_liks_batched.flatten()[:n_prior_samples]
 
     @staticmethod
@@ -302,24 +674,63 @@ class RejectionSampler(eqx.Module):
 
     def _sample_linear_parameters(
         self,
+        model: AbstractComponentModel | JointModel,
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
+        marginalized_names: tuple[str, ...] | None,
     ) -> dict[str, AbstractQuantity]:
         """Sample linear parameters from conditional posterior using vmap.
 
-        For each accepted nonlinear sample, draws from the conditional posterior
-        of the linear parameters given the nonlinear parameters and data.
+        The model's ``sample_conditional_linear`` uses the sampler-resolved
+        ``marginalized_names`` override when one is provided.
         """
-        model = self.model
+        prior = self.prior
 
         n_samples = len(next(iter(nonlinear_samples.values())))
         if n_samples == 0:
-            names = model.all_linear_names
+            if isinstance(model, JointModel):
+                names: list[str] = []
+                for comp in model.components.values():
+                    names.extend(comp._all_linear_names())
+            else:
+                names = list(model._all_linear_names())
             return {name: Q(jnp.zeros(0), "") for name in names}
 
         keys = jr.split(key, n_samples)
+        base_names = model._base_nonlinear_names()
+        model_keys = tuple(nonlinear_samples.keys())
 
-        def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> dict[str, Q]:
-            return model._sample_conditional_linear_raw(sample, key)
+        def _sample_one(key: jax.Array, sample: dict[str, jax.Array]) -> dict[str, Any]:
+            raw = {k: sample[k] for k in model_keys}
+            wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
+            return model.sample_conditional_linear(
+                wrapped,
+                key,
+                marginalized_names=marginalized_names,
+            )
 
-        return jax.vmap(_sample_one)(keys, nonlinear_samples)
+        filtered = {k: nonlinear_samples[k] for k in model_keys}
+        result = jax.vmap(_sample_one)(keys, filtered)
+
+        # Attach units from the model's linear_param_units
+        if isinstance(model, JointModel):
+            # Detect which param names appear in more than one component.
+            # Colliding names (e.g. both "rv_semiamp" in an SB2) are
+            # namespaced as "comp_name.param_name" to avoid silent overwrites.
+            name_counts: dict[str, int] = {}
+            for comp in model.components.values():
+                for name in comp._all_linear_names():
+                    name_counts[name] = name_counts.get(name, 0) + 1
+
+            final: dict[str, AbstractQuantity] = {}
+            for comp_name, comp in model.components.items():
+                units = comp._linear_param_units()
+                comp_result = result[comp_name]
+                for name, arr in comp_result.items():
+                    final_name = (
+                        f"{comp_name}.{name}" if name_counts.get(name, 1) > 1 else name
+                    )
+                    final[final_name] = Q(arr, units.get(name, ""))
+            return final
+        units = model._linear_param_units()
+        return {name: Q(arr, units.get(name, "")) for name, arr in result.items()}

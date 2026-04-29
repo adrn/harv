@@ -22,26 +22,22 @@ classifiers = [
 # TODO: add keywords
 keywords = []
 dependencies = [
+    "equinox>=0.13.2",
+    "h5py>=3.15.1",
     "jax==0.8.1",
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
+    "numpyro>=0.15.0",
+    "numpyro-ext>=0.0.4",
     "quaxed>=0.10.4",
     "unxt>=1.7.2",
-    "numpyro>=0.15.0",
-    "equinox>=0.13.2",
-    "healpy>=1.18.1",
-    "pooch>=1.8.2",
-    "h5py>=3.15.1",
-    "coordinax>=0.23.1",
-    "numpyro-ext>=0.0.4",
-    "jedi==0.19.1",
 ]
 
 [tool.uv]
 override-dependencies = [
     # "unxt @ file:///Users/aprice-whelan/projects/unxt",
-    "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
-    "coordinax @ git+https://github.com/GalacticDynamics/coordinax.git",
+    # "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
+    "unxt @ git+https://github.com/adrn/unxt.git@a78e1965f5033c31e8ab519848b3ff0a01e9e9ab",
     "numpyro-ext @ git+https://github.com/dfm/numpyro-ext.git"
 ]
 
@@ -51,6 +47,9 @@ extra = [
     "setuptools",  # needed for gaiaunlimited for pkg_resources...
     "arviz>=0.22.0", # TODO: pinned because I had kernel issues
     "matplotlib>=3.10.7",
+    "tinygp>=0.3.1",
+    "healpy>=1.18.1",
+    "pooch>=1.8.2",
 ]
 dev = [
     {include-group = "extra"},
@@ -62,8 +61,8 @@ dev = [
     "pre-commit",
     "twine",
     "ruff",
-    "mypy>=1.19.1",
     "ty>=0.0.22",
+    "jedi==0.19.1",
 ]
 docs = [
     "sphinx~=8.0",
@@ -80,7 +79,7 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-raises",
-    "pytest-randomly",
+    # "pytest-randomly",
     "pytest-xdist",
     "beartype",
     "matplotlib>=3.10.7",
@@ -122,7 +121,7 @@ allow-direct-references = true
 
 ######## Configure pytest for your test suite ########
 [tool.pytest.ini_options]
-testpaths = ["tests", "src"] # tests/ for unit/integration, src/ for doctests via Sybil
+testpaths = ["README.md", "tests", "src"]
 markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.mark.raises
 
 [tool.coverage.paths]
@@ -148,65 +147,65 @@ precision = 2
 # Tool configuration
 ################################################################################
 
-[tool.mypy]
-  disable_error_code = [
-    "name-defined",  # for jaxtyping
-  ]
+# [tool.mypy]
+#   disable_error_code = [
+#     "name-defined",  # for jaxtyping
+#   ]
 
-  disallow_incomplete_defs = false
-  disallow_subclassing_any = false
-  disallow_untyped_defs = false
-  enable_error_code = [
-    "ignore-without-code", "redundant-expr", "truthy-bool"
-]
-  files = ["src", "tests"]
-  python_version = "3.12"
-  strict = true
-  warn_return_any = false
-  warn_unreachable = true
-  warn_unused_configs = true
+#   disallow_incomplete_defs = false
+#   disallow_subclassing_any = false
+#   disallow_untyped_defs = false
+#   enable_error_code = [
+#     "ignore-without-code", "redundant-expr", "truthy-bool"
+# ]
+#   files = ["src", "tests"]
+#   python_version = "3.12"
+#   strict = true
+#   warn_return_any = false
+#   warn_unreachable = true
+#   warn_unused_configs = true
 
-  [[tool.mypy.overrides]]
-    disable_error_code = ["untyped-decorator"]
-    disallow_incomplete_defs = true
-    disallow_untyped_defs = true
-    module = "harv.*"
+#   [[tool.mypy.overrides]]
+#     disable_error_code = ["untyped-decorator"]
+#     disallow_incomplete_defs = true
+#     disallow_untyped_defs = true
+#     module = "harv.*"
 
-  [[tool.mypy.overrides]]
-    # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
-    # available when those packages are installed. Suppress errors that vary
-    # between environments so that both `uv run mypy` and pre-commit agree.
-    disable_error_code = ["arg-type", "assignment", "attr-defined"]
-    module = "harv.simulate.*"
+#   [[tool.mypy.overrides]]
+#     # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
+#     # available when those packages are installed. Suppress errors that vary
+#     # between environments so that both `uv run mypy` and pre-commit agree.
+#     disable_error_code = ["arg-type", "assignment", "attr-defined"]
+#     module = "harv.simulate.*"
 
-  [[tool.mypy.overrides]]
-    # cast() calls in orbits.py are required when unxt is installed (standalone
-    # mypy) but appear redundant when unxt is absent (pre-commit environment).
-    disable_error_code = ["redundant-cast"]
-    module = "harv.kepler.orbits"
+#   [[tool.mypy.overrides]]
+#     # cast() calls in orbits.py are required when unxt is installed (standalone
+#     # mypy) but appear redundant when unxt is absent (pre-commit environment).
+#     disable_error_code = ["redundant-cast"]
+#     module = "harv.kepler.orbits"
 
-  [[tool.mypy.overrides]]
-    ignore_missing_imports = true
-    module = [
-      "astropy.*",
-      "coordinax.*",
-      "equinox.*",
-      "h5py.*",
-      "healpy.*",
-      "hypothesis.*",
-      "jax.*",
-      "jaxoplanet.*",
-      "jaxtyping.*",
-      "numpy.*",
-      "numpyro.*",
-      "numpyro_ext.*",
-      "pandas.*",
-      "plum.*",
-      "pooch.*",
-      "quax.*",
-      "quaxed.*",
-      "unxt.*",
-    ]
+#   [[tool.mypy.overrides]]
+#     ignore_missing_imports = true
+#     module = [
+#       "astropy.*",
+#       "coordinax.*",
+#       "equinox.*",
+#       "h5py.*",
+#       "healpy.*",
+#       "hypothesis.*",
+#       "jax.*",
+#       "jaxoplanet.*",
+#       "jaxtyping.*",
+#       "numpy.*",
+#       "numpyro.*",
+#       "numpyro_ext.*",
+#       "pandas.*",
+#       "plum.*",
+#       "pooch.*",
+#       "quax.*",
+#       "quaxed.*",
+#       "unxt.*",
+#     ]
 
 [tool.ruff]
 line-length = 88
@@ -256,6 +255,8 @@ ignore = [
     "UP037",   # Remove quote from type annotation  <- jaxtyping
     "N802",    # Function name should be lowercase
     "N815",    # Variable name {name} should be lowercase
+    "N816",    # should not be mixedCase
+    "N817",    # CamelCase
 ]
 exclude = [
     "src/harv/_version.py",
@@ -271,9 +272,7 @@ exclude = [
 ]
 "tests/**/*.py" = [
     "ANN202", # Missing type annotation"
-    "D101",  # Missing docstring in public class
-    "D102",  # Missing docstring in public method
-    "D104",  # Missing docstring in public package
+    "D",  # documentation not important for tests
     "S101",  # Use of assert detected' ignored because we are using pytest.
     "INP001",  # Insecure input ignored because we are testing.
     "ANN201",  # Missing type annotation for {return} ignored because all tests return `None`.
@@ -286,17 +285,37 @@ exclude = [
     "RUF002",  # ambiguous unicode
     "RUF003",  # ambiguous unicode
 ]
+"docs/**/*" = [
+    "E402",  # module-import-not-at-top-of-file
+    "T201",  # print
+    "FBT003",  # boolean-positional-value-in-call
+    "A004",  # astropy.io.ascii - shadows built-in ascii
+]
+"docs/_static/*" = ["ALL"]
 
 [tool.ruff.lint.isort]
 case-sensitive = true
 known-first-party = ["src", "harv"]
 
 [tool.ty.rules]
-# TODO: these are currently ty bugs that can't handle some of the parametric Quantity
-# type annotations. Hopefully these can eventually be removed?
-unused-type-ignore-comment = "ignore"
-unresolved-import = "ignore"
-unresolved-reference = "ignore"
+
+    [[tool.ty.overrides]]
+    # NOTE: this is needed because of a bug or issue in the way ty and jaxtyping
+    # interact. ty treats parametric string, e.g., Q["angle"] as a forward reference
+    # (PEP 484 semantics), then fails to resolve angle as a Python name. The string is
+    # actually a runtime dimension descriptor consumed by unxt/jaxtyping — not a forward
+    # annotation.
+    include = ["src/harv/custom_types.py"]
+    rules = { unresolved-reference = "ignore" }
+
+    [[tool.ty.overrides]]
+    include = ["src/harv/plot.py"]
+    rules = { possibly-missing-attribute = "ignore" }
+
+    [[tool.ty.overrides]]
+    include = ["src/harv/kepler/constants.py"]
+    rules = { unresolved-import = "ignore" }
+
 
 [tool.pydoclint]
 style = "numpy"
