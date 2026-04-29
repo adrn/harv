@@ -407,6 +407,36 @@ class Samples(eqx.Module):
             linear_extension_names=self.linear_extension_names,
         )
 
+    def thiele_innes_to_campbell(self) -> "Samples":
+        """Convert Thiele-Innes linear parameters to Campbell orbital elements.
+
+        See :func:`~harv.kepler.orbits.campbell_from_thiele_innes` for the mathematical
+        details of the conversion.
+
+        Returns
+        -------
+        Samples
+            New :class:`Samples` with ``semi_major_axis``, ``arg_peri``,
+            ``lon_asc_node``, ``cos_i`` (replacing the four TI constants).
+
+        """
+        ti_names = ("ti_A", "ti_B", "ti_F", "ti_G")
+        if not all(n in self.linear for n in ti_names):
+            msg = "TI to Campbell conversion requires linear parameters: " + ", ".join(
+                ti_names
+            )
+            raise RuntimeError(msg)
+
+        vals = campbell_from_thiele_innes(**{n[3]: self.linear[n] for n in ti_names})
+        # TODO: need to sort into nonlinear/linear
+        return Samples(
+            nonlinear=self.nonlinear,
+            linear=new_lin,
+            data_type=self.data_type,
+            metadata=self.metadata,
+            linear_extension_names=self.linear_extension_names,
+        )
+
     def median(
         self, key: str | None = None
     ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:

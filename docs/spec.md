@@ -182,7 +182,7 @@ src/harv/
 │   ├── parameterizations/    # Parameter declarations and design matrices
 │   │   ├── _base.py         # AbstractParameterization base class
 │   │   ├── rv.py            # StandardRV, EcoswEsinwRV
-│   │   └── gaia.py          # StandardGaiaAstrometry
+│   │   └── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
 │   ├── component.py         # AbstractComponentModel (marginalization, numpyro)
 │   ├── rv.py                # RVModel (final)
 │   ├── astrometry.py        # GaiaAstrometryModel (final)
@@ -533,6 +533,41 @@ The design matrix columns are
 where the Thiele-Innes orbital element combines the (A, B, F, G) constants
 with the X, Y orbital coordinates.
 
+### `ThieleInnesGaiaAstrometry`
+
+Alternative Gaia parameterization that moves the four Thiele-Innes constants
+`(A, B, F, G)` from the nonlinear to the linear parameter set, reducing the
+nonlinear space from 6-D to 3-D.  This is the approach described in Hsieh et al.
+("Astrometric Orbit Fitting with Marginalization over Linear Parameters").
+
+- Nonlinear: `period`, `eccentricity`, `phase_peri`.
+- Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `ti_A`, `ti_B`, `ti_F`, `ti_G`.
+- Design matrix shape: `(n_obs, 9)`.
+
+The Jacobian correction is **always applied**: a flat prior on the Thiele-Innes
+constants is not equivalent to a flat prior on the physical Campbell elements
+`(a_0, ω, Ω, cos i)`.  The zeroth-order correction (evaluated at the conditional-mean
+TI constants following Hsieh et al.) multiplies the marginal likelihood by the factor
+`(a_0 + δ_a)^{-m} (sin²i + δ_s)^{-1}`, where `m = 3` for a uniform prior on `a_0`
+and `m = 4` for a log-uniform prior.
+
+Constructor parameters:
+
+| Parameter          | Type    | Default | Description                                             |
+| ------------------ | ------- | ------- | ------------------------------------------------------- |
+| `a_floor`          | `float` | —       | Floor on `a_0` (in obs units, e.g. mas).  **Required.** |
+| `sin2i_floor`      | `float` | `0.01`  | Floor on `sin²i` for the Jacobian denominator.          |
+| `log_uniform_in_a` | `bool`  | `False` | Use log-uniform prior on `a_0` (`m=4`).                 |
+
+The recommended constructor is `ThieleInnesGaiaAstrometry.from_data(data)`, which
+sets `a_floor = Med(σ_AL) / sqrt(N)` automatically.
+
+After sampling with this parameterization, convert the Thiele-Innes linear parameters
+to Campbell elements via `samples.thiele_innes_to_campbell()`.
+
+**Limitation**: the RV forward model is not linear in `(A, B, F, G)`, so joint
+RV+astrometry fits must use `StandardGaiaAstrometry`.
+
 ### Parameter naming convention
 
 All parameter names follow the rule: **use the standard descriptive name; abbreviate
@@ -570,6 +605,26 @@ absolute `t_peri`. This decouples the phase from the period scale, simplifies th
 prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
 prior. `Samples` exposes a derived `"t_peri"` key that reconstructs the absolute time
 as `phase_peri * period + t_ref`.
+
+### `Samples.thiele_innes_to_campbell()`
+
+When sampling with `ThieleInnesGaiaAstrometry`, the posterior `Samples` object carries
+the Thiele-Innes constants `ti_A, ti_B, ti_F, ti_G` as linear parameters.
+`samples.thiele_innes_to_campbell()` converts them to the physical Campbell elements
+`semi_major_axis, arg_peri, lon_asc_node, cos_i` using the standard inversion:
+
+```
+u = (A²+B²+F²+G²) / 2
+v = A·G − B·F
+a_0 = sqrt(u + sqrt(max(u² − v², 0)))
+ω + Ω = atan2(B − F, A + G)
+ω − Ω = atan2(−B − F, A − G)
+cos i = |v / a_0²|    # cos_i ≥ 0 convention
+```
+
+The method returns a new `Samples` with the TI constants replaced by the Campbell
+elements.  The 2-fold degeneracy inherent in pure astrometry (face-on reflections)
+means `cos_i` is not unique; the convention `cos_i ≥ 0` is adopted.
 
 ______________________________________________________________________
 
@@ -722,10 +777,12 @@ no data or linear prior are stored as fields. Both are passed at call time.
 
 `@final` concrete model for Gaia epoch astrometry. Models are **pure templates**.
 
-| Field              | Type                     | Default                    |
-| ------------------ | ------------------------ | -------------------------- |
-| `parameterization` | `StandardGaiaAstrometry` | `StandardGaiaAstrometry()` |
-| `extensions`       | `tuple`                  | `()`                       |
+| Field              | Type                       | Default                    |
+| ------------------ | -------------------------- | -------------------------- |
+| `data`             | `GaiaAstrometryData`       | (required)                 |
+| `parameterization` | `AbstractParameterization` | `StandardGaiaAstrometry()` |
+| `linear_prior`     | `dict \| None`             | `None`                     |
+| `extensions`       | `tuple`                    | `()`                       |
 
 Overrides `_linear_param_units()` because astrometric linear params have mixed
 units (mas vs mas/yr for proper motions).

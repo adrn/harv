@@ -18,6 +18,7 @@ from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.models.parameterizations._base import AbstractParameterization
 from harv.models.parameterizations.gaia import StandardGaiaAstrometry
 
 
@@ -47,7 +48,7 @@ class GaiaAstrometryModel(AbstractComponentModel):
     ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
     """
 
-    parameterization: StandardGaiaAstrometry = StandardGaiaAstrometry()
+    parameterization: AbstractParameterization = StandardGaiaAstrometry()
     extensions: tuple[AbstractExtension, ...] = ()
     _: KW_ONLY
     pm_time_unit: str = "yr"
@@ -65,14 +66,15 @@ class GaiaAstrometryModel(AbstractComponentModel):
     def _linear_param_units(self, data: GaiaAstrometryData) -> dict[str, str]:
         """Astrometric linear params have different units (mas vs mas/yr)."""
         u = self._obs_unit(data)
-        units: dict[str, str] = {
-            "ra0": u,
-            "dec0": u,
-            "pmra": f"{u}/{self.pm_time_unit}",
-            "pmdec": f"{u}/{self.pm_time_unit}",
-            "parallax": u,
-            "semi_major_axis": u,
+        pm_unit = f"{u}/{self.pm_time_unit}"
+        unit_kind_map: dict[str, str] = {
+            "angle": u,
+            "angular_speed": pm_unit,
+            "": "",
         }
+        units: dict[str, str] = {}
+        for pi in self.parameterization.linear_params():
+            units[pi.name] = unit_kind_map.get(pi.unit, u)
         # Extension-added linear params default to obs_unit
         for pi in self._param_infos():
             if pi.linear and pi.name not in units:
@@ -111,14 +113,25 @@ class GaiaAstrometryModel(AbstractComponentModel):
         cos_psi = jnp.cos(scan_angle_rad)
         parallax_factor = ustrip(AllowValue, "", data.parallax_factor)
 
-        # Strip nonlinear values for parameterization
-        nl_stripped = {
-            "eccentricity": ustrip(AllowValue, "", nl_values["eccentricity"]),
-            "arg_peri": ustrip(AllowValue, "rad", nl_values["arg_peri"]),
-            "lon_asc_node": ustrip(AllowValue, "rad", nl_values["lon_asc_node"]),
-            "cos_i": ustrip(AllowValue, "", nl_values["cos_i"]),
-        }
+        # Strip nonlinear values for parameterization.
+        # Derive strip targets from the parameterization's declared parameter units:
+        #   "angle" → radians, "time" → pm_time_unit, "" → dimensionless.
+        # period and phase_peri are consumed by _solve_kepler above; they are passed
+        # through if the parameterization also requests them (no-op for the design
+        # matrix, but harmless).
+        _strip_target: dict[str, str] = {"angle": "rad", "time": self.pm_time_unit}
+        nl_stripped: dict[str, Any] = {}
+        for pi in self.parameterization.nonlinear_params():
+            name = pi.name
+            if name not in nl_values:
+                continue
+            target = _strip_target.get(pi.unit, "")
+            if target:
+                nl_stripped[name] = ustrip(AllowValue, target, nl_values[name])
+            else:
+                nl_stripped[name] = ustrip(AllowValue, "", nl_values[name])
 
+        # TODO: we need to implement an abstract design_matrix method
         X = self.parameterization.design_matrix(
             sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nl_stripped
         )

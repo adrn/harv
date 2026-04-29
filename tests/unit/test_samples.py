@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 import pytest
-from unxt import Q
+from unxt import Q, ustrip
 
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.samplers.samples import Samples
@@ -584,3 +584,126 @@ class TestSamplesWrapAngles:
         )
         with pytest.raises(NotImplementedError, match="multiple per-component"):
             samples.wrap_angles()
+
+
+def _make_ti_samples(n: int = 4) -> Samples:
+    """Helper: Thiele-Innes Samples with known Campbell elements."""
+    from harv.kepler.orbits import thiele_innes_ABFG
+
+    a0 = jnp.ones(n) * 2.0
+    arg_peri = jnp.linspace(0.2, 1.5, n)
+    lon_asc_node = jnp.linspace(0.5, 2.0, n)
+    cos_i = jnp.linspace(0.3, 0.8, n)
+
+    A_arr, B_arr, F_arr, G_arr = jax.vmap(
+        lambda w, O, ci: thiele_innes_ABFG(
+            jnp.cos(w), jnp.sin(w), jnp.cos(O), jnp.sin(O), ci
+        )
+    )(arg_peri, lon_asc_node, cos_i)
+
+    return (
+        Samples(
+            nonlinear={
+                "period": Q(jnp.ones(n) * 365.0, "day"),
+                "eccentricity": Q(jnp.zeros(n), ""),
+                "phase_peri": Q(jnp.zeros(n), ""),
+            },
+            linear={
+                "ti_A": Q(A_arr * a0, "mas"),
+                "ti_B": Q(B_arr * a0, "mas"),
+                "ti_F": Q(F_arr * a0, "mas"),
+                "ti_G": Q(G_arr * a0, "mas"),
+                "ra0": Q(jnp.zeros(n), "mas"),
+                "dec0": Q(jnp.zeros(n), "mas"),
+                "pmra": Q(jnp.zeros(n), "mas/yr"),
+                "pmdec": Q(jnp.zeros(n), "mas/yr"),
+                "parallax": Q(jnp.ones(n), "mas"),
+            },
+            data_type="gaia_astro",
+            metadata={},
+        ),
+        a0,
+        arg_peri,
+        lon_asc_node,
+        cos_i,
+    )
+
+
+class TestThieleInnesToCampbell:
+    def test_noop_when_no_ti_params(self):
+        s = _make_astro_samples()
+        assert s.thiele_innes_to_campbell() is s
+
+    def test_replaces_ti_with_campbell_keys(self):
+        s, *_ = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        for k in ("semi_major_axis", "arg_peri", "lon_asc_node", "cos_i"):
+            assert k in converted.linear
+        for k in ("ti_A", "ti_B", "ti_F", "ti_G"):
+            assert k not in converted.linear
+
+    def test_semi_major_axis_recovery(self):
+        s, a0_true, *_ = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        a0_rec = converted["semi_major_axis"].value
+        assert jnp.allclose(a0_rec, a0_true, atol=1e-5)
+
+    def test_angle_sums_recovered(self):
+        """TI constants are invariant under (ω,Ω)→(ω+π,Ω+π), so only ω+Ω
+        and ω-Ω can be uniquely recovered, not ω and Ω individually."""
+        s, _, arg_peri_true, lon_asc_node_true, _ = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        w_rec = converted["arg_peri"].value
+        O_rec = converted["lon_asc_node"].value
+
+        # ω+Ω and ω-Ω are invariants of the ambiguous pair
+        sum_rec = jnp.mod(w_rec + O_rec, 2 * jnp.pi)
+        sum_true = jnp.mod(arg_peri_true + lon_asc_node_true, 2 * jnp.pi)
+        diff_rec = jnp.mod(w_rec - O_rec, 2 * jnp.pi)
+        diff_true = jnp.mod(arg_peri_true - lon_asc_node_true, 2 * jnp.pi)
+
+        assert jnp.allclose(sum_rec, sum_true, atol=1e-4)
+        assert jnp.allclose(diff_rec, diff_true, atol=1e-4)
+
+    def test_round_trip_ti_constants(self):
+        """Converting Campbell→TI→Campbell→TI should reproduce the original TI."""
+        from harv.kepler.orbits import thiele_innes_ABFG
+
+        s, *_ = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        # Rebuild TI from the recovered Campbell elements
+        w_rec = converted["arg_peri"].value
+        O_rec = converted["lon_asc_node"].value
+        ci_rec = converted["cos_i"].value
+        a0_rec = converted["semi_major_axis"].value
+        A_rt, B_rt, F_rt, G_rt = jax.vmap(
+            lambda w, O, ci: thiele_innes_ABFG(
+                jnp.cos(w), jnp.sin(w), jnp.cos(O), jnp.sin(O), ci
+            )
+        )(w_rec, O_rec, ci_rec)
+        unit = str(s.linear["ti_A"].unit)
+        A_orig = ustrip(unit, s.linear["ti_A"])
+        B_orig = ustrip(unit, s.linear["ti_B"])
+        F_orig = ustrip(unit, s.linear["ti_F"])
+        G_orig = ustrip(unit, s.linear["ti_G"])
+        assert jnp.allclose(A_rt * a0_rec, A_orig, atol=1e-4)
+        assert jnp.allclose(B_rt * a0_rec, B_orig, atol=1e-4)
+        assert jnp.allclose(F_rt * a0_rec, F_orig, atol=1e-4)
+        assert jnp.allclose(G_rt * a0_rec, G_orig, atol=1e-4)
+
+    def test_cos_i_recovery(self):
+        s, _, _, _, cos_i_true = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        cos_i_rec = converted["cos_i"].value
+        # Convention: cos_i ≥ 0
+        assert jnp.all(cos_i_rec >= 0)
+        assert jnp.allclose(cos_i_rec, cos_i_true, atol=1e-5)
+
+    def test_preserves_nonlinear_and_non_ti_linear(self):
+        s, *_ = _make_ti_samples()
+        converted = s.thiele_innes_to_campbell()
+        # Nonlinear unchanged
+        assert jnp.allclose(converted["period"].value, s["period"].value)
+        # Non-TI linear params preserved
+        assert jnp.allclose(converted["ra0"].value, s["ra0"].value)
+        assert jnp.allclose(converted["parallax"].value, s["parallax"].value)

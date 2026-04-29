@@ -27,6 +27,7 @@ from unxt.quantity import AllowValue, ustrip
 from harv.custom_types import (
     BatchFloat,
     BatchQAngle,
+    BatchQAny,
     BatchQSpeed,
     BatchQTime,
     ScalarFloat,
@@ -144,6 +145,43 @@ def thiele_innes_ABFG(
     return cast(
         "tuple[ScalarFloat, ScalarFloat, ScalarFloat, ScalarFloat]", (A, B, F, G)
     )
+
+
+def campbell_from_thiele_innes(
+    A: BatchQAngle,
+    B: BatchQAngle,
+    F: BatchQAngle,
+    G: BatchQAngle,
+) -> dict[str, BatchQAny]:
+    r"""Invert Thiele-Innes constants to Campbell orbital elements.
+
+    This follows Halbwachs, Pourbaix, et al. 2023 (see the appendix):
+
+    .. math::
+
+        u &= \frac{1}{2}(A^2+B^2+F^2+G^2) \\
+        v &= A\,G - B\,F \\
+        a_0 &= \sqrt{u + \sqrt{\max(u^2 - v^2, 0)}} \\
+        \omega + \Omega &= \mathrm{atan2}(B - F, A + G) \\
+        \omega - \Omega &= \mathrm{atan2}(B + F, G - A) \\
+        \cos i &= v / a_0^2
+
+    The convention ``cos_i ≥ 0`` is adopted here.
+    """
+    u = 0.5 * (A**2 + B**2 + F**2 + G**2)
+    v = A * G - B * F
+    a0 = jnp.sqrt(u + jnp.sqrt(jnp.maximum(u * u - v * v, 0.0)))
+    wPO = jnp.arctan2(B - F, A + G)  # ω + Ω
+    wMO = jnp.arctan2(B + F, G - A)  # ω - Ω
+    arg_peri = jnp.mod(0.5 * (wPO + wMO), 2.0 * jnp.pi)
+    lon_asc_node = jnp.mod(0.5 * (wPO - wMO), 2.0 * jnp.pi)
+    cos_i = jnp.abs(v / jnp.maximum(a0**2, 1e-30))
+    return {
+        "semi_major_axis": a0,
+        "arg_peri": arg_peri,
+        "lon_asc_node": lon_asc_node,
+        "cos_i": cos_i,
+    }
 
 
 def compute_true_anomaly_components(
