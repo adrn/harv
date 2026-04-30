@@ -272,6 +272,7 @@ target-version = "py312"
     exclude = [
         "src/harv/_version.py",
         "docs/conf.py",
+        "docs/tutorials/data/*"
     ]
 
     [tool.ruff.lint.extend-per-file-ignores]
