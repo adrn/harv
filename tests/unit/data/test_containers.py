@@ -2,6 +2,14 @@ import jax.numpy as jnp
 import pytest
 from unxt import Q
 
+try:
+    import matplotlib.pyplot as plt
+    from cycler import cycler
+
+    HAS_MPL = True
+except ImportError:
+    HAS_MPL = False
+
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
 from harv.data.helpers import build_indicator_matrix, stack_datasets
 
@@ -75,6 +83,91 @@ class TestSystemData:
         assert jnp.allclose(stacked.time.value, expected_stacked.time.value)
         assert jnp.allclose(stacked.rv.value, expected_stacked.rv.value)
         assert jnp.allclose(indicator, expected_indicator)
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_returns_axes_with_legend(self):
+        data = SystemData(
+            primary=_make_rv_data(0.0, values=(10.0, -10.0)),
+            secondary=_make_rv_data(10.0, values=(-10.0, 10.0)),
+        )
+        ax = data.plot()
+        try:
+            legend = ax.get_legend()
+            assert legend is not None
+            labels = [t.get_text() for t in legend.get_texts()]
+            assert "primary" in labels
+            assert "secondary" in labels
+            assert len(ax.lines) + len(ax.collections) > 0
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_accepts_existing_axes(self):
+        data = SystemData(
+            primary=_make_rv_data(0.0),
+            secondary=_make_rv_data(10.0),
+        )
+        _, ax_in = plt.subplots()
+        try:
+            ax_out = data.plot(ax=ax_in)
+            assert ax_out is ax_in
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_add_legend_false(self):
+        data = SystemData(
+            primary=_make_rv_data(0.0),
+            secondary=_make_rv_data(10.0),
+        )
+        ax = data.plot(add_legend=False)
+        try:
+            assert ax.get_legend() is None
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_uses_distinct_colors_by_default(self):
+        data = SystemData(
+            primary=_make_rv_data(0.0),
+            secondary=_make_rv_data(10.0),
+        )
+        ax = data.plot()
+        try:
+            # ax.containers holds ErrorbarContainer objects; [0] is the data Line2D
+            colors = [c[0].get_color() for c in ax.containers]
+            assert len(colors) >= 2
+            assert colors[0] != colors[1]
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_custom_color_cycler(self):
+        custom = cycler(color=["#ff0000", "#0000ff"])
+        data = SystemData(
+            primary=_make_rv_data(0.0),
+            secondary=_make_rv_data(10.0),
+        )
+        ax = data.plot(color_cycler=custom)
+        try:
+            colors = [c[0].get_color() for c in ax.containers]
+            assert len(colors) >= 2
+            assert colors[0] != colors[1]
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_explicit_color_kwarg_overrides_cycler(self):
+        data = SystemData(
+            primary=_make_rv_data(0.0),
+            secondary=_make_rv_data(10.0),
+        )
+        ax = data.plot(color="green")
+        try:
+            colors = [c[0].get_color() for c in ax.containers]
+            assert all(c == "green" for c in colors)
+        finally:
+            plt.close("all")
 
 
 class TestSourceData:

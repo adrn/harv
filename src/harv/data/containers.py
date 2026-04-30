@@ -8,7 +8,7 @@ __all__ = (
 )
 
 from collections.abc import Iterator
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import equinox as eqx
 import jax
@@ -186,6 +186,86 @@ class SystemData(AbstractDatasetContainer):
         """Reference epoch from the first component."""
         # TODO: this shouldn't exist!
         return next(iter(self._datasets.values())).t_ref
+
+    def plot(
+        self,
+        ax: Any = None,
+        *,
+        add_legend: bool = True,
+        color_cycler: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Plot all component datasets on the same axes.
+
+        Dispatches to each component dataset's ``.plot()`` method, drawing all
+        components onto a single axes panel with a legend showing the component
+        names.  Each component is assigned a distinct color from ``color_cycler``
+        (or the current ``axes.prop_cycle`` when not specified).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. If ``None``, a new figure is created.
+        add_legend : bool, optional
+            Whether to add a legend labelled by component name. Default: ``True``.
+        color_cycler : matplotlib cycler, optional
+            A :class:`matplotlib.cycler.Cycler` whose ``"color"`` key supplies
+            per-component colors.  When ``None`` (default), colors are taken from
+            the current ``axes.prop_cycle`` rcParam.
+        **kwargs
+            Forwarded to each component's ``.plot()`` method.  A ``color``
+            keyword here overrides the cycler for all components.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+
+        Examples
+        --------
+        >>> import matplotlib.pyplot as plt
+        >>> from unxt import Q
+        >>> from harv import RVData
+        >>> from harv.data.containers import SystemData
+        >>> sys_data = SystemData(
+        ...     primary=RVData(
+        ...         time=Q([0.0, 50.0], "day"),
+        ...         rv=Q([10.0, -10.0], "km/s"),
+        ...         rv_err=Q([0.5, 0.5], "km/s"),
+        ...     ),
+        ...     secondary=RVData(
+        ...         time=Q([0.0, 50.0], "day"),
+        ...         rv=Q([-10.0, 10.0], "km/s"),
+        ...         rv_err=Q([0.5, 0.5], "km/s"),
+        ...     ),
+        ... )
+        >>> ax = sys_data.plot()
+        >>> plt.close("all")
+        """
+        import matplotlib.pyplot as plt  # noqa: PLC0415
+
+        if ax is None:
+            _, ax = plt.subplots()
+
+        if "color" not in kwargs:
+            if color_cycler is not None:
+                colors = list(color_cycler.by_key()["color"])
+            else:
+                colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        else:
+            colors = None
+
+        for i, (name, ds) in enumerate(self._datasets.items()):
+            per_ds: dict[str, Any] = {}
+            if colors is not None:
+                per_ds["color"] = colors[i % len(colors)]
+            ds.plot(  # type: ignore[unresolved-attribute]
+                ax=ax, add_labels=(i == 0), label=name, **per_ds, **kwargs
+            )
+
+        if add_legend:
+            ax.legend()
+
+        return ax
 
     def stacked(self) -> DatasetType:
         """Stack all component datasets."""
