@@ -15,7 +15,7 @@ current_year = datetime.now().year
 # -- General project information -----------------------------
 # General information about the project.
 project = "harv"
-copyright = "Copyright © 2025 adrn"
+copyright = "Copyright © 2026 harv authors"
 html_show_sphinx = False
 
 # Try to get the version info for the project you're documenting, acts as replacement for
@@ -33,7 +33,7 @@ except importlib.metadata.PackageNotFoundError:
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = [
-    "myst_parser",
+    "myst_nb",
     "sphinx_design",
     "sphinx_copybutton",
     "sphinx.ext.intersphinx",
@@ -41,12 +41,11 @@ extensions = [
     # This allows you to create :::{todo} sections that will not be rendered
     # in the live docs if you want to leave notes for future work in the docs
     "sphinx.ext.todo",
-    # Auto generate docs
     "autoapi.extension",
 ]
 
 # Support Markdown source files & rst for api docs
-source_suffix = [".rst", ".md"]
+source_suffix = [".rst", ".md", ".ipynb"]
 
 # The master toctree document.
 master_doc = "index"
@@ -139,3 +138,17 @@ htmlhelp_basename = "harv_doc"
 intersphinx_mapping = {
     "python": ("https://docs.python.org/", None),
 }
+
+nb_execution_mode = "cache" if "GITHUB_TOKEN" not in os.environ else "off"
+
+# rtds-action: download pre-executed notebooks on RTD
+if "GITHUB_TOKEN" in os.environ:
+    rtds_action_github_repo = "adrn/harv"
+    rtds_action_path = "docs/tutorials"
+    rtds_action_artifact_prefix = "notebooks-for-"
+    rtds_action_github_token = os.environ["GITHUB_TOKEN"]
+    rtds_action_error_if_missing = True
+else:
+    rtds_action_github_repo = ""
+    rtds_action_github_token = ""
+    rtds_action_path = ""

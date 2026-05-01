@@ -20,12 +20,10 @@ harv is ...
 
 :::{toctree}
 :maxdepth: 1
-:hidden:
 :caption: Contents:
 
-self
 concepts
-gotchas
+sharp-bits
 tutorials/index
 :::
 
