@@ -42,6 +42,23 @@ class _MargComponents(NamedTuple):
     linear_params: dict[str, jax.Array]
 
 
+class _MargBuildingBlocks(NamedTuple):
+    """Intermediate building blocks before constructing ``MarginalizedLinear``.
+
+    Returned by ``_build_marg_blocks``. The ``_build_marginalized_linear`` method
+    assembles these into a full ``_MargComponents``. This exists so we can support
+    shared linear parameters in joint models.
+    """
+
+    X: jax.Array  # (n, k_marg) — marginalized design matrix
+    y: jax.Array  # (n,) — residualized observations
+    cov: jax.Array  # (n,) diagonal or (n, n) full noise covariance
+    marg_names: tuple[str, ...]  # length k_marg
+    prior_mu: jax.Array  # (k_marg,) prior mean
+    prior_scale_tril: jax.Array  # (k_marg, k_marg) prior Cholesky factor
+    explicit_linear: dict[str, Any]  # explicit linear param values (unit-stripped)
+
+
 class AbstractComponentModel(eqx.Module):
     """Abstract base for single-data-type component models.
 
@@ -327,14 +344,21 @@ class AbstractComponentModel(eqx.Module):
 
         return prior_dict, unit_dict, explicit_names, marg_names, linear_params
 
-    def _build_marginalized_linear(
+    def _build_marg_blocks(
         self,
         nl_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
         data: Any,
-    ) -> _MargComponents:
-        """Assemble the MarginalizedLinear distribution.
+    ) -> _MargBuildingBlocks:
+        """Extract the building blocks needed to construct a MarginalizedLinear.
+
+        This method performs all classification, prior resolution, and
+        design-matrix slicing, but stops short of constructing the final
+        ``MarginalizedLinear`` and ``_MargComponents``.  It is used by
+        :meth:`_build_marginalized_linear` (single-component path) and by
+        :meth:`~harv.models.joint.JointModel._build_joint_marginalized_linear`
+        (joint-marginalization path).
 
         Parameters
         ----------
@@ -349,7 +373,7 @@ class AbstractComponentModel(eqx.Module):
 
         Returns
         -------
-        _MargComponents
+        _MargBuildingBlocks
         """
         X = self._full_design_matrix(nl_values, data)
         arr_obs, arr_obs_err = self._strip_obs()
@@ -405,21 +429,67 @@ class AbstractComponentModel(eqx.Module):
             prior_dict, nl_values, unit_dict, extra_values=extra_q
         )
 
+        return _MargBuildingBlocks(
+            X=X_marg,
+            y=arr_obs,
+            cov=cov,
+            marg_names=marg_names,
+            prior_mu=lp.loc,
+            prior_scale_tril=lp.scale_tril,
+            explicit_linear=linear_params,
+        )
+
+    def _build_marginalized_linear(
+        self,
+        nl_values: dict[str, Any],
+        marginalized_names: tuple[str, ...],
+        explicit_linear: dict[str, jax.Array],
+        data: Any,
+    ) -> _MargComponents:
+        """Assemble the MarginalizedLinear distribution.
+
+        Parameters
+        ----------
+        nl_values : dict
+            Nonlinear parameter values (unit-stripped scalars).
+        marginalized_names : tuple of str
+            Which linear params to marginalize.
+        explicit_linear : dict
+            Values for any linear params evaluated explicitly (unit-stripped).
+        data
+            Raw data object (passed to extensions).
+
+        Returns
+        -------
+        _MargComponents
+        """
+        blocks = self._build_marg_blocks(
+            nl_values, marginalized_names, explicit_linear, data
+        )
+
         # Build data distribution from covariance
-        if cov.ndim == 1:
-            data_dist = dist.Normal(0.0, jnp.sqrt(cov))
+        if blocks.cov.ndim == 1:
+            data_dist = dist.Normal(0.0, jnp.sqrt(blocks.cov))
         else:
             data_dist = dist.MultivariateNormal(
-                loc=jnp.zeros(cov.shape[0]), covariance_matrix=cov
+                loc=jnp.zeros(blocks.cov.shape[0]), covariance_matrix=blocks.cov
             )
 
+        prior = dist.MultivariateNormal(
+            loc=blocks.prior_mu, scale_tril=blocks.prior_scale_tril
+        )
         marg_dist = MarginalizedLinear(
-            design_matrix=X_marg,
-            prior_distribution=lp,
+            design_matrix=blocks.X,
+            prior_distribution=prior,
             data_distribution=data_dist,
         )
+        explicit_names = tuple(blocks.explicit_linear.keys())
         return _MargComponents(
-            marg_dist, arr_obs, marg_names, explicit_names, linear_params
+            marg_dist,
+            blocks.y,
+            blocks.marg_names,
+            explicit_names,
+            blocks.explicit_linear,
         )
 
     # Public API

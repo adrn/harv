@@ -479,3 +479,108 @@ class TestSamplesWrapAngles:
         wrapped = samples.wrap_angles()
         new_omega = wrapped["arg_peri"].value
         assert bool(((new_omega >= 0) & (new_omega < 2 * jnp.pi)).all())
+
+    def test_sb2_flips_both_K_with_shared_arg_peri(self):
+        """SB2 namespaced rv_semiamps flip in lockstep with the shared omega.
+
+        Trigger is the FIRST rv_semiamp-suffixed key (insertion order).
+        For samples where it's negative, both K_primary and K_secondary
+        are flipped and arg_peri is shifted by pi; positive-trigger samples
+        are untouched.
+        """
+        old_omega_val = jnp.array([1.0, 1.0, 1.0, 1.0])
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.full(4, 100.0), "day"),
+                "eccentricity": Q(jnp.full(4, 0.3), ""),
+                "phase_peri": Q(jnp.full(4, 0.25), ""),
+                "arg_peri": Q(old_omega_val, "rad"),
+            },
+            linear={
+                "primary.rv_semiamp": Q(jnp.array([-10.0, 12.0, -8.0, 5.0]), "km/s"),
+                "secondary.rv_semiamp": Q(jnp.array([+5.0, -3.0, +4.0, -2.0]), "km/s"),
+                "v_sys": Q(jnp.zeros(4), "km/s"),
+            },
+            data_type="joint",
+            metadata={},
+        )
+        wrapped = samples.wrap_angles()
+
+        # Trigger is primary.rv_semiamp -> negative at indices 0 and 2.
+        flip_mask = jnp.array([True, False, True, False])
+
+        # Primary K is non-negative everywhere after the wrap.
+        new_K1 = wrapped["primary.rv_semiamp"].value
+        assert bool((new_K1 >= 0).all())
+        assert jnp.allclose(new_K1, jnp.array([10.0, 12.0, 8.0, 5.0]))
+
+        # Secondary K: flipped sign on the same indices as primary.
+        new_K2 = wrapped["secondary.rv_semiamp"].value
+        assert jnp.allclose(new_K2, jnp.array([-5.0, -3.0, -4.0, -2.0]))
+
+        # arg_peri shifted by pi at the flipped indices, untouched otherwise.
+        new_omega = wrapped["arg_peri"].value
+        expected_omega = jnp.where(
+            flip_mask, jnp.mod(old_omega_val + jnp.pi, 2 * jnp.pi), old_omega_val
+        )
+        assert jnp.allclose(new_omega, expected_omega)
+
+        # v_sys (shared, unrelated) is unchanged.
+        assert jnp.allclose(wrapped["v_sys"].value, jnp.zeros(4))
+
+    def test_joint_sb2_with_semi_major_axis(self):
+        """Hypothetical SB2 + astrometry: K's and a all flip together."""
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.full(3, 300.0), "day"),
+                "eccentricity": Q(jnp.full(3, 0.3), ""),
+                "phase_peri": Q(jnp.full(3, 0.1), ""),
+                "arg_peri": Q(jnp.linspace(0.5, 2.5, 3), "rad"),
+                "cos_i": Q(jnp.full(3, 0.4), ""),
+                "lon_asc_node": Q(jnp.full(3, 0.8), "rad"),
+            },
+            linear={
+                "primary.rv_semiamp": Q(jnp.array([-10.0, 8.0, -6.0]), "km/s"),
+                "secondary.rv_semiamp": Q(jnp.array([+4.0, -3.0, +2.0]), "km/s"),
+                "semi_major_axis": Q(jnp.array([1.5, -2.0, 0.5]), "mas"),
+                "v_sys": Q(jnp.zeros(3), "km/s"),
+            },
+            data_type="joint",
+            metadata={},
+        )
+        wrapped = samples.wrap_angles()
+
+        # Trigger is primary.rv_semiamp -> negative at indices 0 and 2.
+        # Both K's AND semi_major_axis flip on those indices regardless of
+        # whether semi_major_axis was already positive (it shares the same
+        # arg_peri as the K's).
+        assert jnp.allclose(
+            wrapped["primary.rv_semiamp"].value, jnp.array([10.0, 8.0, 6.0])
+        )
+        assert jnp.allclose(
+            wrapped["secondary.rv_semiamp"].value, jnp.array([-4.0, -3.0, -2.0])
+        )
+        assert jnp.allclose(
+            wrapped["semi_major_axis"].value, jnp.array([-1.5, -2.0, -0.5])
+        )
+
+    def test_per_component_arg_peri_raises(self):
+        """Multiple per-component arg_peri keys aren't supported (yet)."""
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.full(2, 100.0), "day"),
+                "eccentricity": Q(jnp.full(2, 0.3), ""),
+                "phase_peri": Q(jnp.full(2, 0.25), ""),
+                "primary.arg_peri": Q(jnp.array([1.0, 2.0]), "rad"),
+                "secondary.arg_peri": Q(jnp.array([1.0, 2.0]), "rad"),
+            },
+            linear={
+                "primary.rv_semiamp": Q(jnp.array([-10.0, 5.0]), "km/s"),
+                "secondary.rv_semiamp": Q(jnp.array([4.0, -3.0]), "km/s"),
+                "v_sys": Q(jnp.zeros(2), "km/s"),
+            },
+            data_type="joint",
+            metadata={},
+        )
+        with pytest.raises(NotImplementedError, match="multiple per-component"):
+            samples.wrap_angles()

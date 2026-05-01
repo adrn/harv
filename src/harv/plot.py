@@ -538,6 +538,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     )
 
     # Color cycler for instruments
+    # TODO: will need to be smarter if number of instruments > number of colors
     if color_cycler is not None:
         colors = list(color_cycler.by_key()["color"])
     else:
@@ -638,7 +639,11 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     # that SB2 secondaries (with their own rv_semiamp) are rendered correctly and GP
     # residuals are computed against the matching dataset.
     if rv_datasets:
-        for instr_name, _rv_data in rv_datasets.items():
+        for (instr_name, _rv_data), color in zip(
+            rv_datasets.items(), colors[1 : len(rv_datasets) + 1], strict=True
+        ):
+            _style = orbit_style.copy()
+            _style["color"] = color
             for i in draw_indices:
                 sample_data: dict[str, Any] = {
                     "period": samples["period"][i],
@@ -682,7 +687,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                         if contrib is not None:
                             rv_model = rv_model + Q(contrib, rv_unit)
 
-                ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **orbit_style)
+                ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **_style)
     else:
         # data=None: draw orbit curves using bare parameter keys (no component context)
         for i in draw_indices:

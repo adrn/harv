@@ -16,12 +16,25 @@ from unxt import AbstractQuantity, Q, ustrip
 
 try:
     import arviz as az
+    from arviz_base.labels import MapLabeller
 
     HAS_ARVIZ = True
 except ImportError:
     HAS_ARVIZ = False
 
 __all__ = ["Samples"]
+
+
+def _find_namespaced_keys(d: dict[str, Any], param_name: str) -> list[str]:
+    """Return all keys in ``d`` that match ``param_name`` (bare or namespaced).
+
+    Matches the bare name (e.g. ``"rv_semiamp"``) and any
+    ``"component_name.param_name"`` form (e.g. ``"primary.rv_semiamp"``)
+    used by :class:`~harv.models.JointModel` to namespace per-component
+    parameters.  Keys are returned in dict insertion order so that
+    callers picking the "first" match are deterministic.
+    """
+    return [k for k in d if k == param_name or k.endswith(f".{param_name}")]
 
 
 class Samples(eqx.Module):
@@ -230,9 +243,26 @@ class Samples(eqx.Module):
         * the corresponding ``arg_peri`` values are shifted by ``pi`` and wrapped to
           ``[0, 2*pi)``.
 
+        Joint models (e.g. SB2) namespace per-component linear parameters as
+        ``"component.param_name"``; this method discovers every
+        ``rv_semiamp``- and ``semi_major_axis``-suffixed key and flips them
+        together, since they all share the same ``arg_peri``.  A single
+        ω-shift flips an arbitrary number of K's and a's in lockstep.  The
+        first ``rv_semiamp``-suffixed key (insertion order) determines the
+        flip mask; ``semi_major_axis`` is used as the trigger only if no
+        ``rv_semiamp`` is present (astrometry-only fits).
+
         No-op when ``arg_peri`` is absent from ``nonlinear``, when neither
         ``rv_semiamp`` nor ``semi_major_axis`` is in ``linear``, or when no entries are
         negative.
+
+        Raises
+        ------
+        NotImplementedError
+            If the model has multiple per-component ``arg_peri`` keys
+            (e.g. ``"primary.arg_peri"`` and ``"secondary.arg_peri"``).
+            All current harv joint factories share ``arg_peri``, so this is
+            not expected to arise in practice.
 
         Examples
         --------
@@ -252,37 +282,56 @@ class Samples(eqx.Module):
         >>> bool((wrapped["rv_semiamp"].value >= 0).all())
         True
         """
-        if "arg_peri" not in self.nonlinear:
+        # `arg_peri` must exist; otherwise there's no shift to apply.  We
+        # support the typical case of a single shared `arg_peri` (either bare
+        # or under a single component's namespace).  Per-component arg_peri is
+        # not the default for any joint factory, so out-of-scope here.
+        omega_keys = _find_namespaced_keys(self.nonlinear, "arg_peri")
+        if not omega_keys:
             return self
+        if len(omega_keys) > 1:
+            msg = (
+                "wrap_angles does not yet support multiple per-component "
+                f"arg_peri keys; got {omega_keys!r}.  All current harv joint "
+                "models share arg_peri, so this should not arise in practice."
+            )
+            raise NotImplementedError(msg)
+        omega_key = omega_keys[0]
 
-        K = self.linear.get("rv_semiamp")
-        a = self.linear.get("semi_major_axis")
+        # Discover every rv_semiamp- and semi_major_axis-suffixed key.  This
+        # matches both bare names (single-component) and dot-namespaced names
+        # like "primary.rv_semiamp" (joint / SB2).
+        K_keys = _find_namespaced_keys(self.linear, "rv_semiamp")
+        a_keys = _find_namespaced_keys(self.linear, "semi_major_axis")
 
-        if K is not None:
-            K_val = ustrip(str(K.unit), K)
-            flip = K_val < 0
-        elif a is not None:
-            a_val = ustrip(str(a.unit), a)
-            flip = a_val < 0
+        # Trigger: prefer rv_semiamp (RV is more discriminating for the sign
+        # convention).  In a joint model with shared `arg_peri`, every K
+        # flips together with the same ω-shift, so the choice of trigger
+        # doesn't affect the math — we just need *one* deterministic pick.
+        if K_keys:
+            trigger = self.linear[K_keys[0]]
+        elif a_keys:
+            trigger = self.linear[a_keys[0]]
         else:
             return self
 
+        flip = ustrip(str(trigger.unit), trigger) < 0
         if not jnp.any(flip):
             return self
 
+        # Flip every K and every a together: in a joint model they all share
+        # `arg_peri`, so a single ω-shift flips their signs in lockstep.
         new_lin = dict(self.linear)
-        if K is not None:
-            K_val = ustrip(str(K.unit), K)
-            new_lin["rv_semiamp"] = Q(jnp.where(flip, -K_val, K_val), K.unit)
-        if a is not None:
-            a_val = ustrip(str(a.unit), a)
-            new_lin["semi_major_axis"] = Q(jnp.where(flip, -a_val, a_val), a.unit)
+        for k in (*K_keys, *a_keys):
+            v = new_lin[k]
+            v_val = ustrip(str(v.unit), v)
+            new_lin[k] = Q(jnp.where(flip, -v_val, v_val), v.unit)
 
-        arg_peri = self.nonlinear["arg_peri"]
+        arg_peri = self.nonlinear[omega_key]
         arg_val = ustrip(str(arg_peri.unit), arg_peri)
 
         new_nl = dict(self.nonlinear)
-        new_nl["arg_peri"] = Q(
+        new_nl[omega_key] = Q(
             jnp.where(flip, jnp.mod(arg_val + jnp.pi, 2.0 * jnp.pi), arg_val),
             arg_peri.unit,
         )
@@ -564,7 +613,9 @@ class Samples(eqx.Module):
             metadata=metadata,
         )
 
-    def to_arviz(self, params: list[str] | None = None) -> Any:
+    def to_arviz(
+        self, params: list[str] | None = None, labels: dict[str, str] | None = None
+    ) -> Any:
         """Export samples to an ``arviz.InferenceData`` object.
 
         Parameters
@@ -572,6 +623,10 @@ class Samples(eqx.Module):
         params : list of str, optional
             Parameters to include.  If ``None``, all parameters returned by
             :meth:`keys` are included.
+        labels : dict[str, str], optional
+            Override display names for specific parameters, e.g. ``{"period": "period
+            [day]", "rv_semiamp": "K [km/s]"}``. Parameters not listed use their plain
+            parameter name as the label.
 
         Returns
         -------
@@ -611,12 +666,11 @@ class Samples(eqx.Module):
         for param in params:
             try:
                 values = self[param]
+                var_name = (labels or {}).get(param, param)
                 if isinstance(values, Q):
-                    var_name = f"{param} [{values.unit}]"
                     arr = np.asarray(values.value).reshape(num_chains, n_per_chain)
                 else:
                     arr = np.asarray(values).reshape(num_chains, n_per_chain)
-                    var_name = param
                 data_dict[var_name] = arr
             except (KeyError, ValueError):
                 continue
@@ -625,12 +679,13 @@ class Samples(eqx.Module):
             msg = "No valid parameters found"
             raise ValueError(msg)
 
-        return az.from_dict(posterior=data_dict)
+        return az.from_dict({"posterior": data_dict})
 
     def plot_corner(  # noqa: C901
         self,
         params: list[str] | None = None,
         truths: dict[str, Any] | None = None,
+        labels: dict[str, str] | None = None,
         **plot_kwargs: Any,
     ) -> Any:
         """Create corner plot of posterior samples using arviz.
@@ -642,6 +697,10 @@ class Samples(eqx.Module):
             set based on data_type.
         truths : dict, optional
             Dictionary of true parameter values to overplot as reference values.
+        labels : dict[str, str], optional
+            Override display names for specific parameters, e.g. ``{"period": "period
+            [day]", "rv_semiamp": "K [km/s]"}``. Parameters not listed use their plain
+            parameter name as the label.
         **plot_kwargs
             Additional keyword arguments passed to arviz.plot_pair().
 
@@ -677,31 +736,21 @@ class Samples(eqx.Module):
         var_names = []
         reference_values = {}
 
+        param_units = {}
         for param in params:
             try:
                 values = self[param]
                 if isinstance(values, Q):
-                    # Store with unit in variable name
-                    var_name = (
-                        f"{param} [{values.unit}]"
-                        if values.unit and str(values.unit) != ""
-                        else param
-                    )
-                    data_dict[var_name] = np.asarray(values.value)[None, :]
-                    var_names.append(var_name)
-                    # Handle truths/reference values
-                    if truths is not None and param in truths:
-                        truth_val = truths[param]
-                        if isinstance(truth_val, Q):
-                            reference_values[var_name] = ustrip(values.unit, truth_val)
-                        else:
-                            reference_values[var_name] = float(truth_val)
-                else:
-                    data_dict[param] = np.asarray(values)[None, :]
-                    var_names.append(param)
-                    # Handle truths/reference values
-                    if truths is not None and param in truths:
-                        reference_values[param] = float(truths[param])
+                    param_units[param] = str(values.unit)
+                    values = values.value
+                data_dict[param] = np.asarray(values)[None, :]
+                var_names.append(param)
+                if truths is not None and param in truths:
+                    truth_val = truths[param]
+                    if isinstance(truth_val, Q) and isinstance(values, Q):
+                        reference_values[param] = ustrip(values.unit, truth_val)
+                    else:
+                        reference_values[param] = float(truth_val)
             except (KeyError, ValueError):
                 continue
 
@@ -710,23 +759,35 @@ class Samples(eqx.Module):
             raise ValueError(msg)
 
         # Create arviz InferenceData object
-        idata = az.from_dict(posterior=data_dict)
+        idata = az.from_dict({"posterior": data_dict})
 
         # Set default plot kwargs
         default_kwargs: dict[str, Any] = {
             "var_names": var_names,
-            "kind": "scatter",
-            "marginals": True,
-            "point_estimate": None,
+            "marginal": True,
+            "triangle": "lower",
         }
+
+        user_labels = labels or {}
+        resolved_labels = {
+            k: user_labels[k]
+            if k in user_labels
+            else f"{k} [{param_units[k]}]"
+            if param_units.get(k)
+            else k
+            for k in params
+        }
+        if any(resolved_labels[k] != k for k in params):
+            default_kwargs["labeller"] = MapLabeller(var_name_map=resolved_labels)
 
         # Add reference values if provided
         if reference_values:
-            default_kwargs["reference_values"] = reference_values
-            default_kwargs["reference_values_kwargs"] = {"color": "C1", "lw": 2}
+            default_kwargs.setdefault("visuals", {})
+            default_kwargs["visuals"]["point_estimate"] = {"color": "C1"}
+            default_kwargs.setdefault("stats", {})
+            default_kwargs["stats"]["point_estimate"] = reference_values
 
         # Merge with user kwargs (user kwargs take precedence)
         default_kwargs.update(plot_kwargs)
 
-        # Create corner plot
         return az.plot_pair(idata, **default_kwargs)
