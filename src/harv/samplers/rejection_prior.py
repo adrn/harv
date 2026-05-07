@@ -19,6 +19,7 @@ from unxt import Q, ustrip
 from harv.custom_types import ScalarQAngle, ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
+    LinearPriorDict,
     LinearPriorDist,
     PriorDist,
     _unwrap_dist,
@@ -27,7 +28,6 @@ from harv.samplers.custom_priors import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
-    _make_log_period_prior,
 )
 
 __all__ = ("RejectionPrior",)
@@ -55,6 +55,87 @@ def _apply_overrides(
             linear[name] = value
         else:
             extension_priors[name] = value
+
+
+# Custom prior helper functions:
+
+
+def _make_period_prior(
+    *,
+    period: Any | None = None,
+    period_min: ScalarQTime | None = None,
+    period_max: ScalarQTime | None = None,
+) -> PriorDist:
+    """Return a period prior from an explicit distribution or from bounds."""
+    if period is not None:
+        if period_min is not None or period_max is not None:
+            raise TypeError(
+                "Cannot specify both an explicit period prior and period_min/period_max"
+            )
+        return period
+
+    if period_min is None or period_max is None:
+        raise TypeError(
+            "Must specify either an explicit period prior or both period_min and "
+            "period_max"
+        )
+
+    return QuantityDistribution(
+        dist.LogUniform(
+            ustrip(str(period_min.unit), period_min),
+            ustrip(str(period_min.unit), period_max),
+        ),
+        str(period_min.unit),
+    )
+
+
+def _make_rv_semiamp_prior(
+    *,
+    rv_semiamp: LinearPriorDist | None = None,
+    sigma_K0: ScalarQSpeed | None = None,
+    P0: ScalarQTime = Q(1.0, "yr"),
+) -> LinearPriorDist:
+    if rv_semiamp is not None:
+        if sigma_K0 is not None:
+            raise TypeError("Cannot specify both rv_semiamp and sigma_K0")
+        return rv_semiamp
+    if sigma_K0 is None:
+        raise TypeError("Must specify either rv_semiamp or sigma_K0")
+    return PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0)
+
+
+def _make_vsys_prior(
+    *,
+    v_sys: LinearPriorDist | None = None,
+    sigma_v0: ScalarQSpeed | None = None,
+) -> LinearPriorDist:
+    if v_sys is not None:
+        if sigma_v0 is not None:
+            raise TypeError("Cannot specify both v_sys and sigma_v0")
+        return v_sys
+    if sigma_v0 is None:
+        raise TypeError("Must specify either v_sys or sigma_v0")
+    return QuantityDistribution(
+        dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
+        str(sigma_v0.unit),
+    )
+
+
+def _make_pm_prior(
+    *,
+    pm: LinearPriorDist | None = None,
+    sigma_vtan: ScalarQSpeed | None = None,
+    name: str = "pmra/pmdec",
+) -> LinearPriorDist:
+    if pm is not None:
+        if sigma_vtan is not None:
+            raise TypeError(
+                f"Cannot specify both an explicit {name} prior and sigma_vtan"
+            )
+        return pm
+    if sigma_vtan is None:
+        raise TypeError(f"Must specify either an explicit {name} prior or sigma_vtan")
+    return ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)
 
 
 class RejectionPrior(eqx.Module):
@@ -119,7 +200,7 @@ class RejectionPrior(eqx.Module):
     """
 
     nonlinear_priors: dict[str, PriorDist]
-    linear_prior: LinearPriorDist
+    linear_prior: LinearPriorDict
 
     # Priors for extension parameters (jitter, offsets, GP hyperparams, etc.).
     # Keys are the parameter names declared by the extension via extra_params().
@@ -200,12 +281,12 @@ class RejectionPrior(eqx.Module):
     def default_rv(
         cls,
         *,
-        period_min: ScalarQTime,
-        period_max: ScalarQTime,
-        sigma_K0: ScalarQSpeed,
-        sigma_v0: ScalarQSpeed,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_K0: ScalarQSpeed | None = None,
+        sigma_v0: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
-        **kwargs: PriorDist,
+        **kwargs: PriorDist | LinearPriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
 
@@ -287,17 +368,25 @@ class RejectionPrior(eqx.Module):
         ['espresso', 'jitter']
         """
         nonlinear: dict[str, PriorDist] = {
-            "period": _make_log_period_prior(period_min, period_max),
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
             "eccentricity": kipping_2013_ecc_prior,
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         }
 
-        linear_prior: dict[str, Any] = {
-            "rv_semiamp": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
-            "v_sys": QuantityDistribution(
-                dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
-                str(sigma_v0.unit),
+        linear_prior: LinearPriorDict = {
+            "rv_semiamp": _make_rv_semiamp_prior(
+                rv_semiamp=kwargs.pop("rv_semiamp", None),
+                sigma_K0=sigma_K0,
+                P0=P0,
+            ),
+            "v_sys": _make_vsys_prior(
+                v_sys=kwargs.pop("v_sys", None),
+                sigma_v0=sigma_v0,
             ),
         }
 
@@ -314,14 +403,14 @@ class RejectionPrior(eqx.Module):
     def default_gaia_astrometry(
         cls,
         *,
-        period_min: ScalarQTime,
-        period_max: ScalarQTime,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
         sigma_a0: ScalarQLength,
         sigma_parallax: ScalarQAngle,
         sigma_pos: ScalarQAngle,
-        sigma_vtan: ScalarQSpeed,
+        sigma_vtan: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
-        **kwargs: PriorDist,
+        **kwargs: PriorDist | LinearPriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for Gaia astrometry data.
 
@@ -395,8 +484,13 @@ class RejectionPrior(eqx.Module):
         >>> sorted(prior.nonlinear_priors.keys())
         ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
         """
+        # TODO: make sigma_pos, sigma_a0, sigma_parallax optional
         nonlinear: dict[str, PriorDist] = {
-            "period": _make_log_period_prior(period_min, period_max),
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
             "eccentricity": kipping_2013_ecc_prior,
             "phase_peri": dist.Uniform(0.0, 1.0),
             "cos_i": dist.Uniform(-1.0, 1.0),
@@ -405,15 +499,20 @@ class RejectionPrior(eqx.Module):
                 dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
             ),
         }
-        linear_prior: dict[str, Any] = {
+
+        linear_prior: LinearPriorDict = {
             "ra0": QuantityDistribution(
                 dist.Normal(0.0, ustrip("mas", sigma_pos)), "mas"
             ),
             "dec0": QuantityDistribution(
                 dist.Normal(0.0, ustrip("mas", sigma_pos)), "mas"
             ),
-            "pmra": ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan),
-            "pmdec": ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan),
+            "pmra": _make_pm_prior(
+                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+            ),
+            "pmdec": _make_pm_prior(
+                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+            ),
             "parallax": QuantityDistribution(
                 dist.HalfNormal(ustrip("mas", sigma_parallax)), "mas"
             ),
@@ -435,13 +534,13 @@ class RejectionPrior(eqx.Module):
     def default_sb2(
         cls,
         *,
-        period_min: ScalarQTime,
-        period_max: ScalarQTime,
-        sigma_K0: ScalarQSpeed,
-        sigma_v0: ScalarQSpeed,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_K0: ScalarQSpeed | None = None,
+        sigma_v0: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         component_names: tuple[str, str] = ("primary", "secondary"),
-        **kwargs: PriorDist,
+        **kwargs: PriorDist | LinearPriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for SB2 (double-lined) radial velocity data.
 
@@ -501,19 +600,27 @@ class RejectionPrior(eqx.Module):
         ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
         """
         nonlinear: dict[str, PriorDist] = {
-            "period": _make_log_period_prior(period_min, period_max),
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
             "eccentricity": kipping_2013_ecc_prior,
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         }
 
-        linear_prior: dict[str, Any] = {
-            f"{name}.rv_semiamp": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0)
+        linear_prior: LinearPriorDict = {
+            f"{name}.rv_semiamp": _make_rv_semiamp_prior(
+                rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
+                sigma_K0=sigma_K0,
+                P0=P0,
+            )
             for name in component_names
         }
-        linear_prior["v_sys"] = QuantityDistribution(
-            dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
-            str(sigma_v0.unit),
+        linear_prior["v_sys"] = _make_vsys_prior(
+            v_sys=kwargs.pop("v_sys", None),
+            sigma_v0=sigma_v0,
         )
 
         extension_priors: dict[str, PriorDist] = {}

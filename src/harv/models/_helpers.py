@@ -19,7 +19,9 @@ type PriorDist = dist.Distribution | QuantityDistribution
 type LinearPriorCallable = Callable[..., QuantityDistribution | dist.Normal]
 # Callable that returns a Normal-like prior given nonlinear parameter values.
 
-type LinearPriorDist = dict[str, PriorDist | LinearPriorCallable]
+type LinearPriorDist = PriorDist | LinearPriorCallable
+
+type LinearPriorDict = dict[str, LinearPriorDist]
 # Per-parameter linear prior dictionary.
 
 

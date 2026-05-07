@@ -66,10 +66,17 @@ def _resolve_effective_marginalized_names(
             )
             raise ValueError(msg)
 
+    # Only check names the user actually wants to marginalize
+    names_to_check = (
+        set(effective_linear_prior)
+        if marginalized_names is None
+        else set(marginalized_names)
+    )
+
     explicit = {
         name
-        for name, prior_dist in effective_linear_prior.items()
-        if _needs_explicit_sampling(prior_dist)
+        for name in names_to_check
+        if _needs_explicit_sampling(effective_linear_prior[name])
     }
     if not explicit:
         return marginalized_names
