@@ -145,3 +145,43 @@ class TestRVModelSampleConditional:
         samples = model.sample_conditional_linear(nl, key)
         assert jnp.isfinite(samples["rv_semiamp"])
         assert jnp.isfinite(samples["v_sys"])
+
+    def test_conditional_sample_respects_nonzero_prior_mean(self):
+        """Regression: conditional samples should be centred near the prior mean.
+
+        When all observed RVs are exactly equal to a known v_sys value and the
+        rv_semiamp signal is negligible, the conditional posterior for v_sys
+        should be pulled toward that value.  Previously, MarginalizedLinear.
+        conditional() ignored the prior mean, so samples were wrong when the
+        Normal prior had a non-zero loc.
+        """
+        v_sys_true = 50.0  # km/s — deliberately non-zero
+        n_obs = 40
+        data = RVData(
+            time=Q(jnp.linspace(0, 200, n_obs), "day"),
+            rv=Q(jnp.full(n_obs, v_sys_true), "km/s"),
+            rv_err=Q(jnp.ones(n_obs) * 0.01, "km/s"),  # very tight errors
+        )
+        # Tight prior on v_sys centred on the true value; wide prior on K
+        linear_prior = {
+            "rv_semiamp": dist.Normal(0.0, 0.01),  # near-zero K
+            "v_sys": dist.Normal(v_sys_true, 10.0),  # non-zero mean
+        }
+        model = RVModel(data=data, linear_prior=linear_prior)
+        nl = {
+            "period": Q(1000.0, "day"),
+            "eccentricity": 0.0,
+            "phase_peri": 0.0,
+            "arg_peri": Q(0.0, "rad"),
+        }
+        # Draw many conditional samples and check the mean is close to truth
+        keys = jax.vmap(lambda i: jax.random.fold_in(jax.random.key(0), i))(
+            jnp.arange(200)
+        )
+        samples = jax.vmap(lambda k: model.sample_conditional_linear(nl, k))(keys)
+        mean_v_sys = jnp.mean(samples["v_sys"])
+        assert jnp.abs(mean_v_sys - v_sys_true) < 1.0, (
+            f"Conditional posterior mean for v_sys ({mean_v_sys:.2f}) is far from "
+            f"the true value ({v_sys_true:.2f}). "
+            "This likely indicates the prior-mean bug in conditional sampling."
+        )

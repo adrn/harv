@@ -746,15 +746,25 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 
 **Factory classmethods:**
 
-- `JointModel.for_sb2(components, *, shared_params=None)` -- build a JointModel
-  for an SB2 (two RV components). Defaults shared_params to
+- `JointModel.for_sb2(data, prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
+  build an SB2 `JointModel` directly from a `SystemData` (or `dict[str, RVData]`) and a
+  `RejectionPrior.default_sb2` prior. Automatically routes component-qualified linear-prior
+  keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"` (or whatever names are in
+  `component_names`) to the respective component models and declares all other linear-prior
+  keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
   `("period", "eccentricity", "phase_peri", "arg_peri")`.
 - `JointModel.for_rv_and_gaia(components, *, shared_params=None)` -- build a
   JointModel for combined RV + Gaia astrometry. Same default shared_params.
 
 **Parameter namespacing:** Shared orbital params use bare names (`"period"`).
 Component-specific nonlinear params use `"component_name.param_name"` convention
-(e.g. `"rv.jitter"`). Linear params remain per-component internally.
+(e.g. `"rv.jitter"`). Linear params are per-component by default. Names listed
+in `JointModel.shared_linear_params` are shared across all components: the
+prior under that name must match across components, and the parameter appears
+once at the top level of `sample_conditional_linear` and in flattened sample
+output (no component namespacing). For SB2, the default
+`shared_linear_params=("v_sys",)` ensures correct joint marginalization of the
+systemic velocity.
 
 **Key methods:**
 

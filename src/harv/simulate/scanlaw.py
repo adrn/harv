@@ -47,9 +47,7 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
     """
 
     dr: str = eqx.field(converter=lambda x: str(x).lower())
-    random_downsample_fraction: float = eqx.field(
-        default=0.0, converter=lambda x: float(x)
-    )
+    random_downsample_fraction: float = eqx.field(default=0.0, converter=float)
     random_seed: int | None = eqx.field(
         default=None, converter=lambda x: int(x) if x is not None else None
     )

@@ -440,12 +440,19 @@ class RejectionPrior(eqx.Module):
         sigma_K0: ScalarQSpeed,
         sigma_v0: ScalarQSpeed,
         P0: ScalarQTime = Q(1.0, "yr"),
+        component_names: tuple[str, str] = ("primary", "secondary"),
         **kwargs: PriorDist,
     ) -> "RejectionPrior":
         r"""Create default prior for SB2 (double-lined) radial velocity data.
 
         Both semi-amplitudes use the same period-dependent scaling as
         :meth:`default_rv`.  The systemic velocity prior is a fixed Gaussian.
+
+        The default names for the two components are "primary" and "secondary", which
+        means the linear priors for the semi-amplitudes must be keyed as
+        "primary.rv_semiamp" and "secondary.rv_semiamp".  You can customize the
+        component names via the ``component_names`` argument, but the linear prior keys
+        must always be ``{component_name}.rv_semiamp``
 
         Parameters
         ----------
@@ -459,6 +466,10 @@ class RejectionPrior(eqx.Module):
             Systemic velocity prior scale.
         P0 : Q["time"]
             Reference period for the K prior scaling.  Default: 1 yr.
+        component_names : tuple[str, str]
+            Names of the two components.  These are used to construct the linear prior
+            keys for the semi-amplitudes (e.g. "primary.rv_semiamp" and
+            "secondary.rv_semiamp").
         **kwargs : PriorDist
             Override any default nonlinear or linear prior by name.
 
@@ -487,7 +498,7 @@ class RejectionPrior(eqx.Module):
         ...         sigma_v0=Q(50.0, "km/s"),
         ...     ).linear_prior
         ... )
-        ['rv_semiamp_1', 'rv_semiamp_2', 'v_sys']
+        ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_log_period_prior(period_min, period_max),
@@ -497,13 +508,13 @@ class RejectionPrior(eqx.Module):
         }
 
         linear_prior: dict[str, Any] = {
-            "rv_semiamp_1": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
-            "rv_semiamp_2": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0),
-            "v_sys": QuantityDistribution(
-                dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
-                str(sigma_v0.unit),
-            ),
+            f"{name}.rv_semiamp": PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0)
+            for name in component_names
         }
+        linear_prior["v_sys"] = QuantityDistribution(
+            dist.Normal(0.0, ustrip(str(sigma_v0.unit), sigma_v0)),
+            str(sigma_v0.unit),
+        )
 
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)

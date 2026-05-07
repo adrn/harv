@@ -65,7 +65,10 @@ class QuantityDistribution(eqx.Module):
         For tuple units (multivariate with mixed units), returns a raw array --
         the consumer splits by parameter name and attaches per-element units.
         """
-        raw = self.distribution.sample(key, sample_shape)  # type: ignore[arg-type]
+        raw = self.distribution.sample(
+            key,  # ty: ignore[invalid-argument-type]
+            sample_shape,
+        )
         if isinstance(self.unit, str):
             return Q(raw, self.unit)
         return raw

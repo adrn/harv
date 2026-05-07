@@ -546,7 +546,7 @@ class NumpyroSampler(eqx.Module):
         # (e.g. "rv.jitter") and are already correctly named for numpyro.
 
         if extra_model is not None:
-            init_params.update(extra_init_params)  # type: ignore[arg-type]
+            init_params.update(extra_init_params)  # ty: ignore[no-matching-overload]
 
         if (
             not marginalized
@@ -676,6 +676,16 @@ class NumpyroSampler(eqx.Module):
                 }
             for comp in model.components.values():
                 linear_units.update(comp._linear_param_units())
+            # Per-component non-shared explicit params have qualified site names
+            # in the numpyro posterior (e.g. "primary.rv_semiamp").  Build a set
+            # of the actual posterior keys so we can collect them correctly.
+            shared_lin = set(model.shared_linear_params)
+            explicit_posterior_keys: set[str] = {
+                (name if name in shared_lin else f"{comp_name}.{name}")
+                for comp_name, comp in model.components.items()
+                for name in explicit_linear_names
+                if name in comp._all_linear_names()
+            }
         else:
             linear_units = model._linear_param_units()
             marginalized_name_set = set(
@@ -686,6 +696,8 @@ class NumpyroSampler(eqx.Module):
             explicit_linear_names = (
                 set(model._all_linear_names()) - marginalized_name_set
             )
+            # Non-JointModel: site names are bare, same as explicit_linear_names.
+            explicit_posterior_keys = explicit_linear_names
 
         # Collect all keys the model needs: base nonlinear, extension nonlinear
         # (using model key convention), and explicitly-sampled linear params.
@@ -695,9 +707,9 @@ class NumpyroSampler(eqx.Module):
             if model_key in posterior and model_key not in nl_keys:
                 nl_keys.append(model_key)
 
-        for name in explicit_linear_names:
-            if name in posterior and name not in nl_keys:
-                nl_keys.append(name)
+        for pkey in explicit_posterior_keys:
+            if pkey in posterior and pkey not in nl_keys:
+                nl_keys.append(pkey)
 
         n_samples = len(posterior[nl_keys[0]])
         keys = jr.split(jr.fold_in(rng_key, 3), n_samples)
@@ -709,10 +721,11 @@ class NumpyroSampler(eqx.Module):
             sample: dict[str, jax.Array],
         ) -> dict[str, Any]:
             wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
-            for name in explicit_linear_names:
-                if name in sample and name not in wrapped:
-                    unit = linear_units.get(name, "")
-                    wrapped[name] = Q(sample[name], unit) if unit else sample[name]
+            for pkey in explicit_posterior_keys:
+                if pkey in sample and pkey not in wrapped:
+                    bare = pkey.split(".", 1)[-1] if "." in pkey else pkey
+                    unit = linear_units.get(bare, "")
+                    wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
             return model.sample_conditional_linear(
                 wrapped,
                 key,
@@ -723,12 +736,31 @@ class NumpyroSampler(eqx.Module):
 
         # Attach units
         if isinstance(model, JointModel):
+            # Detect which per-component param names appear in more than one
+            # component (for namespacing), and handle shared top-level params.
+            name_counts: dict[str, int] = {}
+            for comp in model.components.values():
+                for name in comp._all_linear_names():
+                    name_counts[name] = name_counts.get(name, 0) + 1
+
+            first_comp = next(iter(model.components.values()))
+            shared_units = first_comp._linear_param_units()
+
             final: dict[str, AbstractQuantity] = {}
-            for comp_name, comp in model.components.items():
-                units = comp._linear_param_units()
-                comp_result = result[comp_name]
-                for name, arr in comp_result.items():
-                    final[name] = Q(arr, units.get(name, ""))
+            for key, value in result.items():
+                if isinstance(value, dict):
+                    # Per-component sub-dict.
+                    comp_name = key
+                    comp = model.components[comp_name]
+                    units = comp._linear_param_units()
+                    for nm, arr in value.items():
+                        final_name = (
+                            f"{comp_name}.{nm}" if name_counts.get(nm, 1) > 1 else nm
+                        )
+                        final[final_name] = Q(arr, units.get(nm, ""))
+                else:
+                    # Shared top-level param (joint path).
+                    final[key] = Q(value, shared_units.get(key, ""))
             return final
         units = model._linear_param_units()
         return {name: Q(arr, units.get(name, "")) for name, arr in result.items()}
@@ -738,14 +770,28 @@ class NumpyroSampler(eqx.Module):
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
     ) -> dict[str, AbstractQuantity]:
-        """Extract linear params from a non-marginalized posterior."""
+        """Extract linear params from a non-marginalized posterior.
+
+        For a :class:`~harv.models.joint.JointModel` the full numpyro model
+        names per-component non-shared linear sites with qualified keys
+        (``"{comp}.{base}"``) and shared linear sites with bare keys.  The
+        returned dict mirrors that convention so the keys line up with the
+        rejection-sampler / marginalized-path output (e.g.
+        ``primary.rv_semiamp``, ``v_sys``).
+        """
         if isinstance(model, JointModel):
             linear_q: dict[str, AbstractQuantity] = {}
-            for comp in model.components.values():
+            shared_lin = set(model.shared_linear_params)
+            for comp_name, comp in model.components.items():
                 units = comp._linear_param_units()
                 for name in comp._all_linear_names():
-                    if name in posterior:
-                        linear_q[name] = Q(posterior[name], units.get(name, ""))
+                    if name in shared_lin:
+                        if name in posterior and name not in linear_q:
+                            linear_q[name] = Q(posterior[name], units.get(name, ""))
+                    else:
+                        qkey = f"{comp_name}.{name}"
+                        if qkey in posterior:
+                            linear_q[qkey] = Q(posterior[qkey], units.get(name, ""))
             return linear_q
         units = model._linear_param_units()
         linear_q = {}

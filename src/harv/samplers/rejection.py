@@ -97,11 +97,19 @@ def _effective_linear_prior_from_model(
 ) -> dict[str, Any] | None:
     """Collect the effective linear prior dict from a pre-built model."""
     if isinstance(model, JointModel):
+        shared_lin = set(model.shared_linear_params)
         merged_linear_prior: dict[str, Any] = {}
-        for component in model.components.values():
+        for comp_name, component in model.components.items():
             if component.linear_prior is None:
                 continue
-            merged_linear_prior.update(component.linear_prior)
+            for name, prior_dist in component.linear_prior.items():
+                if name in shared_lin:
+                    # Shared: add once with bare key
+                    if name not in merged_linear_prior:
+                        merged_linear_prior[name] = prior_dist
+                else:
+                    # Per-component: qualified key matching numpyro site name
+                    merged_linear_prior[f"{comp_name}.{name}"] = prior_dist
         return merged_linear_prior or None
     return model.linear_prior
 
@@ -672,7 +680,7 @@ class RejectionSampler(eqx.Module):
         uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
         return uniform_draws < weights
 
-    def _sample_linear_parameters(
+    def _sample_linear_parameters(  # noqa: C901
         self,
         model: AbstractComponentModel | JointModel,
         key: jax.Array,
@@ -714,23 +722,34 @@ class RejectionSampler(eqx.Module):
 
         # Attach units from the model's linear_param_units
         if isinstance(model, JointModel):
-            # Detect which param names appear in more than one component.
-            # Colliding names (e.g. both "rv_semiamp" in an SB2) are
-            # namespaced as "comp_name.param_name" to avoid silent overwrites.
+            # Detect which per-component param names appear in more than one
+            # component.  Colliding names (e.g. both "rv_semiamp" in an SB2)
+            # are namespaced as "comp_name.param_name" to avoid silent overwrites.
             name_counts: dict[str, int] = {}
             for comp in model.components.values():
                 for name in comp._all_linear_names():
                     name_counts[name] = name_counts.get(name, 0) + 1
 
+            # Shared linear params that appear at the top level (not in
+            # per-component sub-dicts) should use bare names.
             final: dict[str, AbstractQuantity] = {}
-            for comp_name, comp in model.components.items():
-                units = comp._linear_param_units()
-                comp_result = result[comp_name]
-                for name, arr in comp_result.items():
-                    final_name = (
-                        f"{comp_name}.{name}" if name_counts.get(name, 1) > 1 else name
-                    )
-                    final[final_name] = Q(arr, units.get(name, ""))
+            first_comp = next(iter(model.components.values()))
+            shared_units = first_comp._linear_param_units()
+
+            for k, value in result.items():
+                if isinstance(value, dict):
+                    # Per-component sub-dict.
+                    comp_name = k
+                    comp = model.components[comp_name]
+                    units = comp._linear_param_units()
+                    for nm, arr in value.items():
+                        final_name = (
+                            f"{comp_name}.{nm}" if name_counts.get(nm, 1) > 1 else nm
+                        )
+                        final[final_name] = Q(arr, units.get(nm, ""))
+                else:
+                    # Shared top-level param (joint path).
+                    final[k] = Q(value, shared_units.get(k, ""))
             return final
         units = model._linear_param_units()
         return {name: Q(arr, units.get(name, "")) for name, arr in result.items()}
