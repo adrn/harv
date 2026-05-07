@@ -258,7 +258,7 @@ class SystemData(AbstractDatasetContainer):
             per_ds: dict[str, Any] = {}
             if colors is not None:
                 per_ds["color"] = colors[i % len(colors)]
-            ds.plot(  # type: ignore[unresolved-attribute]
+            ds.plot(  # ty: ignore[unresolved-attribute]
                 ax=ax, add_labels=(i == 0), label=name, **per_ds, **kwargs
             )
 

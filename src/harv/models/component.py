@@ -434,7 +434,7 @@ class AbstractComponentModel(eqx.Module):
             y=arr_obs,
             cov=cov,
             marg_names=marg_names,
-            prior_mu=lp.loc,
+            prior_mu=lp.loc,  # ty: ignore[invalid-argument-type]
             prior_scale_tril=lp.scale_tril,
             explicit_linear=linear_params,
         )

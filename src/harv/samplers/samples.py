@@ -189,7 +189,9 @@ class Samples(eqx.Module):
 
         if key == "log_period":
             period = self.nonlinear["period"]
-            return jnp.log10(ustrip(str(period.unit), period))  # type: ignore[return-value]
+            return jnp.log10(  # ty: ignore[invalid-return-type]
+                ustrip(str(period.unit), period)
+            )
 
         if key == "t_peri":
             # Express t_peri in absolute time: t_ref + phase_peri * period.
@@ -747,8 +749,13 @@ class Samples(eqx.Module):
                 var_names.append(param)
                 if truths is not None and param in truths:
                     truth_val = truths[param]
-                    if isinstance(truth_val, Q) and isinstance(values, Q):
-                        reference_values[param] = ustrip(values.unit, truth_val)
+                    # Strip a Q truth into the plotted unit so the reference
+                    # marker lines up with the (already-unitless) sample axis.
+                    # ``values`` has already been unwrapped above, so the
+                    # recorded ``param_units[param]`` is the source of truth.
+                    if isinstance(truth_val, Q):
+                        target_unit = param_units.get(param, "")
+                        reference_values[param] = float(ustrip(target_unit, truth_val))
                     else:
                         reference_values[param] = float(truth_val)
             except (KeyError, ValueError):
@@ -778,7 +785,9 @@ class Samples(eqx.Module):
             for k in params
         }
         if any(resolved_labels[k] != k for k in params):
-            default_kwargs["labeller"] = MapLabeller(var_name_map=resolved_labels)
+            default_kwargs["labeller"] = MapLabeller(
+                var_name_map=resolved_labels  # ty: ignore[invalid-argument-type]
+            )
 
         # Add reference values if provided
         if reference_values:

@@ -78,32 +78,24 @@ _DEFAULT_SHARED_PARAMS: tuple[str, ...] = (
 def _priors_equal(a: Any, b: Any) -> bool:
     """Return True if two prior specs are structurally equal.
 
-    Reference equality first; otherwise compare type and key parameters.
-    For numpyro distributions, compares the ``.__class__`` and the leaves of
-    the JAX pytree representation.  For ``QuantityDistribution``, also
-    compares the ``.unit`` attribute.  For callable prior factories, compares
-    type and ``__dict__``.
+    Defers to :func:`equinox.tree_equal`, which compares pytree treedef
+    (capturing static metadata such as :attr:`QuantityDistribution.unit`)
+    *and* per-leaf array values together.  This is more robust than a
+    ``__dict__``-based comparison for callable prior factories: many of those
+    are :class:`equinox.Module` subclasses whose field values are exposed via
+    pytree leaves rather than ``__dict__`` (which can be empty under
+    ``__slots__``), and array-shaped fields would also break a raw ``==``
+    on ``__dict__``.
+
+    Numpyro distributions, :class:`QuantityDistribution`, and callable
+    eqx.Module priors are all proper pytrees, so a single call covers every
+    prior shape that flows through ``shared_linear_params`` validation.
     """
     if a is b:
         return True
     if type(a) is not type(b):
         return False
-    # QuantityDistribution with .distribution attribute
-    if hasattr(a, "unit") and hasattr(a, "distribution"):
-        return str(a.unit) == str(b.unit) and _priors_equal(
-            a.distribution, b.distribution
-        )
-    # numpyro Distribution: compare the parameter pytree leaves
-    if isinstance(a, dist.Distribution):
-        a_leaves = jax.tree_util.tree_leaves(a)
-        b_leaves = jax.tree_util.tree_leaves(b)
-        if len(a_leaves) != len(b_leaves):
-            return False
-        return all(
-            jnp.allclose(la, lb) for la, lb in zip(a_leaves, b_leaves, strict=True)
-        )
-    # Callable prior class — compare instance state
-    return getattr(a, "__dict__", None) == getattr(b, "__dict__", None)
+    return bool(eqx.tree_equal(a, b))
 
 
 def _is_callable_prior(p: Any) -> bool:
@@ -1292,23 +1284,40 @@ class JointModel(eqx.Module):
             _comp_explicit_lp[comp_name] = explicit
             _comp_param_units[comp_name] = comp._linear_param_units()
 
-        # Build ordered list of all Gaussian linear names across components.
-        # Names in ``shared_linear_params`` are de-duplicated: each appears
-        # exactly once in the joint MVN, owned by the FIRST component that
-        # holds it.  Without this guard we'd append e.g. ``v_sys`` for every
-        # component, then call ``numpyro.deterministic("v_sys", ...)`` more
-        # than once below, which numpyro rejects with a duplicate-site error.
-        # Validation in ``__check_init__`` guarantees the priors agree across
-        # components, so picking the first owner is well-defined.
+        # Build ordered slot lists for both Gaussian and explicit (non-Gaussian)
+        # linear parameters.  Each slot is ``(site_name, comp_name, base_name)``:
+        #
+        # * Names in ``shared_linear_params`` appear ONCE with ``site_name ==
+        #   base_name``, owned by the first component that holds them.
+        #   Validation in ``__check_init__`` guarantees identical priors
+        #   across components, so picking the first owner is well-defined.
+        # * Names that are NOT shared appear once per owning component with
+        #   ``site_name == f"{comp_name}.{base_name}"``.  This is essential
+        #   when the same bare linear name (e.g. ``rv_semiamp`` for SB2) is
+        #   present in multiple components: without qualified site names
+        #   numpyro raises a duplicate-site error and the per-component
+        #   posteriors collapse onto whichever owner happened to be visited
+        #   last.
         shared_lin_set = set(self.shared_linear_params)
-        _all_gaussian_names: list[str] = []
-        _name_to_comp: dict[str, str] = {}
-        for comp_name in joint.component_names:
-            for n in _comp_gaussian_lp[comp_name]:
-                if n in shared_lin_set and n in _name_to_comp:
-                    continue  # already owned by an earlier component
-                _all_gaussian_names.append(n)
-                _name_to_comp[n] = comp_name
+
+        def _build_slots(
+            per_comp_lp: dict[str, dict[str, Any]],
+        ) -> list[tuple[str, str, str]]:
+            slots: list[tuple[str, str, str]] = []
+            seen_shared: set[str] = set()
+            for comp_name in joint.component_names:
+                for base in per_comp_lp[comp_name]:
+                    if base in shared_lin_set:
+                        if base in seen_shared:
+                            continue
+                        seen_shared.add(base)
+                        slots.append((base, comp_name, base))
+                    else:
+                        slots.append((f"{comp_name}.{base}", comp_name, base))
+            return slots
+
+        _gaussian_slots = _build_slots(_comp_gaussian_lp)
+        _explicit_slots = _build_slots(_comp_explicit_lp)
 
         def model_fn() -> None:  # noqa: C901
             # Sample all nonlinear params
@@ -1325,33 +1334,48 @@ class JointModel(eqx.Module):
                 nl_values, shared, joint.component_names, per_comp_nl
             )
 
-            # Collect all explicit (non-Gaussian) linear params across components
-            all_explicit: dict[str, jax.Array] = {}
-            for comp_name in joint.component_names:
-                pu = _comp_param_units[comp_name]
-                for name, d in _comp_explicit_lp[comp_name].items():
-                    raw = numpyro.sample(name, _unwrap_dist(d))
-                    target_u = pu.get(name, "")
-                    if isinstance(d, QuantityDistribution) and target_u:
-                        raw = ustrip(target_u, Q(raw, str(d.unit)))
-                    all_explicit[name] = jnp.asarray(raw)
+            # Per-component view of linear values, used both to feed callable
+            # Gaussian priors (proxy) and to assemble each component's log-prob
+            # input.  Shared linear values are mirrored into every component's
+            # entry so callable priors can read them as bare attributes.
+            linear_by_comp: dict[str, dict[str, jax.Array]] = {
+                c: {} for c in joint.component_names
+            }
 
-            # Sample all Gaussian linear params jointly as a single _linear site
-            all_linear: dict[str, jax.Array] = {}
-            all_linear.update(all_explicit)
-            if _all_gaussian_names:
-                # Resolve per-component priors and combine into one MVN
+            def _record(
+                cname: str, base: str, value: jax.Array, *, is_shared: bool
+            ) -> None:
+                if is_shared:
+                    for c in joint.component_names:
+                        linear_by_comp[c][base] = value
+                else:
+                    linear_by_comp[cname][base] = value
+
+            # Sample explicit (non-Gaussian) linear priors using the resolved
+            # site names (qualified for per-component, bare for shared).
+            for site_name, cname, base in _explicit_slots:
+                d = _comp_explicit_lp[cname][base]
+                pu = _comp_param_units[cname]
+                raw = numpyro.sample(site_name, _unwrap_dist(d))
+                target_u = pu.get(base, "")
+                if isinstance(d, QuantityDistribution) and target_u:
+                    raw = ustrip(target_u, Q(raw, str(d.unit)))
+                _record(cname, base, jnp.asarray(raw), is_shared=base in shared_lin_set)
+
+            # Sample all Gaussian linear params jointly as a single _linear site.
+            if _gaussian_slots:
+                # Resolve per-component priors and combine into one MVN.
                 all_locs: list[Any] = []
                 all_scales: list[Any] = []
-                for gname in _all_gaussian_names:
-                    cname = _name_to_comp[gname]
-                    d = _comp_gaussian_lp[cname][gname]
+                for _, cname, base in _gaussian_slots:
+                    d = _comp_gaussian_lp[cname][base]
                     pu = _comp_param_units[cname]
-                    target_u = pu.get(gname, "")
+                    target_u = pu.get(base, "")
 
-                    # Resolve callable priors
+                    # Resolve callable priors against the owning component's
+                    # nonlinear + already-sampled-explicit values.
                     proxy_values = dict(comp_nl[cname])
-                    proxy_values.update(all_explicit)
+                    proxy_values.update(linear_by_comp[cname])
                     params_proxy = types.SimpleNamespace(**proxy_values)
                     if callable(d) and not isinstance(
                         d, dist.Distribution | QuantityDistribution
@@ -1369,7 +1393,7 @@ class JointModel(eqx.Module):
                         loc = resolved.loc
                         scale = resolved.scale
                     else:
-                        msg = f"Expected Normal for Gaussian linear prior {gname}"
+                        msg = f"Expected Normal for Gaussian linear prior {base}"
                         raise TypeError(msg)
                     all_locs.append(loc)
                     all_scales.append(scale)
@@ -1381,18 +1405,19 @@ class JointModel(eqx.Module):
                     ),
                 )
                 linear_vec = cast("jax.Array", numpyro.sample("_linear", mvn))
-                for i, lname in enumerate(_all_gaussian_names):
-                    numpyro.deterministic(lname, linear_vec[i])
-                    all_linear[lname] = linear_vec[i]
+                for i, (site_name, cname, base) in enumerate(_gaussian_slots):
+                    v = linear_vec[i]
+                    numpyro.deterministic(site_name, v)
+                    _record(cname, base, v, is_shared=base in shared_lin_set)
 
             # Evaluate explicit log-likelihood per component
             log_lik = jnp.zeros(())
             for comp_name, comp in joint.components.items():
-                # Build this component's linear values
-                comp_linear: dict[str, jax.Array] = {}
-                for n in comp._all_linear_names():
-                    if n in all_linear:
-                        comp_linear[n] = all_linear[n]
+                comp_linear = {
+                    n: linear_by_comp[comp_name][n]
+                    for n in comp._all_linear_names()
+                    if n in linear_by_comp[comp_name]
+                }
                 log_lik = log_lik + comp._log_prob_explicit(
                     comp_nl[comp_name], comp_linear, comp.data
                 )

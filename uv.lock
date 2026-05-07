@@ -1020,7 +1020,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "arviz", specifier = ">=0.22.0" },
+    { name = "arviz", specifier = ">=1.0.0" },
     { name = "beartype" },
     { name = "corner", specifier = ">=2.2.3" },
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
@@ -1063,7 +1063,7 @@ docs = [
     { name = "sphinx-design", specifier = ">=0.6.1" },
 ]
 extra = [
-    { name = "arviz", specifier = ">=0.22.0" },
+    { name = "arviz", specifier = ">=1.0.0" },
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "healpy", specifier = ">=1.18.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },

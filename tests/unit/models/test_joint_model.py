@@ -268,6 +268,45 @@ class TestJointModelNumpyro:
         model_fn = joint.numpyro_model(priors, marginalized=False)
         assert callable(model_fn)
 
+    def test_full_model_traces_with_qualified_per_component_sites(
+        self, rv_data_primary, rv_data_secondary, linear_prior
+    ):
+        """Non-shared linear names appear once per component as qualified sites.
+
+        Regression: when both components have a Gaussian linear prior under
+        the same bare name (e.g. ``rv_semiamp``) and that name is *not* in
+        ``shared_linear_params``, the full numpyro model used to call
+        ``numpyro.deterministic("rv_semiamp", ...)`` twice and crash with a
+        duplicate-site assertion.  Qualified site names are required.
+        """
+        joint = JointModel(
+            components={
+                "primary": RVModel(data=rv_data_primary, linear_prior=linear_prior),
+                "secondary": RVModel(data=rv_data_secondary, linear_prior=linear_prior),
+            },
+            shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
+            shared_linear_params=("v_sys",),
+        )
+        priors = {
+            "period": QD(dist.Uniform(10.0, 500.0), "day"),
+            "eccentricity": dist.Uniform(0.0, 0.9),
+            "phase_peri": dist.Uniform(0.0, 1.0),
+            "arg_peri": QD(dist.Uniform(0.0, 6.28), "rad"),
+        }
+        model_fn = joint.numpyro_model(priors, marginalized=False)
+        seeded = handlers.seed(model_fn, jax.random.PRNGKey(0))
+        trace = handlers.trace(seeded).get_trace()
+
+        # Per-component non-shared linear params are qualified.
+        assert "primary.rv_semiamp" in trace
+        assert "secondary.rv_semiamp" in trace
+        # The bare name must NOT appear (would imply silent collision).
+        assert "rv_semiamp" not in trace
+        # Shared linear params keep bare names.
+        assert "v_sys" in trace
+        assert "primary.v_sys" not in trace
+        assert "secondary.v_sys" not in trace
+
 
 class TestJointModelJit:
     def test_log_prob_jit(self, rv_data_primary, rv_data_secondary, linear_prior):

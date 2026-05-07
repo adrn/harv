@@ -5,6 +5,8 @@ full rejection sampler (slow), tests build a minimal Samples instance directly
 using the constructor. NumpyroSampler.run() returns a Samples object.
 """
 
+from unittest.mock import patch
+
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -12,7 +14,7 @@ import numpyro.distributions as ndist
 import pytest
 from unxt import Q
 
-from harv.data import GaiaAstrometryData, RVData
+from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
 from harv.extensions import Jitter
 from harv.extensions.base import ParamInfo
@@ -875,6 +877,36 @@ class TestPlotRV:
         assert jitter_height > plain_height
         plt.close("all")
 
+    def test_plot_handles_more_instruments_than_color_cycle(self, rv_samples):
+        """Many instruments must not crash plot_rv on the orbit-color zip.
+
+        Regression: ``zip(items, colors[1:N+1], strict=True)`` raised a
+        ValueError once N exceeded ``len(colors) - 1`` (i.e. 9 for the default
+        matplotlib palette).  Orbit colors must cycle modulo the palette.
+        """
+        n_instr = 12  # > default 10-color matplotlib palette
+        rv_datasets: dict[str, RVData] = {}
+        linear: dict[str, Q] = {}
+        for i in range(n_instr):
+            name = f"inst{i}"
+            rv_datasets[name] = RVData(
+                time=Q(jnp.linspace(0.0, 100.0, 6) + i, "day"),
+                rv=Q(jnp.zeros(6) + i * 0.1, "km/s"),
+                rv_err=Q(jnp.ones(6) * 0.5, "km/s"),
+            )
+            linear[f"{name}.rv_semiamp"] = Q(jnp.linspace(3.0, 7.0, N), "km/s")
+            linear[f"{name}.v_sys"] = Q(jnp.linspace(-1.0, 1.0, N) + i * 0.05, "km/s")
+
+        samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear=linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        ax = plot_rv(samples, SystemData(**rv_datasets), n_samples=1)
+        assert ax is not None
+        plt.close("all")
+
     def test_plot_with_gp_extension_changes_time_domain_curve(self, rv_samples):
         """GP plotting support modifies the time-domain RV overlay."""
         tinygp = pytest.importorskip("tinygp")
@@ -936,6 +968,41 @@ def gaia_data() -> GaiaAstrometryData:
         scan_angle=Q(jnp.linspace(0.0, 6.0, n_obs), "rad"),
         parallax_factor=jnp.linspace(-1.0, 1.0, n_obs),
     )
+
+
+@pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+class TestPlotCornerTruths:
+    """Truth-value handling in Samples.plot_corner.
+
+    Regression: ``plot_corner`` unwrapped each Q-valued sample column to a
+    raw array before checking the truth, so a stale ``isinstance(values, Q)``
+    branch never fired and the fallback ``float(truth_val)`` raised a
+    UnitConversionError on any Q truth with non-dimensionless units.
+    """
+
+    def _capture_reference_values(self, samples, truths, params):
+        with patch("harv.samplers.samples.az.plot_pair") as mock_plot:
+            mock_plot.return_value = None
+            samples.plot_corner(params=params, truths=truths)
+        return mock_plot.call_args.kwargs["stats"]["point_estimate"]
+
+    def test_q_truth_converted_to_sample_unit(self, rv_samples):
+        """Q truth in a different but compatible unit converts correctly."""
+        truths = {"period": Q(0.27, "yr")}  # ~98.6 day
+        ref = self._capture_reference_values(rv_samples, truths, ["period"])
+        assert ref["period"] == pytest.approx(0.27 * 365.25, abs=0.5)
+
+    def test_q_truth_same_unit_as_sample(self, rv_samples):
+        """Q truth already in the sample's unit is returned unchanged."""
+        truths = {"rv_semiamp": Q(5.0, "km/s")}
+        ref = self._capture_reference_values(rv_samples, truths, ["rv_semiamp"])
+        assert ref["rv_semiamp"] == pytest.approx(5.0)
+
+    def test_plain_float_truth_with_dimensionless_sample(self, rv_samples):
+        """Plain-float truth still works for a dimensionless sample column."""
+        truths = {"eccentricity": 0.15}
+        ref = self._capture_reference_values(rv_samples, truths, ["eccentricity"])
+        assert ref["eccentricity"] == pytest.approx(0.15)
 
 
 @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")

@@ -546,7 +546,7 @@ class NumpyroSampler(eqx.Module):
         # (e.g. "rv.jitter") and are already correctly named for numpyro.
 
         if extra_model is not None:
-            init_params.update(extra_init_params)  # type: ignore[arg-type]
+            init_params.update(extra_init_params)  # ty: ignore[no-matching-overload]
 
         if (
             not marginalized

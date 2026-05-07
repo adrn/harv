@@ -23,6 +23,7 @@ from harv.data import RVData, SystemData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import JointModel, RVModel
 from harv.samplers import RejectionPrior, RejectionSampler
+from harv.samplers.custom_priors import PeriodDependentKPrior
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -129,6 +130,57 @@ class TestSharedLinearValidation:
                 shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
                 shared_linear_params=("v_sys",),
             )
+
+    def test_shared_callable_priors_must_match(
+        self, rv_data_primary, rv_data_secondary
+    ):
+        """Differing eqx.Module callable priors must be detected.
+
+        Regression test: a previous ``__dict__``-based fallback in
+        ``_priors_equal`` silently returned True for any two
+        ``__slots__``-using ``eqx.Module`` priors and mishandled array-shaped
+        Quantity fields.  Validation must now reject mismatched callable
+        priors and accept matched ones.
+        """
+        # Mismatched sigma_K0 -> must raise.
+        primary = RVModel(
+            data=rv_data_primary,
+            linear_prior={
+                "rv_semiamp": PeriodDependentKPrior(
+                    sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
+                ),
+            },
+        )
+        secondary = RVModel(
+            data=rv_data_secondary,
+            linear_prior={
+                "rv_semiamp": PeriodDependentKPrior(
+                    sigma_K0=Q(99.0, "km/s"), P0=Q(1.0, "yr")
+                ),
+            },
+        )
+        with pytest.raises(ValueError, match="rv_semiamp"):
+            JointModel(
+                components={"primary": primary, "secondary": secondary},
+                shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
+                shared_linear_params=("rv_semiamp",),
+            )
+
+        # Matched eqx.Module priors -> must construct without error.
+        secondary_match = RVModel(
+            data=rv_data_secondary,
+            linear_prior={
+                "rv_semiamp": PeriodDependentKPrior(
+                    sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
+                ),
+            },
+        )
+        joint = JointModel(
+            components={"primary": primary, "secondary": secondary_match},
+            shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
+            shared_linear_params=("rv_semiamp",),
+        )
+        assert joint.shared_linear_params == ("rv_semiamp",)
 
     def test_shared_linear_collision_with_shared_params_raises(
         self, rv_data_primary, rv_data_secondary
