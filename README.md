@@ -8,7 +8,7 @@
 <br/>
 <div align="center">
 <img
-    src="https://raw.githubusercontent.com/adrn/harv/refs/heads/main/docs/_static/logo_med.png"
+    src="https://raw.githubusercontent.com/adrn/harv/refs/heads/main/docs/_static/logo-text-only.png"
     alt="harv logo"
     width="300"
 >
