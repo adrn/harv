@@ -770,14 +770,28 @@ class NumpyroSampler(eqx.Module):
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
     ) -> dict[str, AbstractQuantity]:
-        """Extract linear params from a non-marginalized posterior."""
+        """Extract linear params from a non-marginalized posterior.
+
+        For a :class:`~harv.models.joint.JointModel` the full numpyro model
+        names per-component non-shared linear sites with qualified keys
+        (``"{comp}.{base}"``) and shared linear sites with bare keys.  The
+        returned dict mirrors that convention so the keys line up with the
+        rejection-sampler / marginalized-path output (e.g.
+        ``primary.rv_semiamp``, ``v_sys``).
+        """
         if isinstance(model, JointModel):
             linear_q: dict[str, AbstractQuantity] = {}
-            for comp in model.components.values():
+            shared_lin = set(model.shared_linear_params)
+            for comp_name, comp in model.components.items():
                 units = comp._linear_param_units()
                 for name in comp._all_linear_names():
-                    if name in posterior:
-                        linear_q[name] = Q(posterior[name], units.get(name, ""))
+                    if name in shared_lin:
+                        if name in posterior and name not in linear_q:
+                            linear_q[name] = Q(posterior[name], units.get(name, ""))
+                    else:
+                        qkey = f"{comp_name}.{name}"
+                        if qkey in posterior:
+                            linear_q[qkey] = Q(posterior[qkey], units.get(name, ""))
             return linear_q
         units = model._linear_param_units()
         linear_q = {}

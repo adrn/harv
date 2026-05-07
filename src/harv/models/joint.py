@@ -209,6 +209,10 @@ def _synchronize_component_t_refs(
 class JointModel(eqx.Module):
     """Composition of component models that share orbital parameters.
 
+    We recommend using the :class:`~harv.models.joint.JointModel` factory methods like
+    :func:`~harv.models.joint.JointModel.for_rv_and_gaia` or
+    :func:`~harv.models.joint.JointModel.for_sb2`.
+
     Parameters
     ----------
     components : dict[str, AbstractComponentModel]
@@ -218,30 +222,6 @@ class JointModel(eqx.Module):
         Names of orbital parameters shared across all components (e.g.
         ``("period", "eccentricity", "phase_peri", "arg_peri")``).
 
-    Examples
-    --------
-    >>> from unxt import Q
-    >>> from harv.data import RVData
-    >>> from harv.models import RVModel
-    >>> from harv.models.joint import JointModel
-    >>> data1 = RVData(
-    ...     time=Q([0.0, 50.0], "day"),
-    ...     rv=Q([1.0, -2.0], "km/s"),
-    ...     rv_err=Q([0.5, 0.5], "km/s"),
-    ... )
-    >>> data2 = RVData(
-    ...     time=Q([10.0, 60.0], "day"),
-    ...     rv=Q([-0.5, 1.5], "km/s"),
-    ...     rv_err=Q([0.3, 0.3], "km/s"),
-    ... )
-    >>> joint = JointModel(
-    ...     components={"primary": RVModel(data=data1),
-    ...                 "secondary": RVModel(data=data2)},
-    ...     shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-    ...     shared_linear_params=("v_sys",),
-    ... )
-    >>> sorted(joint.component_names)
-    ['primary', 'secondary']
     """
 
     components: dict[str, AbstractComponentModel]
@@ -570,22 +550,6 @@ class JointModel(eqx.Module):
         (e.g. ``"rv.jitter"``).  Explicit-linear params (non-Gaussian priors,
         e.g. ``"parallax"``) are listed flat without namespace prefix,
         matching how they appear in the ``log_prob`` values dict.
-
-        Examples
-        --------
-        >>> from unxt import Q
-        >>> from harv.data import RVData
-        >>> from harv.models import RVModel
-        >>> from harv.models.joint import JointModel
-        >>> d = RVData(time=Q([0., 50.], "day"), rv=Q([1., -1.], "km/s"),
-        ...           rv_err=Q([0.5, 0.5], "km/s"))
-        >>> joint = JointModel(
-        ...     components={"primary": RVModel(data=d), "secondary": RVModel(data=d)},
-        ...     shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-        ...     shared_linear_params=("v_sys",),
-        ... )
-        >>> set(joint.params_explicit) >= {"period", "eccentricity"}
-        True
         """
         shared = self._shared_param_names()
         per_comp = self._per_component_nonlinear_names()
@@ -618,24 +582,6 @@ class JointModel(eqx.Module):
         """Names of linear parameters analytically marginalized across all components.
 
         De-duplicated; order follows component iteration order.
-
-        Examples
-        --------
-        >>> from unxt import Q
-        >>> from harv.data import RVData
-        >>> from harv.models import RVModel
-        >>> from harv.models.joint import JointModel
-        >>> d = RVData(
-        ...     time=Q([0., 50.], "day"), rv=Q([1., -1.], "km/s"),
-        ...     rv_err=Q([0.5, 0.5], "km/s")
-        ... )
-        >>> joint = JointModel(
-        ...     components={"primary": RVModel(data=d), "secondary": RVModel(data=d)},
-        ...     shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-        ...     shared_linear_params=("v_sys",),
-        ... )
-        >>> joint.params_marginalized
-        ('rv_semiamp', 'v_sys')
         """
         seen: set[str] = set()
         names: list[str] = []

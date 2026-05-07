@@ -694,7 +694,14 @@ class TestNumpyroSamplerCombinedWithJitter:
 
     @pytest.fixture
     def combined_samples_with_jitter(self) -> Samples:
-        """Minimal combined Samples that include rv.jitter in nonlinear."""
+        """Minimal combined Samples that include rv.jitter in nonlinear.
+
+        Per-component linear parameters use the same component-qualified
+        ``"{comp}.{base}"`` keys that ``RejectionSampler.run`` emits for a
+        ``JointModel`` (see ``_effective_linear_prior_from_model``); these
+        are the keys ``NumpyroSampler._build_init_params`` looks up when
+        constructing init values for the explicit-linear sites.
+        """
         nonlinear = {
             "period": Q(jnp.linspace(280.0, 320.0, N), "day"),
             "eccentricity": Q(jnp.linspace(0.1, 0.5, N), ""),
@@ -705,14 +712,14 @@ class TestNumpyroSamplerCombinedWithJitter:
             "rv.jitter": Q(jnp.linspace(1.0, 5.0, N), "km/s"),
         }
         linear = {
-            "ra0": Q(jnp.zeros(N), "mas"),
-            "dec0": Q(jnp.zeros(N), "mas"),
-            "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
-            "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
-            "parallax": Q(jnp.ones(N) * 3.0, "mas"),
-            "semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
-            "rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
-            "v_sys": Q(jnp.zeros(N), "km/s"),
+            "astro.ra0": Q(jnp.zeros(N), "mas"),
+            "astro.dec0": Q(jnp.zeros(N), "mas"),
+            "astro.pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+            "astro.pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+            "astro.parallax": Q(jnp.ones(N) * 3.0, "mas"),
+            "astro.semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
+            "rv.rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
+            "rv.v_sys": Q(jnp.zeros(N), "km/s"),
         }
         return Samples(
             nonlinear=nonlinear,

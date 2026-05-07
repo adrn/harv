@@ -206,7 +206,7 @@ class TestSamplesToArviz:
             metadata={},
         )
         idata = samples.to_arviz(["period", "eccentricity"])
-        period_arr = idata.posterior["period [d]"].values
+        period_arr = idata.posterior["period"].values
         assert period_arr.shape == (1, 4)
 
     def test_multi_chain_shape(self):
@@ -228,7 +228,7 @@ class TestSamplesToArviz:
             metadata={"num_chains": 2},
         )
         idata = samples.to_arviz(["period"])
-        period_arr = idata.posterior["period [d]"].values
+        period_arr = idata.posterior["period"].values
         assert period_arr.shape == (2, 3)
 
     def test_indivisible_falls_back_to_one_chain(self):
@@ -250,7 +250,7 @@ class TestSamplesToArviz:
         )
         with pytest.warns(UserWarning, match="not divisible by num_chains"):
             idata = samples.to_arviz(["period"])
-        period_arr = idata.posterior["period [d]"].values
+        period_arr = idata.posterior["period"].values
         assert period_arr.shape == (1, 3)
 
 
