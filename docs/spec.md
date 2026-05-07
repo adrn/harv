@@ -748,9 +748,10 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 
 - `JointModel.for_sb2(data, prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
   build an SB2 `JointModel` directly from a `SystemData` (or `dict[str, RVData]`) and a
-  `RejectionPrior.default_sb2` prior. Automatically routes `rv_semiamp_1`/`rv_semiamp_2`
-  to the respective component models and declares all other linear-prior keys (e.g. `v_sys`)
-  as shared. Defaults `shared_params` to
+  `RejectionPrior.default_sb2` prior. Automatically routes component-qualified linear-prior
+  keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"` (or whatever names are in
+  `component_names`) to the respective component models and declares all other linear-prior
+  keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
   `("period", "eccentricity", "phase_peri", "arg_peri")`.
 - `JointModel.for_rv_and_gaia(components, *, shared_params=None)` -- build a
   JointModel for combined RV + Gaia astrometry. Same default shared_params.
