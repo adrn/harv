@@ -167,15 +167,15 @@ class TestMultiSurveyRejectionSampler:
         )
         # Merge extension_priors (offset priors) into linear_prior for the model.
         # For MultiSurveyOffset all extension params are linear, so merging is safe.
-        # Use from_model since MultiSurveyOffset requires structural info that
-        # cannot be inferred from the prior alone.
+        # Build the model explicitly because MultiSurveyOffset requires structural
+        # info (the indicator matrix) that cannot be inferred from the prior alone.
         merged_linear = {**prior.linear_prior, **prior.extension_priors}
         model = RVModel(
             data=stacked,
             linear_prior=merged_linear,
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
-        return RejectionSampler.from_model(model=model, prior=prior)
+        return RejectionSampler(prior, model)
 
     def test_sampler_runs_and_returns_samples(self, low_snr_data):
         """Rejection sampler completes and returns a valid Samples object."""

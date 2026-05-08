@@ -374,7 +374,7 @@ class TestRejectionSamplerFlattening:
             },
             linear_prior=linear_prior,
         )
-        sampler = RejectionSampler.from_model(model=joint, prior=prior)
+        sampler = RejectionSampler(prior, joint)
         samples = sampler.run(seed=0, n_prior_samples=1_000, max_posterior_samples=4)
 
         # v_sys must appear as a bare key (shared)

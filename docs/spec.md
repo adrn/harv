@@ -196,6 +196,7 @@ src/harv/
 │   ├── multi_survey.py      # MultiSurveyOffset
 │   └── gp.py                # GP (Gaussian Process covariance)
 ├── samplers/
+│   ├── base.py              # AbstractSampler (shared base)
 │   ├── rejection_prior.py   # RejectionPrior
 │   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
 │   ├── rejection.py         # RejectionSampler
@@ -1077,7 +1078,7 @@ prior = RejectionPrior(
 sampler = RejectionSampler(prior, extensions=(Jitter(param_unit="km/s"),))
 ```
 
-For the `from_model` path with a `JointModel`, use the component-qualified key:
+For a `JointModel`, use the component-qualified key in `extension_priors`:
 
 ```python
 prior = RejectionPrior(
@@ -1085,7 +1086,7 @@ prior = RejectionPrior(
     linear_prior=...,
     extension_priors={"rv.jitter": QD(dist.HalfNormal(1.0), "km/s")},
 )
-sampler = RejectionSampler.from_model(joint, prior)
+sampler = RejectionSampler(prior, joint)
 ```
 
 Jitter is implemented via the `Jitter` extension, which adds `jitter**2` to the
@@ -1099,6 +1100,33 @@ priors. Returns bare JAX arrays regardless of whether the distribution is wrappe
 
 ______________________________________________________________________
 
+## Sampler base (`harv.samplers.base.AbstractSampler`)
+
+Every sampler holds a fully-built model. `AbstractSampler` declares the shared
+fields (`prior`, `model`, `marginalized_names`), the `from_prior(...)`
+classmethod (the ergonomic entry point that hides model construction for
+default and intermediate users), and `get_extensions()`. Concrete samplers
+(`RejectionSampler`, `NumpyroSampler`) add algorithm-specific fields (e.g.
+`batch_size` on `RejectionSampler`) and implement their own `run()`. The
+concrete samplers are marked `@final` per the project's abstract-final pattern.
+
+There are two ways to construct a sampler:
+
+- **Bare constructor — expert / joint-model path.** `Sampler(prior, model)`
+  takes a fully-built `AbstractComponentModel` or `JointModel`. Required
+  for joint, multi-survey, or custom-parameterization workflows where the
+  user constructs the model explicitly (e.g. with a `MultiSurveyOffset`
+  whose indicator matrix is data-derived).
+- `Sampler.from_prior(prior, data, *, extensions=(), parameterization=None, marginalized_names=None)`
+  — ergonomic shortcut for the typical single-component case. Builds a
+  default model under the hood via :func:`harv.rv_model` /
+  :func:`harv.gaia_astrometry_model` (which merge linear extension priors
+  from `prior.extension_priors` into the model's `linear_prior`), then
+  forwards to the bare constructor. Default and intermediate users never
+  need to touch the model classes directly.
+
+______________________________________________________________________
+
 ## Rejection sampler (`harv.samplers.rejection.RejectionSampler`)
 
 Implements the rejection sampling algorithm from
@@ -1109,13 +1137,17 @@ sampling efficient.
 
 ### Fields
 
-| Field                | Type                               | Description                                                  |
-| -------------------- | ---------------------------------- | ------------------------------------------------------------ |
-| `prior`              | `RejectionPrior`                   | Prior distributions for sampling                             |
-| `parameterization`   | `AbstractParameterization \| None` | Optional custom reparameterization (default: `None`)         |
-| `extensions`         | `tuple[AbstractExtension, ...]`    | Additional model extensions (default: `()`)                  |
-| `marginalized_names` | `tuple[str, ...] \| None`          | Optional subset of linear params to analytically marginalize |
-| `batch_size`         | `int` (static)                     | Samples vmapped at once (default: 100,000)                   |
+| Field                | Type                                   | Description                                                  |
+| -------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| `prior`              | `RejectionPrior`                       | Prior distributions for sampling                             |
+| `model`              | `AbstractComponentModel \| JointModel` | Fully constructed model (data + extensions attached)         |
+| `marginalized_names` | `tuple[str, ...] \| None`              | Optional subset of linear params to analytically marginalize |
+| `batch_size`         | `int` (static)                         | Samples vmapped at once (default: 100,000)                   |
+
+`get_extensions()` walks the attached model: returns `model.extensions` for a
+single component model, or `dict[component_name, tuple[Extension, ...]]` for a
+`JointModel` (preserving per-component associations like `"primary.jitter"` vs
+`"secondary.jitter"`). The same method is inherited by `NumpyroSampler`.
 
 ### Algorithm
 
@@ -1145,24 +1177,33 @@ sampling efficient.
 
 ```python
 sampler.run(
-    data: RVData | GaiaAstrometryData | None = None,
-    n_prior_samples: int,
     *,
+    n_prior_samples: int,
     max_posterior_samples: int | None = None,
     seed: int = 0,
 ) -> Samples
 ```
 
-`data` is required unless the sampler was constructed via `from_model()`.
+The model already embeds the data, so `run()` does not take a `data` argument.
 
-### `from_model` classmethod
+### `from_prior` classmethod
 
 ```python
-RejectionSampler.from_model(model, prior, *, batch_size=100_000) -> RejectionSampler
+RejectionSampler.from_prior(
+    prior, data,
+    *,
+    extensions=(),
+    parameterization=None,
+    marginalized_names=None,
+    batch_size=100_000,
+) -> RejectionSampler
 ```
 
-Expert bypass: builds a sampler from a pre-constructed model. The model already
-embeds the data, so `run()` can be called without a `data` argument.
+Ergonomic entry point: calls `harv.rv_model` / `harv.gaia_astrometry_model`
+under the hood to build a default model from `data`, wires
+`prior.extension_priors` into the model's `linear_prior`, and returns a
+sampler with that model attached. The same method is inherited by
+`NumpyroSampler` (without the `batch_size` kwarg).
 
 ### `batch_size` and GPU support
 
@@ -1554,7 +1595,7 @@ from harv.models.factories import rv_model, gaia_astrometry_model
 from harv.extensions import Jitter, MultiSurveyOffset
 from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler
 
-# --- Minimal RV-only case ---
+# --- Minimal RV-only case (default user) ---
 data = RVData(time, rv, rv_err)
 prior = RejectionPrior.default_rv(
     period_min=Q(50, "day"),
@@ -1562,20 +1603,21 @@ prior = RejectionPrior.default_rv(
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
 )
-sampler = RejectionSampler(prior)
-samples = sampler.run(data, n_prior_samples=500_000)
+sampler = RejectionSampler.from_prior(prior, data)
+samples = sampler.run(n_prior_samples=500_000)
 
 # With max posterior samples:
-samples = sampler.run(data, n_prior_samples=500_000, max_posterior_samples=128)
+samples = sampler.run(n_prior_samples=500_000, max_posterior_samples=128)
 
-# --- RV with custom extensions and parameterization ---
+# --- RV with custom extensions and parameterization (intermediate user) ---
 from harv.models.parameterizations.rv import EcoswEsinwRV
-sampler = RejectionSampler(
+sampler = RejectionSampler.from_prior(
     prior,
+    data,
     parameterization=EcoswEsinwRV(),
     extensions=(Jitter(param_unit="km/s"),),
 )
-samples = sampler.run(data, n_prior_samples=500_000)
+samples = sampler.run(n_prior_samples=500_000)
 
 # --- Gaia astrometry only ---
 prior = RejectionPrior.default_gaia_astrometry(
@@ -1586,8 +1628,8 @@ prior = RejectionPrior.default_gaia_astrometry(
     sigma_pos=Q(1e3, "mas"),
     sigma_vtan=Q(200, "km/s"),
 )
-sampler = RejectionSampler(prior)
-samples = sampler.run(gaia_data, n_prior_samples=1_000_000)
+sampler = RejectionSampler.from_prior(prior, gaia_data)
+samples = sampler.run(n_prior_samples=1_000_000)
 
 # --- Joint astrometry + RV (expert path: build model explicitly) ---
 joint = JointModel.for_rv_and_gaia(
@@ -1596,13 +1638,13 @@ joint = JointModel.for_rv_and_gaia(
         "astro": gaia_astrometry_model(gaia_data),
     },
 )
-sampler = RejectionSampler.from_model(joint, prior)
+sampler = RejectionSampler(prior, joint)
 samples = sampler.run(n_prior_samples=1_000_000)
 
 # --- MCMC continuation ---
-mcmc_sampler = NumpyroSampler(prior)
+mcmc_sampler = NumpyroSampler.from_prior(prior, data)
 mcmc_samples = mcmc_sampler.run(
-    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000, seed=42,
+    init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000, seed=42,
 )
 
 # --- Post-sampling analysis ---

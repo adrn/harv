@@ -35,6 +35,7 @@ __all__ = (
     "gaia_astrometry_model",
     "rv_model",
     # Samplers
+    "AbstractSampler",
     "NumpyroSampler",
     "RejectionPrior",
     "RejectionSampler",
@@ -66,6 +67,12 @@ from harv.models import (
     gaia_astrometry_model,
     rv_model,
 )
-from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler, Samples
+from harv.samplers import (
+    AbstractSampler,
+    NumpyroSampler,
+    RejectionPrior,
+    RejectionSampler,
+    Samples,
+)
 from harv import data
 from harv import plot

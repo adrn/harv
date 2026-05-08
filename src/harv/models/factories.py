@@ -7,7 +7,7 @@ priors, reducing boilerplate for common use-cases.
 
 __all__ = ("gaia_astrometry_model", "rv_model")
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpyro.distributions as dist
 
@@ -17,10 +17,44 @@ from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 from harv.models.rv import RVModel
 
+if TYPE_CHECKING:
+    from harv.samplers.rejection_prior import RejectionPrior
+
+
+def _merge_linear_extension_priors(
+    base_linear_prior: dict[str, Any],
+    extensions: tuple[AbstractExtension, ...],
+    extension_priors: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge linear-extension priors into a base linear-prior dict.
+
+    For each extension parameter declared as ``linear=True``, look up its
+    prior in ``extension_priors`` and add to the merged dict. Raises
+    :class:`ValueError` if a linear extension parameter has no matching
+    entry in ``extension_priors``.
+
+    The nonlinear extension priors are not merged here — they're consumed
+    by the sampler at run time, not stored on the model.
+    """
+    merged = dict(base_linear_prior)
+    for ext in extensions:
+        for p in ext.extra_params():
+            if not p.linear:
+                continue
+            if p.name not in extension_priors:
+                raise ValueError(
+                    f"Extension '{type(ext).__name__}' requires a prior for "
+                    f"parameter '{p.name}'. Pass it as a keyword argument: "
+                    f"RejectionPrior.default_rv(..., {p.name}=QD(...))."
+                )
+            merged[p.name] = extension_priors[p.name]
+    return merged
+
 
 def rv_model(
     data: RVData,
     *,
+    prior: "RejectionPrior | None" = None,
     parameterization: StandardRV | EcoswEsinwRV | None = None,
     extensions: tuple[AbstractExtension, ...] = (),
     linear_prior: dict[str, Any] | Literal[False] | None = None,
@@ -31,14 +65,22 @@ def rv_model(
     ----------
     data : RVData
         Observed radial velocities.
+    prior : RejectionPrior, optional
+        When supplied (and ``linear_prior is None``), the model's
+        ``linear_prior`` is built from ``prior.linear_prior`` plus the
+        linear extension priors looked up in ``prior.extension_priors``.
+        This is the typical wiring used by
+        :meth:`~harv.RejectionSampler.from_prior`.
     parameterization : StandardRV or EcoswEsinwRV or None
         RV parameterization. Defaults to :class:`StandardRV`.
     extensions : tuple of AbstractExtension
         Model extensions (jitter, trends, offsets).
     linear_prior : dict, False, or None
-        If ``None`` (default), uses wide Normal priors on ``rv_semiamp``
-        and ``v_sys`` (sigma=1000 km/s). Pass ``False`` for explicit
-        (non-marginalized) mode, or a custom dict.
+        If ``None`` (default) and ``prior`` is also ``None``, uses wide
+        Normal priors on ``rv_semiamp`` and ``v_sys`` (sigma=1000 km/s).
+        If ``None`` and ``prior`` is supplied, the linear prior is taken
+        from ``prior``. Pass ``False`` for explicit (non-marginalized)
+        mode, or a custom dict to override.
 
     Returns
     -------
@@ -62,10 +104,18 @@ def rv_model(
         parameterization = StandardRV()
 
     if linear_prior is None:
-        linear_prior = {
-            "rv_semiamp": dist.Normal(0.0, 1000.0),
-            "v_sys": dist.Normal(0.0, 1000.0),
-        }
+        if prior is not None:
+            base = (
+                dict(prior.linear_prior) if isinstance(prior.linear_prior, dict) else {}
+            )
+            linear_prior = _merge_linear_extension_priors(
+                base, extensions, prior.extension_priors
+            )
+        else:
+            linear_prior = {
+                "rv_semiamp": dist.Normal(0.0, 1000.0),
+                "v_sys": dist.Normal(0.0, 1000.0),
+            }
     elif linear_prior is False:
         linear_prior = None
 
@@ -80,6 +130,7 @@ def rv_model(
 def gaia_astrometry_model(
     data: GaiaAstrometryData,
     *,
+    prior: "RejectionPrior | None" = None,
     extensions: tuple[AbstractExtension, ...] = (),
     linear_prior: dict[str, Any] | Literal[False] | None = None,
 ) -> GaiaAstrometryModel:
@@ -89,13 +140,17 @@ def gaia_astrometry_model(
     ----------
     data : GaiaAstrometricData
         Gaia epoch astrometric data.
+    prior : RejectionPrior, optional
+        When supplied (and ``linear_prior is None``), the model's
+        ``linear_prior`` is built from ``prior.linear_prior`` plus the
+        linear extension priors looked up in ``prior.extension_priors``.
     extensions : tuple of AbstractExtension
         Model extensions.
     linear_prior : dict, False, or None
-        If ``None`` (default), uses wide Normal priors on all 6 linear
-        astrometric parameters (positions, proper motions, parallax,
-        semi-major axis). Pass ``False`` for explicit mode, or a custom
-        dict.
+        If ``None`` (default) and ``prior`` is also ``None``, uses wide
+        Normal priors on all 6 linear astrometric parameters. If ``None``
+        and ``prior`` is supplied, the linear prior is taken from
+        ``prior``. Pass ``False`` for explicit mode, or a custom dict.
 
     Returns
     -------
@@ -107,14 +162,22 @@ def gaia_astrometry_model(
     >>> # gaia_astrometry_model(data)  # requires GaiaAstrometricData
     """
     if linear_prior is None:
-        linear_prior = {
-            "ra0": dist.Normal(0.0, 1e6),
-            "dec0": dist.Normal(0.0, 1e6),
-            "pmra": dist.Normal(0.0, 1e6),
-            "pmdec": dist.Normal(0.0, 1e6),
-            "parallax": dist.Normal(0.0, 1e6),
-            "semi_major_axis": dist.Normal(0.0, 1e6),
-        }
+        if prior is not None:
+            base = (
+                dict(prior.linear_prior) if isinstance(prior.linear_prior, dict) else {}
+            )
+            linear_prior = _merge_linear_extension_priors(
+                base, extensions, prior.extension_priors
+            )
+        else:
+            linear_prior = {
+                "ra0": dist.Normal(0.0, 1e6),
+                "dec0": dist.Normal(0.0, 1e6),
+                "pmra": dist.Normal(0.0, 1e6),
+                "pmdec": dist.Normal(0.0, 1e6),
+                "parallax": dist.Normal(0.0, 1e6),
+                "semi_major_axis": dist.Normal(0.0, 1e6),
+            }
     elif linear_prior is False:
         linear_prior = None
 
@@ -127,25 +190,33 @@ def gaia_astrometry_model(
 
 def _build_model(
     data: RVData | GaiaAstrometryData,
-    linear_prior: dict[str, Any] | None,
-    extensions: tuple[AbstractExtension, ...],
-    parameterization: StandardRV | EcoswEsinwRV | None,
+    *,
+    prior: "RejectionPrior | None" = None,
+    extensions: tuple[AbstractExtension, ...] = (),
+    parameterization: StandardRV | EcoswEsinwRV | None = None,
+    linear_prior: dict[str, Any] | None = None,
 ) -> RVModel | GaiaAstrometryModel:
-    """Build a component model from data, prior components, and extensions.
+    """Build a component model by dispatching on data type.
 
     Parameters
     ----------
     data : RVData or GaiaAstrometryData
         Observed data. Dispatches to :func:`rv_model` or
         :func:`gaia_astrometry_model` based on type.
-    linear_prior : dict or None
-        Per-parameter priors for linear parameters, or ``None`` for explicit
-        (non-marginalized) mode.
+    prior : RejectionPrior, optional
+        When supplied, the linear prior of the resulting model is built
+        from ``prior.linear_prior`` plus the linear extension priors
+        looked up in ``prior.extension_priors``. Mutually exclusive with
+        a non-``None`` ``linear_prior``.
     extensions : tuple of AbstractExtension
         Extensions to include.
     parameterization : StandardRV, EcoswEsinwRV, or None
         RV parameterization. Only used when ``data`` is :class:`RVData`.
         Ignored for :class:`GaiaAstrometryData`.
+    linear_prior : dict or None
+        Explicit per-parameter linear prior. ``None`` means use the
+        ``prior``-derived merge (if ``prior`` is supplied) or the wide
+        Normal defaults from the public factories.
 
     Returns
     -------
@@ -156,15 +227,16 @@ def _build_model(
     TypeError
         If ``data`` is not :class:`RVData` or :class:`GaiaAstrometryData`.
     """
-    # When linear_prior is None it means explicit (non-marginalized) mode.
-    # The model factories use False for that and None for "use wide defaults".
-    lp_arg: dict[str, Any] | Literal[False] | None = (
-        False if linear_prior is None else linear_prior
-    )
+    # The public factories use ``False`` for "explicit non-marginalized
+    # mode" and ``None`` for "build defaults"; this internal helper takes
+    # ``None`` directly and forwards ``prior`` so the factory can do its
+    # own default-building.
+    lp_arg: dict[str, Any] | Literal[False] | None = linear_prior
 
     if isinstance(data, RVData):
         return rv_model(
             data,
+            prior=prior,
             parameterization=parameterization,
             extensions=extensions,
             linear_prior=lp_arg,
@@ -172,6 +244,7 @@ def _build_model(
     if isinstance(data, GaiaAstrometryData):
         return gaia_astrometry_model(
             data,
+            prior=prior,
             extensions=extensions,
             linear_prior=lp_arg,
         )

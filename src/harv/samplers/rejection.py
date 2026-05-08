@@ -3,7 +3,7 @@
 import uuid
 import warnings
 from collections.abc import Mapping
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple, cast, final
 
 import equinox as eqx
 import jax
@@ -12,6 +12,7 @@ import jax.random as jr
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
+from harv.data import GaiaAstrometryData, RVData
 from harv.distributions import QuantityDistribution
 from harv.extensions.base import AbstractExtension
 from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
@@ -19,6 +20,7 @@ from harv.models.component import AbstractComponentModel
 from harv.models.factories import _build_model
 from harv.models.joint import JointModel
 from harv.models.parameterizations import AbstractParameterization
+from harv.samplers.base import AbstractSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
@@ -286,46 +288,23 @@ def _ext_nonlinear_model_keys(
 
 def _prepare_sampler_model(
     prior: RejectionPrior,
-    model: AbstractComponentModel | JointModel | None,
-    data: Any,
-    extensions: tuple[AbstractExtension, ...],
-    parameterization: AbstractParameterization | None,
+    model: AbstractComponentModel | JointModel,
     marginalized_names: tuple[str, ...] | None,
 ) -> _PreparedSamplerModel:
-    """Prepare a normalized model/prior bundle for rejection or MCMC sampling."""
-    if model is not None:
-        nonlinear_extension_priors, linear_extension_names = (
-            _nonlinear_extension_priors_from_model(prior, model)
-        )
-        effective_linear_prior = _effective_linear_prior_from_model(model)
-        effective_marginalized_names = _resolve_effective_marginalized_names(
-            effective_linear_prior,
-            marginalized_names,
-        )
-        return _PreparedSamplerModel(
-            model=model,
-            nonlinear_extension_priors=nonlinear_extension_priors,
-            effective_linear_prior=effective_linear_prior,
-            effective_marginalized_names=effective_marginalized_names,
-            linear_extension_names=linear_extension_names,
-        )
+    """Prepare a normalized model/prior bundle for rejection or MCMC sampling.
 
-    if data is None:
-        msg = "data must be provided when no pre-built model is attached to the sampler"
-        raise ValueError(msg)
-
-    (
-        nonlinear_extension_priors,
+    Walks the attached ``model`` to extract nonlinear extension priors and the
+    effective linear prior, and resolves the effective marginalized-name set.
+    Linear-extension priors are already merged into ``model.linear_prior`` by
+    the model-building factories (see :func:`harv.rv_model`).
+    """
+    nonlinear_extension_priors, linear_extension_names = (
+        _nonlinear_extension_priors_from_model(prior, model)
+    )
+    effective_linear_prior = _effective_linear_prior_from_model(model)
+    effective_marginalized_names = _resolve_effective_marginalized_names(
         effective_linear_prior,
-        linear_extension_names,
-        effective_marginalized_names,
-    ) = _resolve_extension_priors(prior, extensions, marginalized_names)
-
-    model = _build_model(
-        data,
-        effective_linear_prior,
-        extensions,
-        cast("Any", parameterization),
+        marginalized_names,
     )
     return _PreparedSamplerModel(
         model=model,
@@ -353,119 +332,90 @@ def _wrap_unit_values(
     return result
 
 
-class RejectionSampler(eqx.Module):
+@final
+class RejectionSampler(AbstractSampler):
     """Rejection sampler for Keplerian orbital parameters.
 
-    This class implements rejection sampling with analytical marginalization over linear
-    parameters. Data is passed to :meth:`run` rather than at construction, so the same
-    configured sampler can be applied to multiple datasets.
+    Implements rejection sampling with analytic marginalization over linear
+    parameters. Every sampler holds a fully-built model: either supplied via
+    the bare constructor (expert path, e.g. for joint or multi-survey
+    workflows) or built under the hood by
+    :meth:`~harv.AbstractSampler.from_prior` for the typical single-component
+    case.
 
     Parameters
     ----------
     prior : RejectionPrior
         Prior distributions for nonlinear (and optionally linear) parameters.
-    parameterization : AbstractParameterization or None, optional
-        Orbital parameterization. For RV data defaults to
-        :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
-        astrometry data.
-    extensions : tuple of AbstractExtension, optional
-        Model extensions (jitter, trends, offsets, GP).
+    model : AbstractComponentModel or JointModel
+        Fully constructed model with data and extensions attached.
     marginalized_names : tuple of str or None, optional
-        Linear parameter names to analytically marginalize. If None, all linear
-        parameters are marginalized. Ignored if the effective linear prior is None.
+        Linear parameter names to analytically marginalize. If None, all
+        Gaussian linear parameters are auto-classified for marginalization.
     batch_size : int, optional
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
-    model : AbstractComponentModel or JointModel, optional
-        Pre-built model to use for sampling. If provided, the model's parameterization
-        and extensions are used and the ``parameterization`` and ``extensions`` fields
-        are ignored. This is an expert bypass path for users who want to build a custom
-        model and use the rejection sampler for inference. If not provided, a model will
-        be constructed at run-time from the provided ``parameterization`` and
-        ``extensions``.
 
     See Also
     --------
-    RejectionSampler.from_model : Expert path for pre-built models.
+    AbstractSampler.from_prior : Ergonomic path that hides model construction
+        for default and intermediate users.
 
     Examples
     --------
+    Build a sampler from a prior + data via the ``from_prior`` shortcut:
+
     >>> from unxt import Q
-    >>> from harv.samplers import RejectionPrior, RejectionSampler
-    >>> prior = RejectionPrior.default_rv(
+    >>> import jax.numpy as jnp
+    >>> from harv import RejectionPrior, RejectionSampler, RVData
+    >>> data = RVData(  # doctest: +SKIP
+    ...     time=Q(jnp.linspace(0, 100, 5), "day"),
+    ...     rv=Q(jnp.zeros(5), "km/s"),
+    ...     rv_err=Q(jnp.full(5, 1.0), "km/s"),
+    ... )
+    >>> prior = RejectionPrior.default_rv(  # doctest: +SKIP
     ...     period_min=Q(2.0, "day"),
     ...     period_max=Q(1000.0, "day"),
     ...     sigma_K0=Q(30.0, "km/s"),
     ...     sigma_v0=Q(50.0, "km/s"),
     ... )
-    >>> sampler = RejectionSampler(prior)
-    >>> sampler.batch_size
-    100000
-
-    Run rejection sampling:
-
-    >>> samples = sampler.run(data, n_prior_samples=100_000)  # doctest: +SKIP
+    >>> sampler = RejectionSampler.from_prior(prior, data)  # doctest: +SKIP
+    >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
     """
 
-    prior: RejectionPrior
-    parameterization: AbstractParameterization | None = None
-    extensions: tuple[AbstractExtension, ...] = ()
-    marginalized_names: tuple[str, ...] | None = None
     batch_size: int = eqx.field(static=True, default=100_000)
-    model: AbstractComponentModel | JointModel | None = None
-
-    def __check_init__(self) -> None:
-        if self.model is not None and (
-            self.parameterization is not None or self.extensions
-        ):
-            msg = (
-                "Cannot specify parameterization or extensions when model is provided. "
-                "Use RejectionSampler.from_model(model, prior) and configure the "
-                "model directly."
-            )
-            raise ValueError(msg)
 
     @classmethod
-    def from_model(
+    def from_prior(  # type: ignore[override]
         cls,
-        model: AbstractComponentModel | JointModel,
         prior: RejectionPrior,
+        data: RVData | GaiaAstrometryData,
         *,
+        extensions: tuple[AbstractExtension, ...] = (),
+        parameterization: AbstractParameterization | None = None,
+        marginalized_names: tuple[str, ...] | None = None,
         batch_size: int = 100_000,
     ) -> "RejectionSampler":
-        """Construct from a pre-built model (expert bypass path).
+        """RejectionSampler-typed override that surfaces ``batch_size``.
 
-        Use this when you need full control over model construction,
-        parameterization, or extensions and want to bypass the automatic
-        model-building in :meth:`run`. With this constructor, omit ``data``
-        when calling :meth:`run`.
-
-        Parameters
-        ----------
-        model : AbstractComponentModel or JointModel
-            A fully constructed model with data and extensions attached.
-        prior : RejectionPrior
-            Prior distributions compatible with the model's parameters.
-        batch_size : int, optional
-            Number of samples to process per batch. Default: 100_000.
-        marginalized_names : tuple[str, ...] | None, optional
-            Linear parameter names to analytically marginalize. ``None``
-            means auto-classify from the effective linear prior.
-
-        Returns
-        -------
-        RejectionSampler
-
-        Examples
-        --------
-        >>> sampler = RejectionSampler.from_model(model, prior)  # doctest: +SKIP
-        >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
+        See :meth:`AbstractSampler.from_prior` for the base contract. The
+        only addition here is the typed ``batch_size`` keyword.
         """
-        return cls(prior, batch_size=batch_size, model=model)
+        model = _build_model(
+            data,
+            prior=prior,
+            extensions=extensions,
+            parameterization=cast("Any", parameterization),
+        )
+        return cls(
+            prior=prior,
+            model=model,
+            marginalized_names=marginalized_names,
+            batch_size=batch_size,
+        )
 
-    def run(  # noqa: C901
+    def run(
         self,
-        data: Any = None,
         *,
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
@@ -475,9 +425,6 @@ class RejectionSampler(eqx.Module):
 
         Parameters
         ----------
-        data : RVData or GaiaAstrometryData, optional
-            Observed data to condition on. Required unless the sampler was
-            constructed via :meth:`from_model`.
         n_prior_samples
             Number of samples to draw from the prior.
         max_posterior_samples
@@ -492,24 +439,11 @@ class RejectionSampler(eqx.Module):
         samples
             Posterior samples container.
         """
-        try:
-            prepared = _prepare_sampler_model(
-                self.prior,
-                self.model,
-                data,
-                self.extensions,
-                self.parameterization,
-                self.marginalized_names,
-            )
-        except ValueError as err:
-            if self.model is None and data is None:
-                msg = (
-                    "data must be provided unless the sampler was constructed via "
-                    "RejectionSampler.from_model(). Got data=None and no "
-                    "pre-built model."
-                )
-                raise ValueError(msg) from err
-            raise
+        prepared = _prepare_sampler_model(
+            self.prior,
+            self.model,
+            self.marginalized_names,
+        )
 
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors

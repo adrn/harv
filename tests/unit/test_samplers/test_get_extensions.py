@@ -1,0 +1,193 @@
+"""Tests for ``Sampler.get_extensions()`` on RejectionSampler and NumpyroSampler.
+
+The method walks the attached model:
+
+  - single-component model -> returns ``model.extensions`` (a tuple)
+  - JointModel -> returns ``dict[name, tuple[Extension, ...]]``
+
+These tests just construct samplers and assert on the return shape/contents -- no
+sampling is performed.
+"""
+
+import jax.numpy as jnp
+import numpyro.distributions as dist
+from unxt import Q
+
+from harv.data import RVData, SystemData
+from harv.distributions import QD
+from harv.extensions import Jitter, MultiSurveyOffset
+from harv.models.joint import JointModel
+from harv.models.rv import RVModel
+from harv.samplers.base import AbstractSampler
+from harv.samplers.numpyro import NumpyroSampler
+from harv.samplers.rejection import RejectionSampler
+from harv.samplers.rejection_prior import RejectionPrior
+
+
+def _rv_data(start: float = 0.0, n: int = 6) -> RVData:
+    times = jnp.linspace(start, start + 100.0, n)
+    return RVData(
+        time=Q(times, "day"),
+        rv=Q(jnp.zeros(n), "km/s"),
+        rv_err=Q(jnp.full(n, 0.5), "km/s"),
+    )
+
+
+def _basic_prior() -> RejectionPrior:
+    return RejectionPrior.default_rv(
+        period_min=Q(2.0, "day"),
+        period_max=Q(1000.0, "day"),
+        sigma_K0=Q(30.0, "km/s"),
+        sigma_v0=Q(50.0, "km/s"),
+    )
+
+
+def _jitter_prior() -> RejectionPrior:
+    return RejectionPrior.default_rv(
+        period_min=Q(2.0, "day"),
+        period_max=Q(1000.0, "day"),
+        sigma_K0=Q(30.0, "km/s"),
+        sigma_v0=Q(50.0, "km/s"),
+        jitter=QD(dist.HalfNormal(1.0), "km/s"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# RejectionSampler
+# ---------------------------------------------------------------------------
+
+
+class TestRejectionSamplerGetExtensions:
+    def test_from_prior_no_extensions(self):
+        sampler = RejectionSampler.from_prior(_basic_prior(), _rv_data())
+        assert sampler.get_extensions() == ()
+
+    def test_from_prior_with_jitter(self):
+        ext = Jitter(param_unit="km/s")
+        sampler = RejectionSampler.from_prior(
+            _jitter_prior(), _rv_data(), extensions=(ext,)
+        )
+        result = sampler.get_extensions()
+        assert isinstance(result, tuple)
+        assert result == (ext,)
+
+    def test_constructor_with_component_model(self):
+        ext = Jitter(param_unit="km/s")
+        model = RVModel(
+            data=_rv_data(),
+            extensions=(ext,),
+            linear_prior={
+                "rv_semiamp": QD(dist.Normal(0.0, 30.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
+            },
+        )
+        sampler = RejectionSampler(_jitter_prior(), model)
+        result = sampler.get_extensions()
+        assert isinstance(result, tuple)
+        assert result == (ext,)
+
+    def test_constructor_with_multisurvey_offset(self):
+        """The case that motivated this method: MultiSurveyOffset built from data."""
+        from harv.simulate.rv import simulate_rv_multisurv_data  # noqa: PLC0415
+
+        source_data, _ = simulate_rv_multisurv_data(
+            instruments={"keck": None, "harps": Q(2.0, "km/s")},
+            seed=0,
+            n_obs_per_instrument=10,
+            period=Q(50.0, "day"),
+            rv_semiamp=Q(5.0, "km/s"),
+            rv_err=Q(2.0, "km/s"),
+        )
+        stacked, indicator, names = source_data.indicator_data_by_type(
+            RVData, reference="keck"
+        )
+        prior = RejectionPrior.default_rv(
+            period_min=Q(40.0, "day"),
+            period_max=Q(60.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(30.0, "km/s"),
+            harps=QD(dist.Normal(0.0, 5.0), "km/s"),
+        )
+        ext = MultiSurveyOffset(indicator, names, "km/s")
+        model = RVModel(
+            data=stacked,
+            linear_prior={**prior.linear_prior, **prior.extension_priors},
+            extensions=(ext,),
+        )
+        sampler = RejectionSampler(prior, model)
+        result = sampler.get_extensions()
+        assert isinstance(result, tuple)
+        assert result == (ext,)
+
+    def test_constructor_with_joint_model_returns_dict(self):
+        """Per-component association is preserved as a dict[name, tuple]."""
+        primary_ext = Jitter(param_unit="km/s")
+        secondary_ext = Jitter(param_unit="km/s")
+
+        data = SystemData(primary=_rv_data(0.0), secondary=_rv_data(50.0))
+        prior = RejectionPrior.default_sb2(
+            period_min=Q(2.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        joint = JointModel.for_sb2(
+            data=data,
+            prior=prior,
+            extensions={"primary": (primary_ext,), "secondary": (secondary_ext,)},
+        )
+        sampler = RejectionSampler(prior, joint)
+        result = sampler.get_extensions()
+
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {"primary", "secondary"}
+        assert result["primary"] == (primary_ext,)
+        assert result["secondary"] == (secondary_ext,)
+
+
+# ---------------------------------------------------------------------------
+# NumpyroSampler
+# ---------------------------------------------------------------------------
+
+
+class TestNumpyroSamplerGetExtensions:
+    def test_from_prior_with_jitter(self):
+        ext = Jitter(param_unit="km/s")
+        sampler = NumpyroSampler.from_prior(
+            _jitter_prior(), _rv_data(), extensions=(ext,)
+        )
+        result = sampler.get_extensions()
+        assert isinstance(result, tuple)
+        assert result == (ext,)
+
+    def test_constructor_with_component_model(self):
+        ext = Jitter(param_unit="km/s")
+        model = RVModel(
+            data=_rv_data(),
+            extensions=(ext,),
+            linear_prior={
+                "rv_semiamp": QD(dist.Normal(0.0, 30.0), "km/s"),
+                "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
+            },
+        )
+        sampler = NumpyroSampler(_jitter_prior(), model)
+        result = sampler.get_extensions()
+        assert isinstance(result, tuple)
+        assert result == (ext,)
+
+
+# ---------------------------------------------------------------------------
+# Inheritance assertion
+# ---------------------------------------------------------------------------
+
+
+def test_rejection_sampler_inherits_abstract_sampler():
+    """Concrete sampler must be a subclass of AbstractSampler."""
+    sampler = RejectionSampler.from_prior(_basic_prior(), _rv_data())
+    assert isinstance(sampler, AbstractSampler)
+
+
+def test_numpyro_sampler_inherits_abstract_sampler():
+    """Concrete sampler must be a subclass of AbstractSampler."""
+    sampler = NumpyroSampler.from_prior(_basic_prior(), _rv_data())
+    assert isinstance(sampler, AbstractSampler)

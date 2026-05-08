@@ -7,9 +7,8 @@ builds the numpyro model closure directly.
 
 import uuid
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, cast, final
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -22,7 +21,6 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import AbstractExtension
 from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import (
     AbstractComponentModel,
@@ -31,7 +29,7 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
-from harv.models.parameterizations import AbstractParameterization
+from harv.samplers.base import AbstractSampler
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
@@ -228,7 +226,8 @@ def _build_extra_numpyro_model(  # noqa: C901
     return model_fn
 
 
-class NumpyroSampler(eqx.Module):
+@final
+class NumpyroSampler(AbstractSampler):
     """MCMC sampler for Keplerian orbital parameters using numpyro.
 
     Builds a numpyro model from a component model (or joint model) and runs
@@ -245,7 +244,11 @@ class NumpyroSampler(eqx.Module):
         :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
         astrometry data.
     extensions : tuple of AbstractExtension, optional
-        Model extensions (jitter, trends, offsets, GP).
+        Model extensions (jitter, trends, offsets, GP) supplied at construction time.
+        Mutually exclusive with ``model``: when the sampler is built via
+        :meth:`from_model` this field stays empty and the actual extensions live on
+        the attached model. Use :meth:`get_extensions` to retrieve the effective
+        extensions regardless of construction path.
 
     See Also
     --------
@@ -267,52 +270,8 @@ class NumpyroSampler(eqx.Module):
     ... )  # doctest: +SKIP
     """
 
-    prior: RejectionPrior
-    parameterization: AbstractParameterization | None = None
-    extensions: tuple[AbstractExtension, ...] = ()
-    marginalized_names: tuple[str, ...] | None = None
-    model: AbstractComponentModel | JointModel | None = None
-
-    def __check_init__(self) -> None:
-        if self.model is not None and (
-            self.parameterization is not None or self.extensions
-        ):
-            msg = (
-                "Cannot specify parameterization or extensions when model is provided. "
-                "Use NumpyroSampler.from_model(model, prior) and configure the "
-                "model directly."
-            )
-            raise ValueError(msg)
-
-    @classmethod
-    def from_model(
-        cls,
-        model: AbstractComponentModel | JointModel,
-        prior: RejectionPrior,
-    ) -> "NumpyroSampler":
-        """Construct from a pre-built model (expert bypass path).
-
-        Use this when you need full control over model construction,
-        parameterization, or extensions and want to bypass the automatic
-        model-building in :meth:`run`. With this constructor, omit ``data``
-        when calling :meth:`run`.
-
-        Parameters
-        ----------
-        model : AbstractComponentModel or JointModel
-            A fully constructed model with data and extensions attached.
-        prior : RejectionPrior
-            Prior distributions compatible with the model's parameters.
-
-        Returns
-        -------
-        NumpyroSampler
-        """
-        return cls(prior, model=model)
-
     def run(
         self,
-        data: Any = None,
         *,
         init_samples: "Samples | None" = None,
         seed: int | None = None,
@@ -329,9 +288,6 @@ class NumpyroSampler(eqx.Module):
 
         Parameters
         ----------
-        data : RVData or GaiaAstrometryData, optional
-            Observed data to condition on. Required unless the sampler was
-            constructed via :meth:`from_model`.
         init_samples : Samples, optional
             Posterior samples produced by rejection sampling, used to set the
             initial positions for each MCMC chain.
@@ -384,23 +340,11 @@ class NumpyroSampler(eqx.Module):
         if kernel is None:
             kernel = _numpyro_infer.NUTS
 
-        try:
-            prepared = _prepare_sampler_model(
-                self.prior,
-                self.model,
-                data,
-                self.extensions,
-                self.parameterization,
-                self.marginalized_names if marginalized else None,
-            )
-        except ValueError as err:
-            if self.model is None and data is None:
-                msg = (
-                    "data must be provided unless the sampler was constructed via "
-                    "NumpyroSampler.from_model(). Got data=None and no pre-built model."
-                )
-                raise ValueError(msg) from err
-            raise
+        prepared = _prepare_sampler_model(
+            self.prior,
+            self.model,
+            self.marginalized_names if marginalized else None,
+        )
 
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors

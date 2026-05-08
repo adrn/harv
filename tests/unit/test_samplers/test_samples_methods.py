@@ -152,7 +152,7 @@ def rv_sampler_and_data():
         sigma_v0=Q(30.0, "km/s"),
     )
     model = RVModel(data=data, linear_prior=prior.linear_prior)
-    return NumpyroSampler.from_model(model=model, prior=prior)
+    return NumpyroSampler(prior, model)
 
 
 # ---------------------------------------------------------------------------
@@ -399,10 +399,9 @@ class TestNumpyroSamplerRun:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = NumpyroSampler(prior, marginalized_names=("v_sys",))
+        sampler = NumpyroSampler.from_prior(prior, data, marginalized_names=("v_sys",))
 
         result = sampler.run(
-            data,
             init_samples=rv_samples,
             seed=7,
             num_chains=2,
@@ -571,7 +570,7 @@ class TestNumpyroSamplerNonGaussianLinear:
             sigma_vtan=Q(50.0, "km/s"),
         )
         model = GaiaAstrometryModel(data=data, linear_prior=prior.linear_prior)
-        return NumpyroSampler.from_model(model=model, prior=prior)
+        return NumpyroSampler(prior, model)
 
     def test_run_marginalized_with_halfnormal_parallax(
         self, astro_samples, astro_sampler_and_data
@@ -690,7 +689,7 @@ class TestNumpyroSamplerCombinedWithJitter:
             linear_prior=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},
         )
-        return NumpyroSampler.from_model(model=joint, prior=prior)
+        return NumpyroSampler(prior, joint)
 
     @pytest.fixture
     def combined_samples_with_jitter(self) -> Samples:

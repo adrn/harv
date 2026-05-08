@@ -87,8 +87,8 @@ class TestHighSNRRVRecovery:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(data, n_prior_samples=500_000, seed=42)
+        sampler = RejectionSampler.from_prior(prior, data)
+        samples = sampler.run(n_prior_samples=500_000, seed=42)
         return samples, true
 
     def test_enough_accepted_samples(self, rv_samples_high_snr):
@@ -190,7 +190,7 @@ class TestMultiSurveyRVRecovery:
             linear_prior=eff_linear,
             extensions=extensions,
         )
-        sampler = RejectionSampler.from_model(model=model, prior=prior)
+        sampler = RejectionSampler(prior, model)
         samples = sampler.run(n_prior_samples=500_000, seed=10)
         return samples, true
 
@@ -262,8 +262,8 @@ class TestLowSNRBroadPosterior:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = RejectionSampler(prior)
-        samples = sampler.run(data, n_prior_samples=200_000, seed=7)
+        sampler = RejectionSampler.from_prior(prior, data)
+        samples = sampler.run(n_prior_samples=200_000, seed=7)
         return samples, true
 
     def test_enough_accepted_samples(self, low_snr_samples):

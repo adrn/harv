@@ -126,7 +126,7 @@ class TestGaiaAstrometryRejectionSampler:
         )
         return data, true
 
-    def _make_sampler(self):
+    def _make_sampler(self, data):
         prior = RejectionPrior.default_gaia_astrometry(
             period_min=Q(0.3, "yr"),
             period_max=Q(3.0, "yr"),
@@ -135,13 +135,13 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        return RejectionSampler(prior, batch_size=10_000)
+        return RejectionSampler.from_prior(prior, data, batch_size=10_000)
 
     def test_sampler_runs_and_returns_samples(self, sim_data):
         """Rejection sampler completes and returns a valid Samples object."""
         data, _ = sim_data
-        sampler = self._make_sampler()
-        samples = sampler.run(data, n_prior_samples=50_000, seed=42)
+        sampler = self._make_sampler(data)
+        samples = sampler.run(n_prior_samples=50_000, seed=42)
 
         assert samples.n_samples > 0
         assert samples.data_type == "GaiaAstrometryModel"
@@ -149,8 +149,8 @@ class TestGaiaAstrometryRejectionSampler:
     def test_samples_have_correct_keys(self, sim_data):
         """Samples object has all expected parameter keys."""
         data, _ = sim_data
-        sampler = self._make_sampler()
-        samples = sampler.run(data, n_prior_samples=50_000, seed=43)
+        sampler = self._make_sampler(data)
+        samples = sampler.run(n_prior_samples=50_000, seed=43)
 
         keys = samples.keys()
         for nl_key in (
@@ -176,9 +176,9 @@ class TestGaiaAstrometryRejectionSampler:
     def test_reproducibility(self, sim_data):
         """Same seed produces identical samples."""
         data, _ = sim_data
-        sampler = self._make_sampler()
-        s1 = sampler.run(data, n_prior_samples=20_000, seed=44)
-        s2 = sampler.run(data, n_prior_samples=20_000, seed=44)
+        sampler = self._make_sampler(data)
+        s1 = sampler.run(n_prior_samples=20_000, seed=44)
+        s2 = sampler.run(n_prior_samples=20_000, seed=44)
 
         assert s1.n_samples == s2.n_samples
         np.testing.assert_array_equal(s1["period"].value, s2["period"].value)

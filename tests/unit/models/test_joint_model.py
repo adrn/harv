@@ -361,7 +361,7 @@ class TestSB2RejectionSamplerLinearKeys:
             },
             linear_prior=linear_prior,
         )
-        sampler = RejectionSampler.from_model(model=joint, prior=prior)
+        sampler = RejectionSampler(prior, joint)
         samples = sampler.run(seed=0, n_prior_samples=20)
         assert "primary.rv_semiamp" in samples.linear
         assert "secondary.rv_semiamp" in samples.linear
