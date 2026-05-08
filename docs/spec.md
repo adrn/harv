@@ -316,7 +316,12 @@ data = SourceData(
 ```
 
 Each dataset is accessed by name (`data["keck"]`). `SourceData` provides
-`get_datasets_by_type(dtype)`, `keys()`, `values()`, and `items()` for iteration.
+`get_datasets_by_type(dtype)`, `keys()`, `values()`, and `items()` for iteration,
+plus a `plot(ax=None, *, add_legend=True, color_cycler=None, **kwargs)` method that
+inherits the shared implementation on `AbstractDatasetContainer`. `SourceData.plot()`
+raises `TypeError` if the contained datasets are not all the same concrete type, since
+overlaying heterogeneous datasets (e.g. RV in km/s and astrometry in mas) on one axes
+is meaningless. Use `get_datasets_by_type(...)` to filter first if needed.
 
 **Important:** `SourceData` is for heterogeneous or multi-instrument data for a
 *single stellar photocenter*. It is *not* the right container for SB2 systems (see
@@ -343,7 +348,8 @@ user-defined (not restricted to "primary"/"secondary").
 
 `SystemData` provides the same dict-like interface as `SourceData`:
 `__getitem__`, `keys()`, `values()`, `items()`, `get_datasets_by_type(dtype)`,
-plus:
+`plot(...)` (inherited; no homogeneity check is needed because the constructor
+already enforces one), plus:
 
 - `t_ref` — delegates to the first component's `t_ref`
 - `_get_obs()` — concatenates observations across all components (key order)
@@ -562,7 +568,7 @@ prior's unit to the data's time unit before constructing parameter values.
 
 Models use `phase_peri = t_peri / period` (dimensionless, range 0-1) rather than an
 absolute `t_peri`. This decouples the phase from the period scale, simplifies the
-prior (uniform on \[0, 1\]), and avoids the need to specify a reference epoch in the
+prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
 prior. `Samples` exposes a derived `"t_peri"` key that reconstructs the absolute time
 as `phase_peri * period + t_ref`.
 
@@ -937,7 +943,7 @@ Constructs a prior with:
 - `v_sys` linear prior: `QD(Normal(0, sigma_v0), unit)`
 
 Any nonlinear or linear prior can be overridden by passing the corresponding
-parameter name as a keyword argument.  Valid names are the nonlinear and linear
+parameter name as a keyword argument. Valid names are the nonlinear and linear
 parameter names from `StandardRV`: `period`, `eccentricity`, `phase_peri`,
 `arg_peri`, `rv_semiamp`, `v_sys`.
 
@@ -973,7 +979,7 @@ Constructs a prior with:
   fixed in velocity space
 
 Any nonlinear or linear prior can be overridden by passing the corresponding
-parameter name as a keyword argument.  Valid names are the nonlinear and linear
+parameter name as a keyword argument. Valid names are the nonlinear and linear
 parameter names from `StandardGaiaAstrometry`: `period`, `eccentricity`,
 `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node`, `ra0`, `dec0`, `pmra`, `pmdec`,
 `parallax`, `semi_major_axis`.
