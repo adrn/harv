@@ -87,8 +87,8 @@ class TestHighSNRRVRecovery:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=500_000, seed=42)
+        sampler = RejectionSampler(prior, RVModel())
+        samples = sampler.run(data, n_prior_samples=500_000, seed=42)
         return samples, true
 
     def test_enough_accepted_samples(self, rv_samples_high_snr):
@@ -180,18 +180,9 @@ class TestMultiSurveyRVRecovery:
         extensions = (MultiSurveyOffset(indicator, instrument_names, "km/s"),)
         # Merge extension linear params (harps offset) into the model's linear_prior.
         # For from_model, we handle routing manually since _build_model is not called.
-        eff_linear = dict(prior.linear_prior)
-        for ext in extensions:
-            for p in ext.extra_params():
-                if p.linear and p.name in prior.extension_priors:
-                    eff_linear[p.name] = prior.extension_priors[p.name]
-        model = RVModel(
-            data=stacked,
-            linear_prior=eff_linear,
-            extensions=extensions,
-        )
+        model = RVModel(extensions=extensions)
         sampler = RejectionSampler(prior, model)
-        samples = sampler.run(n_prior_samples=500_000, seed=10)
+        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
         return samples, true
 
     def test_enough_accepted_samples(self, multisurv_samples):
@@ -262,8 +253,8 @@ class TestLowSNRBroadPosterior:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=200_000, seed=7)
+        sampler = RejectionSampler(prior, RVModel())
+        samples = sampler.run(data, n_prior_samples=200_000, seed=7)
         return samples, true
 
     def test_enough_accepted_samples(self, low_snr_samples):
@@ -342,13 +333,13 @@ class TestAstrometryLikelihoodSanity:
             "parallax": dist.Normal(0.0, 1000.0),
             "semi_major_axis": dist.Normal(0.0, 1000.0),
         }
-        model = GaiaAstrometryModel(data=data, linear_prior=lp)
-        return model, data, true
+        model = GaiaAstrometryModel()
+        return model, data, lp, true
 
     def test_true_params_log_prob_finite(self, astro_model_and_truth):
-        model, _, true = astro_model_and_truth
+        model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", model.data.t_ref))
+        t_ref_day = float(ustrip("day", data.t_ref))
         phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
         nl = {
             "period": true["period"],
@@ -358,7 +349,7 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik = model.log_prob(nl)
+        log_lik = model.log_prob(nl, data, linear_prior=lp)
         assert jnp.isfinite(log_lik), (
             f"log_prob at true params is not finite: {log_lik}"
         )
@@ -370,9 +361,9 @@ class TestAstrometryLikelihoodSanity:
         parameters should be several hundred nats above the median prior sample.
         We use a conservative threshold of 50 nats.
         """
-        model, _, true = astro_model_and_truth
+        model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", model.data.t_ref))
+        t_ref_day = float(ustrip("day", data.t_ref))
         phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
 
         nl_true = {
@@ -383,7 +374,7 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik_true = float(model.log_prob(nl_true))
+        log_lik_true = float(model.log_prob(nl_true, data, linear_prior=lp))
 
         # Sample 1000 random nonlinear parameter sets from the prior
         prior = RejectionPrior.default_gaia_astrometry(
@@ -403,7 +394,9 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(prior_nl["arg_peri"], "rad"),
             "lon_asc_node": Q(prior_nl["lon_asc_node"], "rad"),
         }
-        log_liks_prior = jax.jit(jax.vmap(model.log_prob))(nl_batch)
+        log_liks_prior = jax.jit(
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+        )(nl_batch)
         median_prior_log_lik = float(jnp.median(log_liks_prior))
 
         improvement = log_lik_true - median_prior_log_lik
@@ -414,9 +407,9 @@ class TestAstrometryLikelihoodSanity:
 
     def test_grid_maximum_near_true_period(self, astro_model_and_truth):
         """A grid search over period (all other params fixed) peaks near truth."""
-        model, _, true = astro_model_and_truth
+        model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", model.data.t_ref))
+        t_ref_day = float(ustrip("day", data.t_ref))
         phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
         ecc = true["eccentricity"]
         cos_i = float(jnp.cos(ustrip("rad", true["inclination"])))
@@ -433,7 +426,9 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(jnp.ones(n_grid) * arg_peri, "rad"),
             "lon_asc_node": Q(jnp.ones(n_grid) * lon_asc, "rad"),
         }
-        log_liks = jax.jit(jax.vmap(model.log_prob))(nl_batch)
+        log_liks = jax.jit(
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+        )(nl_batch)
         best_period = float(test_periods[jnp.argmax(log_liks)])
 
         # The best grid period should be within 5% of the true value

@@ -32,8 +32,6 @@ __all__ = (
     "RVModel",
     "StandardGaiaAstrometry",
     "StandardRV",
-    "gaia_astrometry_model",
-    "rv_model",
     # Samplers
     "AbstractSampler",
     "NumpyroSampler",
@@ -64,8 +62,6 @@ from harv.models import (
     RVModel,
     StandardGaiaAstrometry,
     StandardRV,
-    gaia_astrometry_model,
-    rv_model,
 )
 from harv.samplers import (
     AbstractSampler,

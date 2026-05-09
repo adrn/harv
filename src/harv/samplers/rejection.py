@@ -12,14 +12,10 @@ import jax.random as jr
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
-from harv.data import GaiaAstrometryData, RVData
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import AbstractExtension
 from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import AbstractComponentModel
-from harv.models.factories import _build_model
 from harv.models.joint import JointModel
-from harv.models.parameterizations import AbstractParameterization
 from harv.samplers.base import AbstractSampler
 from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
@@ -101,108 +97,35 @@ def _resolve_effective_marginalized_names(
     return resolved_names
 
 
-def _effective_linear_prior_from_model(
+def _effective_linear_prior_from_prior(
+    prior: RejectionPrior,
     model: AbstractComponentModel | JointModel,
 ) -> dict[str, Any] | None:
-    """Collect the effective linear prior dict from a pre-built model."""
-    if isinstance(model, JointModel):
-        shared_lin = set(model.shared_linear_params)
-        merged_linear_prior: dict[str, Any] = {}
-        for comp_name, component in model.components.items():
-            if component.linear_prior is None:
-                continue
-            for name, prior_dist in component.linear_prior.items():
-                if name in shared_lin:
-                    # Shared: add once with bare key
-                    if name not in merged_linear_prior:
-                        merged_linear_prior[name] = prior_dist
-                else:
-                    # Per-component: qualified key matching numpyro site name
-                    merged_linear_prior[f"{comp_name}.{name}"] = prior_dist
-        return merged_linear_prior or None
-    return model.linear_prior
+    """Build the effective linear prior from prior.linear_prior + extensions.
 
-
-def _resolve_extension_priors(
-    prior: RejectionPrior,
-    extensions: tuple[AbstractExtension, ...],
-    marginalized_names: tuple[str, ...] | None,
-) -> tuple[
-    dict[str, Any],  # nonlinear_extension_priors: param_name -> prior
-    dict[str, Any] | None,
-    # effective_linear_prior: merged base + extension linear priors
-    tuple[str, ...],  # linear_extension_names from linear=True extension params
-    tuple[str, ...] | None,
-    # effective marginalized_names (auto-classification applied)
-]:
-    """Validate and route extension priors to nonlinear/linear dicts.
-
-    Called at sampler run-time when the full extension list is known.
-    Raises ``ValueError`` if any extension declares a parameter not in
-    ``prior.extension_priors``.
-
-    Parameters
-    ----------
-    prior : RejectionPrior
-        Prior with ``extension_priors`` populated by the user.
-    extensions : tuple of AbstractExtension
-        The sampler's extension list (jitter, offsets, GP, etc.).
-    marginalized_names : tuple of str or None
-        Requested linear parameter names to analytically marginalize.
-
-    Returns
-    -------
-    nonlinear_extension_priors : dict
-        Extension nonlinear params keyed by ``param_name``.
-    effective_linear_prior : dict or None
-        Base linear prior merged with extension linear params.
-    linear_extension_names : tuple of str
-        Names of extension linear params (instrument offsets, trends, etc.).
-    effective_marginalized_names : tuple of str or None
-        Effective marginalize set after auto-classifying non-Gaussian entries.
+    Models are now templates and carry no ``linear_prior`` themselves.  The
+    sampler computes it at run-time by merging ``prior.linear_prior`` with any
+    linear-extension parameters declared on the model's extensions.
     """
-    nonlinear_extension_priors: dict[str, Any] = {}
-    effective_linear_prior: dict[str, Any] | None = (
+    effective: dict[str, Any] | None = (
         dict(prior.linear_prior)
         if isinstance(prior.linear_prior, dict)
         else prior.linear_prior
     )
-    linear_extension_names: list[str] = []
-
-    for ext in extensions:
-        for p in ext.extra_params():
-            if p.name not in prior.extension_priors:
-                raise ValueError(
-                    f"Extension '{type(ext).__name__}' requires a prior for "
-                    f"parameter '{p.name}'. Pass it as a keyword argument: "
-                    f"RejectionPrior.default_rv(..., {p.name}=QD(...)) or "
-                    f"set extension_priors={{'{p.name}': QD(...)}} directly."
-                )
-            if p.linear:
-                if effective_linear_prior is None:
-                    msg = (
-                        "Cannot add linear extension priors when "
-                        "effective_linear_prior "
-                        "is None. Build the model in explicit mode only when no linear "
-                        "extensions are present."
-                    )
-                    raise ValueError(msg)
-                effective_linear_prior[p.name] = prior.extension_priors[p.name]
-                linear_extension_names.append(p.name)
-            else:
-                nonlinear_extension_priors[p.name] = prior.extension_priors[p.name]
-
-    effective_marginalized_names = _resolve_effective_marginalized_names(
-        effective_linear_prior,
-        marginalized_names,
-    )
-
-    return (
-        nonlinear_extension_priors,
-        effective_linear_prior,
-        tuple(linear_extension_names),
-        effective_marginalized_names,
-    )
+    if effective is None:
+        return None
+    # Merge linear extension params from the model
+    comps: list[AbstractComponentModel]
+    if isinstance(model, JointModel):
+        comps = list(model.components.values())
+    else:
+        comps = [model]
+    for comp in comps:
+        for ext in comp.extensions:
+            for p in ext.extra_params():
+                if p.linear and p.name in prior.extension_priors:
+                    effective[p.name] = prior.extension_priors[p.name]
+    return effective
 
 
 def _nonlinear_extension_priors_from_model(
@@ -293,15 +216,14 @@ def _prepare_sampler_model(
 ) -> _PreparedSamplerModel:
     """Prepare a normalized model/prior bundle for rejection or MCMC sampling.
 
-    Walks the attached ``model`` to extract nonlinear extension priors and the
-    effective linear prior, and resolves the effective marginalized-name set.
-    Linear-extension priors are already merged into ``model.linear_prior`` by
-    the model-building factories (see :func:`harv.rv_model`).
+    Walks the attached ``model`` to extract nonlinear extension priors and
+    computes the effective linear prior at run-time from ``prior.linear_prior``
+    plus any linear-extension parameters declared on the model's extensions.
     """
     nonlinear_extension_priors, linear_extension_names = (
         _nonlinear_extension_priors_from_model(prior, model)
     )
-    effective_linear_prior = _effective_linear_prior_from_model(model)
+    effective_linear_prior = _effective_linear_prior_from_prior(prior, model)
     effective_marginalized_names = _resolve_effective_marginalized_names(
         effective_linear_prior,
         marginalized_names,
@@ -337,18 +259,14 @@ class RejectionSampler(AbstractSampler):
     """Rejection sampler for Keplerian orbital parameters.
 
     Implements rejection sampling with analytic marginalization over linear
-    parameters. Every sampler holds a fully-built model: either supplied via
-    the bare constructor (expert path, e.g. for joint or multi-survey
-    workflows) or built under the hood by
-    :meth:`~harv.AbstractSampler.from_prior` for the typical single-component
-    case.
+    parameters. Configure once, then call :meth:`run` with each dataset.
 
     Parameters
     ----------
     prior : RejectionPrior
         Prior distributions for nonlinear (and optionally linear) parameters.
     model : AbstractComponentModel or JointModel
-        Fully constructed model with data and extensions attached.
+        Fully constructed model template (no data, no linear_prior).
     marginalized_names : tuple of str or None, optional
         Linear parameter names to analytically marginalize. If None, all
         Gaussian linear parameters are auto-classified for marginalization.
@@ -356,18 +274,12 @@ class RejectionSampler(AbstractSampler):
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
 
-    See Also
-    --------
-    AbstractSampler.from_prior : Ergonomic path that hides model construction
-        for default and intermediate users.
-
     Examples
     --------
-    Build a sampler from a prior + data via the ``from_prior`` shortcut:
-
     >>> from unxt import Q
     >>> import jax.numpy as jnp
     >>> from harv import RejectionPrior, RejectionSampler, RVData
+    >>> from harv.models.rv import RVModel
     >>> data = RVData(  # doctest: +SKIP
     ...     time=Q(jnp.linspace(0, 100, 5), "day"),
     ...     rv=Q(jnp.zeros(5), "km/s"),
@@ -379,43 +291,15 @@ class RejectionSampler(AbstractSampler):
     ...     sigma_K0=Q(30.0, "km/s"),
     ...     sigma_v0=Q(50.0, "km/s"),
     ... )
-    >>> sampler = RejectionSampler.from_prior(prior, data)  # doctest: +SKIP
-    >>> samples = sampler.run(n_prior_samples=100_000)  # doctest: +SKIP
+    >>> sampler = RejectionSampler(prior, RVModel())  # doctest: +SKIP
+    >>> samples = sampler.run(data, n_prior_samples=100_000)  # doctest: +SKIP
     """
 
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    @classmethod
-    def from_prior(  # type: ignore[override]
-        cls,
-        prior: RejectionPrior,
-        data: RVData | GaiaAstrometryData,
-        *,
-        extensions: tuple[AbstractExtension, ...] = (),
-        parameterization: AbstractParameterization | None = None,
-        marginalized_names: tuple[str, ...] | None = None,
-        batch_size: int = 100_000,
-    ) -> "RejectionSampler":
-        """RejectionSampler-typed override that surfaces ``batch_size``.
-
-        See :meth:`AbstractSampler.from_prior` for the base contract. The
-        only addition here is the typed ``batch_size`` keyword.
-        """
-        model = _build_model(
-            data,
-            prior=prior,
-            extensions=extensions,
-            parameterization=cast("Any", parameterization),
-        )
-        return cls(
-            prior=prior,
-            model=model,
-            marginalized_names=marginalized_names,
-            batch_size=batch_size,
-        )
-
     def run(
         self,
+        data: Any,
         *,
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
@@ -425,6 +309,10 @@ class RejectionSampler(AbstractSampler):
 
         Parameters
         ----------
+        data
+            Observed data (:class:`~harv.data.RVData`,
+            :class:`~harv.data.GaiaAstrometryData`, or
+            :class:`~harv.data.SystemData` for joint models).
         n_prior_samples
             Number of samples to draw from the prior.
         max_posterior_samples
@@ -467,6 +355,7 @@ class RejectionSampler(AbstractSampler):
             nonlinear_extension_priors,
             effective_linear_prior,
             effective_marginalized_names,
+            data,
         )
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
@@ -479,6 +368,8 @@ class RejectionSampler(AbstractSampler):
             linear_key,
             accepted_nonlinear,
             effective_marginalized_names,
+            data,
+            effective_linear_prior,
         )
 
         if max_posterior_samples is not None:
@@ -509,14 +400,14 @@ class RejectionSampler(AbstractSampler):
             unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
             nonlinear_q[k] = Q(v, unit)
 
-        # Get t_ref from the model's data
+        # Get t_ref from the passed-in data
         t_ref: Any = None
         if isinstance(model, JointModel):
-            first_comp = next(iter(model.components.values()))
-            if hasattr(first_comp, "data") and hasattr(first_comp.data, "t_ref"):
-                t_ref = first_comp.data.t_ref
-        elif hasattr(model, "data") and hasattr(model.data, "t_ref"):
-            t_ref = model.data.t_ref
+            first_comp_data = data[next(iter(model.components))]
+            if hasattr(first_comp_data, "t_ref"):
+                t_ref = first_comp_data.t_ref
+        elif hasattr(data, "t_ref"):
+            t_ref = data.t_ref
 
         metadata: dict[str, Any] = {}
         if t_ref is not None:
@@ -545,6 +436,7 @@ class RejectionSampler(AbstractSampler):
         ext_nl_priors: dict[str, Any],
         eff_linear: dict[str, Any],
         marginalize_names: "tuple[str, ...] | None",
+        data: Any,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Sample prior and evaluate likelihoods in batches.
 
@@ -596,11 +488,19 @@ class RejectionSampler(AbstractSampler):
             raw = {k: batched[k][i] for k in model_keys}
             wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
             if marginalize_names is None:
-                return acc.at[i].set(jax.vmap(model.log_prob)(wrapped))
+                return acc.at[i].set(
+                    jax.vmap(
+                        lambda s: model.log_prob(
+                            s, data, linear_prior=eff_linear or None
+                        )
+                    )(wrapped)
+                )
             return acc.at[i].set(
                 jax.vmap(
                     lambda sample: model.log_prob(
                         sample,
+                        data,
+                        linear_prior=eff_linear or None,
                         marginalized_names=marginalize_names,
                     )
                 )(wrapped)
@@ -627,6 +527,8 @@ class RejectionSampler(AbstractSampler):
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
         marginalized_names: tuple[str, ...] | None,
+        data: Any,
+        linear_prior: dict[str, Any] | None,
     ) -> dict[str, AbstractQuantity]:
         """Sample linear parameters from conditional posterior using vmap.
 
@@ -655,6 +557,8 @@ class RejectionSampler(AbstractSampler):
             return model.sample_conditional_linear(
                 wrapped,
                 key,
+                data,
+                linear_prior=linear_prior,
                 marginalized_names=marginalized_names,
             )
 
@@ -674,15 +578,16 @@ class RejectionSampler(AbstractSampler):
             # Shared linear params that appear at the top level (not in
             # per-component sub-dicts) should use bare names.
             final: dict[str, AbstractQuantity] = {}
-            first_comp = next(iter(model.components.values()))
-            shared_units = first_comp._linear_param_units()
+            first_comp_name = next(iter(model.components))
+            first_comp = model.components[first_comp_name]
+            shared_units = first_comp._linear_param_units(data[first_comp_name])
 
             for k, value in result.items():
                 if isinstance(value, dict):
                     # Per-component sub-dict.
                     comp_name = k
                     comp = model.components[comp_name]
-                    units = comp._linear_param_units()
+                    units = comp._linear_param_units(data[comp_name])
                     for nm, arr in value.items():
                         final_name = (
                             f"{comp_name}.{nm}" if name_counts.get(nm, 1) > 1 else nm
@@ -692,5 +597,5 @@ class RejectionSampler(AbstractSampler):
                     # Shared top-level param (joint path).
                     final[k] = Q(value, shared_units.get(k, ""))
             return final
-        units = model._linear_param_units()
+        units = model._linear_param_units(data)
         return {name: Q(arr, units.get(name, "")) for name, arr in result.items()}

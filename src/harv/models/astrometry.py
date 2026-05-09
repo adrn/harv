@@ -1,9 +1,8 @@
 """Concrete Gaia epoch-astrometry component model.
 
-:class:`GaiaAstrometryModel` wraps :class:`~harv.data.GaiaAstrometryData`, a
-parameterization (default
-:class:`~harv.models.parameterizations.gaia.StandardGaiaAstrometry`), and optional
-extensions to provide ``log_prob`` and ``sample_conditional_linear``.
+:class:`GaiaAstrometryModel` is a *template* carrying a parameterization
+(default :class:`~harv.models.parameterizations.gaia.StandardGaiaAstrometry`)
+and extensions. Data and linear priors are passed at evaluation time.
 """
 
 __all__ = ("GaiaAstrometryModel",)
@@ -24,46 +23,31 @@ from harv.models.parameterizations.gaia import StandardGaiaAstrometry
 
 @final
 class GaiaAstrometryModel(AbstractComponentModel):
-    """Gaia epoch astrometry component model.
+    """Gaia epoch astrometry component model (template).
 
-    Supports marginalized and explicit likelihood evaluation for along-scan astrometric
-    data.
+    Carries a parameterization and extensions. Data and the linear prior are
+    passed at evaluation time so the same model instance can be reused across
+    multiple datasets.
 
     Parameters
     ----------
-    data : GaiaAstrometryData
-        Along-scan epoch astrometry.
     parameterization : StandardGaiaAstrometry
         Declares parameter names/roles and builds the base design matrix.
     extensions : tuple of Extension
         Model extensions (jitter, trends, ...).
-    linear_prior : dict or None
-        Per-parameter priors for analytic marginalization.
     pm_time_unit : str or None
-        If not None, override the proper motion units in the design matrix to use this
-        unit instead of the default (obs_unit / yr).
+        If not None, override the proper motion units in the design matrix to
+        use this unit instead of the default (obs_unit / yr).
 
     Examples
     --------
-    >>> import jax.numpy as jnp
-    >>> from unxt import Q
-    >>> from harv.data import GaiaAstrometryData
     >>> from harv.models.astrometry import GaiaAstrometryModel
-    >>> data = GaiaAstrometryData(
-    ...     time=Q([0.0, 100.0, 200.0], "day"),
-    ...     al_position=Q([0.1, -0.2, 0.05], "mas"),
-    ...     al_position_err=Q([0.01, 0.01, 0.01], "mas"),
-    ...     scan_angle=Q([0.5, 1.2, 2.8], "rad"),
-    ...     parallax_factor=jnp.array([0.3, -0.1, 0.4]),
-    ... )
-    >>> model = GaiaAstrometryModel(data=data)
+    >>> model = GaiaAstrometryModel()
     >>> sorted(model._all_nonlinear_names())
     ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
     """
 
-    data: GaiaAstrometryData
     parameterization: StandardGaiaAstrometry = StandardGaiaAstrometry()
-    linear_prior: dict[str, Any] | None = None
     extensions: tuple[AbstractExtension, ...] = ()
     _: KW_ONLY
     pm_time_unit: str = "yr"
@@ -75,12 +59,12 @@ class GaiaAstrometryModel(AbstractComponentModel):
             ext_params = (*ext_params, *ext.extra_params())
         return (*base, *ext_params)
 
-    def _obs_unit(self) -> str:
-        return str(self.data.al_position.unit)
+    def _obs_unit(self, data: GaiaAstrometryData) -> str:
+        return str(data.al_position.unit)
 
-    def _linear_param_units(self) -> dict[str, str]:
+    def _linear_param_units(self, data: GaiaAstrometryData) -> dict[str, str]:
         """Astrometric linear params have different units (mas vs mas/yr)."""
-        u = self._obs_unit()
+        u = self._obs_unit(data)
         units: dict[str, str] = {
             "ra0": u,
             "dec0": u,
@@ -95,33 +79,37 @@ class GaiaAstrometryModel(AbstractComponentModel):
                 units[pi.name] = u
         return units
 
-    def _strip_obs(self) -> tuple[jax.Array, jax.Array]:
-        obs_unit = self._obs_unit()
-        arr_obs = jnp.array(ustrip(obs_unit, self.data.al_position))
-        arr_obs_err = jnp.array(ustrip(obs_unit, self.data.al_position_err))
+    def _strip_obs(self, data: GaiaAstrometryData) -> tuple[jax.Array, jax.Array]:
+        obs_unit = self._obs_unit(data)
+        arr_obs = jnp.array(ustrip(obs_unit, data.al_position))
+        arr_obs_err = jnp.array(ustrip(obs_unit, data.al_position_err))
         return arr_obs, arr_obs_err
 
-    def _solve_kepler(self, nl_values: dict[str, Any]) -> tuple[jax.Array, jax.Array]:
+    def _solve_kepler(
+        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+    ) -> tuple[jax.Array, jax.Array]:
         """Solve Kepler's equation from nonlinear parameter values."""
         period = nl_values["period"]
         phase_peri = nl_values["phase_peri"]
         eccentricity = nl_values["eccentricity"]
 
         t_peri = phase_peri * period
-        dt = (self.data.time - self.data.t_ref) - t_peri
+        dt = (data.time - data.t_ref) - t_peri
         M = mean_anomaly(dt, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
-    def _base_design_matrix(self, nl_values: dict[str, Any]) -> jax.Array:
-        sin_f, cos_f = self._solve_kepler(nl_values)
+    def _base_design_matrix(
+        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+    ) -> jax.Array:
+        sin_f, cos_f = self._solve_kepler(nl_values, data)
 
         # Prepare auxiliary data arrays
-        dt = jnp.array(ustrip(self.pm_time_unit, self.data.time - self.data.t_ref))
-        scan_angle_rad = ustrip("rad", self.data.scan_angle)
+        dt = jnp.array(ustrip(self.pm_time_unit, data.time - data.t_ref))
+        scan_angle_rad = ustrip("rad", data.scan_angle)
         sin_psi = jnp.sin(scan_angle_rad)
         cos_psi = jnp.cos(scan_angle_rad)
-        parallax_factor = ustrip(AllowValue, "", self.data.parallax_factor)
+        parallax_factor = ustrip(AllowValue, "", data.parallax_factor)
 
         # Strip nonlinear values for parameterization
         nl_stripped = {

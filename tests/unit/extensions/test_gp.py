@@ -144,29 +144,18 @@ class TestGPModifyCovariance:
 
 class TestGPWithRVModel:
     def test_rv_model_with_gp_construction(self):
-        data = _make_rv_data()
         gp = _make_gp()
-        model = RVModel(
-            data=data,
-            extensions=(gp,),
-            linear_prior={
-                "rv_semiamp": dist.Normal(0.0, 100.0),
-                "v_sys": dist.Normal(0.0, 100.0),
-            },
-        )
+        model = RVModel(extensions=(gp,))
         assert "gp_amp" in model._all_nonlinear_names()
 
     def test_rv_model_log_prob_is_finite(self):
         data = _make_rv_data()
         gp = _make_gp()
-        model = RVModel(
-            data=data,
-            extensions=(gp,),
-            linear_prior={
-                "rv_semiamp": dist.Normal(0.0, 100.0),
-                "v_sys": dist.Normal(0.0, 100.0),
-            },
-        )
+        linear_prior = {
+            "rv_semiamp": dist.Normal(0.0, 100.0),
+            "v_sys": dist.Normal(0.0, 100.0),
+        }
+        model = RVModel(extensions=(gp,))
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -174,20 +163,17 @@ class TestGPWithRVModel:
             "arg_peri": Q(1.0, "rad"),
             "gp_amp": 1.0,
         }
-        ll = model.log_prob(nl)
+        ll = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(ll)
 
     def test_rv_model_with_gp_jit(self):
         data = _make_rv_data()
         gp = _make_gp()
-        model = RVModel(
-            data=data,
-            extensions=(gp,),
-            linear_prior={
-                "rv_semiamp": dist.Normal(0.0, 100.0),
-                "v_sys": dist.Normal(0.0, 100.0),
-            },
-        )
+        linear_prior = {
+            "rv_semiamp": dist.Normal(0.0, 100.0),
+            "v_sys": dist.Normal(0.0, 100.0),
+        }
+        model = RVModel(extensions=(gp,))
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -198,7 +184,7 @@ class TestGPWithRVModel:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl)
+            return model.log_prob(nl, data, linear_prior=linear_prior)
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -211,8 +197,8 @@ class TestGPWithRVModel:
             "v_sys": dist.Normal(0.0, 100.0),
         }
 
-        model_no_gp = RVModel(data=data, linear_prior=prior)
-        model_gp = RVModel(data=data, extensions=(_make_gp(),), linear_prior=prior)
+        model_no_gp = RVModel()
+        model_gp = RVModel(extensions=(_make_gp(),))
 
         nl_base = {
             "period": Q(100.0, "day"),
@@ -222,8 +208,8 @@ class TestGPWithRVModel:
         }
         nl_gp = {**nl_base, "gp_amp": 2.0}
 
-        ll_no_gp = model_no_gp.log_prob(nl_base)
-        ll_gp = model_gp.log_prob(nl_gp)
+        ll_no_gp = model_no_gp.log_prob(nl_base, data, linear_prior=prior)
+        ll_gp = model_gp.log_prob(nl_gp, data, linear_prior=prior)
 
         assert not jnp.allclose(ll_no_gp, ll_gp)
         assert jnp.isfinite(ll_gp)
@@ -233,14 +219,11 @@ class TestGPWithRVModel:
         data = _make_rv_data()
         gp = _make_gp()
         jitter = Jitter("km/s")
-        model = RVModel(
-            data=data,
-            extensions=(jitter, gp),
-            linear_prior={
-                "rv_semiamp": dist.Normal(0.0, 100.0),
-                "v_sys": dist.Normal(0.0, 100.0),
-            },
-        )
+        linear_prior = {
+            "rv_semiamp": dist.Normal(0.0, 100.0),
+            "v_sys": dist.Normal(0.0, 100.0),
+        }
+        model = RVModel(extensions=(jitter, gp))
         # Both jitter and gp_amp should be nonlinear params
         nl_names = model._all_nonlinear_names()
         assert "jitter" in nl_names
@@ -254,5 +237,5 @@ class TestGPWithRVModel:
             "jitter": 0.5,
             "gp_amp": 1.0,
         }
-        ll = model.log_prob(nl)
+        ll = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(ll)

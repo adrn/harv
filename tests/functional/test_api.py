@@ -9,6 +9,7 @@ import numpy as np
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
+from harv.models import GaiaAstrometryModel
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior
 
@@ -91,8 +92,8 @@ class TestBasicAPI:
         """Test the simplest API pattern: default prior and basic run."""
         data = simulate_gaia_data_simple(seed=42, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=42)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=42)
 
         assert samples.n_samples > 0
         assert samples.data_type == "GaiaAstrometryModel"
@@ -108,11 +109,11 @@ class TestBasicAPI:
         """Test limiting the number of posterior samples returned."""
         data = simulate_gaia_data_simple(seed=43, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
         max_samples = 64
         samples = sampler.run(
-            n_prior_samples=10_000, max_posterior_samples=max_samples, seed=43
+            data, n_prior_samples=10_000, max_posterior_samples=max_samples, seed=43
         )
         assert samples.n_samples <= max_samples
 
@@ -128,8 +129,8 @@ class TestBasicAPI:
         )
 
         data = simulate_gaia_data_simple(seed=44, n_obs=30)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=5_000, seed=44)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=5_000, seed=44)
 
         period = samples["period"]
         assert np.all(period.to_value("day") >= 10.0)
@@ -139,10 +140,10 @@ class TestBasicAPI:
         """Test that using the same seed produces identical results."""
         data = simulate_gaia_data_simple(seed=45, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples1 = sampler.run(n_prior_samples=5_000, seed=100)
-        samples2 = sampler.run(n_prior_samples=5_000, seed=100)
+        samples1 = sampler.run(data, n_prior_samples=5_000, seed=100)
+        samples2 = sampler.run(data, n_prior_samples=5_000, seed=100)
 
         assert samples1.n_samples == samples2.n_samples
         np.testing.assert_array_equal(
@@ -153,10 +154,10 @@ class TestBasicAPI:
         """Test that different seeds produce different samples."""
         data = simulate_gaia_data_simple(seed=46, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples1 = sampler.run(n_prior_samples=5_000, seed=200)
-        samples2 = sampler.run(n_prior_samples=5_000, seed=201)
+        samples1 = sampler.run(data, n_prior_samples=5_000, seed=200)
+        samples2 = sampler.run(data, n_prior_samples=5_000, seed=201)
 
         assert not np.allclose(samples1["eccentricity"], samples2["eccentricity"])
 
@@ -168,8 +169,8 @@ class TestSamplesContainer:
         """Test dict-like access to parameters."""
         data = simulate_gaia_data_simple(seed=50, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=50)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=50)
 
         # Test nonlinear parameter access
         assert "period" in samples
@@ -197,8 +198,8 @@ class TestSamplesContainer:
         """Test that units are properly restored when accessing parameters."""
         data = simulate_gaia_data_simple(seed=51, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=51)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=51)
 
         # Angles should have radian units
         arg_peri = samples["arg_peri"]
@@ -224,8 +225,8 @@ class TestSamplesContainer:
         """Test that dimensionless parameters are plain arrays or dimensionless."""
         data = simulate_gaia_data_simple(seed=52, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=52)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=52)
 
         # These should be dimensionless (plain arrays or Q with unit='')
         for key in ("eccentricity", "phase_peri", "cos_i"):
@@ -241,8 +242,8 @@ class TestSamplesContainer:
         """Test len() and n_samples property."""
         data = simulate_gaia_data_simple(seed=53, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=53)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=53)
 
         assert len(samples) == samples.n_samples
         assert samples.n_samples > 0
@@ -251,8 +252,8 @@ class TestSamplesContainer:
         """Test string representation."""
         data = simulate_gaia_data_simple(seed=54, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
-        samples = sampler.run(n_prior_samples=10_000, seed=54)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
+        samples = sampler.run(data, n_prior_samples=10_000, seed=54)
 
         repr_str = repr(samples)
         assert "Samples(" in repr_str
@@ -268,9 +269,9 @@ class TestEdgeCases:
         """Test that providing wrong data type raises an error."""
         data = simulate_gaia_data_simple(seed=60, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples = sampler.run(n_prior_samples=5_000, seed=60)
+        samples = sampler.run(data, n_prior_samples=5_000, seed=60)
         assert samples.n_samples >= 0
 
     def test_small_batch_size(self):
@@ -278,18 +279,18 @@ class TestEdgeCases:
         data = simulate_gaia_data_simple(seed=61, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
 
-        sampler = RejectionSampler.from_prior(prior, data, batch_size=1000)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel(), batch_size=1000)
 
-        samples = sampler.run(n_prior_samples=5_000, seed=61)
+        samples = sampler.run(data, n_prior_samples=5_000, seed=61)
         assert samples.n_samples >= 0
 
     def test_no_accepted_samples(self):
         """Test handling when no samples are accepted (very unlikely but possible)."""
         data = simulate_gaia_data_simple(seed=62, n_obs=30)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples = sampler.run(n_prior_samples=10, seed=62)
+        samples = sampler.run(data, n_prior_samples=10, seed=62)
 
         assert samples.n_samples >= 0
         assert samples.data_type == "GaiaAstrometryModel"
@@ -302,10 +303,10 @@ class TestAcceptanceRate:
         """Test that we get a reasonable acceptance rate."""
         data = simulate_gaia_data_simple(seed=70, n_obs=50)
         prior = RejectionPrior.default_gaia_astrometry(**_ASTRO_KWARGS)
-        sampler = RejectionSampler.from_prior(prior, data)
+        sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
         n_prior = 50_000
-        samples = sampler.run(n_prior_samples=n_prior, seed=70)
+        samples = sampler.run(data, n_prior_samples=n_prior, seed=70)
 
         acceptance_rate = samples.n_samples / n_prior
 

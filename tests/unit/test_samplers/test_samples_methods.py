@@ -151,8 +151,8 @@ def rv_sampler_and_data():
         sigma_K0=Q(30.0, "km/s"),
         sigma_v0=Q(30.0, "km/s"),
     )
-    model = RVModel(data=data, linear_prior=prior.linear_prior)
-    return NumpyroSampler(prior, model)
+    model = RVModel()
+    return NumpyroSampler(prior, model), data
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +296,9 @@ class TestNumpyroSamplerRun:
 
     def test_returns_samples(self, rv_samples, rv_sampler_and_data):
         """run() returns a Samples container."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=0,
             num_chains=2,
@@ -309,8 +310,9 @@ class TestNumpyroSamplerRun:
 
     def test_nonlinear_keys_match_prior(self, rv_samples, rv_sampler_and_data):
         """Returned Samples has nonlinear keys matching the prior."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=1,
             num_chains=2,
@@ -323,8 +325,9 @@ class TestNumpyroSamplerRun:
 
     def test_linear_keys_present(self, rv_samples, rv_sampler_and_data):
         """Marginalized run() conditionally samples linear params in output."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=2,
             num_chains=2,
@@ -337,8 +340,9 @@ class TestNumpyroSamplerRun:
 
     def test_output_shape(self, rv_samples, rv_sampler_and_data):
         """Output has num_chains * num_samples total samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=3,
             num_chains=2,
@@ -350,8 +354,9 @@ class TestNumpyroSamplerRun:
 
     def test_data_type_preserved(self, rv_samples, rv_sampler_and_data):
         """Output data_type matches the model's data_type."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=4,
             num_chains=2,
@@ -363,9 +368,10 @@ class TestNumpyroSamplerRun:
 
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
         """run() raises ValueError when there are no posterior samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="no posterior samples"):
             sampler.run(
+                data,
                 init_samples=empty_rv_samples,
                 seed=5,
                 num_chains=2,
@@ -375,8 +381,9 @@ class TestNumpyroSamplerRun:
 
     def test_single_chain(self, rv_samples, rv_sampler_and_data):
         """run() with num_chains=1 produces expected output."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=6,
             num_chains=1,
@@ -399,9 +406,10 @@ class TestNumpyroSamplerRun:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = NumpyroSampler.from_prior(prior, data, marginalized_names=("v_sys",))
+        sampler = NumpyroSampler(prior, RVModel(), marginalized_names=("v_sys",))
 
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=7,
             num_chains=2,
@@ -420,8 +428,9 @@ class TestNumpyroSamplerRunFull:
 
     def test_returns_samples(self, rv_samples, rv_sampler_and_data):
         """run(marginalized=False) returns a Samples container."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=10,
             marginalized=False,
@@ -434,8 +443,9 @@ class TestNumpyroSamplerRunFull:
 
     def test_has_linear_params(self, rv_samples, rv_sampler_and_data):
         """Full model output includes named linear params."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=11,
             marginalized=False,
@@ -469,9 +479,10 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_raises_without_extra_init_params(self, rv_samples, rv_sampler_and_data):
         """extra_model without extra_init_params raises ValueError."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="extra_init_params is required"):
             sampler.run(
+                data,
                 init_samples=rv_samples,
                 seed=20,
                 extra_model=self._make_extra_model(),
@@ -482,8 +493,9 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_run_with_extra_model(self, rv_samples, rv_sampler_and_data):
         """run() with extra_model completes and returns Samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=21,
             extra_model=self._make_extra_model(),
@@ -497,8 +509,9 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_run_extra_model_marginalized(self, rv_samples, rv_sampler_and_data):
         """extra_model + marginalized=True runs and returns Samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=22,
             extra_model=self._make_extra_model(),
@@ -523,9 +536,10 @@ class TestNumpyroSamplerRunExtraModel:
             x = numpyro.sample("x", ndist.Normal(0.0, 1.0))
             return {"not_a_real_param": x}
 
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="unknown linear parameter name"):
             sampler.run(
+                data,
                 init_samples=rv_samples,
                 seed=23,
                 extra_model=bad_extra_model,
@@ -569,15 +583,15 @@ class TestNumpyroSamplerNonGaussianLinear:
             sigma_pos=Q(100.0, "mas"),
             sigma_vtan=Q(50.0, "km/s"),
         )
-        model = GaiaAstrometryModel(data=data, linear_prior=prior.linear_prior)
-        return NumpyroSampler(prior, model)
+        return NumpyroSampler(prior, GaiaAstrometryModel()), data
 
     def test_run_marginalized_with_halfnormal_parallax(
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC runs and output includes parallax when it has a HalfNormal prior."""
-        sampler = astro_sampler_and_data
+        sampler, data = astro_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=astro_samples,
             seed=30,
             num_chains=2,
@@ -593,8 +607,9 @@ class TestNumpyroSamplerNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC with num_chains=1 and HalfNormal parallax produces valid output."""
-        sampler = astro_sampler_and_data
+        sampler, data = astro_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=astro_samples,
             seed=31,
             num_chains=1,
@@ -645,32 +660,25 @@ class TestNumpyroSamplerCombinedWithJitter:
             rv_err=Q(jnp.ones(n_rv) * 1.0, "km/s"),
         )
 
-        # Split linear priors per component
+        # Split linear priors per component (qualified with component name)
         astro_linear = {
-            "ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
-            "dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
-            "pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
-            "pmdec": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
-            "parallax": QD(ndist.HalfNormal(10.0), "mas"),
-            "semi_major_axis": QD(ndist.Normal(0.0, 50.0), "mas"),
+            "astro.ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "astro.dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "astro.pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "astro.pmdec": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "astro.parallax": QD(ndist.HalfNormal(10.0), "mas"),
+            "astro.semi_major_axis": QD(ndist.Normal(0.0, 50.0), "mas"),
         }
         rv_linear = {
-            "rv_semiamp": QD(ndist.Normal(0.0, 30.0), "km/s"),
-            "v_sys": QD(ndist.Normal(0.0, 30.0), "km/s"),
+            "rv.rv_semiamp": QD(ndist.Normal(0.0, 30.0), "km/s"),
+            "rv.v_sys": QD(ndist.Normal(0.0, 30.0), "km/s"),
         }
 
-        astro_model = GaiaAstrometryModel(
-            data=astro_data,
-            linear_prior=astro_linear,
-        )
-        rv_model = RVModel(
-            data=rv_data,
-            linear_prior=rv_linear,
-            extensions=(Jitter(param_unit="km/s"),),
-        )
+        astro_model = GaiaAstrometryModel()
+        rv_model_inst = RVModel(extensions=(Jitter(param_unit="km/s"),))
 
         joint = JointModel.for_rv_and_gaia(
-            components={"astro": astro_model, "rv": rv_model}
+            components={"astro": astro_model, "rv": rv_model_inst}
         )
 
         # Combined prior (nonlinear priors only, linear handled by components)
@@ -689,7 +697,8 @@ class TestNumpyroSamplerCombinedWithJitter:
             linear_prior=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},
         )
-        return NumpyroSampler(prior, joint)
+        joint_data = {"astro": astro_data, "rv": rv_data}
+        return NumpyroSampler(prior, joint), joint_data
 
     @pytest.fixture
     def combined_samples_with_jitter(self) -> Samples:
@@ -731,8 +740,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Combined marginalized MCMC with jitter runs and returns Samples."""
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=40,
             num_chains=1,
@@ -753,8 +763,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Combined marginalized MCMC produces expected number of samples."""
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=41,
             num_chains=2,
@@ -774,8 +785,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         single params object, and (b) init_params included explicit linear
         keys (e.g. ``parallax``) that belong in ``_linear`` for the full model.
         """
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=42,
             marginalized=False,

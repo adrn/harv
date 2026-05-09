@@ -153,12 +153,11 @@ class TestRVModelWithEcoswEsinw:
     """RVModel constructed with EcoswEsinwRV parameterization."""
 
     def test_construction(self):
-        data = _make_rv_data()
-        model = RVModel(data=data, parameterization=EcoswEsinwRV())
+        model = RVModel(parameterization=EcoswEsinwRV())
         assert isinstance(model.parameterization, EcoswEsinwRV)
 
     def test_param_names(self):
-        model = RVModel(data=_make_rv_data(), parameterization=EcoswEsinwRV())
+        model = RVModel(parameterization=EcoswEsinwRV())
         assert set(model._all_nonlinear_names()) == {
             "period",
             "ecosw",
@@ -169,19 +168,19 @@ class TestRVModelWithEcoswEsinw:
 
     def test_base_design_matrix_shape(self):
         data = _make_rv_data(n_obs=10)
-        model = RVModel(data=data, parameterization=EcoswEsinwRV())
+        model = RVModel(parameterization=EcoswEsinwRV())
         nl = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
             "phase_peri": 0.0,
         }
-        X = model._base_design_matrix(nl)
+        X = model._base_design_matrix(nl, data)
         assert X.shape == (10, 2)
 
     def test_explicit_is_finite(self):
         data = _make_rv_data()
-        model = RVModel(data=data, parameterization=EcoswEsinwRV())
+        model = RVModel(parameterization=EcoswEsinwRV())
         nl = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
@@ -192,32 +191,24 @@ class TestRVModelWithEcoswEsinw:
             "rv_semiamp": jnp.float32(5.0),
             "v_sys": jnp.float32(0.0),
         }
-        ll = model.log_prob(nl, linear_values=linear)
+        ll = model.log_prob(nl, data, linear_values=linear)
         assert jnp.isfinite(ll)
 
     def test_marginalized_is_finite(self):
         data = _make_rv_data()
-        model = RVModel(
-            data=data,
-            parameterization=EcoswEsinwRV(),
-            linear_prior=_rv_prior(),
-        )
+        model = RVModel(parameterization=EcoswEsinwRV())
         nl = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
             "phase_peri": 0.0,
         }
-        ll = model.log_prob(nl)
+        ll = model.log_prob(nl, data, linear_prior=_rv_prior())
         assert jnp.isfinite(ll)
 
     def test_jit(self):
         data = _make_rv_data()
-        model = RVModel(
-            data=data,
-            parameterization=EcoswEsinwRV(),
-            linear_prior=_rv_prior(),
-        )
+        model = RVModel(parameterization=EcoswEsinwRV())
         nl = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
@@ -227,7 +218,7 @@ class TestRVModelWithEcoswEsinw:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl)
+            return model.log_prob(nl, data, linear_prior=_rv_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -239,8 +230,8 @@ class TestNumericalEquivalence:
     def test_explicit_equivalence(self):
         data = _make_rv_data(n_obs=30)
 
-        std_model = RVModel(data=data)
-        eco_model = RVModel(data=data, parameterization=EcoswEsinwRV())
+        std_model = RVModel()
+        eco_model = RVModel(parameterization=EcoswEsinwRV())
 
         nl_std = {
             "period": Q(100.0, "day"),
@@ -259,8 +250,8 @@ class TestNumericalEquivalence:
             "v_sys": jnp.float32(0.0),
         }
 
-        ll_std = std_model.log_prob(nl_std, linear_values=linear)
-        ll_eco = eco_model.log_prob(nl_eco, linear_values=linear)
+        ll_std = std_model.log_prob(nl_std, data, linear_values=linear)
+        ll_eco = eco_model.log_prob(nl_eco, data, linear_values=linear)
 
         assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
             f"std={float(ll_std)}, eco={float(ll_eco)}"
@@ -270,12 +261,8 @@ class TestNumericalEquivalence:
         data = _make_rv_data(n_obs=30)
         prior = _rv_prior()
 
-        std_model = RVModel(data=data, linear_prior=prior)
-        eco_model = RVModel(
-            data=data,
-            parameterization=EcoswEsinwRV(),
-            linear_prior=prior,
-        )
+        std_model = RVModel()
+        eco_model = RVModel(parameterization=EcoswEsinwRV())
 
         nl_std = {
             "period": Q(100.0, "day"),
@@ -290,8 +277,8 @@ class TestNumericalEquivalence:
             "phase_peri": 0.0,
         }
 
-        ll_std = std_model.log_prob(nl_std)
-        ll_eco = eco_model.log_prob(nl_eco)
+        ll_std = std_model.log_prob(nl_std, data, linear_prior=prior)
+        ll_eco = eco_model.log_prob(nl_eco, data, linear_prior=prior)
 
         assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
             f"std={float(ll_std)}, eco={float(ll_eco)}"

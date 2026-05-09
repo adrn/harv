@@ -187,7 +187,6 @@ src/harv/
 │   ├── rv.py                # RVModel (final)
 │   ├── astrometry.py        # GaiaAstrometryModel (final)
 │   ├── joint.py             # JointModel (composition of components)
-│   ├── factories.py         # rv_model(), gaia_astrometry_model() convenience
 │   └── _helpers.py          # PriorDist, LinearPriorCallable, _needs_explicit_sampling
 ├── extensions/              # Pluggable model modifiers
 │   ├── base.py              # ParamInfo, AbstractExtension
@@ -712,35 +711,25 @@ model extracts them automatically in auto mode.
 
 ### `RVModel`
 
-`@final` concrete model for radial velocity data.
+`@final` concrete model for radial velocity data. Models are **pure templates**:
+no data or linear prior are stored as fields. Both are passed at call time.
 
 | Field              | Type                         | Default        |
 | ------------------ | ---------------------------- | -------------- |
-| `data`             | `RVData`                     | (required)     |
 | `parameterization` | `StandardRV \| EcoswEsinwRV` | `StandardRV()` |
-| `linear_prior`     | `dict \| None`               | `None`         |
 | `extensions`       | `tuple`                      | `()`           |
 
 ### `GaiaAstrometryModel`
 
-`@final` concrete model for Gaia epoch astrometry.
+`@final` concrete model for Gaia epoch astrometry. Models are **pure templates**.
 
 | Field              | Type                     | Default                    |
 | ------------------ | ------------------------ | -------------------------- |
-| `data`             | `GaiaAstrometryData`     | (required)                 |
 | `parameterization` | `StandardGaiaAstrometry` | `StandardGaiaAstrometry()` |
-| `linear_prior`     | `dict \| None`           | `None`                     |
 | `extensions`       | `tuple`                  | `()`                       |
 
 Overrides `_linear_param_units()` because astrometric linear params have mixed
 units (mas vs mas/yr for proper motions).
-
-### Convenience factories
-
-`rv_model(data, *, parameterization=None, extensions=(), linear_prior=None)`
-and `gaia_astrometry_model(data, *, extensions=(), linear_prior=None)` construct
-models with wide Normal default priors, reducing boilerplate. Pass
-`linear_prior=False` for explicit (non-marginalized) mode.
 
 ### `JointModel`
 
@@ -753,15 +742,15 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 
 **Factory classmethods:**
 
-- `JointModel.for_sb2(data, prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
-  build an SB2 `JointModel` directly from a `SystemData` (or `dict[str, RVData]`) and a
-  `RejectionPrior.default_sb2` prior. Automatically routes component-qualified linear-prior
-  keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"` (or whatever names are in
-  `component_names`) to the respective component models and declares all other linear-prior
-  keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
+- `JointModel.for_sb2(prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
+  build an SB2 `JointModel` from a `RejectionPrior.default_sb2` prior. Automatically routes
+  component-qualified linear-prior keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"`
+  (or whatever names are in `component_names`) to the respective component models and declares all
+  other linear-prior keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
   `("period", "eccentricity", "phase_peri", "arg_peri")`.
 - `JointModel.for_rv_and_gaia(components, *, shared_params=None)` -- build a
   JointModel for combined RV + Gaia astrometry. Same default shared_params.
+  Defaults `shared_linear_params=()` — all linear priors must be fully qualified.
 
 **Parameter namespacing:** Shared orbital params use bare names (`"period"`).
 Component-specific nonlinear params use `"component_name.param_name"` convention
@@ -775,12 +764,12 @@ systemic velocity.
 
 **Key methods:**
 
-- `log_prob(nl_values)` -- splits flat dict into per-component dicts, routes
-  explicit linear values, sums component log-likelihoods.
-- `sample_conditional_linear(nl_values, key)` -- returns
+- `log_prob(nl_values, data, *, linear_prior=None)` -- splits flat dict into per-component
+  dicts, routes explicit linear values, sums component log-likelihoods.
+- `sample_conditional_linear(nl_values, key, data, *, linear_prior=None)` -- returns
   `dict[str, dict[str, jax.Array]]` keyed by component name.
-- `numpyro_model(priors, marginalized=True)` -- builds a joint numpyro model.
-  Currently only `marginalized=True` is supported.
+- `numpyro_model(nonlinear_priors, data, linear_prior, *, marginalized=True)` -- builds
+  a joint numpyro model.
   **Explicit linear routing:** Non-Gaussian linear priors (e.g. HalfNormal parallax)
   are sampled alongside nonlinear params and appear in the flat `nl_values` dict.
   `JointModel._route_explicit_linear` copies them to the correct component's dict.
@@ -1102,28 +1091,18 @@ ______________________________________________________________________
 
 ## Sampler base (`harv.samplers.base.AbstractSampler`)
 
-Every sampler holds a fully-built model. `AbstractSampler` declares the shared
-fields (`prior`, `model`, `marginalized_names`), the `from_prior(...)`
-classmethod (the ergonomic entry point that hides model construction for
-default and intermediate users), and `get_extensions()`. Concrete samplers
-(`RejectionSampler`, `NumpyroSampler`) add algorithm-specific fields (e.g.
+Every sampler holds a prior and a model. `AbstractSampler` declares the shared
+fields (`prior`, `model`, `marginalized_names`) and `get_extensions()`. Concrete
+samplers (`RejectionSampler`, `NumpyroSampler`) add algorithm-specific fields (e.g.
 `batch_size` on `RejectionSampler`) and implement their own `run()`. The
 concrete samplers are marked `@final` per the project's abstract-final pattern.
 
-There are two ways to construct a sampler:
+Models are **pure templates** — they hold no data or linear prior. Both are passed
+at call time (`run(data, ...)`) so the same model instance can be reused across
+different datasets.
 
-- **Bare constructor — expert / joint-model path.** `Sampler(prior, model)`
-  takes a fully-built `AbstractComponentModel` or `JointModel`. Required
-  for joint, multi-survey, or custom-parameterization workflows where the
-  user constructs the model explicitly (e.g. with a `MultiSurveyOffset`
-  whose indicator matrix is data-derived).
-- `Sampler.from_prior(prior, data, *, extensions=(), parameterization=None, marginalized_names=None)`
-  — ergonomic shortcut for the typical single-component case. Builds a
-  default model under the hood via :func:`harv.rv_model` /
-  :func:`harv.gaia_astrometry_model` (which merge linear extension priors
-  from `prior.extension_priors` into the model's `linear_prior`), then
-  forwards to the bare constructor. Default and intermediate users never
-  need to touch the model classes directly.
+Constructor: `Sampler(prior, model)` where `model` is a fully-built
+`AbstractComponentModel` or `JointModel`.
 
 ______________________________________________________________________
 
@@ -1140,7 +1119,7 @@ sampling efficient.
 | Field                | Type                                   | Description                                                  |
 | -------------------- | -------------------------------------- | ------------------------------------------------------------ |
 | `prior`              | `RejectionPrior`                       | Prior distributions for sampling                             |
-| `model`              | `AbstractComponentModel \| JointModel` | Fully constructed model (data + extensions attached)         |
+| `model`              | `AbstractComponentModel \| JointModel` | Model template (no data or linear prior stored)              |
 | `marginalized_names` | `tuple[str, ...] \| None`              | Optional subset of linear params to analytically marginalize |
 | `batch_size`         | `int` (static)                         | Samples vmapped at once (default: 100,000)                   |
 
@@ -1177,6 +1156,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 
 ```python
 sampler.run(
+    data,
     *,
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
@@ -1184,26 +1164,9 @@ sampler.run(
 ) -> Samples
 ```
 
-The model already embeds the data, so `run()` does not take a `data` argument.
-
-### `from_prior` classmethod
-
-```python
-RejectionSampler.from_prior(
-    prior, data,
-    *,
-    extensions=(),
-    parameterization=None,
-    marginalized_names=None,
-    batch_size=100_000,
-) -> RejectionSampler
-```
-
-Ergonomic entry point: calls `harv.rv_model` / `harv.gaia_astrometry_model`
-under the hood to build a default model from `data`, wires
-`prior.extension_priors` into the model's `linear_prior`, and returns a
-sampler with that model attached. The same method is inherited by
-`NumpyroSampler` (without the `batch_size` kwarg).
+`data` is the first positional argument and is passed through to `model.log_prob`
+at each evaluation. For a `JointModel`, pass `data` as a dict keyed by component
+name (e.g. `{"rv": rv_data, "astro": astro_data}`).
 
 ### `batch_size` and GPU support
 
@@ -1213,14 +1176,14 @@ The `batch_size` field controls how many samples are vmapped at once within a
 
 ### MCMC sampling (`NumpyroSampler`)
 
-MCMC functionality lives on `NumpyroSampler(prior)`. The `run()` method takes
-the data and an optional `Samples` warm-start from `RejectionSampler.run()`, builds
-a numpyro model automatically from the component model's `numpyro_model()` method,
-draws one starting position per chain from the rejection posterior (if provided),
-runs MCMC, and returns a new `Samples` object containing the MCMC posterior.
+MCMC functionality lives on `NumpyroSampler(prior, model)`. The `run()` method
+takes the data and an optional `Samples` warm-start from `RejectionSampler.run()`,
+builds a numpyro model automatically from the component model's `numpyro_model()`
+method, draws one starting position per chain from the rejection posterior (if
+provided), runs MCMC, and returns a new `Samples` object.
 
 ```python
-mcmc_sampler = NumpyroSampler(prior)
+mcmc_sampler = NumpyroSampler(prior, model)
 mcmc_samples = mcmc_sampler.run(
     data,
     init_samples=rej_samples,
@@ -1591,11 +1554,10 @@ from unxt import Q
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models import RVModel, GaiaAstrometryModel, JointModel
-from harv.models.factories import rv_model, gaia_astrometry_model
 from harv.extensions import Jitter, MultiSurveyOffset
 from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler
 
-# --- Minimal RV-only case (default user) ---
+# --- Minimal RV-only case ---
 data = RVData(time, rv, rv_err)
 prior = RejectionPrior.default_rv(
     period_min=Q(50, "day"),
@@ -1603,21 +1565,19 @@ prior = RejectionPrior.default_rv(
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
 )
-sampler = RejectionSampler.from_prior(prior, data)
-samples = sampler.run(n_prior_samples=500_000)
+sampler = RejectionSampler(prior, RVModel())
+samples = sampler.run(data, n_prior_samples=500_000)
 
 # With max posterior samples:
-samples = sampler.run(n_prior_samples=500_000, max_posterior_samples=128)
+samples = sampler.run(data, n_prior_samples=500_000, max_posterior_samples=128)
 
-# --- RV with custom extensions and parameterization (intermediate user) ---
+# --- RV with custom extensions and parameterization ---
 from harv.models.parameterizations.rv import EcoswEsinwRV
-sampler = RejectionSampler.from_prior(
+sampler = RejectionSampler(
     prior,
-    data,
-    parameterization=EcoswEsinwRV(),
-    extensions=(Jitter(param_unit="km/s"),),
+    RVModel(parameterization=EcoswEsinwRV(), extensions=(Jitter(param_unit="km/s"),)),
 )
-samples = sampler.run(n_prior_samples=500_000)
+samples = sampler.run(data, n_prior_samples=500_000)
 
 # --- Gaia astrometry only ---
 prior = RejectionPrior.default_gaia_astrometry(
@@ -1628,23 +1588,24 @@ prior = RejectionPrior.default_gaia_astrometry(
     sigma_pos=Q(1e3, "mas"),
     sigma_vtan=Q(200, "km/s"),
 )
-sampler = RejectionSampler.from_prior(prior, gaia_data)
-samples = sampler.run(n_prior_samples=1_000_000)
+sampler = RejectionSampler(prior, GaiaAstrometryModel())
+samples = sampler.run(gaia_data, n_prior_samples=1_000_000)
 
-# --- Joint astrometry + RV (expert path: build model explicitly) ---
+# --- Joint astrometry + RV ---
+# All linear-prior keys must be qualified ("rv.rv_semiamp", "astro.parallax", etc.)
 joint = JointModel.for_rv_and_gaia(
     components={
-        "rv": rv_model(rv_data, extensions=(Jitter(param_unit="km/s"),)),
-        "astro": gaia_astrometry_model(gaia_data),
+        "rv": RVModel(extensions=(Jitter(param_unit="km/s"),)),
+        "astro": GaiaAstrometryModel(),
     },
 )
-sampler = RejectionSampler(prior, joint)
-samples = sampler.run(n_prior_samples=1_000_000)
+sampler = RejectionSampler(joint_prior, joint)
+samples = sampler.run({"rv": rv_data, "astro": gaia_data}, n_prior_samples=1_000_000)
 
 # --- MCMC continuation ---
-mcmc_sampler = NumpyroSampler.from_prior(prior, data)
+mcmc_sampler = NumpyroSampler(prior, RVModel())
 mcmc_samples = mcmc_sampler.run(
-    init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000, seed=42,
+    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000, seed=42,
 )
 
 # --- Post-sampling analysis ---

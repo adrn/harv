@@ -31,12 +31,11 @@ class TestRVModelBasic:
     """Basic construction and introspection."""
 
     def test_construction(self):
-        data = _make_rv_data()
-        model = RVModel(data=data)
-        assert model.data is data
+        model = RVModel()
+        assert isinstance(model.parameterization, object)
 
     def test_param_names(self):
-        model = RVModel(data=_make_rv_data())
+        model = RVModel()
         assert set(model._all_nonlinear_names()) == {
             "period",
             "eccentricity",
@@ -46,19 +45,19 @@ class TestRVModelBasic:
         assert set(model._all_linear_names()) == {"rv_semiamp", "v_sys"}
 
     def test_obs_unit(self):
-        model = RVModel(data=_make_rv_data())
-        assert model._obs_unit() == "km / s"
+        model = RVModel()
+        assert model._obs_unit(_make_rv_data()) == "km / s"
 
     def test_base_design_matrix_shape(self):
         data = _make_rv_data(n_obs=10)
-        model = RVModel(data=data)
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
             "phase_peri": 0.0,
             "arg_peri": 1.0,
         }
-        X = model._base_design_matrix(nl)
+        X = model._base_design_matrix(nl, data)
         assert X.shape == (10, 2)
 
 
@@ -67,7 +66,7 @@ class TestRVModelExplicit:
 
     def test_explicit_is_finite(self):
         data = _make_rv_data()
-        model = RVModel(data=data)
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -78,7 +77,7 @@ class TestRVModelExplicit:
             "rv_semiamp": jnp.float32(5.0),
             "v_sys": jnp.float32(0.0),
         }
-        ll = model.log_prob(nl, linear_values=linear)
+        ll = model.log_prob(nl, data, linear_values=linear)
         assert jnp.isfinite(ll)
 
 
@@ -87,19 +86,19 @@ class TestRVModelMarginalized:
 
     def test_marginalized_is_finite(self):
         data = _make_rv_data()
-        model = RVModel(data=data, linear_prior=_rv_prior())
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
             "phase_peri": 0.0,
             "arg_peri": Q(1.0, "rad"),
         }
-        ll = model.log_prob(nl)
+        ll = model.log_prob(nl, data, linear_prior=_rv_prior())
         assert jnp.isfinite(ll)
 
     def test_marginalized_jit(self):
         data = _make_rv_data()
-        model = RVModel(data=data, linear_prior=_rv_prior())
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -109,7 +108,7 @@ class TestRVModelMarginalized:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl)
+            return model.log_prob(nl, data, linear_prior=_rv_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -120,7 +119,7 @@ class TestRVModelSampleConditional:
 
     def test_sample_returns_all_linear(self):
         data = _make_rv_data()
-        model = RVModel(data=data, linear_prior=_rv_prior())
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -128,13 +127,15 @@ class TestRVModelSampleConditional:
             "arg_peri": Q(1.0, "rad"),
         }
         key = jax.random.key(42)
-        samples = model.sample_conditional_linear(nl, key)
+        samples = model.sample_conditional_linear(
+            nl, key, data, linear_prior=_rv_prior()
+        )
         assert "rv_semiamp" in samples
         assert "v_sys" in samples
 
     def test_sample_values_finite(self):
         data = _make_rv_data()
-        model = RVModel(data=data, linear_prior=_rv_prior())
+        model = RVModel()
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": 0.3,
@@ -142,7 +143,9 @@ class TestRVModelSampleConditional:
             "arg_peri": Q(1.0, "rad"),
         }
         key = jax.random.key(0)
-        samples = model.sample_conditional_linear(nl, key)
+        samples = model.sample_conditional_linear(
+            nl, key, data, linear_prior=_rv_prior()
+        )
         assert jnp.isfinite(samples["rv_semiamp"])
         assert jnp.isfinite(samples["v_sys"])
 
@@ -167,7 +170,7 @@ class TestRVModelSampleConditional:
             "rv_semiamp": dist.Normal(0.0, 0.01),  # near-zero K
             "v_sys": dist.Normal(v_sys_true, 10.0),  # non-zero mean
         }
-        model = RVModel(data=data, linear_prior=linear_prior)
+        model = RVModel()
         nl = {
             "period": Q(1000.0, "day"),
             "eccentricity": 0.0,
@@ -178,7 +181,11 @@ class TestRVModelSampleConditional:
         keys = jax.vmap(lambda i: jax.random.fold_in(jax.random.key(0), i))(
             jnp.arange(200)
         )
-        samples = jax.vmap(lambda k: model.sample_conditional_linear(nl, k))(keys)
+        samples = jax.vmap(
+            lambda k: model.sample_conditional_linear(
+                nl, k, data, linear_prior=linear_prior
+            )
+        )(keys)
         mean_v_sys = jnp.mean(samples["v_sys"])
         assert jnp.abs(mean_v_sys - v_sys_true) < 1.0, (
             f"Conditional posterior mean for v_sys ({mean_v_sys:.2f}) is far from "

@@ -26,14 +26,18 @@ def _get_factor_value(trace, name):
 
 class TestNumpyroModelMarginalized:
     def test_returns_callable(self, rv_data, nonlinear_priors, linear_prior):
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
+        )
         assert callable(model_fn)
 
     def test_model_traces(self, rv_data, nonlinear_priors, linear_prior):
         """Model can be traced and produces expected sites."""
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
+        )
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -49,8 +53,10 @@ class TestNumpyroModelMarginalized:
 
     def test_log_lik_is_finite(self, rv_data, nonlinear_priors, linear_prior):
         """Log-likelihood in the trace is finite."""
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
+        )
 
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
@@ -60,8 +66,10 @@ class TestNumpyroModelMarginalized:
 
     def test_no_linear_sites(self, rv_data, nonlinear_priors, linear_prior):
         """Marginalized model should NOT have linear param sample sites."""
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
+        )
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -74,14 +82,18 @@ class TestNumpyroModelMarginalized:
 
 class TestNumpyroModelFull:
     def test_returns_callable(self, rv_data, nonlinear_priors, linear_prior):
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=False)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=False
+        )
         assert callable(model_fn)
 
     def test_model_traces(self, rv_data, nonlinear_priors, linear_prior):
         """Full model has both nonlinear and linear sample sites."""
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=False)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=False
+        )
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -97,8 +109,10 @@ class TestNumpyroModelFull:
         assert "v_sys" in trace
 
     def test_log_lik_is_finite(self, rv_data, nonlinear_priors, linear_prior):
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=False)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=False
+        )
 
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
@@ -108,9 +122,9 @@ class TestNumpyroModelFull:
 
     def test_requires_linear_prior(self, rv_data, nonlinear_priors):
         """Full model without linear_prior raises ValueError."""
-        model = RVModel(data=rv_data)
+        model = RVModel()
         with pytest.raises(ValueError, match="linear_prior"):
-            model.numpyro_model(nonlinear_priors, marginalized=False)
+            model.numpyro_model(nonlinear_priors, rv_data, None, marginalized=False)
 
 
 class TestNumpyroModelWithExtensions:
@@ -123,12 +137,10 @@ class TestNumpyroModelWithExtensions:
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             "jitter": QD(dist.HalfNormal(1.0), "km/s"),
         }
-        model = RVModel(
-            data=rv_data,
-            linear_prior=linear_prior,
-            extensions=(Jitter(param_unit="km/s"),),
+        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
         )
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -145,16 +157,15 @@ class TestNumpyroModelWithExtensions:
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         }
-        model = RVModel(
-            data=rv_data,
-            extensions=(MonomialTrend(order=1, time_unit="day"),),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "trend_1": dist.Normal(0.0, 1.0),
-            },
+        linear_prior = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "trend_1": dist.Normal(0.0, 1.0),
+        }
+        model = RVModel(extensions=(MonomialTrend(order=1, time_unit="day"),))
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
         )
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -172,8 +183,10 @@ class TestNumpyroModelUnitConversion:
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         }
-        model = RVModel(data=rv_data, linear_prior=linear_prior)
-        model_fn = model.numpyro_model(nonlinear_priors, marginalized=True)
+        model = RVModel()
+        model_fn = model.numpyro_model(
+            nonlinear_priors, rv_data, linear_prior, marginalized=True
+        )
 
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
