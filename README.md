@@ -83,7 +83,7 @@ prior = harv.RejectionPrior.default_rv(
 )
 
 # Run the rejection sampler
-sampler = harv.RejectionSampler(prior, )
+sampler = harv.RejectionSampler(prior, harv.RVModel())
 samples = sampler.run(data, n_prior_samples=1_000_000, seed=42)
 
 # Inspect results — quantities carry units:
@@ -94,27 +94,31 @@ print(f"Eccentricity: {samples['eccentricity']}")
 
 ### Gaia epoch astrometry
 
-```py
-from harv.data import GaiaAstrometryData
+<!-- TODO: custom parallax prior parallax=harv.QD(dist.TruncatedNormal(0.5, 0.5, low=0.0), "mas"),  # parallax prior -->
 
-astro_data = GaiaAstrometryData(
-    time=times,                          # Quantity["time"]
-    al_position=al_pos,                  # Quantity["angle"] (mas)
-    al_position_err=al_err,              # Quantity["angle"] (mas)
-    scan_angle=scan_angles,              # Quantity["angle"] (rad)
-    parallax_factor=parallax_factors,    # dimensionless
+```python
+import numpyro.distributions as dist
+import quaxed.numpy as jnp
+
+astro_data = harv.GaiaAstrometryData(
+    time=Q([958.110978, 994.910525, 995.086642, 1010.091395, 1076.918577], "day"),
+    al_position=Q([147.066, 379.996, 378.656, 74.666, -293.923], "mas"),
+    al_position_err=Q([0.370, 0.446, 0.428, 0.270, 0.247], "mas"),
+    scan_angle=Q([-59.047, -5.114, -5.783, -68.579, -134.155], "deg"),
+    parallax_factor=jnp.array([0.70828, -0.46657, -0.45946, 0.19659, -0.21379])
 )
 
-prior = RejectionPrior.default_gaia_astrometry(
+prior = harv.RejectionPrior.default_gaia_astrometry(
     period_min=Q(50, "day"),
     period_max=Q(3000, "day"),
-    sigma_a0=Q(1, "au"),   # astrometric semi-major axis scale
-    parallax=Q(5, "mas"),    # source parallax (for physical prior scaling)
+    sigma_a0=Q(1, "au"),   # astrometric semi-major axis prior scale
+    sigma_parallax=Q(1.0, "mas"),  # parallax prior width
+    sigma_pos=Q(1, "mas"),  # position offset prior width
+    sigma_vtan=Q(30, "km/s"),  # tangential velocity prior width
 )
 
-model = Model(prior, astro_data)
-sampler = RejectionSampler(model)
-samples = sampler.run(n_prior_samples=1_000_000, seed=42)
+sampler = harv.RejectionSampler(prior, harv.GaiaAstrometryModel())
+samples = sampler.run(astro_data, n_prior_samples=1_000_000, seed=42)
 ```
 
 ### MCMC continuation
