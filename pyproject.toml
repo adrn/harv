@@ -81,10 +81,12 @@ docs = [
     "pydata-sphinx-theme~=0.16",
     "sphinx-autobuild>=2024.10.3",
     "sphinx-autoapi>=3.6.0",
-    "sphinx_design>=0.6.1",
+    "sphinx-design>=0.6.1",
     "sphinx-copybutton>=0.5.2",
     "corner>=2.2.3",
     "ipykernel>=7.1.0",
+    "myst-nb>=1.4.0",
+    "autoapi>=2.0.1",
 ]
 test = [
     "pytest",
