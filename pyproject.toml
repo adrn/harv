@@ -88,6 +88,7 @@ docs = [
     "myst-nb>=1.4.0",
     "autoapi>=2.0.1",
     "nbconvert>=7.17.1",
+    "rtds-action>=1.1.0",
 ]
 test = [
     "pytest",

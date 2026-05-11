@@ -42,6 +42,7 @@ extensions = [
     # in the live docs if you want to leave notes for future work in the docs
     "sphinx.ext.todo",
     "autoapi.extension",
+    "rtds_action",
 ]
 
 # Support Markdown source files & rst for api docs

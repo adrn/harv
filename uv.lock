@@ -1069,6 +1069,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-raises" },
     { name = "pytest-xdist" },
+    { name = "rtds-action" },
     { name = "ruff" },
     { name = "setuptools" },
     { name = "sphinx" },
@@ -1089,6 +1090,7 @@ docs = [
     { name = "myst-parser" },
     { name = "nbconvert" },
     { name = "pydata-sphinx-theme" },
+    { name = "rtds-action" },
     { name = "sphinx" },
     { name = "sphinx-autoapi" },
     { name = "sphinx-autobuild" },
@@ -1159,6 +1161,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-raises" },
     { name = "pytest-xdist" },
+    { name = "rtds-action", specifier = ">=1.1.0" },
     { name = "ruff" },
     { name = "setuptools" },
     { name = "sphinx", specifier = "~=8.0" },
@@ -1179,6 +1182,7 @@ docs = [
     { name = "myst-parser", specifier = ">=4.0" },
     { name = "nbconvert", specifier = ">=7.17.1" },
     { name = "pydata-sphinx-theme", specifier = "~=0.16" },
+    { name = "rtds-action", specifier = ">=1.1.0" },
     { name = "sphinx", specifier = "~=8.0" },
     { name = "sphinx-autoapi", specifier = ">=3.6.0" },
     { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
@@ -3103,6 +3107,21 @@ wheels = [
 ]
 
 [[package]]
+name = "rtds-action"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "setuptools" },
+    { name = "setuptools-scm" },
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e5/f2/d6b99748e97ba132f856f1caa891d577da63bacb44a08eb4944e6511c986/rtds_action-1.1.0.tar.gz", hash = "sha256:f824851318a5d41550ae30edfb166dc6442bc9b9940a50ea06e649cd471f6ac1", size = 81459, upload-time = "2023-06-01T11:44:34.68Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/54/b9aaf8e4867e95ac8ea27cd3249946c62c58058779e998040442d6d07625/rtds_action-1.1.0-py2.py3-none-any.whl", hash = "sha256:097a73eac507387a32b24c3da690f3a876936cb56150aa1786d52a9a67cd62f9", size = 6660, upload-time = "2023-06-01T11:44:33.475Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.15.12"
 source = { registry = "https://pypi.org/simple" }
@@ -3208,6 +3227,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
+]
+
+[[package]]
+name = "setuptools-scm"
+version = "10.0.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "setuptools" },
+    { name = "vcs-versioning" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/b1/2a6a8ecd6f9e263754036a0b573360bdbd6873b595725e49e11139722041/setuptools_scm-10.0.5.tar.gz", hash = "sha256:bbba8fe754516cdefd017f4456721775e6ef9662bd7887fb52ae26813d4838c3", size = 56748, upload-time = "2026-03-27T15:57:05.751Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/e1/342c4434df56aa537f6ce7647eefee521d96fbb828b08acd709865767652/setuptools_scm-10.0.5-py3-none-any.whl", hash = "sha256:f611037d8aae618221503b8fa89319f073438252ae3420e01c9ceec249131a0a", size = 21695, upload-time = "2026-03-27T15:57:03.969Z" },
 ]
 
 [[package]]
@@ -3717,6 +3750,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1f/93/041fca8274050e40e6791f267d82e0e2e27dd165627bd640d3e0e378d877/uvicorn-0.46.0.tar.gz", hash = "sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d", size = 88758, upload-time = "2026-04-23T07:16:00.151Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/a3/5b1562db76a5a488274b2332a97199b32d0442aca0ed193697fd47786316/uvicorn-0.46.0-py3-none-any.whl", hash = "sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048", size = 70926, upload-time = "2026-04-23T07:15:58.355Z" },
+]
+
+[[package]]
+name = "vcs-versioning"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/42/d97a7795055677961c63a1eef8e7b19d5968ed992ed3a70ab8eb012efad8/vcs_versioning-1.1.1.tar.gz", hash = "sha256:fabd75a3cab7dd8ac02fe24a3a9ba936bf258667b5a62ed468c9a1da0f5775bc", size = 97575, upload-time = "2026-03-27T20:42:41.613Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/60/73603fbcdbe5e803855bcce4414f94eaeed449083bd8183e67161af78188/vcs_versioning-1.1.1-py3-none-any.whl", hash = "sha256:b541e2ba79fc6aaa3850f8a7f88af43d97c1c80649c01142ee4146eddbc599e4", size = 79851, upload-time = "2026-03-27T20:42:40.45Z" },
 ]
 
 [[package]]
