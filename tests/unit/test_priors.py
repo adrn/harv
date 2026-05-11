@@ -172,17 +172,20 @@ class TestParameterOverrides:
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
 
     def test_rv_override_linear(self):
-        """Linear prior can be overridden via kwargs."""
+        """Linear prior can be overridden via kwargs (omit conflicting sigma_K0)."""
         custom_K = QD(dist.Normal(0.0, 50.0), "km/s")
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, rv_semiamp=custom_K)
+        kwargs = {k: v for k, v in _DEFAULT_RV_KWARGS.items() if k != "sigma_K0"}
+        prior = RejectionPrior.default_rv(**kwargs, rv_semiamp=custom_K)
         assert prior.linear_prior["rv_semiamp"] is custom_K
 
     def test_rv_override_both(self):
         """Nonlinear and linear overrides can be combined."""
         custom_ecc = dist.Uniform(0.0, 0.3)
         custom_v0 = QD(dist.Normal(0.0, 5.0), "km/s")
+        # Omit sigma_v0 since v_sys is being overridden directly.
+        kwargs = {k: v for k, v in _DEFAULT_RV_KWARGS.items() if k != "sigma_v0"}
         prior = RejectionPrior.default_rv(
-            **_DEFAULT_RV_KWARGS, eccentricity=custom_ecc, v_sys=custom_v0
+            **kwargs, eccentricity=custom_ecc, v_sys=custom_v0
         )
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
         assert prior.linear_prior["v_sys"] is custom_v0

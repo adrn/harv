@@ -15,6 +15,7 @@ from harv.extensions import (
     MultiSurveyOffset,
 )
 from harv.models import RVModel
+from harv.samplers import RejectionPrior, RejectionSampler
 
 # ======================================================================
 # Jitter
@@ -61,14 +62,11 @@ class TestJitter:
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
         jitter_ext = Jitter(param_unit="km/s")
-        model = RVModel(
-            data=data,
-            extensions=(jitter_ext,),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-            },
-        )
+        linear_prior = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+        }
+        model = RVModel(extensions=(jitter_ext,))
         # Check that jitter appears in nonlinear params
         assert "jitter" in model._all_nonlinear_names()
 
@@ -80,17 +78,11 @@ class TestJitter:
             "arg_peri": Q(1.0, "rad"),
             "jitter": 0.5,  # in km/s, unit-stripped
         }
-        lp = model.log_prob(nl)
+        lp = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(lp)
 
         # Compare: jitter=0 should give same result as no jitter extension
-        model_no_jitter = RVModel(
-            data=data,
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-            },
-        )
+        model_no_jitter = RVModel()
         nl_no_jitter = {
             "period": Q(100.0, "day"),
             "eccentricity": jnp.float32(0.3),
@@ -98,8 +90,10 @@ class TestJitter:
             "arg_peri": Q(1.0, "rad"),
         }
         nl_zero = {**nl_no_jitter, "jitter": 0.0}
-        lp_zero_jitter = model.log_prob(nl_zero)
-        lp_no_ext = model_no_jitter.log_prob(nl_no_jitter)
+        lp_zero_jitter = model.log_prob(nl_zero, data, linear_prior=linear_prior)
+        lp_no_ext = model_no_jitter.log_prob(
+            nl_no_jitter, data, linear_prior=linear_prior
+        )
         assert jnp.allclose(lp_zero_jitter, lp_no_ext, atol=1e-5)
 
     def test_jitter_jit(self):
@@ -109,14 +103,11 @@ class TestJitter:
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
-        model = RVModel(
-            data=data,
-            extensions=(Jitter(param_unit="km/s"),),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-            },
-        )
+        linear_prior = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+        }
+        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": jnp.float32(0.3),
@@ -128,7 +119,7 @@ class TestJitter:
         @jax.jit
         def _lp(jitter_val):
             vals = {**nl, "jitter": jitter_val}
-            return model.log_prob(vals)
+            return model.log_prob(vals, data, linear_prior=linear_prior)
 
         result = _lp(0.5)
         assert jnp.isfinite(result)
@@ -210,16 +201,13 @@ class TestMonomialTrend:
             rv=Q([1.0, -2.0, 0.5, 3.0, -1.0], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5, 0.5, 0.5], "km/s"),
         )
+        linear_prior = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "trend_1": dist.Normal(0.0, 1.0),  # dimensionless trend
+        }
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
-        model = RVModel(
-            data=data,
-            extensions=(trend,),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "trend_1": dist.Normal(0.0, 1.0),  # dimensionless trend
-            },
-        )
+        model = RVModel(extensions=(trend,))
 
         # trend_1 should be a linear param
         assert "trend_1" in model._all_linear_names()
@@ -230,8 +218,30 @@ class TestMonomialTrend:
             "phase_peri": jnp.float32(0.25),
             "arg_peri": Q(0.5, "rad"),
         }
-        lp = model.log_prob(nl)
+        lp = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(lp)
+
+    def test_rejection_sampler_requires_all_trend_priors(self):
+        """Sampler must reject missing priors for declared trend coefficients."""
+        data = RVData(
+            time=Q([0.0, 50.0, 100.0, 150.0, 200.0], "day"),
+            rv=Q([1.0, -2.0, 0.5, 3.0, -1.0], "km/s"),
+            rv_err=Q([0.5, 0.5, 0.5, 0.5, 0.5], "km/s"),
+        )
+        prior = RejectionPrior.default_rv(
+            period_min=Q(1.0, "day"),
+            period_max=Q(1_000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+            trend_1=QD(dist.Normal(0.0, 1.0), "km/s"),
+        )
+        sampler = RejectionSampler(
+            prior,
+            RVModel(extensions=(MonomialTrend(order=2, time_unit="day"),)),
+        )
+
+        with pytest.raises(ValueError, match="trend_2"):
+            sampler.run(data, n_prior_samples=8, max_posterior_samples=2, seed=0)
 
 
 # ======================================================================
@@ -296,17 +306,13 @@ class TestMultiSurveyOffset:
                 [1.0],
             ]
         )
+        linear_prior_mso = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
+        }
         offset_ext = MultiSurveyOffset(indicator, ("espresso",), "km/s")
-
-        model = RVModel(
-            data=data,
-            extensions=(offset_ext,),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
-        )
+        model = RVModel(extensions=(offset_ext,))
 
         assert "espresso" in model._all_linear_names()
 
@@ -316,7 +322,7 @@ class TestMultiSurveyOffset:
             "phase_peri": jnp.float32(0.25),
             "arg_peri": Q(0.5, "rad"),
         }
-        lp = model.log_prob(nl)
+        lp = model.log_prob(nl, data, linear_prior=linear_prior_mso)
         assert jnp.isfinite(lp)
 
     def test_sample_conditional_with_offset(self):
@@ -335,17 +341,13 @@ class TestMultiSurveyOffset:
                 [1.0],
             ]
         )
+        linear_prior_off = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
+        }
         offset_ext = MultiSurveyOffset(indicator, ("espresso",), "km/s")
-
-        model = RVModel(
-            data=data,
-            extensions=(offset_ext,),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
-        )
+        model = RVModel(extensions=(offset_ext,))
 
         nl = {
             "period": Q(100.0, "day"),
@@ -354,7 +356,9 @@ class TestMultiSurveyOffset:
             "arg_peri": Q(0.5, "rad"),
         }
         key = jax.random.PRNGKey(42)
-        samples = model.sample_conditional_linear(nl, key)
+        samples = model.sample_conditional_linear(
+            nl, key, data, linear_prior=linear_prior_off
+        )
         assert "espresso" in samples
         assert "rv_semiamp" in samples
         assert "v_sys" in samples
@@ -375,17 +379,16 @@ class TestCombinedExtensions:
             rv=Q([1.0, -2.0, 0.5, 3.0], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5, 0.5], "km/s"),
         )
+        linear_prior_jt = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "trend_1": dist.Normal(0.0, 1.0),
+        }
         model = RVModel(
-            data=data,
             extensions=(
                 Jitter(param_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
             ),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "trend_1": dist.Normal(0.0, 1.0),
-            },
         )
 
         assert "jitter" in model._all_nonlinear_names()
@@ -398,7 +401,7 @@ class TestCombinedExtensions:
             "arg_peri": Q(0.5, "rad"),
             "jitter": 0.3,
         }
-        lp = model.log_prob(nl)
+        lp = model.log_prob(nl, data, linear_prior=linear_prior_jt)
         assert jnp.isfinite(lp)
 
     def test_all_three_extensions(self):
@@ -418,19 +421,18 @@ class TestCombinedExtensions:
                 [1.0],
             ]
         )
+        linear_prior_all = {
+            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "trend_1": dist.Normal(0.0, 1.0),
+            "other_surv": QD(dist.Normal(0.0, 5.0), "km/s"),
+        }
         model = RVModel(
-            data=data,
             extensions=(
                 Jitter(param_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
                 MultiSurveyOffset(indicator, ("other_surv",), "km/s"),
             ),
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-                "trend_1": dist.Normal(0.0, 1.0),
-                "other_surv": QD(dist.Normal(0.0, 5.0), "km/s"),
-            },
         )
 
         nl = {
@@ -440,11 +442,13 @@ class TestCombinedExtensions:
             "arg_peri": Q(0.5, "rad"),
             "jitter": 0.2,
         }
-        lp = model.log_prob(nl)
+        lp = model.log_prob(nl, data, linear_prior=linear_prior_all)
         assert jnp.isfinite(lp)
 
         # Sample conditional
         key = jax.random.PRNGKey(0)
-        samples = model.sample_conditional_linear(nl, key)
+        samples = model.sample_conditional_linear(
+            nl, key, data, linear_prior=linear_prior_all
+        )
         assert set(samples) == {"rv_semiamp", "v_sys", "trend_1", "other_surv"}
         assert all(jnp.isfinite(v) for v in samples.values())

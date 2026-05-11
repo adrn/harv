@@ -5,6 +5,7 @@ full rejection sampler (slow), tests build a minimal Samples instance directly
 using the constructor. NumpyroSampler.run() returns a Samples object.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jax.numpy as jnp
@@ -16,7 +17,7 @@ from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
-from harv.extensions import Jitter
+from harv.extensions import Jitter, MonomialTrend
 from harv.extensions.base import ParamInfo
 from harv.extensions.gp import GP
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -151,8 +152,8 @@ def rv_sampler_and_data():
         sigma_K0=Q(30.0, "km/s"),
         sigma_v0=Q(30.0, "km/s"),
     )
-    model = RVModel(data=data, linear_prior=prior.linear_prior)
-    return NumpyroSampler.from_model(model=model, prior=prior)
+    model = RVModel()
+    return NumpyroSampler(prior, model), data
 
 
 # ---------------------------------------------------------------------------
@@ -296,8 +297,9 @@ class TestNumpyroSamplerRun:
 
     def test_returns_samples(self, rv_samples, rv_sampler_and_data):
         """run() returns a Samples container."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=0,
             num_chains=2,
@@ -309,8 +311,9 @@ class TestNumpyroSamplerRun:
 
     def test_nonlinear_keys_match_prior(self, rv_samples, rv_sampler_and_data):
         """Returned Samples has nonlinear keys matching the prior."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=1,
             num_chains=2,
@@ -323,8 +326,9 @@ class TestNumpyroSamplerRun:
 
     def test_linear_keys_present(self, rv_samples, rv_sampler_and_data):
         """Marginalized run() conditionally samples linear params in output."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=2,
             num_chains=2,
@@ -337,8 +341,9 @@ class TestNumpyroSamplerRun:
 
     def test_output_shape(self, rv_samples, rv_sampler_and_data):
         """Output has num_chains * num_samples total samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=3,
             num_chains=2,
@@ -350,8 +355,9 @@ class TestNumpyroSamplerRun:
 
     def test_data_type_preserved(self, rv_samples, rv_sampler_and_data):
         """Output data_type matches the model's data_type."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=4,
             num_chains=2,
@@ -363,9 +369,10 @@ class TestNumpyroSamplerRun:
 
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
         """run() raises ValueError when there are no posterior samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="no posterior samples"):
             sampler.run(
+                data,
                 init_samples=empty_rv_samples,
                 seed=5,
                 num_chains=2,
@@ -375,8 +382,9 @@ class TestNumpyroSamplerRun:
 
     def test_single_chain(self, rv_samples, rv_sampler_and_data):
         """run() with num_chains=1 produces expected output."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=6,
             num_chains=1,
@@ -399,7 +407,7 @@ class TestNumpyroSamplerRun:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        sampler = NumpyroSampler(prior, marginalized_names=("v_sys",))
+        sampler = NumpyroSampler(prior, RVModel(), marginalized_names=("v_sys",))
 
         result = sampler.run(
             data,
@@ -421,8 +429,9 @@ class TestNumpyroSamplerRunFull:
 
     def test_returns_samples(self, rv_samples, rv_sampler_and_data):
         """run(marginalized=False) returns a Samples container."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=10,
             marginalized=False,
@@ -435,8 +444,9 @@ class TestNumpyroSamplerRunFull:
 
     def test_has_linear_params(self, rv_samples, rv_sampler_and_data):
         """Full model output includes named linear params."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=11,
             marginalized=False,
@@ -470,9 +480,10 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_raises_without_extra_init_params(self, rv_samples, rv_sampler_and_data):
         """extra_model without extra_init_params raises ValueError."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="extra_init_params is required"):
             sampler.run(
+                data,
                 init_samples=rv_samples,
                 seed=20,
                 extra_model=self._make_extra_model(),
@@ -483,8 +494,9 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_run_with_extra_model(self, rv_samples, rv_sampler_and_data):
         """run() with extra_model completes and returns Samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=21,
             extra_model=self._make_extra_model(),
@@ -498,8 +510,9 @@ class TestNumpyroSamplerRunExtraModel:
 
     def test_run_extra_model_marginalized(self, rv_samples, rv_sampler_and_data):
         """extra_model + marginalized=True runs and returns Samples."""
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=rv_samples,
             seed=22,
             extra_model=self._make_extra_model(),
@@ -524,9 +537,10 @@ class TestNumpyroSamplerRunExtraModel:
             x = numpyro.sample("x", ndist.Normal(0.0, 1.0))
             return {"not_a_real_param": x}
 
-        sampler = rv_sampler_and_data
+        sampler, data = rv_sampler_and_data
         with pytest.raises(ValueError, match="unknown linear parameter name"):
             sampler.run(
+                data,
                 init_samples=rv_samples,
                 seed=23,
                 extra_model=bad_extra_model,
@@ -570,15 +584,15 @@ class TestNumpyroSamplerNonGaussianLinear:
             sigma_pos=Q(100.0, "mas"),
             sigma_vtan=Q(50.0, "km/s"),
         )
-        model = GaiaAstrometryModel(data=data, linear_prior=prior.linear_prior)
-        return NumpyroSampler.from_model(model=model, prior=prior)
+        return NumpyroSampler(prior, GaiaAstrometryModel()), data
 
     def test_run_marginalized_with_halfnormal_parallax(
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC runs and output includes parallax when it has a HalfNormal prior."""
-        sampler = astro_sampler_and_data
+        sampler, data = astro_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=astro_samples,
             seed=30,
             num_chains=2,
@@ -594,8 +608,9 @@ class TestNumpyroSamplerNonGaussianLinear:
         self, astro_samples, astro_sampler_and_data
     ):
         """MCMC with num_chains=1 and HalfNormal parallax produces valid output."""
-        sampler = astro_sampler_and_data
+        sampler, data = astro_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=astro_samples,
             seed=31,
             num_chains=1,
@@ -646,32 +661,25 @@ class TestNumpyroSamplerCombinedWithJitter:
             rv_err=Q(jnp.ones(n_rv) * 1.0, "km/s"),
         )
 
-        # Split linear priors per component
+        # Split linear priors per component (qualified with component name)
         astro_linear = {
-            "ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
-            "dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
-            "pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
-            "pmdec": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
-            "parallax": QD(ndist.HalfNormal(10.0), "mas"),
-            "semi_major_axis": QD(ndist.Normal(0.0, 50.0), "mas"),
+            "astro.ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "astro.dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
+            "astro.pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "astro.pmdec": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
+            "astro.parallax": QD(ndist.HalfNormal(10.0), "mas"),
+            "astro.semi_major_axis": QD(ndist.Normal(0.0, 50.0), "mas"),
         }
         rv_linear = {
-            "rv_semiamp": QD(ndist.Normal(0.0, 30.0), "km/s"),
-            "v_sys": QD(ndist.Normal(0.0, 30.0), "km/s"),
+            "rv.rv_semiamp": QD(ndist.Normal(0.0, 30.0), "km/s"),
+            "rv.v_sys": QD(ndist.Normal(0.0, 30.0), "km/s"),
         }
 
-        astro_model = GaiaAstrometryModel(
-            data=astro_data,
-            linear_prior=astro_linear,
-        )
-        rv_model = RVModel(
-            data=rv_data,
-            linear_prior=rv_linear,
-            extensions=(Jitter(param_unit="km/s"),),
-        )
+        astro_model = GaiaAstrometryModel()
+        rv_model_inst = RVModel(extensions=(Jitter(param_unit="km/s"),))
 
         joint = JointModel.for_rv_and_gaia(
-            components={"astro": astro_model, "rv": rv_model}
+            components={"astro": astro_model, "rv": rv_model_inst}
         )
 
         # Combined prior (nonlinear priors only, linear handled by components)
@@ -690,7 +698,8 @@ class TestNumpyroSamplerCombinedWithJitter:
             linear_prior=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},
         )
-        return NumpyroSampler.from_model(model=joint, prior=prior)
+        joint_data = {"astro": astro_data, "rv": rv_data}
+        return NumpyroSampler(prior, joint), joint_data
 
     @pytest.fixture
     def combined_samples_with_jitter(self) -> Samples:
@@ -732,8 +741,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Combined marginalized MCMC with jitter runs and returns Samples."""
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=40,
             num_chains=1,
@@ -754,8 +764,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
         """Combined marginalized MCMC produces expected number of samples."""
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=41,
             num_chains=2,
@@ -775,8 +786,9 @@ class TestNumpyroSamplerCombinedWithJitter:
         single params object, and (b) init_params included explicit linear
         keys (e.g. ``parallax``) that belong in ``_linear`` for the full model.
         """
-        sampler = combined_sampler_and_data
+        sampler, data = combined_sampler_and_data
         result = sampler.run(
+            data,
             init_samples=combined_samples_with_jitter,
             seed=42,
             marginalized=False,
@@ -961,6 +973,317 @@ class TestPlotRV:
         )
 
         assert not np.allclose(plain_line.get_ydata(), gp_line.get_ydata())
+        plt.close("all")
+
+    def test_plot_with_trend_extension_changes_time_domain_curve(self, rv_samples):
+        """Trend plotting support modifies the time-domain RV overlay."""
+        times = Q(jnp.linspace(0.0, 4.0, 5), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.linspace(0.0, 4.0, 9), "day")
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax_plain = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
+        ax_trend = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            time_grid=time_grid,
+        )
+
+        expected_alpha = get_alpha(1)
+        plain_line = next(
+            line
+            for line in ax_plain.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+        trend_line = next(
+            line
+            for line in ax_trend.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert not np.allclose(plain_line.get_ydata(), trend_line.get_ydata())
+        plt.close("all")
+
+    def test_plot_with_trend_extension_can_show_signal_components(self, rv_samples):
+        """Trend plotting can decompose Keplerian and extension contributions."""
+        times = Q(jnp.linspace(0.0, 4.0, 5), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.linspace(0.0, 4.0, 9), "day")
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            time_grid=time_grid,
+            show_signal_components=True,
+        )
+
+        expected_alpha = get_alpha(1)
+        component_lines = [
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        ]
+
+        assert len(component_lines) == 2
+        assert {line.get_label() for line in component_lines} == {
+            "Extensions",
+            "Keplerian",
+        }
+        assert not np.allclose(
+            component_lines[0].get_ydata(),
+            component_lines[1].get_ydata(),
+        )
+        plt.close("all")
+
+    def test_phase_fold_subtracts_trend_signal_from_data(self, rv_samples):
+        """Phase-folded plots subtract the reference trend signal from data points."""
+        times = Q(jnp.array([0.0, 1.0, 2.0, 3.0, 4.0]), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax_plain = plot_rv(rv_samples, rv_data, n_samples=1, phase_fold_median=True)
+        ax_trend = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            phase_fold_median=True,
+        )
+
+        plain_data = next(line for line in ax_plain.lines if line.get_marker() == "o")
+        trend_data = next(line for line in ax_trend.lines if line.get_marker() == "o")
+
+        assert not np.allclose(plain_data.get_ydata(), trend_data.get_ydata())
+        plt.close("all")
+
+    def test_plot_with_gp_extension_can_show_signal_components(self, rv_samples):
+        """GP plotting can decompose Keplerian and extension contributions."""
+        tinygp = pytest.importorskip("tinygp")
+
+        times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+        rv = Q(jnp.zeros(20), "km/s")
+        rv_err = Q(jnp.ones(20) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_amp": Q(jnp.ones(N) * 2.0, "km/s"),
+                "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: (
+                tinygp.kernels.ExpSquared(hp["gp_scale"]) * hp["gp_amp"] ** 2
+            ),
+            hyperparams=(
+                ParamInfo("gp_amp", "km/s"),
+                ParamInfo("gp_scale", "day"),
+            ),
+            time_unit="day",
+        )
+
+        ax = plot_rv(
+            gp_samples,
+            rv_data,
+            extensions=(gp,),
+            n_samples=1,
+            show_signal_components=True,
+        )
+
+        expected_alpha = get_alpha(1)
+        component_lines = [
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        ]
+
+        assert len(component_lines) == 2
+        assert {line.get_label() for line in component_lines} == {
+            "Extensions",
+            "Keplerian",
+        }
+        assert not np.allclose(
+            component_lines[0].get_ydata(),
+            component_lines[1].get_ydata(),
+        )
+        plt.close("all")
+
+    def test_plot_with_quasisep_gp_unsorted_times(self, rv_samples):
+        """Quasisep GP plotting sorts unsorted RV times before conditioning."""
+        tinygp = pytest.importorskip("tinygp")
+
+        times = Q(jnp.array([20.0, 5.0, 35.0, 10.0, 25.0]), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_omega": Q(jnp.ones(N) * 0.2, "1/day"),
+                "gp_Q": Q(jnp.ones(N) * 2.0, ""),
+                "gp_sigma": Q(jnp.ones(N) * 1.0, "km/s"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: tinygp.kernels.quasisep.SHO(
+                omega=hp["gp_omega"],
+                quality=hp["gp_Q"],
+                sigma=hp["gp_sigma"],
+            ),
+            hyperparams=(
+                ParamInfo("gp_omega", "1/day"),
+                ParamInfo("gp_Q", ""),
+                ParamInfo("gp_sigma", "km/s"),
+            ),
+            time_unit="day",
+        )
+
+        ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+
+        expected_alpha = get_alpha(1)
+        gp_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert np.all(np.isfinite(gp_line.get_ydata()))
+        plt.close("all")
+
+    def test_plot_uses_explicit_time_grid(self, rv_samples):
+        """Supplying time_grid bypasses the default get_t_grid path."""
+        times = Q(jnp.array([0.0, 50.0, 100.0]), "day")
+        rv = Q(jnp.zeros(3), "km/s")
+        rv_err = Q(jnp.ones(3), "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.array([2.0, 4.0, 8.0, 16.0]), "day")
+
+        with patch(
+            "harv.plot.get_t_grid", side_effect=AssertionError("should not be called")
+        ):
+            ax = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
+
+        expected_alpha = get_alpha(1)
+        orbit_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        np.testing.assert_allclose(orbit_line.get_xdata(), np.asarray(time_grid.value))
+        plt.close("all")
+
+    def test_plot_with_gp_large_grid_chunks_conditioning(self, rv_samples):
+        """GP plotting chunks large prediction grids to avoid dense blowups."""
+        pytest.importorskip("tinygp")
+
+        times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+        rv = Q(jnp.zeros(20), "km/s")
+        rv_err = Q(jnp.ones(20) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_amp": Q(jnp.ones(N) * 2.0, "km/s"),
+                "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: (
+                hp["gp_amp"] ** 2 * jnp.exp(-0.5 * hp["gp_scale"])
+            ),
+            hyperparams=(
+                ParamInfo("gp_amp", "km/s"),
+                ParamInfo("gp_scale", "day"),
+            ),
+            time_unit="day",
+        )
+
+        chunk_lengths: list[int] = []
+
+        class FakeGaussianProcess:
+            def __init__(self, kernel, data_times, diag):
+                del kernel, data_times, diag
+
+            def condition(self, residuals, X_test):
+                del residuals
+                chunk_lengths.append(len(X_test))
+                return None, SimpleNamespace(loc=jnp.zeros(len(X_test)))
+
+        with (
+            patch("harv.plot.tinygp.GaussianProcess", FakeGaussianProcess),
+            patch(
+                "harv.plot.get_t_grid",
+                return_value=Q(jnp.linspace(-10.0, 110.0, 5000), "day"),
+            ),
+        ):
+            ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+
+        expected_alpha = get_alpha(1)
+        gp_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert np.all(np.isfinite(gp_line.get_ydata()))
+        assert len(chunk_lengths) > 1
+        assert max(chunk_lengths) <= 2048
+        assert sum(chunk_lengths) == 5000
         plt.close("all")
 
 

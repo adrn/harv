@@ -45,8 +45,6 @@ class TestMultiSurveyModel:
             "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
         }
         model = RVModel(
-            data=stacked,
-            linear_prior=linear_prior,
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
         nl = {
@@ -55,7 +53,7 @@ class TestMultiSurveyModel:
             "phase_peri": 0.5,
             "arg_peri": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl)
+        log_lik = model.log_prob(nl, stacked, linear_prior=linear_prior)
         assert jnp.isfinite(log_lik)
 
     def test_log_prob_higher_than_single_instrument(self):
@@ -83,14 +81,9 @@ class TestMultiSurveyModel:
             "espresso": QD(dist.Normal(0.0, 15.0), "km/s"),
         }
         model_multi = RVModel(
-            data=stacked,
-            linear_prior=linear_prior_multi,
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
-        model_single = RVModel(
-            data=stacked,
-            linear_prior=linear_prior_base,
-        )
+        model_single = RVModel()
 
         nl = {
             "period": Q(100.0, "day"),
@@ -98,8 +91,12 @@ class TestMultiSurveyModel:
             "phase_peri": 0.5,
             "arg_peri": Q(0.0, "rad"),
         }
-        log_lik_multi = model_multi.log_prob(nl)
-        log_lik_single = model_single.log_prob(nl)
+        log_lik_multi = model_multi.log_prob(
+            nl, stacked, linear_prior=linear_prior_multi
+        )
+        log_lik_single = model_single.log_prob(
+            nl, stacked, linear_prior=linear_prior_base
+        )
         assert log_lik_multi > log_lik_single
 
     def test_vmap_batch(self):
@@ -123,8 +120,6 @@ class TestMultiSurveyModel:
             "hires": QD(dist.Normal(0.0, 5.0), "km/s"),
         }
         model = RVModel(
-            data=stacked,
-            linear_prior=linear_prior,
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
 
@@ -135,7 +130,9 @@ class TestMultiSurveyModel:
             "phase_peri": jnp.linspace(0.0, 1.0, n),
             "arg_peri": Q(jnp.ones(n) * 1.0, "rad"),
         }
-        log_liks = jax.jit(jax.vmap(model.log_prob))(nl_batch)
+        log_liks = jax.jit(
+            jax.vmap(lambda nl: model.log_prob(nl, stacked, linear_prior=linear_prior))
+        )(nl_batch)
 
         assert log_liks.shape == (n,)
         assert jnp.all(jnp.isfinite(log_liks))
@@ -167,15 +164,13 @@ class TestMultiSurveyRejectionSampler:
         )
         # Merge extension_priors (offset priors) into linear_prior for the model.
         # For MultiSurveyOffset all extension params are linear, so merging is safe.
-        # Use from_model since MultiSurveyOffset requires structural info that
-        # cannot be inferred from the prior alone.
+        # Build the model explicitly because MultiSurveyOffset requires structural
+        # info (the indicator matrix) that cannot be inferred from the prior alone.
         merged_linear = {**prior.linear_prior, **prior.extension_priors}
         model = RVModel(
-            data=stacked,
-            linear_prior=merged_linear,
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )
-        return RejectionSampler.from_model(model=model, prior=prior)
+        return RejectionSampler(prior, model), stacked, merged_linear
 
     def test_sampler_runs_and_returns_samples(self, low_snr_data):
         """Rejection sampler completes and returns a valid Samples object."""
@@ -187,8 +182,8 @@ class TestMultiSurveyRejectionSampler:
             sigma_v0=Q(30.0, "km/s"),
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = self._make_sampler(source_data, prior)
-        samples = sampler.run(n_prior_samples=500_000, seed=10)
+        sampler, stacked, _ = self._make_sampler(source_data, prior)
+        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
 
         period_samples = uconvert("day", samples["period"])
         period_true = uconvert("day", truth["period"])
@@ -217,8 +212,8 @@ class TestMultiSurveyRejectionSampler:
             sigma_v0=Q(30.0, "km/s"),
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = self._make_sampler(source_data, prior)
-        samples = sampler.run(n_prior_samples=50_000, seed=11)
+        sampler, stacked, _ = self._make_sampler(source_data, prior)
+        samples = sampler.run(stacked, n_prior_samples=50_000, seed=11)
 
         keys = samples.keys()
         for nonlinear_key in (
@@ -243,8 +238,8 @@ class TestMultiSurveyRejectionSampler:
             sigma_v0=Q(30.0, "km/s"),
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = self._make_sampler(source_data, prior)
-        samples = sampler.run(n_prior_samples=50_000, seed=12)
+        sampler, stacked, _ = self._make_sampler(source_data, prior)
+        samples = sampler.run(stacked, n_prior_samples=50_000, seed=12)
         assert "keck" not in samples.keys()  # noqa: SIM118
 
     def test_reproducibility(self, low_snr_data):
@@ -257,9 +252,9 @@ class TestMultiSurveyRejectionSampler:
             sigma_v0=Q(30.0, "km/s"),
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
-        sampler = self._make_sampler(source_data, prior)
-        s1 = sampler.run(n_prior_samples=20_000, seed=20)
-        s2 = sampler.run(n_prior_samples=20_000, seed=20)
+        sampler, stacked, _ = self._make_sampler(source_data, prior)
+        s1 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
+        s2 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
 
         assert s1.n_samples == s2.n_samples
         if s1.n_samples > 0:

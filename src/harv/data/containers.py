@@ -138,55 +138,6 @@ class AbstractDatasetContainer(eqx.Module):
         stacked, indicator, names = build_indicator_matrix(datasets, reference)
         return stacked, indicator, names
 
-
-class SystemData(AbstractDatasetContainer):
-    """Container for a multi-component system.
-
-    Each named component holds the same concrete data class representing observations of
-    a distinct physical body or photocenter in a gravitationally bound system.
-    """
-
-    _dataset_type: type[AbstractData] = eqx.field(static=True)
-
-    def __init__(self, **datasets: DatasetType) -> None:
-        if not datasets:
-            raise ValueError("At least one component must be provided")
-
-        type_map: dict[str, str] = {}
-        for name, ds in datasets.items():
-            if not isinstance(ds, AbstractData):
-                raise TypeError(
-                    f"Component '{name}' must be an AbstractData subclass "
-                    f"(RVData, GaiaAstrometryData, ...), got {type(ds).__name__}"
-                )
-            type_map[name] = type(ds).__name__
-
-        dataset_types = {type(ds) for ds in datasets.values()}
-        if len(dataset_types) != 1:
-            msg = (
-                "SystemData requires all component datasets to have the same "
-                f"concrete data class; got {type_map}"
-            )
-            raise TypeError(msg)
-
-        datasets = cast(
-            "dict[str, DatasetType]",
-            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
-        )
-        self._datasets = datasets
-        self._dataset_type = next(iter(dataset_types))
-
-    @property
-    def dataset_type(self) -> type[AbstractData]:
-        """Concrete dataset class shared by all components."""
-        return self._dataset_type
-
-    @property
-    def t_ref(self) -> NTime | None:
-        """Reference epoch from the first component."""
-        # TODO: this shouldn't exist!
-        return next(iter(self._datasets.values())).t_ref
-
     def plot(
         self,
         ax: Any = None,
@@ -195,12 +146,17 @@ class SystemData(AbstractDatasetContainer):
         color_cycler: Any = None,
         **kwargs: Any,
     ) -> Any:
-        """Plot all component datasets on the same axes.
+        """Plot all contained datasets on the same axes.
 
-        Dispatches to each component dataset's ``.plot()`` method, drawing all
-        components onto a single axes panel with a legend showing the component
-        names.  Each component is assigned a distinct color from ``color_cycler``
-        (or the current ``axes.prop_cycle`` when not specified).
+        Dispatches to each dataset's ``.plot()`` method, drawing all components onto a
+        single axes panel with a legend showing the names.  Each dataset is assigned a
+        distinct color from ``color_cycler`` (or the current ``axes.prop_cycle`` when
+        not specified).
+
+        This base implementation does not check that the contained datasets share a
+        concrete type; concrete subclasses are responsible for any preconditions
+        (:class:`SystemData` enforces homogeneity at construction; :class:`SourceData`
+        validates at call time).
 
         Parameters
         ----------
@@ -267,6 +223,55 @@ class SystemData(AbstractDatasetContainer):
 
         return ax
 
+
+class SystemData(AbstractDatasetContainer):
+    """Container for a multi-component system.
+
+    Each named component holds the same concrete data class representing observations of
+    a distinct physical body or photocenter in a gravitationally bound system.
+    """
+
+    _dataset_type: type[AbstractData] = eqx.field(static=True)
+
+    def __init__(self, **datasets: DatasetType) -> None:
+        if not datasets:
+            raise ValueError("At least one component must be provided")
+
+        type_map: dict[str, str] = {}
+        for name, ds in datasets.items():
+            if not isinstance(ds, AbstractData):
+                raise TypeError(
+                    f"Component '{name}' must be an AbstractData subclass "
+                    f"(RVData, GaiaAstrometryData, ...), got {type(ds).__name__}"
+                )
+            type_map[name] = type(ds).__name__
+
+        dataset_types = {type(ds) for ds in datasets.values()}
+        if len(dataset_types) != 1:
+            msg = (
+                "SystemData requires all component datasets to have the same "
+                f"concrete data class; got {type_map}"
+            )
+            raise TypeError(msg)
+
+        datasets = cast(
+            "dict[str, DatasetType]",
+            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
+        )
+        self._datasets = datasets
+        self._dataset_type = next(iter(dataset_types))
+
+    @property
+    def dataset_type(self) -> type[AbstractData]:
+        """Concrete dataset class shared by all components."""
+        return self._dataset_type
+
+    @property
+    def t_ref(self) -> NTime | None:
+        """Reference epoch from the first component."""
+        # TODO: this shouldn't exist!
+        return next(iter(self._datasets.values())).t_ref
+
     def stacked(self) -> DatasetType:
         """Stack all component datasets."""
         return stack_datasets(self._datasets)
@@ -308,6 +313,31 @@ class SourceData(AbstractDatasetContainer):
     def _n_rv(self) -> int:
         """Number of radial velocity datasets."""
         return len(self.get_datasets_by_type(RVData))
+
+    def plot(self, *args: Any, **kwargs: Any) -> Any:
+        """Plot all datasets on a single axes.
+
+        Only valid when every contained dataset shares the same concrete type;
+        plotting heterogeneous types (e.g. RV in km/s and astrometry in mas) on a
+        single axes would overlay incompatible y-axes. Use
+        :meth:`get_datasets_by_type` to filter to a single type first when needed.
+
+        Parameters mirror :meth:`AbstractDatasetContainer.plot`.
+
+        Raises
+        ------
+        TypeError
+            If the contained datasets are not all of the same concrete type.
+        """
+        types = {type(ds) for ds in self._datasets.values()}
+        if len(types) > 1:
+            type_map = {n: type(d).__name__ for n, d in self._datasets.items()}
+            raise TypeError(
+                "SourceData.plot() requires all datasets to share the same concrete "
+                f"type; got {type_map}. Use .get_datasets_by_type(<DataClass>) to "
+                "select one type, then plot the resulting datasets individually."
+            )
+        return super().plot(*args, **kwargs)
 
 
 # Type alias for any top-level input accepted by the sampler and likelihoods.

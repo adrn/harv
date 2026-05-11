@@ -218,3 +218,28 @@ class TestSourceData:
         )
         with pytest.raises(ValueError, match="No datasets of type"):
             source.stacked_by_type(GaiaAstrometryData)
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_homogeneous_delegates_to_super(self):
+        source = SourceData(
+            survey1=_make_rv_data(0.0, values=(1.0, -1.0)),
+            survey2=_make_rv_data(20.0, values=(0.5, -0.5)),
+        )
+        ax = source.plot()
+        try:
+            legend = ax.get_legend()
+            assert legend is not None
+            labels = [t.get_text() for t in legend.get_texts()]
+            assert "survey1" in labels
+            assert "survey2" in labels
+        finally:
+            plt.close("all")
+
+    @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
+    def test_plot_raises_on_mixed_types(self):
+        source = SourceData(
+            keck=_make_rv_data(0.0),
+            gaia=_make_astrometry_data(),
+        )
+        with pytest.raises(TypeError, match="same concrete"):
+            source.plot()

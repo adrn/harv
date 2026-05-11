@@ -19,11 +19,10 @@ from numpyro import handlers
 from unxt import Q
 
 import harv
-from harv.data import RVData, SystemData
+from harv.data import RVData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import JointModel, RVModel
 from harv.samplers import RejectionPrior, RejectionSampler
-from harv.samplers.custom_priors import PeriodDependentKPrior
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -32,6 +31,19 @@ from harv.samplers.custom_priors import PeriodDependentKPrior
 _LINEAR_PRIOR = {
     "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
     "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+}
+
+_JOINT_LINEAR_PRIOR_SHARED_VSYS = {
+    "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+    "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+    "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),  # shared
+}
+
+_JOINT_LINEAR_PRIOR_UNSHARED = {
+    "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+    "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+    "primary.v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+    "secondary.v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
 }
 
 _NL_VALUES = {
@@ -65,11 +77,6 @@ def rv_data_secondary() -> RVData:
 
 
 @pytest.fixture
-def system_data(rv_data_primary, rv_data_secondary) -> SystemData:
-    return SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
-
-
-@pytest.fixture
 def sb2_prior() -> RejectionPrior:
     return RejectionPrior.default_sb2(
         period_min=Q(10.0, "day"),
@@ -84,124 +91,6 @@ def sb2_prior() -> RejectionPrior:
 # ---------------------------------------------------------------------------
 
 
-class TestSharedLinearValidation:
-    def test_shared_linear_must_be_in_every_component(
-        self, rv_data_primary, rv_data_secondary
-    ):
-        """A shared name missing from a component's linear_prior raises."""
-        primary = RVModel(
-            data=rv_data_primary,
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-            },
-        )
-        secondary = RVModel(
-            data=rv_data_secondary,
-            linear_prior={"rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s")},
-            # v_sys intentionally absent
-        )
-        with pytest.raises(ValueError, match="v_sys"):
-            JointModel(
-                components={"primary": primary, "secondary": secondary},
-                shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-                shared_linear_params=("v_sys",),
-            )
-
-    def test_shared_linear_priors_must_match(self, rv_data_primary, rv_data_secondary):
-        """Differing priors for a shared linear param raises."""
-        primary = RVModel(
-            data=rv_data_primary,
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
-            },
-        )
-        secondary = RVModel(
-            data=rv_data_secondary,
-            linear_prior={
-                "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-                "v_sys": QD(dist.Normal(0.0, 5.0), "km/s"),  # different sigma
-            },
-        )
-        with pytest.raises(ValueError, match="v_sys"):
-            JointModel(
-                components={"primary": primary, "secondary": secondary},
-                shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-                shared_linear_params=("v_sys",),
-            )
-
-    def test_shared_callable_priors_must_match(
-        self, rv_data_primary, rv_data_secondary
-    ):
-        """Differing eqx.Module callable priors must be detected.
-
-        Regression test: a previous ``__dict__``-based fallback in
-        ``_priors_equal`` silently returned True for any two
-        ``__slots__``-using ``eqx.Module`` priors and mishandled array-shaped
-        Quantity fields.  Validation must now reject mismatched callable
-        priors and accept matched ones.
-        """
-        # Mismatched sigma_K0 -> must raise.
-        primary = RVModel(
-            data=rv_data_primary,
-            linear_prior={
-                "rv_semiamp": PeriodDependentKPrior(
-                    sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
-                ),
-            },
-        )
-        secondary = RVModel(
-            data=rv_data_secondary,
-            linear_prior={
-                "rv_semiamp": PeriodDependentKPrior(
-                    sigma_K0=Q(99.0, "km/s"), P0=Q(1.0, "yr")
-                ),
-            },
-        )
-        with pytest.raises(ValueError, match="rv_semiamp"):
-            JointModel(
-                components={"primary": primary, "secondary": secondary},
-                shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-                shared_linear_params=("rv_semiamp",),
-            )
-
-        # Matched eqx.Module priors -> must construct without error.
-        secondary_match = RVModel(
-            data=rv_data_secondary,
-            linear_prior={
-                "rv_semiamp": PeriodDependentKPrior(
-                    sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
-                ),
-            },
-        )
-        joint = JointModel(
-            components={"primary": primary, "secondary": secondary_match},
-            shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
-            shared_linear_params=("rv_semiamp",),
-        )
-        assert joint.shared_linear_params == ("rv_semiamp",)
-
-    def test_shared_linear_collision_with_shared_params_raises(
-        self, rv_data_primary, rv_data_secondary
-    ):
-        """A name in both shared_params and shared_linear_params raises."""
-        primary = RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR)
-        secondary = RVModel(data=rv_data_secondary, linear_prior=_LINEAR_PRIOR)
-        with pytest.raises(ValueError, match="cannot be both"):
-            JointModel(
-                components={"primary": primary, "secondary": secondary},
-                shared_params=(
-                    "period",
-                    "eccentricity",
-                    "phase_peri",
-                    "arg_peri",
-                    "v_sys",
-                ),
-                shared_linear_params=("v_sys",),
-            )
-
-
 # ---------------------------------------------------------------------------
 # Test 2: Numerical correctness
 # ---------------------------------------------------------------------------
@@ -211,38 +100,37 @@ class TestJointMargLogProb:
     def test_joint_marg_logprob_is_finite(self, rv_data_primary, rv_data_secondary):
         """Joint log_prob with shared v_sys is finite."""
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR),
-                "secondary": RVModel(
-                    data=rv_data_secondary, linear_prior=_LINEAR_PRIOR
-                ),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        lp = joint.log_prob(_NL_VALUES)
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        lp = joint.log_prob(
+            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+        )
         assert jnp.isfinite(lp)
 
     def test_joint_marg_logprob_differs_from_summed(
         self, rv_data_primary, rv_data_secondary
     ):
         """Shared-v_sys joint log_prob differs from naive per-component sum."""
-        components = {
-            "primary": RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR),
-            "secondary": RVModel(data=rv_data_secondary, linear_prior=_LINEAR_PRIOR),
-        }
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         joint_shared = JointModel(
-            components=components,
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
         joint_unshared = JointModel(
-            components=components,
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=(),
         )
-        lp_shared = joint_shared.log_prob(_NL_VALUES)
-        lp_unshared = joint_unshared.log_prob(_NL_VALUES)
+        lp_shared = joint_shared.log_prob(
+            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+        )
+        lp_unshared = joint_unshared.log_prob(
+            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+        )
         assert jnp.isfinite(lp_shared)
         assert jnp.isfinite(lp_unshared)
         assert not jnp.isclose(lp_shared, lp_unshared, atol=1e-3)
@@ -254,16 +142,19 @@ class TestJointMargLogProb:
 
         v_sys_prior = QD(dist.Normal(0.0, 10.0), "km/s")
         k_prior = QD(dist.Normal(5.0, 5.0), "km/s")
-        linear_prior = {"rv_semiamp": k_prior, "v_sys": v_sys_prior}
+        linear_prior = {
+            "primary.rv_semiamp": k_prior,
+            "secondary.rv_semiamp": k_prior,
+            "v_sys": v_sys_prior,  # shared
+        }
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
 
-        primary = RVModel(data=rv_data_primary, linear_prior=linear_prior)
-        secondary = RVModel(data=rv_data_secondary, linear_prior=linear_prior)
         joint = JointModel(
-            components={"primary": primary, "secondary": secondary},
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        lp_joint = joint.log_prob(_NL_VALUES)
+        lp_joint = joint.log_prob(_NL_VALUES, data, linear_prior=linear_prior)
 
         # Hand-build the joint MarginalizedLinear directly.
         # Get per-component building blocks.
@@ -272,14 +163,15 @@ class TestJointMargLogProb:
         comp_nl = harv.models.joint._split_nl_values(
             _NL_VALUES, shared_nl, joint.component_names, per_comp_nl
         )
+        per_comp_lp = joint._per_component_linear_prior(linear_prior)
         per_comp_marg = {
-            comp_name: comp._auto_marginalized_names()
+            comp_name: comp._auto_marginalized_names(per_comp_lp[comp_name])
             for comp_name, comp in joint.components.items()
         }
-        joint._route_explicit_linear(_NL_VALUES, comp_nl, per_comp_marg)
+        joint._route_explicit_linear(_NL_VALUES, comp_nl, per_comp_lp, per_comp_marg)
 
         marg_dist_manual, y_joint_manual, _, _ = joint._build_joint_marginalized_linear(
-            comp_nl, per_comp_marg
+            comp_nl, per_comp_marg, data, linear_prior
         )
         lp_manual = marg_dist_manual.log_prob(y_joint_manual)
 
@@ -295,17 +187,15 @@ class TestSampleConditionalLinearShape:
     def test_shared_at_top_level(self, rv_data_primary, rv_data_secondary):
         """v_sys appears at top of dict, rv_semiamp in component sub-dicts."""
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR),
-                "secondary": RVModel(
-                    data=rv_data_secondary, linear_prior=_LINEAR_PRIOR
-                ),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         key = jax.random.PRNGKey(0)
-        samples = joint.sample_conditional_linear(_NL_VALUES, key)
+        samples = joint.sample_conditional_linear(
+            _NL_VALUES, key, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+        )
 
         # Shared v_sys at top level
         assert "v_sys" in samples
@@ -327,17 +217,15 @@ class TestSampleConditionalLinearShape:
     def test_per_component_path_unchanged(self, rv_data_primary, rv_data_secondary):
         """With shared_linear_params=(), result is per-component sub-dicts only."""
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR),
-                "secondary": RVModel(
-                    data=rv_data_secondary, linear_prior=_LINEAR_PRIOR
-                ),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=(),
         )
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         key = jax.random.PRNGKey(0)
-        samples = joint.sample_conditional_linear(_NL_VALUES, key)
+        samples = joint.sample_conditional_linear(
+            _NL_VALUES, key, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+        )
 
         assert "primary" in samples
         assert "secondary" in samples
@@ -354,14 +242,12 @@ class TestRejectionSamplerFlattening:
     def test_samples_v_sys_unnamespaced(self, rv_data_primary, rv_data_secondary):
         """After RejectionSampler on SB2 joint model, samples['v_sys'] is bare."""
         linear_prior = {
-            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
+            "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),  # shared
         }
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=linear_prior),
-                "secondary": RVModel(data=rv_data_secondary, linear_prior=linear_prior),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
@@ -374,8 +260,11 @@ class TestRejectionSamplerFlattening:
             },
             linear_prior=linear_prior,
         )
-        sampler = RejectionSampler.from_model(model=joint, prior=prior)
-        samples = sampler.run(seed=0, n_prior_samples=1_000, max_posterior_samples=4)
+        sampler = RejectionSampler(prior, joint)
+        joint_data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        samples = sampler.run(
+            joint_data, seed=0, n_prior_samples=1_000, max_posterior_samples=4
+        )
 
         # v_sys must appear as a bare key (shared)
         assert "v_sys" in samples.linear
@@ -397,24 +286,25 @@ class TestNumpyroSharedExplicitLinear:
         """Shared explicit linear param appears exactly once in numpyro trace."""
         # Use a non-Gaussian prior so v_sys is classified as explicit.
         linear_prior = {
-            "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-            "v_sys": QD(dist.HalfNormal(10.0), "km/s"),
+            "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
+            "v_sys": QD(dist.HalfNormal(10.0), "km/s"),  # shared; HalfNormal → explicit
         }
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=linear_prior),
-                "secondary": RVModel(data=rv_data_secondary, linear_prior=linear_prior),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         nonlinear_priors = {
             "period": QD(dist.Uniform(10.0, 500.0), "day"),
             "eccentricity": dist.Uniform(0.0, 0.9),
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         }
-        model_fn = joint.numpyro_model(nonlinear_priors, marginalized=True)
+        model_fn = joint.numpyro_model(
+            nonlinear_priors, data, linear_prior, marginalized=True
+        )
 
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
@@ -430,38 +320,25 @@ class TestNumpyroSharedExplicitLinear:
 
 
 class TestForSb2Factory:
-    def test_builds_correct_models(self, system_data, sb2_prior):
-        """Factory routes shared and per-component linear priors correctly."""
-        joint = JointModel.for_sb2(data=system_data, prior=sb2_prior)
+    def test_builds_correct_models(self, sb2_prior):
+        """Factory produces a JointModel with correct shared_linear_params."""
+        joint = JointModel.for_sb2(prior=sb2_prior)
 
         assert joint.shared_linear_params == ("v_sys",)
-        assert (
-            joint.components["primary"].linear_prior["rv_semiamp"]
-            is sb2_prior.linear_prior["primary.rv_semiamp"]
-        )
-        assert (
-            joint.components["secondary"].linear_prior["rv_semiamp"]
-            is sb2_prior.linear_prior["secondary.rv_semiamp"]
-        )
-        assert (
-            joint.components["primary"].linear_prior["v_sys"]
-            is sb2_prior.linear_prior["v_sys"]
-        )
+        assert "primary" in joint.components
+        assert "secondary" in joint.components
 
-    def test_extensions_tuple_applied_to_all(self, system_data, sb2_prior):
+    def test_extensions_tuple_applied_to_all(self, sb2_prior):
         """extensions as tuple is applied to all components."""
         jitter = harv.Jitter("km/s")
-        joint = JointModel.for_sb2(
-            data=system_data, prior=sb2_prior, extensions=(jitter,)
-        )
+        joint = JointModel.for_sb2(prior=sb2_prior, extensions=(jitter,))
         for comp in joint.components.values():
             assert any(isinstance(ext, harv.Jitter) for ext in comp.extensions)
 
-    def test_extensions_dict_per_component(self, system_data, sb2_prior):
+    def test_extensions_dict_per_component(self, sb2_prior):
         """extensions as dict applies per-component extensions."""
         jitter = harv.Jitter("km/s")
         joint = JointModel.for_sb2(
-            data=system_data,
             prior=sb2_prior,
             extensions={"primary": (jitter,)},
         )
@@ -470,13 +347,7 @@ class TestForSb2Factory:
         )
         assert len(joint.components["secondary"].extensions) == 0
 
-    def test_wrong_component_count_raises(self, rv_data_primary, sb2_prior):
-        """Factory raises when data has != 2 components."""
-        data_single = SystemData(only=rv_data_primary)
-        with pytest.raises(ValueError, match="2 components"):
-            JointModel.for_sb2(data=data_single, prior=sb2_prior)
-
-    def test_missing_sb2_keys_raises(self, system_data):
+    def test_missing_sb2_keys_raises(self):
         """Factory raises when prior lacks component-qualified semi-amplitudes."""
         bad_prior = RejectionPrior(
             nonlinear_priors={
@@ -492,9 +363,9 @@ class TestForSb2Factory:
         with pytest.raises(
             ValueError, match=re.escape("prior.linear_prior is missing SB2 keys")
         ):
-            JointModel.for_sb2(data=system_data, prior=bad_prior)
+            JointModel.for_sb2(prior=bad_prior)
 
-    def test_shared_linear_name_must_be_bare(self, system_data):
+    def test_shared_linear_name_must_be_bare(self):
         """Shared linear params must not use component-qualified keys."""
         bad_prior = RejectionPrior(
             nonlinear_priors={
@@ -512,12 +383,11 @@ class TestForSb2Factory:
 
         with pytest.raises(ValueError, match="is shared and must not be prefixed"):
             JointModel.for_sb2(
-                data=system_data,
                 prior=bad_prior,
                 shared_linear_params=("v_sys",),
             )
 
-    def test_non_shared_linear_name_must_be_qualified(self, system_data):
+    def test_non_shared_linear_name_must_be_qualified(self):
         """Non-shared linear params must use component-qualified keys."""
         bad_prior = RejectionPrior(
             nonlinear_priors={
@@ -535,12 +405,11 @@ class TestForSb2Factory:
 
         with pytest.raises(ValueError, match="is not shared and must be qualified"):
             JointModel.for_sb2(
-                data=system_data,
                 prior=bad_prior,
                 shared_linear_params=(),
             )
 
-    def test_shared_nonlinear_name_must_be_bare(self, system_data):
+    def test_shared_nonlinear_name_must_be_bare(self):
         """Shared nonlinear params must not use component-qualified keys."""
         bad_prior = RejectionPrior(
             nonlinear_priors={
@@ -557,9 +426,9 @@ class TestForSb2Factory:
         )
 
         with pytest.raises(ValueError, match="is shared and must not be prefixed"):
-            JointModel.for_sb2(data=system_data, prior=bad_prior)
+            JointModel.for_sb2(prior=bad_prior)
 
-    def test_non_shared_nonlinear_name_must_be_qualified(self, system_data):
+    def test_non_shared_nonlinear_name_must_be_qualified(self):
         """Non-shared nonlinear params must use component-qualified keys."""
         bad_prior = RejectionPrior(
             nonlinear_priors={
@@ -580,7 +449,6 @@ class TestForSb2Factory:
 
         with pytest.raises(ValueError, match="is not shared and must be qualified"):
             JointModel.for_sb2(
-                data=system_data,
                 prior=bad_prior,
                 shared_params=(
                     "eccentricity",
@@ -589,19 +457,24 @@ class TestForSb2Factory:
                 ),
             )
 
-    def test_log_prob_is_finite(self, system_data, sb2_prior):
+    def test_log_prob_is_finite(self, rv_data_primary, rv_data_secondary, sb2_prior):
         """Factory-built joint model produces finite log_prob."""
-        joint = JointModel.for_sb2(data=system_data, prior=sb2_prior)
-        lp = joint.log_prob(_NL_VALUES)
+        joint = JointModel.for_sb2(prior=sb2_prior)
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        lp = joint.log_prob(_NL_VALUES, data, linear_prior=sb2_prior.linear_prior)
         assert jnp.isfinite(lp)
 
-    def test_jit_compatible(self, system_data, sb2_prior):
+    def test_jit_compatible(self, rv_data_primary, rv_data_secondary, sb2_prior):
         """for_sb2 model is JIT-compatible."""
-        joint = JointModel.for_sb2(data=system_data, prior=sb2_prior)
+        joint = JointModel.for_sb2(prior=sb2_prior)
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        lp_ref = sb2_prior.linear_prior
 
         @jax.jit
         def _lp(period):
-            return joint.log_prob({**_NL_VALUES, "period": Q(period, "day")})
+            return joint.log_prob(
+                {**_NL_VALUES, "period": Q(period, "day")}, data, linear_prior=lp_ref
+            )
 
         result = _lp(100.0)
         assert jnp.isfinite(result)
@@ -619,8 +492,8 @@ class TestPerComponentPathRegression:
         self, rv_data_primary, rv_data_secondary
     ):
         """With shared_linear_params=(), joint log_prob equals sum of per-component."""
-        model_p = RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR)
-        model_s = RVModel(data=rv_data_secondary, linear_prior=_LINEAR_PRIOR)
+        model_p = RVModel()
+        model_s = RVModel()
 
         joint = JointModel(
             components={"primary": model_p, "secondary": model_s},
@@ -628,9 +501,14 @@ class TestPerComponentPathRegression:
             shared_linear_params=(),
         )
 
-        lp_joint = joint.log_prob(_NL_VALUES)
-        lp_p = model_p.log_prob(_NL_VALUES)
-        lp_s = model_s.log_prob(_NL_VALUES)
+        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        lp_joint = joint.log_prob(
+            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+        )
+        lp_p = model_p.log_prob(_NL_VALUES, rv_data_primary, linear_prior=_LINEAR_PRIOR)
+        lp_s = model_s.log_prob(
+            _NL_VALUES, rv_data_secondary, linear_prior=_LINEAR_PRIOR
+        )
 
         assert jnp.allclose(lp_joint, lp_p + lp_s, atol=1e-5)
 
@@ -639,12 +517,7 @@ class TestPerComponentPathRegression:
     ):
         """JointModel stores shared_linear_params correctly."""
         joint = JointModel(
-            components={
-                "primary": RVModel(data=rv_data_primary, linear_prior=_LINEAR_PRIOR),
-                "secondary": RVModel(
-                    data=rv_data_secondary, linear_prior=_LINEAR_PRIOR
-                ),
-            },
+            components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )

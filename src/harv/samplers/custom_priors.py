@@ -8,26 +8,12 @@ from unxt import ustrip
 
 from harv.custom_types import ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import PriorDist
 
 __all__ = (
     "ParallaxDependentProperMotionPrior",
     "PeriodDependentKPrior",
     "PeriodDependentSemiMajorAxisPrior",
 )
-
-
-def _make_log_period_prior(
-    period_min: ScalarQTime,
-    period_max: ScalarQTime,
-) -> PriorDist:
-    return QuantityDistribution(
-        dist.LogUniform(
-            ustrip(str(period_min.unit), period_min),
-            ustrip(str(period_min.unit), period_max),
-        ),
-        str(period_min.unit),
-    )
 
 
 class PeriodDependentKPrior(eqx.Module):

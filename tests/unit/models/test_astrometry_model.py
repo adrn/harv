@@ -44,12 +44,11 @@ def _nl_values():
 
 class TestGaiaAstrometryModelBasic:
     def test_construction(self):
-        data = _make_astro_data()
-        model = GaiaAstrometryModel(data=data)
-        assert model.data is data
+        model = GaiaAstrometryModel()
+        assert model.parameterization is not None
 
     def test_param_names(self):
-        model = GaiaAstrometryModel(data=_make_astro_data())
+        model = GaiaAstrometryModel()
         assert set(model._all_nonlinear_names()) == {
             "period",
             "eccentricity",
@@ -68,31 +67,31 @@ class TestGaiaAstrometryModelBasic:
         }
 
     def test_obs_unit(self):
-        model = GaiaAstrometryModel(data=_make_astro_data())
-        assert model._obs_unit() == "mas"
+        model = GaiaAstrometryModel()
+        assert model._obs_unit(_make_astro_data()) == "mas"
 
     def test_design_matrix_shape(self):
         data = _make_astro_data(n_obs=15)
-        model = GaiaAstrometryModel(data=data)
-        X = model._base_design_matrix(_nl_values())
+        model = GaiaAstrometryModel()
+        X = model._base_design_matrix(_nl_values(), data)
         assert X.shape == (15, 6)
 
 
 class TestGaiaAstrometryModelMarginalized:
     def test_marginalized_is_finite(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(data=data, linear_prior=_astro_prior())
-        ll = model.log_prob(_nl_values())
+        model = GaiaAstrometryModel()
+        ll = model.log_prob(_nl_values(), data, linear_prior=_astro_prior())
         assert jnp.isfinite(ll)
 
     def test_marginalized_jit(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(data=data, linear_prior=_astro_prior())
+        model = GaiaAstrometryModel()
         nl = _nl_values()
 
         @jax.jit
         def fn():
-            return model.log_prob(nl)
+            return model.log_prob(nl, data, linear_prior=_astro_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -101,16 +100,20 @@ class TestGaiaAstrometryModelMarginalized:
 class TestGaiaAstrometryModelSampleConditional:
     def test_sample_returns_all_linear(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(data=data, linear_prior=_astro_prior())
+        model = GaiaAstrometryModel()
         key = jax.random.key(42)
-        samples = model.sample_conditional_linear(_nl_values(), key)
+        samples = model.sample_conditional_linear(
+            _nl_values(), key, data, linear_prior=_astro_prior()
+        )
         expected = {"ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis"}
         assert set(samples.keys()) == expected
 
     def test_sample_values_finite(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(data=data, linear_prior=_astro_prior())
+        model = GaiaAstrometryModel()
         key = jax.random.key(0)
-        samples = model.sample_conditional_linear(_nl_values(), key)
+        samples = model.sample_conditional_linear(
+            _nl_values(), key, data, linear_prior=_astro_prior()
+        )
         for name, val in samples.items():
             assert jnp.isfinite(val), f"{name} is not finite"

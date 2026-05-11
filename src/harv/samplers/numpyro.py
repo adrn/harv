@@ -7,9 +7,8 @@ builds the numpyro model closure directly.
 
 import uuid
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, cast, final
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -22,7 +21,6 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import AbstractExtension
 from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import (
     AbstractComponentModel,
@@ -31,7 +29,7 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
-from harv.models.parameterizations import AbstractParameterization
+from harv.samplers.base import AbstractSampler
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
@@ -91,12 +89,14 @@ def _unconstrain_init_params(
     return out
 
 
-def _build_extra_numpyro_model(  # noqa: C901
+def _build_extra_numpyro_model(
     model: AbstractComponentModel | JointModel,
     all_priors: dict[str, PriorDist],
     extra_model_fn: Callable[[dict[str, Any]], dict[str, Any]],
     marginalized: bool,
     marginalized_names: tuple[str, ...] | None,
+    data: Any,
+    effective_linear_prior: dict[str, Any] | None,
 ) -> Callable[[], None]:
     """Build a numpyro model with an ``extra_model`` reparameterization.
 
@@ -110,8 +110,8 @@ def _build_extra_numpyro_model(  # noqa: C901
 
     component = model
     all_linear_names = component._all_linear_names()
-    linear_prior = component.linear_prior or {}
-    param_units = component._linear_param_units()
+    linear_prior = effective_linear_prior or {}
+    param_units = component._linear_param_units(data)
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(all_priors)
@@ -202,17 +202,10 @@ def _build_extra_numpyro_model(  # noqa: C901
                 "log_lik",
                 component.log_prob(
                     nl_values,
+                    data,
+                    linear_prior=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=requested_marginalized_names,
-                ),
-            )
-        elif explicit_linear_values:
-            numpyro.factor(
-                "log_lik",
-                component.log_prob(
-                    nl_values,
-                    linear_values=explicit_linear_values,
-                    marginalized_names=(),
                 ),
             )
         else:
@@ -220,6 +213,8 @@ def _build_extra_numpyro_model(  # noqa: C901
                 "log_lik",
                 component.log_prob(
                     nl_values,
+                    data,
+                    linear_prior=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=(),
                 ),
@@ -228,7 +223,8 @@ def _build_extra_numpyro_model(  # noqa: C901
     return model_fn
 
 
-class NumpyroSampler(eqx.Module):
+@final
+class NumpyroSampler(AbstractSampler):
     """MCMC sampler for Keplerian orbital parameters using numpyro.
 
     Builds a numpyro model from a component model (or joint model) and runs
@@ -245,7 +241,11 @@ class NumpyroSampler(eqx.Module):
         :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
         astrometry data.
     extensions : tuple of AbstractExtension, optional
-        Model extensions (jitter, trends, offsets, GP).
+        Model extensions (jitter, trends, offsets, GP) supplied at construction time.
+        Mutually exclusive with ``model``: when the sampler is built via
+        :meth:`from_model` this field stays empty and the actual extensions live on
+        the attached model. Use :meth:`get_extensions` to retrieve the effective
+        extensions regardless of construction path.
 
     See Also
     --------
@@ -267,52 +267,9 @@ class NumpyroSampler(eqx.Module):
     ... )  # doctest: +SKIP
     """
 
-    prior: RejectionPrior
-    parameterization: AbstractParameterization | None = None
-    extensions: tuple[AbstractExtension, ...] = ()
-    marginalized_names: tuple[str, ...] | None = None
-    model: AbstractComponentModel | JointModel | None = None
-
-    def __check_init__(self) -> None:
-        if self.model is not None and (
-            self.parameterization is not None or self.extensions
-        ):
-            msg = (
-                "Cannot specify parameterization or extensions when model is provided. "
-                "Use NumpyroSampler.from_model(model, prior) and configure the "
-                "model directly."
-            )
-            raise ValueError(msg)
-
-    @classmethod
-    def from_model(
-        cls,
-        model: AbstractComponentModel | JointModel,
-        prior: RejectionPrior,
-    ) -> "NumpyroSampler":
-        """Construct from a pre-built model (expert bypass path).
-
-        Use this when you need full control over model construction,
-        parameterization, or extensions and want to bypass the automatic
-        model-building in :meth:`run`. With this constructor, omit ``data``
-        when calling :meth:`run`.
-
-        Parameters
-        ----------
-        model : AbstractComponentModel or JointModel
-            A fully constructed model with data and extensions attached.
-        prior : RejectionPrior
-            Prior distributions compatible with the model's parameters.
-
-        Returns
-        -------
-        NumpyroSampler
-        """
-        return cls(prior, model=model)
-
     def run(
         self,
-        data: Any = None,
+        data: Any,
         *,
         init_samples: "Samples | None" = None,
         seed: int | None = None,
@@ -329,9 +286,10 @@ class NumpyroSampler(eqx.Module):
 
         Parameters
         ----------
-        data : RVData or GaiaAstrometryData, optional
-            Observed data to condition on. Required unless the sampler was
-            constructed via :meth:`from_model`.
+        data
+            Observed data (:class:`~harv.data.RVData`,
+            :class:`~harv.data.GaiaAstrometryData`, or
+            :class:`~harv.data.SystemData` for joint models).
         init_samples : Samples, optional
             Posterior samples produced by rejection sampling, used to set the
             initial positions for each MCMC chain.
@@ -384,23 +342,11 @@ class NumpyroSampler(eqx.Module):
         if kernel is None:
             kernel = _numpyro_infer.NUTS
 
-        try:
-            prepared = _prepare_sampler_model(
-                self.prior,
-                self.model,
-                data,
-                self.extensions,
-                self.parameterization,
-                self.marginalized_names if marginalized else None,
-            )
-        except ValueError as err:
-            if self.model is None and data is None:
-                msg = (
-                    "data must be provided unless the sampler was constructed via "
-                    "NumpyroSampler.from_model(). Got data=None and no pre-built model."
-                )
-                raise ValueError(msg) from err
-            raise
+        prepared = _prepare_sampler_model(
+            self.prior,
+            self.model,
+            self.marginalized_names if marginalized else None,
+        )
 
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors
@@ -419,10 +365,14 @@ class NumpyroSampler(eqx.Module):
                 extra_model,
                 marginalized,
                 effective_marginalized_names if marginalized else None,
+                data,
+                effective_linear_prior,
             )
         else:
             numpyro_model = model.numpyro_model(
                 all_priors,
+                data,
+                effective_linear_prior,
                 marginalized=marginalized,
                 marginalized_names=(
                     effective_marginalized_names if marginalized else None
@@ -467,6 +417,8 @@ class NumpyroSampler(eqx.Module):
             model,
             posterior,
             rng_key,
+            data=data,
+            effective_linear_prior=effective_linear_prior,
             marginalized=marginalized,
             nonlinear_extension_priors=nonlinear_extension_priors,
             effective_marginalized_names=effective_marginalized_names,
@@ -579,6 +531,8 @@ class NumpyroSampler(eqx.Module):
         posterior: dict[str, Any],
         rng_key: jax.Array,
         *,
+        data: Any,
+        effective_linear_prior: dict[str, Any] | None,
         marginalized: bool,
         nonlinear_extension_priors: dict[str, Any],
         effective_marginalized_names: tuple[str, ...] | None,
@@ -608,20 +562,22 @@ class NumpyroSampler(eqx.Module):
                 rng_key,
                 nonlinear_extension_priors,
                 effective_marginalized_names,
+                data,
+                effective_linear_prior,
             )
         else:
             # Non-marginalized: linear params are in the posterior as named
             # deterministic sites.
-            linear_q = self._extract_linear_from_posterior(model, posterior)
+            linear_q = self._extract_linear_from_posterior(model, posterior, data)
 
-        # Build metadata
+        # Build metadata from the passed-in data
         t_ref: Any = None
         if isinstance(model, JointModel):
-            first_comp = next(iter(model.components.values()))
-            if hasattr(first_comp, "data") and hasattr(first_comp.data, "t_ref"):
-                t_ref = first_comp.data.t_ref
-        elif hasattr(model, "data") and hasattr(model.data, "t_ref"):
-            t_ref = model.data.t_ref
+            first_comp_data = data[next(iter(model.components))]
+            if hasattr(first_comp_data, "t_ref"):
+                t_ref = first_comp_data.t_ref
+        elif hasattr(data, "t_ref"):
+            t_ref = data.t_ref
 
         metadata: dict[str, Any] = {"num_chains": num_chains}
         if t_ref is not None:
@@ -648,18 +604,25 @@ class NumpyroSampler(eqx.Module):
         rng_key: jax.Array,
         nonlinear_extension_priors: dict[str, Any],
         effective_marginalized_names: tuple[str, ...] | None,
+        data: Any,
+        effective_linear_prior: dict[str, Any] | None,
     ) -> dict[str, AbstractQuantity]:
         """Conditionally sample linear params given MCMC nonlinear posterior."""
         prior = self.prior
         base_names = model._base_nonlinear_names()
         if isinstance(model, JointModel):
             linear_units: dict[str, str] = {}
+            per_comp_lp: dict[str, dict[str, Any] | None] = (
+                model._per_component_linear_prior(effective_linear_prior)
+                if effective_linear_prior is not None
+                else dict.fromkeys(model.component_names)
+            )
             if effective_marginalized_names is None:
                 explicit_linear_names = {
                     name
-                    for comp in model.components.values()
+                    for comp_name, comp in model.components.items()
                     for name in set(comp._all_linear_names())
-                    - set(comp._auto_marginalized_names())
+                    - set(comp._auto_marginalized_names(per_comp_lp.get(comp_name)))
                 }
             else:
                 per_comp_marginalized_names = (
@@ -674,8 +637,8 @@ class NumpyroSampler(eqx.Module):
                     for name in set(comp._all_linear_names())
                     - set(per_comp_marginalized_names[comp_name])
                 }
-            for comp in model.components.values():
-                linear_units.update(comp._linear_param_units())
+            for comp_name, comp in model.components.items():
+                linear_units.update(comp._linear_param_units(data[comp_name]))
             # Per-component non-shared explicit params have qualified site names
             # in the numpyro posterior (e.g. "primary.rv_semiamp").  Build a set
             # of the actual posterior keys so we can collect them correctly.
@@ -687,9 +650,9 @@ class NumpyroSampler(eqx.Module):
                 if name in comp._all_linear_names()
             }
         else:
-            linear_units = model._linear_param_units()
+            linear_units = model._linear_param_units(data)
             marginalized_name_set = set(
-                model._auto_marginalized_names()
+                model._auto_marginalized_names(effective_linear_prior)
                 if effective_marginalized_names is None
                 else effective_marginalized_names
             )
@@ -729,6 +692,8 @@ class NumpyroSampler(eqx.Module):
             return model.sample_conditional_linear(
                 wrapped,
                 key,
+                data,
+                linear_prior=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
             )
 
@@ -743,8 +708,10 @@ class NumpyroSampler(eqx.Module):
                 for name in comp._all_linear_names():
                     name_counts[name] = name_counts.get(name, 0) + 1
 
-            first_comp = next(iter(model.components.values()))
-            shared_units = first_comp._linear_param_units()
+            first_comp_name = next(iter(model.components))
+            shared_units = model.components[first_comp_name]._linear_param_units(
+                data[first_comp_name]
+            )
 
             final: dict[str, AbstractQuantity] = {}
             for key, value in result.items():
@@ -752,7 +719,7 @@ class NumpyroSampler(eqx.Module):
                     # Per-component sub-dict.
                     comp_name = key
                     comp = model.components[comp_name]
-                    units = comp._linear_param_units()
+                    units = comp._linear_param_units(data[comp_name])
                     for nm, arr in value.items():
                         final_name = (
                             f"{comp_name}.{nm}" if name_counts.get(nm, 1) > 1 else nm
@@ -762,13 +729,14 @@ class NumpyroSampler(eqx.Module):
                     # Shared top-level param (joint path).
                     final[key] = Q(value, shared_units.get(key, ""))
             return final
-        units = model._linear_param_units()
+        units = model._linear_param_units(data)
         return {name: Q(arr, units.get(name, "")) for name, arr in result.items()}
 
     def _extract_linear_from_posterior(
         self,
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
+        data: Any,
     ) -> dict[str, AbstractQuantity]:
         """Extract linear params from a non-marginalized posterior.
 
@@ -783,7 +751,7 @@ class NumpyroSampler(eqx.Module):
             linear_q: dict[str, AbstractQuantity] = {}
             shared_lin = set(model.shared_linear_params)
             for comp_name, comp in model.components.items():
-                units = comp._linear_param_units()
+                units = comp._linear_param_units(data[comp_name])
                 for name in comp._all_linear_names():
                     if name in shared_lin:
                         if name in posterior and name not in linear_q:
@@ -793,7 +761,7 @@ class NumpyroSampler(eqx.Module):
                         if qkey in posterior:
                             linear_q[qkey] = Q(posterior[qkey], units.get(name, ""))
             return linear_q
-        units = model._linear_param_units()
+        units = model._linear_param_units(data)
         linear_q = {}
         for name in model._all_linear_names():
             if name in posterior:

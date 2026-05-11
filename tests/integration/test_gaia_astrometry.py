@@ -49,7 +49,7 @@ class TestGaiaAstrometryModel:
     def test_log_prob_finite(self, astro_data):
         """Model returns a finite scalar at arbitrary parameters."""
         data, _ = astro_data
-        model = GaiaAstrometryModel(data=data, linear_prior=_linear_prior())
+        model = GaiaAstrometryModel()
         nl = {
             "period": Q(1.5, "yr"),
             "eccentricity": 0.3,
@@ -58,13 +58,14 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.5,
             "lon_asc_node": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl)
+        log_lik = model.log_prob(nl, data, linear_prior=_linear_prior())
         assert jnp.isfinite(log_lik)
 
     def test_vmap_batch(self, astro_data):
         """Vmap over a batch of parameter samples works correctly."""
         data, _ = astro_data
-        model = GaiaAstrometryModel(data=data, linear_prior=_linear_prior())
+        model = GaiaAstrometryModel()
+        lp = _linear_prior()
         n = 8
         nl_batch = {
             "period": Q(jnp.ones(n) * 1.5, "yr"),
@@ -74,7 +75,9 @@ class TestGaiaAstrometryModel:
             "cos_i": jnp.linspace(-0.5, 0.5, n),
             "lon_asc_node": Q(jnp.ones(n) * 1.0, "rad"),
         }
-        log_liks = jax.jit(jax.vmap(model.log_prob))(nl_batch)
+        log_liks = jax.jit(
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+        )(nl_batch)
 
         assert log_liks.shape == (n,)
         assert jnp.all(jnp.isfinite(log_liks))
@@ -82,7 +85,8 @@ class TestGaiaAstrometryModel:
     def test_true_params_have_higher_loglik(self, astro_data):
         """True parameters should give a higher log-likelihood than random ones."""
         data, true = astro_data
-        model = GaiaAstrometryModel(data=data, linear_prior=_linear_prior())
+        model = GaiaAstrometryModel()
+        lp = _linear_prior()
 
         cos_i_true = float(np.cos(float(true["inclination"].value)))
 
@@ -105,8 +109,8 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.0,
             "lon_asc_node": Q(0.0, "rad"),
         }
-        ll_true = model.log_prob(nl_true)
-        ll_rng = model.log_prob(nl_rng)
+        ll_true = model.log_prob(nl_true, data, linear_prior=lp)
+        ll_rng = model.log_prob(nl_rng, data, linear_prior=lp)
         assert ll_true > ll_rng
 
 
@@ -126,7 +130,7 @@ class TestGaiaAstrometryRejectionSampler:
         )
         return data, true
 
-    def _make_sampler(self):
+    def _make_sampler(self, data):
         prior = RejectionPrior.default_gaia_astrometry(
             period_min=Q(0.3, "yr"),
             period_max=Q(3.0, "yr"),
@@ -135,12 +139,12 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        return RejectionSampler(prior, batch_size=10_000)
+        return RejectionSampler(prior, GaiaAstrometryModel(), batch_size=10_000), data
 
     def test_sampler_runs_and_returns_samples(self, sim_data):
         """Rejection sampler completes and returns a valid Samples object."""
         data, _ = sim_data
-        sampler = self._make_sampler()
+        sampler, data = self._make_sampler(data)
         samples = sampler.run(data, n_prior_samples=50_000, seed=42)
 
         assert samples.n_samples > 0
@@ -149,7 +153,7 @@ class TestGaiaAstrometryRejectionSampler:
     def test_samples_have_correct_keys(self, sim_data):
         """Samples object has all expected parameter keys."""
         data, _ = sim_data
-        sampler = self._make_sampler()
+        sampler, data = self._make_sampler(data)
         samples = sampler.run(data, n_prior_samples=50_000, seed=43)
 
         keys = samples.keys()
@@ -176,7 +180,7 @@ class TestGaiaAstrometryRejectionSampler:
     def test_reproducibility(self, sim_data):
         """Same seed produces identical samples."""
         data, _ = sim_data
-        sampler = self._make_sampler()
+        sampler, data = self._make_sampler(data)
         s1 = sampler.run(data, n_prior_samples=20_000, seed=44)
         s2 = sampler.run(data, n_prior_samples=20_000, seed=44)
 
