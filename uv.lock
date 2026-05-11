@@ -943,6 +943,17 @@ dependencies = [
     { name = "unxt" },
 ]
 
+[package.optional-dependencies]
+extra = [
+    { name = "arviz" },
+    { name = "gaiaunlimited" },
+    { name = "healpy" },
+    { name = "matplotlib" },
+    { name = "pooch" },
+    { name = "setuptools" },
+    { name = "tinygp" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "arviz" },
@@ -1007,16 +1018,24 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arviz", marker = "extra == 'extra'", specifier = ">=1.0.0" },
     { name = "equinox", specifier = ">=0.13.2" },
+    { name = "gaiaunlimited", marker = "extra == 'extra'", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "h5py", specifier = ">=3.15.1" },
+    { name = "healpy", marker = "extra == 'extra'", specifier = ">=1.18.1" },
     { name = "jax", specifier = "==0.8.1" },
     { name = "jaxoplanet", specifier = ">=0.1.0" },
     { name = "jaxtyping", specifier = ">=0.3.3" },
+    { name = "matplotlib", marker = "extra == 'extra'", specifier = ">=3.10.7" },
     { name = "numpyro", specifier = ">=0.15.0" },
     { name = "numpyro-ext", specifier = ">=0.0.4" },
+    { name = "pooch", marker = "extra == 'extra'", specifier = ">=1.8.2" },
     { name = "quaxed", specifier = ">=0.10.4" },
+    { name = "setuptools", marker = "extra == 'extra'" },
+    { name = "tinygp", marker = "extra == 'extra'", specifier = ">=0.3.1" },
     { name = "unxt", specifier = ">=1.7.2" },
 ]
+provides-extras = ["extra"]
 
 [package.metadata.requires-dev]
 dev = [
