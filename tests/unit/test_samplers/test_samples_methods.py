@@ -1065,6 +1065,38 @@ class TestPlotRV:
         )
         plt.close("all")
 
+    def test_phase_fold_subtracts_trend_signal_from_data(self, rv_samples):
+        """Phase-folded plots subtract the reference trend signal from data points."""
+        times = Q(jnp.array([0.0, 1.0, 2.0, 3.0, 4.0]), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax_plain = plot_rv(rv_samples, rv_data, n_samples=1, phase_fold_median=True)
+        ax_trend = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            phase_fold_median=True,
+        )
+
+        plain_data = next(line for line in ax_plain.lines if line.get_marker() == "o")
+        trend_data = next(line for line in ax_trend.lines if line.get_marker() == "o")
+
+        assert not np.allclose(plain_data.get_ydata(), trend_data.get_ydata())
+        plt.close("all")
+
     def test_plot_with_gp_extension_can_show_signal_components(self, rv_samples):
         """GP plotting can decompose Keplerian and extension contributions."""
         tinygp = pytest.importorskip("tinygp")

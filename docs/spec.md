@@ -1323,7 +1323,9 @@ created and returned; otherwise draws into `ax` and returns `None`.
   for time-domain RV plots with observed data.
 - `phase_fold_median` -- when `True`, fold to orbital phase using the median-period
   sample. Only the reference orbit is drawn (multiple samples on a phase axis
-  defined by one period would be misleading).
+  defined by one period would be misleading). When plot-aware extensions are
+  present, the reference sample's extension contribution is subtracted from the
+  data before folding so the Keplerian orbit overlays the phase-folded points.
 - `apply_median_offsets` -- when `True` (default), shift non-reference instrument
   data by the posterior median offset parameter.
 

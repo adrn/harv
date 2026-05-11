@@ -438,8 +438,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         the median period. Phase zero is set to that sample's ``t_peri`` value. Only
         that single reference orbit curve is drawn — plotting multiple samples on a
         phase axis defined by one period is misleading when the posterior has period
-        spread. Any GP extension contributions are also suppressed when phase folding.
-        Default: ``False``.
+        spread. When plot-aware extensions are present, the reference sample's
+        extension contribution is subtracted from the data before folding so the
+        Keplerian orbit overlays the phase-folded points. Default: ``False``.
     apply_median_offsets : bool, optional
         Shift non-reference instrument data by the posterior median offset so
         all instruments land in the reference frame.  Only applies when a
@@ -482,19 +483,6 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     if plt is None:
         msg = "matplotlib is required for plot_rv."
         raise ImportError(msg)
-
-    if phase_fold_median and extensions:
-        from .extensions.gp import GP  # noqa: PLC0415
-
-        if any(isinstance(ext, GP) for ext in extensions):
-            warnings.warn(
-                "phase_fold_median=True suppresses GP contributions from model curves "
-                "but the data still contains GP variance, so the orbit will not "
-                "overlay the data. Consider plotting without phase_fold_median "
-                "when GP extensions are present.",
-                UserWarning,
-                stacklevel=2,
-            )
 
     if show_signal_components and phase_fold_median:
         warnings.warn(
@@ -629,6 +617,50 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
         if apply_median_offsets and instr_name in median_offsets:
             rv_obs = rv_obs - median_offsets[instr_name]
+
+        if phase_fold_median and extensions:
+            ref_sample_data: dict[str, Any] = {
+                "period": samples["period"][ref_idx],
+                "eccentricity": samples["eccentricity"][ref_idx],
+                "t_peri": samples["t_peri"][ref_idx],
+                "arg_peri": samples["arg_peri"][ref_idx],
+                "rv_semiamp": _component_linear_param(
+                    samples, instr_name, "rv_semiamp", ref_idx
+                ),
+                "v_sys": _component_linear_param(samples, instr_name, "v_sys", ref_idx),
+            }
+            rv_at_data = rv_at_times(
+                rv_data.time,
+                ref_sample_data["period"],
+                ref_sample_data["eccentricity"],
+                ref_sample_data["t_peri"],
+                ref_sample_data["arg_peri"],
+                ref_sample_data["rv_semiamp"],
+                ref_sample_data["v_sys"],
+            )
+            residuals = jnp.asarray(
+                ustrip(rv_unit, rv_obs) - ustrip(rv_unit, rv_at_data)
+            )
+            err_data_raw = ustrip(rv_unit, rv_err)
+            t_data_raw = ustrip(time_unit, rv_data.time)
+            hp_ref = _get_extension_sample_values(samples, extensions, ref_idx)
+            phase_fold_signal = Q(jnp.zeros(rv_data.n_times), rv_unit)
+            has_phase_fold_signal = False
+            for ext in extensions:
+                contrib = _plot_extension_rv_signal(
+                    ext,
+                    hp_ref,
+                    residuals,
+                    err_data_raw,
+                    rv_data.time,
+                    t_data_raw,
+                    rv_data.t_ref,
+                )
+                if contrib is not None:
+                    phase_fold_signal = phase_fold_signal + Q(contrib, rv_unit)
+                    has_phase_fold_signal = True
+            if has_phase_fold_signal:
+                rv_obs = rv_obs - phase_fold_signal
 
         instr_style = data_style.copy()
         if "color" not in instr_style:
