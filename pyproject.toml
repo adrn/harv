@@ -87,6 +87,7 @@ docs = [
     "ipykernel>=7.1.0",
     "myst-nb>=1.4.0",
     "autoapi>=2.0.1",
+    "nbconvert>=7.17.1",
 ]
 test = [
     "pytest",
