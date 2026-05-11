@@ -139,7 +139,7 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/", None),
 }
 
-nb_execution_mode = "cache" if "GITHUB_TOKEN" not in os.environ else "off"
+nb_execution_mode = "off"
 
 # rtds-action: download pre-executed notebooks on RTD
 if "GITHUB_TOKEN" in os.environ:
