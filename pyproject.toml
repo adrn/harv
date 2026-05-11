@@ -327,7 +327,7 @@ target-version = "py312"
 
     [[tool.ty.overrides]]
     include = ["src/harv/plot.py"]
-    rules = { possibly-missing-attribute = "ignore" }
+    rules = { possibly-missing-attribute = "ignore", possibly-missing-submodule = "ignore"}
 
     [[tool.ty.overrides]]
     include = ["src/harv/kepler/constants.py"]
