@@ -19,7 +19,7 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install 3.14
 
       - name: Check code style
         run: uv run ruff check src docs tests
@@ -28,4 +28,4 @@ jobs:
         run: uv run ruff format --check src docs tests
 
       - name: Check type annotations
-        run: uv run ty check src docs # TODO: add tests
+        run: uv run ty check src  # TODO: add docs tests
