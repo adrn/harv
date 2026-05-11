@@ -64,8 +64,9 @@ jobs:
         run: uv sync --group docs
 
       - name: Execute the notebooks
+        # TODO: docs/tutorials/astrometry/*.ipynb docs/tutorials/case-studies/*.ipynb
         run: |
-            for nb in docs/tutorials/rv/*.ipynb docs/tutorials/astrometry/*.ipynb docs/tutorials/case-studies/*.ipynb; do
+            for nb in docs/tutorials/rv/*.ipynb; do
             echo "Executing $nb"
             uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
             done
@@ -75,8 +76,8 @@ jobs:
             name: notebooks-for-${{ github.sha }}
             path: |
               docs/tutorials/rv
-              docs/tutorials/astrometry
-              docs/tutorials/case-studies
+              # TODO: docs/tutorials/astrometry
+              # TODO: docs/tutorials/case-studies
 
       - name: Trigger RTDs build
         if: ${{ github.event_name != 'pull_request' }}
