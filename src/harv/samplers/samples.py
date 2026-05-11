@@ -773,6 +773,8 @@ class Samples(eqx.Module):
             "var_names": var_names,
             "marginal": True,
             "triangle": "lower",
+            "marginal_kind": "hist",
+            "figure_kwargs": {},
         }
 
         user_labels = labels or {}
@@ -798,5 +800,9 @@ class Samples(eqx.Module):
 
         # Merge with user kwargs (user kwargs take precedence)
         default_kwargs.update(plot_kwargs)
+
+        default_kwargs["figure_kwargs"].setdefault(
+            "figsize", (3 * len(var_names) + 1.5, 3 * len(var_names))
+        )
 
         return az.plot_pair(idata, **default_kwargs)

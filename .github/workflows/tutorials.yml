@@ -1,0 +1,88 @@
+name: Tutorials
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+  release:
+    types:
+      - published
+
+jobs:
+  check_tutorial_flags:
+    name: Check tutorial triggers
+    runs-on: ubuntu-latest
+    outputs:
+      head-commit-message:
+        ${{ steps.get_head_commit_message.outputs.HEAD_COMMIT_MESSAGE }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Get head commit message
+        id: get_head_commit_message
+        run: |
+          {
+            echo 'HEAD_COMMIT_MESSAGE<<EOF'
+            git show -s --format=%B
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  notebooks:
+    name: "Build the notebooks for the docs"
+    runs-on: ubuntu-latest
+    needs: check_tutorial_flags
+    if:
+      ${{ github.event_name == 'release' ||
+      startsWith(github.ref, 'refs/tags/') ||
+      contains(needs.check_tutorial_flags.outputs.head-commit-message, '[tutorials]') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'tutorials')) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --group docs
+
+      - name: Execute the notebooks
+        # TODO: docs/tutorials/astrometry/*.ipynb docs/tutorials/case-studies/*.ipynb
+        run: |
+            for nb in docs/tutorials/rv/*.ipynb; do
+            echo "Executing $nb"
+            uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
+            done
+
+      - uses: actions/upload-artifact@v7
+        with:
+            name: notebooks-for-${{ github.sha }}
+            path: |
+              docs/tutorials/rv
+              # TODO: docs/tutorials/astrometry
+              # TODO: docs/tutorials/case-studies
+
+      - name: Trigger RTDs build
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: dfm/rtds-action@v1.1.0
+        with:
+            webhook_url: ${{ secrets.RTDS_WEBHOOK_URL }}
+            webhook_token: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
+            commit_ref: ${{ github.ref }}
