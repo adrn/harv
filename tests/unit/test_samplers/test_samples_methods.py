@@ -5,6 +5,7 @@ full rejection sampler (slow), tests build a minimal Samples instance directly
 using the constructor. NumpyroSampler.run() returns a Samples object.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jax.numpy as jnp
@@ -16,7 +17,7 @@ from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
-from harv.extensions import Jitter
+from harv.extensions import Jitter, MonomialTrend
 from harv.extensions.base import ParamInfo
 from harv.extensions.gp import GP
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
@@ -972,6 +973,285 @@ class TestPlotRV:
         )
 
         assert not np.allclose(plain_line.get_ydata(), gp_line.get_ydata())
+        plt.close("all")
+
+    def test_plot_with_trend_extension_changes_time_domain_curve(self, rv_samples):
+        """Trend plotting support modifies the time-domain RV overlay."""
+        times = Q(jnp.linspace(0.0, 4.0, 5), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.linspace(0.0, 4.0, 9), "day")
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax_plain = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
+        ax_trend = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            time_grid=time_grid,
+        )
+
+        expected_alpha = get_alpha(1)
+        plain_line = next(
+            line
+            for line in ax_plain.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+        trend_line = next(
+            line
+            for line in ax_trend.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert not np.allclose(plain_line.get_ydata(), trend_line.get_ydata())
+        plt.close("all")
+
+    def test_plot_with_trend_extension_can_show_signal_components(self, rv_samples):
+        """Trend plotting can decompose Keplerian and extension contributions."""
+        times = Q(jnp.linspace(0.0, 4.0, 5), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 0.5, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.linspace(0.0, 4.0, 9), "day")
+        trend_samples = Samples(
+            nonlinear=rv_samples.nonlinear,
+            linear={
+                **rv_samples.linear,
+                "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
+            },
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
+
+        ax = plot_rv(
+            trend_samples,
+            rv_data,
+            extensions=(trend,),
+            n_samples=1,
+            time_grid=time_grid,
+            show_signal_components=True,
+        )
+
+        expected_alpha = get_alpha(1)
+        component_lines = [
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        ]
+
+        assert len(component_lines) == 2
+        assert {line.get_label() for line in component_lines} == {
+            "Extensions",
+            "Keplerian",
+        }
+        assert not np.allclose(
+            component_lines[0].get_ydata(),
+            component_lines[1].get_ydata(),
+        )
+        plt.close("all")
+
+    def test_plot_with_gp_extension_can_show_signal_components(self, rv_samples):
+        """GP plotting can decompose Keplerian and extension contributions."""
+        tinygp = pytest.importorskip("tinygp")
+
+        times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+        rv = Q(jnp.zeros(20), "km/s")
+        rv_err = Q(jnp.ones(20) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_amp": Q(jnp.ones(N) * 2.0, "km/s"),
+                "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: (
+                tinygp.kernels.ExpSquared(hp["gp_scale"]) * hp["gp_amp"] ** 2
+            ),
+            hyperparams=(
+                ParamInfo("gp_amp", "km/s"),
+                ParamInfo("gp_scale", "day"),
+            ),
+            time_unit="day",
+        )
+
+        ax = plot_rv(
+            gp_samples,
+            rv_data,
+            extensions=(gp,),
+            n_samples=1,
+            show_signal_components=True,
+        )
+
+        expected_alpha = get_alpha(1)
+        component_lines = [
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        ]
+
+        assert len(component_lines) == 2
+        assert {line.get_label() for line in component_lines} == {
+            "Extensions",
+            "Keplerian",
+        }
+        assert not np.allclose(
+            component_lines[0].get_ydata(),
+            component_lines[1].get_ydata(),
+        )
+        plt.close("all")
+
+    def test_plot_with_quasisep_gp_unsorted_times(self, rv_samples):
+        """Quasisep GP plotting sorts unsorted RV times before conditioning."""
+        tinygp = pytest.importorskip("tinygp")
+
+        times = Q(jnp.array([20.0, 5.0, 35.0, 10.0, 25.0]), "day")
+        rv = Q(jnp.zeros(5), "km/s")
+        rv_err = Q(jnp.ones(5) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_omega": Q(jnp.ones(N) * 0.2, "1/day"),
+                "gp_Q": Q(jnp.ones(N) * 2.0, ""),
+                "gp_sigma": Q(jnp.ones(N) * 1.0, "km/s"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: tinygp.kernels.quasisep.SHO(
+                omega=hp["gp_omega"],
+                quality=hp["gp_Q"],
+                sigma=hp["gp_sigma"],
+            ),
+            hyperparams=(
+                ParamInfo("gp_omega", "1/day"),
+                ParamInfo("gp_Q", ""),
+                ParamInfo("gp_sigma", "km/s"),
+            ),
+            time_unit="day",
+        )
+
+        ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+
+        expected_alpha = get_alpha(1)
+        gp_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert np.all(np.isfinite(gp_line.get_ydata()))
+        plt.close("all")
+
+    def test_plot_uses_explicit_time_grid(self, rv_samples):
+        """Supplying time_grid bypasses the default get_t_grid path."""
+        times = Q(jnp.array([0.0, 50.0, 100.0]), "day")
+        rv = Q(jnp.zeros(3), "km/s")
+        rv_err = Q(jnp.ones(3), "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        time_grid = Q(jnp.array([2.0, 4.0, 8.0, 16.0]), "day")
+
+        with patch(
+            "harv.plot.get_t_grid", side_effect=AssertionError("should not be called")
+        ):
+            ax = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
+
+        expected_alpha = get_alpha(1)
+        orbit_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        np.testing.assert_allclose(orbit_line.get_xdata(), np.asarray(time_grid.value))
+        plt.close("all")
+
+    def test_plot_with_gp_large_grid_chunks_conditioning(self, rv_samples):
+        """GP plotting chunks large prediction grids to avoid dense blowups."""
+        pytest.importorskip("tinygp")
+
+        times = Q(jnp.linspace(0.0, 100.0, 20), "day")
+        rv = Q(jnp.zeros(20), "km/s")
+        rv_err = Q(jnp.ones(20) * 2.0, "km/s")
+        rv_data = RVData(time=times, rv=rv, rv_err=rv_err)
+        gp_samples = Samples(
+            nonlinear={
+                **rv_samples.nonlinear,
+                "gp_amp": Q(jnp.ones(N) * 2.0, "km/s"),
+                "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
+            },
+            linear=rv_samples.linear,
+            data_type=rv_samples.data_type,
+            metadata=rv_samples.metadata,
+        )
+        gp = GP(
+            kernel_builder=lambda hp: (
+                hp["gp_amp"] ** 2 * jnp.exp(-0.5 * hp["gp_scale"])
+            ),
+            hyperparams=(
+                ParamInfo("gp_amp", "km/s"),
+                ParamInfo("gp_scale", "day"),
+            ),
+            time_unit="day",
+        )
+
+        chunk_lengths: list[int] = []
+
+        class FakeGaussianProcess:
+            def __init__(self, kernel, data_times, diag):
+                del kernel, data_times, diag
+
+            def condition(self, residuals, X_test):
+                del residuals
+                chunk_lengths.append(len(X_test))
+                return None, SimpleNamespace(loc=jnp.zeros(len(X_test)))
+
+        with (
+            patch("harv.plot.tinygp.GaussianProcess", FakeGaussianProcess),
+            patch(
+                "harv.plot.get_t_grid",
+                return_value=Q(jnp.linspace(-10.0, 110.0, 5000), "day"),
+            ),
+        ):
+            ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+
+        expected_alpha = get_alpha(1)
+        gp_line = next(
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        )
+
+        assert np.all(np.isfinite(gp_line.get_ydata()))
+        assert len(chunk_lengths) > 1
+        assert max(chunk_lengths) <= 2048
+        assert sum(chunk_lengths) == 5000
         plt.close("all")
 
 

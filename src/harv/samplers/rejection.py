@@ -47,6 +47,24 @@ def _lookup_extension_prior(
     return extension_priors.get(param_name)
 
 
+def _iter_component_extensions(
+    model: AbstractComponentModel | JointModel,
+) -> list[tuple[str, Any]]:
+    """Return ``(component_name, extension)`` pairs for a sampler model."""
+    if isinstance(model, JointModel):
+        return [
+            (comp_name, ext)
+            for comp_name, comp in model.components.items()
+            for ext in comp.extensions
+        ]
+    return [("", ext) for ext in model.extensions]
+
+
+def _extension_model_key(component_name: str, param_name: str) -> str:
+    """Return the flattened sampler/model key for an extension parameter."""
+    return f"{component_name}.{param_name}" if component_name else param_name
+
+
 def _resolve_effective_marginalized_names(
     effective_linear_prior: dict[str, Any] | None,
     marginalized_names: tuple[str, ...] | None,
@@ -114,18 +132,57 @@ def _effective_linear_prior_from_prior(
     )
     if effective is None:
         return None
-    # Merge linear extension params from the model
-    comps: list[AbstractComponentModel]
-    if isinstance(model, JointModel):
-        comps = list(model.components.values())
-    else:
-        comps = [model]
-    for comp in comps:
-        for ext in comp.extensions:
-            for p in ext.extra_params():
-                if p.linear and p.name in prior.extension_priors:
-                    effective[p.name] = prior.extension_priors[p.name]
+    # Merge linear extension params from the model.
+    for comp_name, ext in _iter_component_extensions(model):
+        for p in ext.extra_params():
+            if not p.linear:
+                continue
+            extension_prior = _lookup_extension_prior(
+                prior.extension_priors,
+                p.name,
+                component_name=comp_name,
+            )
+            if extension_prior is not None:
+                effective[_extension_model_key(comp_name, p.name)] = extension_prior
     return effective
+
+
+def _validate_extension_priors(
+    prior: RejectionPrior,
+    model: AbstractComponentModel | JointModel,
+    effective_linear_prior: dict[str, Any] | None,
+) -> None:
+    """Ensure every extension-declared parameter has a prior before sampling."""
+    linear_names = (
+        set(effective_linear_prior)
+        if isinstance(effective_linear_prior, dict)
+        else set()
+    )
+    missing: list[str] = []
+
+    for comp_name, ext in _iter_component_extensions(model):
+        for p in ext.extra_params():
+            model_key = _extension_model_key(comp_name, p.name)
+            if p.linear:
+                if model_key not in linear_names:
+                    missing.append(model_key)
+                continue
+
+            extension_prior = _lookup_extension_prior(
+                prior.extension_priors,
+                p.name,
+                component_name=comp_name,
+            )
+            if extension_prior is None:
+                missing.append(model_key)
+
+    if missing:
+        msg = (
+            "Missing required prior(s) for extension parameter(s): "
+            f"{tuple(missing)}. Add priors for every parameter declared by "
+            "model.extensions."
+        )
+        raise ValueError(msg)
 
 
 def _nonlinear_extension_priors_from_model(
@@ -150,19 +207,10 @@ def _nonlinear_extension_priors_from_model(
     linear_extension_names : tuple[str, ...]
         Names of extension linear (offset) params.
     """
-    if isinstance(model, JointModel):
-        comp_extensions: list[tuple[str, Any]] = [
-            (comp_name, ext)
-            for comp_name, comp in model.components.items()
-            for ext in comp.extensions
-        ]
-    else:
-        comp_extensions = [("", ext) for ext in model.extensions]
-
     nonlinear_extension_priors: dict[str, Any] = {}
     linear_extension_names: list[str] = []
 
-    for comp_name, ext in comp_extensions:
+    for comp_name, ext in _iter_component_extensions(model):
         for p in ext.extra_params():
             extension_prior = _lookup_extension_prior(
                 prior.extension_priors,
@@ -171,9 +219,9 @@ def _nonlinear_extension_priors_from_model(
             )
             if extension_prior is None:
                 continue
-            model_key = f"{comp_name}.{p.name}" if comp_name else p.name
+            model_key = _extension_model_key(comp_name, p.name)
             if p.linear:
-                linear_extension_names.append(p.name)
+                linear_extension_names.append(model_key)
             else:
                 nonlinear_extension_priors[model_key] = extension_prior
 
@@ -224,6 +272,7 @@ def _prepare_sampler_model(
         _nonlinear_extension_priors_from_model(prior, model)
     )
     effective_linear_prior = _effective_linear_prior_from_prior(prior, model)
+    _validate_extension_priors(prior, model, effective_linear_prior)
     effective_marginalized_names = _resolve_effective_marginalized_names(
         effective_linear_prior,
         marginalized_names,
@@ -304,6 +353,7 @@ class RejectionSampler(AbstractSampler):
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
         seed: int | None = None,
+        ignore_non_finite: bool = False,
     ) -> Samples:
         """Run rejection sampling.
 
@@ -321,6 +371,11 @@ class RejectionSampler(AbstractSampler):
         seed
             Random number seed. If not specified, picks a seed based on the
             current time.
+        ignore_non_finite
+            If ``True``, any ``NaN`` or infinite log-likelihood values are
+            treated as rejected samples by replacing them with ``-inf`` before
+            the rejection step. If ``False`` (default), non-finite values are
+            left unchanged.
 
         Returns
         -------
@@ -357,6 +412,11 @@ class RejectionSampler(AbstractSampler):
             effective_marginalized_names,
             data,
         )
+
+        if ignore_non_finite:
+            log_likelihoods = jnp.where(
+                jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf
+            )
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
@@ -517,7 +577,12 @@ class RejectionSampler(AbstractSampler):
     @jax.jit
     def _rejection_step(key: jax.Array, log_likelihoods: jax.Array) -> jax.Array:
         """Compute rejection mask."""
-        weights = jnp.exp(log_likelihoods - jnp.max(log_likelihoods))
+        max_log_likelihood = jnp.max(log_likelihoods)
+        weights = jnp.where(
+            jnp.isfinite(max_log_likelihood),
+            jnp.exp(log_likelihoods - max_log_likelihood),
+            jnp.zeros_like(log_likelihoods),
+        )
         uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
         return uniform_draws < weights
 

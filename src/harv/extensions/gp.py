@@ -29,7 +29,7 @@ class GP(AbstractExtension):
     ----------
     kernel_builder : callable
         Receives the full nonlinear-parameter dict (unit-stripped) and returns a
-        callable kernel object whose ``.evaluate(X, Xp)`` method produces the kernel
+        callable kernel object that can be called with ``(X, Xp)`` to produce the kernel
         matrix. For example, from ``tinygp``.
     hyperparams : tuple of ParamInfo
         Nonlinear hyperparameters declared by this extension (e.g. ``gp_amp``,
@@ -77,7 +77,7 @@ class GP(AbstractExtension):
 
         # Build kernel and evaluate
         kernel = self.kernel_builder(nl_values)
-        K = kernel.evaluate(t, t)
+        K = kernel(t, t)
 
         # Promote diagonal to full if needed
         if cov.ndim == 1:

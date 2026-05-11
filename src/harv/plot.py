@@ -268,10 +268,46 @@ def _gp_plot_signal(
         msg = "tinygp is required for GP plotting support"
         raise ImportError(msg)
 
+    # Quasisep kernels require sorted training coordinates. Keep the prediction
+    # grid order unchanged and reorder the observed residuals/errors to match.
+    sort_idx = jnp.argsort(data_times)
+    data_times = data_times[sort_idx]
+    residuals = residuals[sort_idx]
+    data_err = data_err[sort_idx]
+
     kernel = ext.kernel_builder(hp)
     gp = tinygp.GaussianProcess(kernel, data_times, diag=data_err**2)
-    _, cond = gp.condition(residuals, t_grid)
-    return cond.loc
+
+    # Quasisep training is scalable, but conditioning on a large prediction grid
+    # can still fall back to dense test-time covariance matrices. Predict in
+    # chunks to keep notebook plotting from exhausting memory.
+    t_grid = jnp.asarray(t_grid)
+    chunk_size = 2048
+    if t_grid.shape[0] <= chunk_size:
+        _, cond = gp.condition(residuals, t_grid)
+        return cond.loc
+
+    pred_chunks = []
+    for start in range(0, int(t_grid.shape[0]), chunk_size):
+        stop = start + chunk_size
+        _, cond = gp.condition(residuals, t_grid[start:stop])
+        pred_chunks.append(cond.loc)
+    return jnp.concatenate(pred_chunks)
+
+
+def _trend_plot_signal(
+    ext: Any,
+    hp: dict[str, float],
+    t_grid: Any,
+    data_t_ref: Any,
+) -> Any:
+    """Return a polynomial trend contribution on the plotting grid."""
+    time_unit = ext.time_unit or str(t_grid.unit)
+    dt = jnp.asarray(ustrip(time_unit, t_grid - data_t_ref))
+    trend = jnp.zeros_like(dt)
+    for k in range(1, ext.order + 1):
+        trend = trend + jnp.asarray(hp[f"trend_{k}"]) * dt**k
+    return trend
 
 
 def _plot_extension_extra_noise(
@@ -300,12 +336,24 @@ def _plot_extension_rv_signal(
     data_err: Any,
     t_grid: Any,
     data_times: Any,
+    data_t_ref: Any,
 ) -> Any | None:
     """Private plotting adapter for extension-driven RV curve adjustments."""
     from .extensions.gp import GP  # noqa: PLC0415
+    from .extensions.trend import MonomialTrend  # noqa: PLC0415
 
     if isinstance(ext, GP):
-        return _gp_plot_signal(ext, hp, residuals, data_err, t_grid, data_times)
+        time_unit = ext.time_unit or str(t_grid.unit)
+        return _gp_plot_signal(
+            ext,
+            hp,
+            residuals,
+            data_err,
+            jnp.asarray(ustrip(time_unit, t_grid)),
+            data_times,
+        )
+    if isinstance(ext, MonomialTrend) and not ext.astrometry:
+        return _trend_plot_signal(ext, hp, t_grid, data_t_ref)
     return None
 
 
@@ -334,6 +382,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     extensions: tuple[Any, ...] = (),
     *,
     n_samples: int | None = 128,
+    time_grid: BatchQTime | None = None,
+    show_signal_components: bool = False,
     relative_to_t_ref: bool = False,
     relative_to_median_v_sys: bool = False,
     phase_fold_median: bool = False,
@@ -367,6 +417,16 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     n_samples : int | None, optional
         Number of posterior curves to draw.  Set to None to draw all samples.  Default:
         128.
+    time_grid : Q["time"], optional
+        Explicit time grid used to evaluate and plot the posterior orbit curves.
+        When provided, this is used instead of the default phase grid or
+        :func:`get_t_grid`. If ``phase_fold_median=True``, the supplied time grid
+        is converted to phase using the reference sample's period and periastron time.
+    show_signal_components : bool, optional
+        Whether to plot the Keplerian signal and the combined extension-driven
+        contribution as separate curves instead of plotting their sum. This
+        decomposition view is only supported for time-domain RV plots with
+        observed data. Default: ``False``.
     relative_to_t_ref : bool, optional
         Whether to plot time relative to the reference epoch (t_ref) of the data.
     relative_to_median_v_sys : bool, optional
@@ -436,6 +496,15 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 stacklevel=2,
             )
 
+    if show_signal_components and phase_fold_median:
+        warnings.warn(
+            "show_signal_components=True is only supported for time-domain RV "
+            "plots and will be ignored when phase_fold_median=True.",
+            UserWarning,
+            stacklevel=2,
+        )
+        show_signal_components = False
+
     if ax is None:
         _, ax = plt.subplots(**kwargs)
 
@@ -470,6 +539,15 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     else:
         msg = "data must be RVData, SourceData, or SystemData."
         raise ValueError(msg)
+
+    if show_signal_components and not rv_datasets:
+        warnings.warn(
+            "show_signal_components=True requires observed RV data so extension "
+            "contributions can be decomposed and will be ignored when data is None.",
+            UserWarning,
+            stacklevel=2,
+        )
+        show_signal_components = False
 
     # we pull the time unit off of the data - we could make this configurable?
     _data = next(iter(rv_datasets.values())) if rv_datasets else None
@@ -601,11 +679,17 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     # Plot the orbit curves:
     phase_grid = jnp.linspace(0.0, 1.0, 1024)  # should this be customizable?
     if phase_fold_median:
-        # Common reference-time grid defined by the chosen reference sample.
-        t_grid = ref_t_peri + Q(phase_grid, "") * ref_period
-
-        # the x values to plot below
-        x_plot = phase_grid
+        # Common reference-time grid defined by the chosen reference sample,
+        # unless the user explicitly provides a plotting grid.
+        if time_grid is None:
+            t_grid = ref_t_peri + Q(phase_grid, "") * ref_period
+            x_plot = phase_grid
+        else:
+            t_grid = time_grid
+            x_plot = (
+                (ustrip(time_unit, t_grid) - float(ustrip(time_unit, ref_t_peri)))
+                / float(ustrip(time_unit, ref_period))
+            ) % 1.0
 
         ax_set_info = {
             "xlabel": "phase",
@@ -616,7 +700,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
     else:
         # don't phase fold:
-        if rv_datasets:
+        if time_grid is not None:
+            t_grid = time_grid
+        elif rv_datasets:
             all_times = QTime.from_(
                 jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
             )
@@ -644,10 +730,15 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         # length so that more instruments than available colors does not turn
         # a plotting call into a hard ValueError.
         for color_idx, (instr_name, _rv_data) in enumerate(rv_datasets.items()):
-            color = colors[(color_idx + 1) % len(colors)]
-            _style = orbit_style.copy()
-            _style["color"] = color
-            for i in draw_indices:
+            total_style = orbit_style.copy()
+            total_style["color"] = colors[(color_idx + 1) % len(colors)]
+            kepler_style = orbit_style.copy()
+            kepler_style["color"] = colors[(color_idx + 1) % len(colors)]
+            extension_style = orbit_style.copy()
+            extension_style["color"] = colors[(color_idx + 2) % len(colors)]
+            extension_style.setdefault("linestyle", "--")
+
+            for draw_idx, i in enumerate(draw_indices):
                 sample_data: dict[str, Any] = {
                     "period": samples["period"][i],
                     "eccentricity": samples["eccentricity"][i],
@@ -658,7 +749,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                     ),
                     "v_sys": _component_linear_param(samples, instr_name, "v_sys", i),
                 }
-                rv_model = rv_at_times(t_grid, **sample_data)
+                kepler_rv = rv_at_times(t_grid, **sample_data)
+                extension_rv = Q(jnp.zeros_like(ustrip(time_unit, t_grid)), rv_unit)
+                has_extension_signal = False
 
                 # Extension contributions (e.g. GP conditional mean) computed
                 # against this component's data, not the first dataset.
@@ -684,13 +777,39 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                             hp_i,
                             residuals,
                             err_data_raw,
-                            ustrip(time_unit, t_grid),
+                            t_grid,
                             t_data_raw,
+                            _rv_data.t_ref,
                         )
                         if contrib is not None:
-                            rv_model = rv_model + Q(contrib, rv_unit)
+                            extension_rv = extension_rv + Q(contrib, rv_unit)
+                            has_extension_signal = True
 
-                ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **_style)
+                if show_signal_components:
+                    kepler_plot_style = kepler_style.copy()
+                    extension_plot_style = extension_style.copy()
+                    if color_idx == 0 and draw_idx == 0:
+                        kepler_plot_style.setdefault("label", "Keplerian")
+                        extension_plot_style.setdefault("label", "Extensions")
+
+                    ax.plot(
+                        x_plot,
+                        ustrip(rv_unit, kepler_rv - median_v0),
+                        **kepler_plot_style,
+                    )
+                    if has_extension_signal:
+                        ax.plot(
+                            x_plot,
+                            ustrip(rv_unit, extension_rv),
+                            **extension_plot_style,
+                        )
+                else:
+                    rv_model = kepler_rv + extension_rv
+                    ax.plot(
+                        x_plot,
+                        ustrip(rv_unit, rv_model - median_v0),
+                        **total_style,
+                    )
     else:
         # data=None: draw orbit curves using bare parameter keys (no component context)
         for i in draw_indices:

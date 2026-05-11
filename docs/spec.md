@@ -1161,12 +1161,17 @@ sampler.run(
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
     seed: int = 0,
+  ignore_non_finite: bool = False,
 ) -> Samples
 ```
 
 `data` is the first positional argument and is passed through to `model.log_prob`
 at each evaluation. For a `JointModel`, pass `data` as a dict keyed by component
 name (e.g. `{"rv": rv_data, "astro": astro_data}`).
+
+- `ignore_non_finite` -- when `True`, any `NaN` or infinite log-likelihoods
+  are treated as rejected samples by replacing them with `-inf` before the
+  rejection step. Default: `False`.
 
 ### `batch_size` and GPU support
 
@@ -1284,6 +1289,8 @@ plot_rv(
     extensions=(),
     *,
     n_samples=128,
+    time_grid=None,
+    show_signal_components=False,
     phase_fold_median=False,
     apply_median_offsets=True,
     plot_kwargs=None,
@@ -1296,17 +1303,24 @@ plot_rv(
 ```
 
 Draw posterior RV curves over observed data. Handles multi-instrument offsets,
-phase folding, and optional extension contributions (GP conditional mean, jitter
-error bars). When `ax=None` a new figure is created and returned; otherwise draws
-into `ax` and returns `None`.
+phase folding, and optional extension contributions (GP conditional mean,
+polynomial trend overlays, jitter error bars). When `ax=None` a new figure is
+created and returned; otherwise draws into `ax` and returns `None`.
 
 - `samples` -- `Samples` from rejection or MCMC sampling.
 - `data` -- `RVData`, `SourceData`, `SystemData`, or `None`. When `None`, only
   posterior orbit curves are drawn (no data points).
 - `extensions` -- tuple of `AbstractExtension` instances. `plot_rv()` has
   built-in plotting support for currently supported plot-aware extensions,
-  specifically GP conditional-mean overlays in the time-domain branch and
-  jitter-driven error-bar widening.
+  specifically GP conditional-mean overlays, monomial trend overlays in the
+  time-domain branch, and jitter-driven error-bar widening.
+- `time_grid` -- optional explicit time grid used to evaluate and plot the
+  posterior orbit curves. When omitted, `plot_rv()` builds a default dense grid
+  from the data baseline (or a one-period phase grid when phase folding).
+- `show_signal_components` -- when `True`, switch from plotting the total RV
+  model to plotting the Keplerian curve and the combined extension-driven RV
+  contribution as separate curves. This decomposition view is only supported
+  for time-domain RV plots with observed data.
 - `phase_fold_median` -- when `True`, fold to orbital phase using the median-period
   sample. Only the reference orbit is drawn (multiple samples on a phase axis
   defined by one period would be misleading).

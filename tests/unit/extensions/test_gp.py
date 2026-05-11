@@ -5,13 +5,17 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
+import pytest
 from unxt import Q
 
 from harv.data import RVData
+from harv.distributions import QD
 from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.extensions.gp import GP
 from harv.extensions.jitter import Jitter
 from harv.models.rv import RVModel
+from harv.samplers.rejection import RejectionSampler, _prepare_sampler_model
+from harv.samplers.rejection_prior import RejectionPrior
 
 # ---------------------------------------------------------------------------
 # Mock kernel (avoids tinygp dependency in tests)
@@ -19,15 +23,23 @@ from harv.models.rv import RVModel
 
 
 class _MockKernel:
-    """Minimal kernel-like object with an ``evaluate(X, Xp)`` method."""
+    """Minimal kernel-like object whose ``evaluate(x, xp)`` takes scalar inputs.
+
+    Matches the calling convention that GP.modify_covariance uses: it vmaps
+    ``evaluate`` over all (i, j) pairs, so each call receives scalars.
+    """
 
     def __init__(self, amp: float) -> None:
         self.amp = amp
 
     def evaluate(self, X: jax.Array, Xp: jax.Array) -> jax.Array:
-        # Simple squared-exponential-like kernel: amp^2 * exp(-0.5 * |X-Xp|^2)
-        diff = X[:, None] - Xp[None, :]
+        """Scalar kernel evaluation."""
+        diff = X - Xp
         return self.amp**2 * jnp.exp(-0.5 * diff**2)
+
+    def __call__(self, X: jax.Array, Xp: jax.Array) -> jax.Array:
+        """Allow the kernel to be called directly (without .evaluate)."""
+        return self.evaluate(X, Xp)
 
 
 def _mock_kernel_builder(nl_values: dict[str, Any]) -> _MockKernel:
@@ -47,6 +59,24 @@ def _make_rv_data(n_obs: int = 10) -> RVData:
         time=Q(jnp.linspace(0, 100, n_obs), "day"),
         rv=Q(jnp.zeros(n_obs), "km/s"),
         rv_err=Q(jnp.ones(n_obs) * 0.5, "km/s"),
+    )
+
+
+def _make_tinygp_sho() -> GP:
+    tinygp = pytest.importorskip("tinygp")
+
+    return GP(
+        kernel_builder=lambda hp: tinygp.kernels.quasisep.SHO(
+            omega=hp["gp_omega"],
+            quality=hp["gp_Q"],
+            sigma=hp["gp_sigma"],
+        ),
+        hyperparams=(
+            ParamInfo("gp_omega", "1/day"),
+            ParamInfo("gp_Q", ""),
+            ParamInfo("gp_sigma", "km/s"),
+        ),
+        time_unit="day",
     )
 
 
@@ -239,3 +269,53 @@ class TestGPWithRVModel:
         }
         ll = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(ll)
+
+    def test_tinygp_sho_log_prob_is_finite(self):
+        """Real tinygp SHO kernels should give a finite marginalized log-prob."""
+        data = _make_rv_data(n_obs=8)
+        gp = _make_tinygp_sho()
+        linear_prior = {
+            "rv_semiamp": dist.Normal(0.0, 100.0),
+            "v_sys": dist.Normal(0.0, 100.0),
+        }
+        model = RVModel(extensions=(gp,))
+        nl = {
+            "period": Q(40.0, "day"),
+            "eccentricity": 0.2,
+            "phase_peri": 0.3,
+            "arg_peri": Q(1.0, "rad"),
+            "gp_omega": 0.2,
+            "gp_Q": 2.0,
+            "gp_sigma": 1.0,
+        }
+
+        ll = model.log_prob(nl, data, linear_prior=linear_prior)
+        assert jnp.isfinite(ll)
+
+    def test_tinygp_sho_sampler_produces_finite_log_likelihoods(self):
+        """The sampler GP path should produce at least some finite log-likelihoods."""
+        data = _make_rv_data(n_obs=8)
+        model = RVModel(extensions=(_make_tinygp_sho(),))
+        prior = RejectionPrior.default_rv(
+            period_min=Q(1.0, "day"),
+            period_max=Q(300.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+            gp_omega=QD(dist.LogNormal(0.0, 1.0), "1/day"),
+            gp_Q=QD(dist.LogNormal(0.0, 0.5), ""),
+            gp_sigma=QD(dist.HalfNormal(1.0), "km/s"),
+        )
+        sampler = RejectionSampler(prior, model, batch_size=32)
+        prepared = _prepare_sampler_model(prior, model, None)
+
+        _, log_likelihoods = sampler._sample_prior_and_evaluate_batched(
+            prepared.model,
+            jax.random.key(0),
+            128,
+            prepared.nonlinear_extension_priors,
+            prepared.effective_linear_prior or {},
+            prepared.effective_marginalized_names,
+            data,
+        )
+
+        assert jnp.any(jnp.isfinite(log_likelihoods))

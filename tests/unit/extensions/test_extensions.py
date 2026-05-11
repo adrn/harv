@@ -15,6 +15,7 @@ from harv.extensions import (
     MultiSurveyOffset,
 )
 from harv.models import RVModel
+from harv.samplers import RejectionPrior, RejectionSampler
 
 # ======================================================================
 # Jitter
@@ -219,6 +220,28 @@ class TestMonomialTrend:
         }
         lp = model.log_prob(nl, data, linear_prior=linear_prior)
         assert jnp.isfinite(lp)
+
+    def test_rejection_sampler_requires_all_trend_priors(self):
+        """Sampler must reject missing priors for declared trend coefficients."""
+        data = RVData(
+            time=Q([0.0, 50.0, 100.0, 150.0, 200.0], "day"),
+            rv=Q([1.0, -2.0, 0.5, 3.0, -1.0], "km/s"),
+            rv_err=Q([0.5, 0.5, 0.5, 0.5, 0.5], "km/s"),
+        )
+        prior = RejectionPrior.default_rv(
+            period_min=Q(1.0, "day"),
+            period_max=Q(1_000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+            trend_1=QD(dist.Normal(0.0, 1.0), "km/s"),
+        )
+        sampler = RejectionSampler(
+            prior,
+            RVModel(extensions=(MonomialTrend(order=2, time_unit="day"),)),
+        )
+
+        with pytest.raises(ValueError, match="trend_2"):
+            sampler.run(data, n_prior_samples=8, max_posterior_samples=2, seed=0)
 
 
 # ======================================================================

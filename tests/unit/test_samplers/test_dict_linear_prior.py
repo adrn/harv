@@ -25,6 +25,142 @@ def _make_rv_data(n_obs: int = 30, seed: int = 42) -> RVData:
 class TestDictLinearPriorRV:
     """Tests for dict-form linear prior with RV data."""
 
+    def test_run_ignore_non_finite_keeps_finite_samples(self, monkeypatch):
+        """ignore_non_finite=True should reject only the bad log-likelihoods."""
+        data = _make_rv_data()
+        prior = RejectionPrior.default_rv(
+            period_min=Q(1.0, "day"),
+            period_max=Q(10.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        sampler = RejectionSampler(prior, RVModel())
+
+        def fake_sample_prior_and_evaluate_batched(
+            self,
+            model,
+            key,
+            n_prior_samples,
+            ext_nl_priors,
+            eff_linear,
+            marginalize_names,
+            data,
+        ):
+            del self, model, key, n_prior_samples, ext_nl_priors, eff_linear
+            del marginalize_names, data
+            prior_samples = {
+                "period": jnp.array([2.0, 3.0, 4.0, 5.0]),
+                "eccentricity": jnp.array([0.1, 0.1, 0.1, 0.1]),
+                "phase_peri": jnp.array([0.2, 0.2, 0.2, 0.2]),
+                "arg_peri": jnp.array([1.0, 1.0, 1.0, 1.0]),
+            }
+            log_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
+            return prior_samples, log_likelihoods
+
+        def fake_sample_linear_parameters(
+            self,
+            model,
+            key,
+            nonlinear_samples,
+            marginalized_names,
+            data,
+            linear_prior,
+        ):
+            del self, model, key, marginalized_names, data, linear_prior
+            n = len(next(iter(nonlinear_samples.values())))
+            return {
+                "rv_semiamp": Q(jnp.zeros(n), "km/s"),
+                "v_sys": Q(jnp.zeros(n), "km/s"),
+            }
+
+        monkeypatch.setattr(
+            RejectionSampler,
+            "_sample_prior_and_evaluate_batched",
+            fake_sample_prior_and_evaluate_batched,
+        )
+        monkeypatch.setattr(
+            RejectionSampler,
+            "_sample_linear_parameters",
+            fake_sample_linear_parameters,
+        )
+
+        samples = sampler.run(
+            data,
+            n_prior_samples=4,
+            seed=0,
+            ignore_non_finite=True,
+        )
+
+        assert samples.n_samples == 1
+        assert jnp.allclose(samples["period"].value, jnp.array([2.0]))
+
+    def test_run_default_does_not_ignore_non_finite(self, monkeypatch):
+        """Without ignore_non_finite, non-finite values poison the rejection step."""
+        data = _make_rv_data()
+        prior = RejectionPrior.default_rv(
+            period_min=Q(1.0, "day"),
+            period_max=Q(10.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        sampler = RejectionSampler(prior, RVModel())
+
+        def fake_sample_prior_and_evaluate_batched(
+            self,
+            model,
+            key,
+            n_prior_samples,
+            ext_nl_priors,
+            eff_linear,
+            marginalize_names,
+            data,
+        ):
+            del self, model, key, n_prior_samples, ext_nl_priors, eff_linear
+            del marginalize_names, data
+            prior_samples = {
+                "period": jnp.array([2.0, 3.0, 4.0, 5.0]),
+                "eccentricity": jnp.array([0.1, 0.1, 0.1, 0.1]),
+                "phase_peri": jnp.array([0.2, 0.2, 0.2, 0.2]),
+                "arg_peri": jnp.array([1.0, 1.0, 1.0, 1.0]),
+            }
+            log_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
+            return prior_samples, log_likelihoods
+
+        def fake_sample_linear_parameters(
+            self,
+            model,
+            key,
+            nonlinear_samples,
+            marginalized_names,
+            data,
+            linear_prior,
+        ):
+            del self, model, key, marginalized_names, data, linear_prior
+            n = len(next(iter(nonlinear_samples.values())))
+            return {
+                "rv_semiamp": Q(jnp.zeros(n), "km/s"),
+                "v_sys": Q(jnp.zeros(n), "km/s"),
+            }
+
+        monkeypatch.setattr(
+            RejectionSampler,
+            "_sample_prior_and_evaluate_batched",
+            fake_sample_prior_and_evaluate_batched,
+        )
+        monkeypatch.setattr(
+            RejectionSampler,
+            "_sample_linear_parameters",
+            fake_sample_linear_parameters,
+        )
+
+        samples = sampler.run(
+            data,
+            n_prior_samples=4,
+            seed=0,
+        )
+
+        assert samples.n_samples == 0
+
     def test_all_gaussian_matches_mvn(self):
         """Dict with all Normal entries should behave like equivalent MVN."""
         data = _make_rv_data()
