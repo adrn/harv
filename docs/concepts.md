@@ -10,17 +10,20 @@ Joker](https://github.com/adrn/thejoker): draw many samples from the prior, eval
 likelihood for each sample, and retain samples with probability proportional to the
 posterior weight.
 
-In the simplest form, the posterior pdf over parameters $\\theta$ given data $D$ is
-$$
-p(\\theta \\mid D) \\propto p(D \\mid \\theta),p(\\theta) \\quad ,
-$$
-so if you draw candidate parameter values $\\theta^{(k)}$ from the prior
-$p(\\theta)$, the only remaining weight is the likelihood. In practice, `harv` works
+In the simplest form, the posterior pdf over parameters $\theta$ given data $D$ is
+
+```{math}
+p(\theta \mid D) \propto p(D \mid \theta) \, p(\theta) \quad ,
+```
+
+so if you draw candidate parameter values $\theta^{(k)}$ from the prior
+$p(\theta)$, the only remaining weight is the likelihood. In practice, `harv` works
 with log weights and accepts samples with probability based on the likelihood relative
 to the maximum weight in the current batch.
 
 This is especially useful for orbital inference problems with sparse, noisy, or highly
-multimodal data, where all MCMC methods will struggle to mix across well-separated but narrow modes.
+multimodal data, where all MCMC methods will struggle to mix across well-separated but
+narrow modes.
 
 The main tradeoff is straightforward:
 
@@ -45,16 +48,20 @@ fully nonlinear ones. In many cases, Gaussian linear parameters are analytically
 marginalized out of the likelihood, leaving a lower-dimensional problem for sampling.
 
 Schematically, `harv` treats the parameters as
-$$
-\\theta = (\\theta\_{\\mathrm{nl}}, \\theta\_{\\mathrm{lin}}),
-$$
 
-# and then works with the marginalized likelihood $$ p(D \\mid \\theta\_{\\mathrm{nl}})
+```{math}
+\theta = (\theta_{\mathrm{nl}}, \theta_{\mathrm{lin}}),
+```
 
-\\int p(D \\mid \\theta\_{\\mathrm{nl}}, \\theta\_{\\mathrm{lin}})
-, p(\\theta\_{\\mathrm{lin}} \\mid \\theta\_{\\mathrm{nl}})
-, d\\theta\_{\\mathrm{lin}}.
-$$
+and then works with the marginalized likelihood
+
+```{math}
+p(D \mid \theta\_{\mathrm{nl}}) =
+\int p(D \mid \theta\_{\mathrm{nl}}, \theta\_{\mathrm{lin}})
+\, p(\theta\_{\mathrm{lin}} \mid \theta\_{\mathrm{nl}})
+\, d\theta\_{\mathrm{lin}} \quad .
+```
+
 This integral removes the linear parameters from the expensive outer sampling loop when
 their prior family permits analytic marginalization.
 

@@ -36,7 +36,7 @@ repos:
     hooks:
       - id: mdformat
         additional_dependencies:
-          [mdformat-gfm, mdformat-frontmatter, mdformat-footnote]
+          [mdformat-gfm, mdformat-myst, mdformat-footnote]
   - repo: https://github.com/kynan/nbstripout
     rev: 0.9.1
     hooks:
