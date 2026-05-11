@@ -10,16 +10,17 @@ Joker](https://github.com/adrn/thejoker): draw many samples from the prior, eval
 likelihood for each sample, and retain samples with probability proportional to the
 posterior weight.
 
-In the simplest form, the posterior pdf over parameters $\theta$ given data $D$ is
+In the simplest form, the posterior pdf over parameters {math}`\theta` given data
+{math}`D` is
 
 ```{math}
 p(\theta \mid D) \propto p(D \mid \theta) \, p(\theta) \quad ,
 ```
 
-so if you draw candidate parameter values $\theta^{(k)}$ from the prior
-$p(\theta)$, the only remaining weight is the likelihood. In practice, `harv` works
-with log weights and accepts samples with probability based on the likelihood relative
-to the maximum weight in the current batch.
+so if you draw candidate parameter values {math}`\theta^{(k)}` from the prior
+{math}`p(\theta)`, the only remaining weight is the likelihood. In practice, `harv`
+works with log weights and accepts samples with probability based on the likelihood
+relative to the maximum weight in the current batch.
 
 This is especially useful for orbital inference problems with sparse, noisy, or highly
 multimodal data, where all MCMC methods will struggle to mix across well-separated but
@@ -56,10 +57,10 @@ Schematically, `harv` treats the parameters as
 and then works with the marginalized likelihood
 
 ```{math}
-p(D \mid \theta\_{\mathrm{nl}}) =
-\int p(D \mid \theta\_{\mathrm{nl}}, \theta\_{\mathrm{lin}})
-\, p(\theta\_{\mathrm{lin}} \mid \theta\_{\mathrm{nl}})
-\, d\theta\_{\mathrm{lin}} \quad .
+p(D \mid \theta_{\mathrm{nl}}) =
+\int p(D \mid \theta_{\mathrm{nl}}, \theta_{\mathrm{lin}})
+\, p(\theta_{\mathrm{lin}} \mid \theta_{\mathrm{nl}})
+\, d\theta_{\mathrm{lin}} \quad .
 ```
 
 This integral removes the linear parameters from the expensive outer sampling loop when
