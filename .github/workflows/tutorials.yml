@@ -52,10 +52,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
             name: notebooks-for-${{ github.sha }}
-            path: |
-              docs/tutorials/rv
-              # TODO: docs/tutorials/astrometry
-              # TODO: docs/tutorials/case-studies
+            path: docs/tutorials
 
       - name: Trigger RTDs build
         if: ${{ github.event_name != 'pull_request' }}
