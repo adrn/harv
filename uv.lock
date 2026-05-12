@@ -911,6 +911,22 @@ wheels = [
 ]
 
 [[package]]
+name = "furo"
+version = "2025.12.19"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accessible-pygments" },
+    { name = "beautifulsoup4" },
+    { name = "pygments" },
+    { name = "sphinx" },
+    { name = "sphinx-basic-ng" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ec/20/5f5ad4da6a5a27c80f2ed2ee9aee3f9e36c66e56e21c00fde467b2f8f88f/furo-2025.12.19.tar.gz", hash = "sha256:188d1f942037d8b37cd3985b955839fea62baa1730087dc29d157677c857e2a7", size = 1661473, upload-time = "2025-12-19T17:34:40.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/b2/50e9b292b5cac13e9e81272c7171301abc753a60460d21505b606e15cf21/furo-2025.12.19-py3-none-any.whl", hash = "sha256:bb0ead5309f9500130665a26bee87693c41ce4dbdff864dbfb6b0dae4673d24f", size = 339262, upload-time = "2025-12-19T17:34:38.905Z" },
+]
+
+[[package]]
 name = "gaiaunlimited"
 version = "0.3.2"
 source = { git = "https://github.com/gaia-unlimited/gaiaunlimited.git#73bcca7c6d33ae84ef7b2a37a50ee77562221ef9" }
@@ -1052,6 +1068,7 @@ dev = [
     { name = "autoapi" },
     { name = "beartype" },
     { name = "corner" },
+    { name = "furo" },
     { name = "gaiaunlimited" },
     { name = "hatch" },
     { name = "healpy" },
@@ -1064,7 +1081,6 @@ dev = [
     { name = "nbconvert" },
     { name = "pooch" },
     { name = "pre-commit" },
-    { name = "pydata-sphinx-theme" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-raises" },
@@ -1075,6 +1091,7 @@ dev = [
     { name = "sphinx" },
     { name = "sphinx-autoapi" },
     { name = "sphinx-autobuild" },
+    { name = "sphinx-autodoc-typehints" },
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
     { name = "sybil" },
@@ -1085,15 +1102,16 @@ dev = [
 docs = [
     { name = "autoapi" },
     { name = "corner" },
+    { name = "furo" },
     { name = "ipykernel" },
     { name = "myst-nb" },
     { name = "myst-parser" },
     { name = "nbconvert" },
-    { name = "pydata-sphinx-theme" },
     { name = "rtds-action" },
     { name = "sphinx" },
     { name = "sphinx-autoapi" },
     { name = "sphinx-autobuild" },
+    { name = "sphinx-autodoc-typehints" },
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
 ]
@@ -1143,6 +1161,7 @@ dev = [
     { name = "autoapi", specifier = ">=2.0.1" },
     { name = "beartype" },
     { name = "corner", specifier = ">=2.2.3" },
+    { name = "furo", specifier = ">=2024.8.6" },
     { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "hatch" },
     { name = "healpy", specifier = ">=1.18.1" },
@@ -1156,7 +1175,6 @@ dev = [
     { name = "nbconvert", specifier = ">=7.17.1" },
     { name = "pooch", specifier = ">=1.8.2" },
     { name = "pre-commit" },
-    { name = "pydata-sphinx-theme", specifier = "~=0.16" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-raises" },
@@ -1167,6 +1185,7 @@ dev = [
     { name = "sphinx", specifier = "~=8.0" },
     { name = "sphinx-autoapi", specifier = ">=3.6.0" },
     { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=2.5" },
     { name = "sphinx-copybutton", specifier = ">=0.5.2" },
     { name = "sphinx-design", specifier = ">=0.6.1" },
     { name = "sybil", specifier = ">=10.0.1" },
@@ -1177,15 +1196,16 @@ dev = [
 docs = [
     { name = "autoapi", specifier = ">=2.0.1" },
     { name = "corner", specifier = ">=2.2.3" },
+    { name = "furo", specifier = ">=2024.8.6" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "myst-nb", specifier = ">=1.4.0" },
     { name = "myst-parser", specifier = ">=4.0" },
     { name = "nbconvert", specifier = ">=7.17.1" },
-    { name = "pydata-sphinx-theme", specifier = "~=0.16" },
     { name = "rtds-action", specifier = ">=1.1.0" },
     { name = "sphinx", specifier = "~=8.0" },
     { name = "sphinx-autoapi", specifier = ">=3.6.0" },
     { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=2.5" },
     { name = "sphinx-copybutton", specifier = ">=0.5.2" },
     { name = "sphinx-design", specifier = ">=0.6.1" },
 ]
@@ -2623,24 +2643,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pydata-sphinx-theme"
-version = "0.17.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "accessible-pygments" },
-    { name = "babel" },
-    { name = "beautifulsoup4" },
-    { name = "docutils" },
-    { name = "pygments" },
-    { name = "sphinx" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/f7/c74c7100a7f4c0f77b5dcacb7dfdb8fee774fb70e487dd97acba2b930774/pydata_sphinx_theme-0.17.1.tar.gz", hash = "sha256:2cfc1d926c753c77039b7ee53f0ccebcbee5e81f0db61432b01cbb10ad7fd0af", size = 4991415, upload-time = "2026-04-21T13:00:34.263Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/bc/2cb8c78300ce1ace4eeac3b3522218cea2c2053bfa6b4e32cc972a477f9a/pydata_sphinx_theme-0.17.1-py3-none-any.whl", hash = "sha256:320b022d7808bdf5920d9a28e573f27aace9b23e1af6ca103eecc752411df492", size = 6823346, upload-time = "2026-04-21T13:00:31.978Z" },
-]
-
-[[package]]
 name = "pyerfa"
 version = "2.0.1.5"
 source = { registry = "https://pypi.org/simple" }
@@ -3337,6 +3339,30 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e0/3c/a59a3a453d4133777f7ed2e83c80b7dc817d43c74b74298ca0af869662ad/sphinx_autobuild-2025.8.25.tar.gz", hash = "sha256:9cf5aab32853c8c31af572e4fecdc09c997e2b8be5a07daf2a389e270e85b213", size = 15200, upload-time = "2025-08-25T18:44:55.436Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/20/56411b52f917696995f5ad27d2ea7e9492c84a043c5b49a3a3173573cd93/sphinx_autobuild-2025.8.25-py3-none-any.whl", hash = "sha256:b750ac7d5a18603e4665294323fd20f6dcc0a984117026d1986704fa68f0379a", size = 12535, upload-time = "2025-08-25T18:44:54.164Z" },
+]
+
+[[package]]
+name = "sphinx-autodoc-typehints"
+version = "3.5.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/4f/4fd5583678bb7dc8afa69e9b309e6a99ee8d79ad3a4728f4e52fd7cb37c7/sphinx_autodoc_typehints-3.5.2.tar.gz", hash = "sha256:5fcd4a3eb7aa89424c1e2e32bedca66edc38367569c9169a80f4b3e934171fdb", size = 37839, upload-time = "2025-10-16T00:50:15.743Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/f2/9657c98a66973b7c35bfd48ba65d1922860de9598fbb535cd96e3f58a908/sphinx_autodoc_typehints-3.5.2-py3-none-any.whl", hash = "sha256:0accd043619f53c86705958e323b419e41667917045ac9215d7be1b493648d8c", size = 21184, upload-time = "2025-10-16T00:50:13.973Z" },
+]
+
+[[package]]
+name = "sphinx-basic-ng"
+version = "1.0.0b2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/0b/a866924ded68efec7a1759587a4e478aec7559d8165fac8b2ad1c0e774d6/sphinx_basic_ng-1.0.0b2.tar.gz", hash = "sha256:9ec55a47c90c8c002b5960c57492ec3021f5193cb26cebc2dc4ea226848651c9", size = 20736, upload-time = "2023-07-08T18:40:54.166Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/dd/018ce05c532a22007ac58d4f45232514cd9d6dd0ee1dc374e309db830983/sphinx_basic_ng-1.0.0b2-py3-none-any.whl", hash = "sha256:eb09aedbabfb650607e9b4b68c9d240b90b1e1be221d6ad71d61c52e29f7932b", size = 22496, upload-time = "2023-07-08T18:40:52.659Z" },
 ]
 
 [[package]]
