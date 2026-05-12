@@ -76,7 +76,13 @@ myst_footnote_transition = False
 
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "tutorials/data",
+    "_static/*.ipynb",
+]
 
 # --------- setup autoapi defaults for your api docs ---------------
 
