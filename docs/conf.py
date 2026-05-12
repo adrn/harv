@@ -155,8 +155,8 @@ github_token = os.environ.get("GITHUB_TOKEN")
 if github_token:
     print("rtds_action: GITHUB_TOKEN found; fetching executed tutorial artifact")
     rtds_action_github_repo = "adrn/harv"
-    # Path is relative to the Sphinx build working directory (repo root on RTD).
-    rtds_action_path = "docs/tutorials"
+    # Path is relative to docs/conf.py, so this resolves to docs/tutorials on RTD.
+    rtds_action_path = "tutorials"
     rtds_action_artifact_prefix = "notebooks-for-"
     rtds_action_github_token = github_token
     rtds_action_error_if_missing = True
