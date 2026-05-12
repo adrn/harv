@@ -149,13 +149,26 @@ intersphinx_mapping = {
 nb_execution_mode = "off"
 
 # rtds-action: download pre-executed notebooks on RTD
-if "GITHUB_TOKEN" in os.environ:
+is_rtd_build = os.environ.get("READTHEDOCS") == "True"
+github_token = os.environ.get("GITHUB_TOKEN")
+
+if github_token:
+    print("rtds_action: GITHUB_TOKEN found; fetching executed tutorial artifact")
     rtds_action_github_repo = "adrn/harv"
+    # Path is relative to the Sphinx build working directory (repo root on RTD).
     rtds_action_path = "docs/tutorials"
     rtds_action_artifact_prefix = "notebooks-for-"
-    rtds_action_github_token = os.environ["GITHUB_TOKEN"]
+    rtds_action_github_token = github_token
     rtds_action_error_if_missing = True
 else:
+    if is_rtd_build:
+        msg = (
+            "rtds_action: GITHUB_TOKEN is not set on Read the Docs, so executed "
+            "tutorial notebooks cannot be fetched from GitHub Actions artifacts."
+        )
+        raise RuntimeError(msg)
+
+    print("rtds_action: no GITHUB_TOKEN found; skipping artifact retrieval")
     rtds_action_github_repo = ""
     rtds_action_github_token = ""
     rtds_action_path = ""
