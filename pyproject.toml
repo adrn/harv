@@ -66,6 +66,7 @@ dev = [
     {include-group = "extra"},
     {include-group = "test"},
     {include-group = "docs"},
+    {include-group = "nox"},
     "hatch",
     "ipykernel",
     "ipywidgets",
@@ -90,6 +91,7 @@ docs = [
     "nbconvert>=7.17.1",
     "rtds-action>=1.1.0",
     "furo>=2024.8.6",
+    "pytz>=2026.2",
 ]
 test = [
     "pytest",
@@ -100,6 +102,10 @@ test = [
     "beartype",
     "matplotlib>=3.10.7",
     "sybil>=10.0.1",
+]
+nox = [
+    "nox>=2026.4.10",
+    "nox-uv>=0.8.0",
 ]
 
 [project.urls]

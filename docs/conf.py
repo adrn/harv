@@ -5,6 +5,7 @@ import os
 import sys
 import importlib.metadata
 from datetime import datetime
+import pytz
 
 # Ensure src/ is on the path so autodoc can find the package
 sys.path.insert(0, os.path.abspath("../src"))
@@ -15,7 +16,8 @@ current_year = datetime.now().year
 # -- General project information -----------------------------
 # General information about the project.
 project = "harv"
-copyright = "Copyright © 2026 harv authors"
+author = f"{project} Developers"
+copyright = f"{datetime.now(pytz.timezone('UTC')).year}, {author}"
 html_show_sphinx = False
 
 # Try to get the version info for the project you're documenting, acts as replacement for
@@ -25,8 +27,6 @@ try:
     version = importlib.metadata.version("harv")
 except importlib.metadata.PackageNotFoundError:
     version = "0.0.0"
-
-# -- General configuration -----------------------------------------------------
 
 # -- General configuration -----------------------------------------------------
 
@@ -62,6 +62,9 @@ pygments_style = "default"
 # Usually you set "language" from the command line for these cases.
 language = "en"
 
+# Suppress the module name of the python reference if it can be resolved.
+python_use_unqualified_type_names = True
+
 # -- Options for extensions ----------------------------------------------------
 # https://myst-parser.readthedocs.io/en/latest/syntax/optional.html
 # -- Options for myst markdown formatting
@@ -96,6 +99,22 @@ autoapi_add_toctree = False
 autoapi_keep_files = False
 autoapi_options = ["members", "undoc-members", "show-inheritance"]
 
+# -- Autodoc settings ---------------------------------------------------
+
+autodoc_typehints = "description"
+autodoc_typehints_format = "short"
+
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": True,
+    "inherited-members": True,
+    "show-inheritance": True,
+    "member-order": "bysource",
+}
+
+always_document_param_types = True
+typehints_use_signature = True
+
 # -- Options for HTML output ---------------------------------------------------
 
 html_theme = "furo"
@@ -108,7 +127,40 @@ htmlhelp_basename = "harv_doc"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/", None),
+    # Canonical URL (jax.readthedocs.io now redirects here)
+    "jax": ("https://docs.jax.dev/en/latest/", None),
+    "jaxtyping": ("https://docs.kidger.site/jaxtyping/", None),
+    "astropy": ("https://docs.astropy.org/en/stable/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "equinox": ("https://docs.kidger.site/equinox/", None),
+    "quax": ("https://docs.kidger.site/quax/", None),
+    "unxt": ("https://unxt.readthedocs.io/en/latest/", None),
 }
+
+nitpick_ignore = [
+    # Keep this ignore: Sphinx emits unresolved typing.Union references from
+    # generated type signatures with <unknown> source locations, so there is no
+    # stable doc target to fix directly yet.
+    # TODO: Revisit after upgrading Sphinx and/or sphinx-autodoc-typehints.
+    ("py:data", "typing.Union"),
+    # ArrayLike is documented as py:data in JAX (it's a type alias), but
+    # sphinx_autodoc_typehints emits it as py:class — the mismatch cannot be
+    # resolved via intersphinx regardless of URL.
+    ("py:class", "ArrayLike"),
+    ("py:class", "jax.typing.ArrayLike"),
+    # Private internal helper class from unxt with no public docs
+    # ("py:class", "unxt._src.quantity.quantity.Quantity[PhysicalType('length')]"),
+    # ("py:class", "Q"),
+]
+
+# TypedNdArray is a JAX-private type (jax._src.basearray) with no public docs.
+# jax._src.* are private JAX implementation paths never in the public inventory.
+nitpick_ignore_regex = [
+    (r"py:class", r"jaxtyping\..*"),  # TODO: remove
+    (r"py:class", r".*TypedNdArray.*"),
+    (r"py:class", r"jax\._src\..*"),
+]
+
 
 nb_execution_mode = "off"
 
