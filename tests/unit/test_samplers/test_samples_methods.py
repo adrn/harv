@@ -6,7 +6,7 @@ using the constructor. NumpyroSampler.run() returns a Samples object.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import jax.numpy as jnp
 import numpy as np
@@ -705,11 +705,10 @@ class TestNumpyroSamplerCombinedWithJitter:
     def combined_samples_with_jitter(self) -> Samples:
         """Minimal combined Samples that include rv.jitter in nonlinear.
 
-        Per-component linear parameters use the same component-qualified
-        ``"{comp}.{base}"`` keys that ``RejectionSampler.run`` emits for a
-        ``JointModel`` (see ``_effective_linear_prior_from_model``); these
-        are the keys ``NumpyroSampler._build_init_params`` looks up when
-        constructing init values for the explicit-linear sites.
+        ``RejectionSampler.run`` flattens unique joint linear names to bare keys
+        (for example ``"parallax"`` instead of ``"astro.parallax"``) while
+        keeping colliding names qualified. Warm-started MCMC must accept that
+        output shape when building init values for joint numpyro sites.
         """
         nonlinear = {
             "period": Q(jnp.linspace(280.0, 320.0, N), "day"),
@@ -721,14 +720,14 @@ class TestNumpyroSamplerCombinedWithJitter:
             "rv.jitter": Q(jnp.linspace(1.0, 5.0, N), "km/s"),
         }
         linear = {
-            "astro.ra0": Q(jnp.zeros(N), "mas"),
-            "astro.dec0": Q(jnp.zeros(N), "mas"),
-            "astro.pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
-            "astro.pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
-            "astro.parallax": Q(jnp.ones(N) * 3.0, "mas"),
-            "astro.semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
-            "rv.rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
-            "rv.v_sys": Q(jnp.zeros(N), "km/s"),
+            "ra0": Q(jnp.zeros(N), "mas"),
+            "dec0": Q(jnp.zeros(N), "mas"),
+            "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+            "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+            "parallax": Q(jnp.ones(N) * 3.0, "mas"),
+            "semi_major_axis": Q(jnp.linspace(1.0, 3.0, N), "mas"),
+            "rv_semiamp": Q(jnp.linspace(3.0, 7.0, N), "km/s"),
+            "v_sys": Q(jnp.zeros(N), "km/s"),
         }
         return Samples(
             nonlinear=nonlinear,
@@ -740,7 +739,7 @@ class TestNumpyroSamplerCombinedWithJitter:
     def test_run_marginalized_completes(
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):
-        """Combined marginalized MCMC with jitter runs and returns Samples."""
+        """Combined marginalized MCMC accepts bare unique joint warm-start keys."""
         sampler, data = combined_sampler_and_data
         result = sampler.run(
             data,
@@ -758,6 +757,23 @@ class TestNumpyroSamplerCombinedWithJitter:
         # Jitter site present (model-key convention for JointModel: "rv.jitter")
         assert "rv.jitter" in result.nonlinear
         # Explicit linear (HalfNormal parallax) present
+        assert "parallax" in result.linear
+
+    def test_run_marginalized_accepts_bare_joint_linear_warm_start_keys(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """Regression: joint warm starts may flatten unique explicit linear names."""
+        sampler, data = combined_sampler_and_data
+        result = sampler.run(
+            data,
+            init_samples=combined_samples_with_jitter,
+            seed=43,
+            num_chains=2,
+            num_warmup=3,
+            num_samples=3,
+            chain_method="sequential",
+        )
+        assert isinstance(result, Samples)
         assert "parallax" in result.linear
 
     def test_run_marginalized_sample_count(
@@ -783,8 +799,10 @@ class TestNumpyroSamplerCombinedWithJitter:
 
         Regression: the full model previously failed on combined data because
         (a) callable linear priors received a composite dict instead of a
-        single params object, and (b) init_params included explicit linear
-        keys (e.g. ``parallax``) that belong in ``_linear`` for the full model.
+        single params object, and (b) joint warm-start samples may flatten
+        unique linear keys (for example ``parallax`` rather than
+        ``astro.parallax``), so `_build_init_params()` must normalize them
+        before packing the ``_linear`` site.
         """
         sampler, data = combined_sampler_and_data
         result = sampler.run(
@@ -1310,29 +1328,51 @@ class TestPlotCornerTruths:
     UnitConversionError on any Q truth with non-dimensionless units.
     """
 
-    def _capture_reference_values(self, samples, truths, params):
-        with patch("harv.samplers.samples.az.plot_pair") as mock_plot:
-            mock_plot.return_value = None
-            samples.plot_corner(params=params, truths=truths)
-        return mock_plot.call_args.kwargs["stats"]["point_estimate"]
+    def _capture_truth_overlay(self, samples, truths, params):
+        fake_axes = np.empty((len(params), len(params)), dtype=object)
+        for idx in np.ndindex(fake_axes.shape):
+            fake_axes[idx] = MagicMock()
+        fake_plot_matrix = SimpleNamespace(
+            backend="matplotlib",
+            viz={"plot": SimpleNamespace(values=fake_axes)},
+        )
+        with patch("harv.samplers.samples.az.plot_pair", return_value=fake_plot_matrix):
+            result = samples.plot_corner(params=params, truths=truths)
+        return result, fake_axes
 
     def test_q_truth_converted_to_sample_unit(self, rv_samples):
         """Q truth in a different but compatible unit converts correctly."""
         truths = {"period": Q(0.27, "yr")}  # ~98.6 day
-        ref = self._capture_reference_values(rv_samples, truths, ["period"])
-        assert ref["period"] == pytest.approx(0.27 * 365.25, abs=0.5)
+        _, axes = self._capture_truth_overlay(rv_samples, truths, ["period"])
+        assert axes[0, 0].axvline.call_args.args[0] == pytest.approx(
+            0.27 * 365.25, abs=0.5
+        )
 
     def test_q_truth_same_unit_as_sample(self, rv_samples):
         """Q truth already in the sample's unit is returned unchanged."""
         truths = {"rv_semiamp": Q(5.0, "km/s")}
-        ref = self._capture_reference_values(rv_samples, truths, ["rv_semiamp"])
-        assert ref["rv_semiamp"] == pytest.approx(5.0)
+        _, axes = self._capture_truth_overlay(rv_samples, truths, ["rv_semiamp"])
+        assert axes[0, 0].axvline.call_args.args[0] == pytest.approx(5.0)
 
     def test_plain_float_truth_with_dimensionless_sample(self, rv_samples):
         """Plain-float truth still works for a dimensionless sample column."""
         truths = {"eccentricity": 0.15}
-        ref = self._capture_reference_values(rv_samples, truths, ["eccentricity"])
-        assert ref["eccentricity"] == pytest.approx(0.15)
+        _, axes = self._capture_truth_overlay(rv_samples, truths, ["eccentricity"])
+        assert axes[0, 0].axvline.call_args.args[0] == pytest.approx(0.15)
+
+    def test_truths_overlay_on_lower_triangle_pair_plot(self, rv_samples):
+        """Two-parameter corner plots draw lower-triangle truth crosshairs."""
+        truths = {"period": Q(100.0, "day"), "eccentricity": 0.2}
+        _, axes = self._capture_truth_overlay(
+            rv_samples, truths, ["period", "eccentricity"]
+        )
+
+        axes[0, 0].axvline.assert_called_once()
+        axes[1, 1].axvline.assert_called_once()
+        axes[1, 0].axvline.assert_called_once()
+        axes[1, 0].axhline.assert_called_once()
+        axes[1, 0].scatter.assert_called_once()
+        axes[0, 1].scatter.assert_not_called()
 
 
 @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")

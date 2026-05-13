@@ -37,6 +37,67 @@ def _find_namespaced_keys(d: dict[str, Any], param_name: str) -> list[str]:
     return [k for k in d if k == param_name or k.endswith(f".{param_name}")]
 
 
+def _overlay_corner_truths(  # noqa: C901
+    plot_matrix: Any,
+    var_names: list[str],
+    reference_values: dict[str, float],
+    *,
+    marginal: bool,
+    triangle: str,
+) -> None:
+    """Overlay truth markers on an ArviZ pair plot.
+
+    This is an ugly workaround because arviz's new API is not backwards compatible with
+    the old plot_pair for displaying reference values / "truths" - ARGH!
+
+    ``arviz_plots.plot_pair`` treats ``stats['point_estimate']`` as keyword
+    arguments for computing a summary statistic or as a precomputed xarray
+    object, not as literal truth coordinates. Overlay truths after plotting
+    rather than routing them through the stats API.
+    """
+    if not reference_values or plot_matrix is None:
+        return
+
+    if getattr(plot_matrix, "backend", None) != "matplotlib":
+        warnings.warn(
+            "plot_corner truths are only overplotted for the matplotlib backend.",
+            stacklevel=3,
+        )
+        return
+
+    axes = np.asarray(plot_matrix.viz["plot"].values)
+    line_kwargs = {"color": "C1", "linestyle": "--", "linewidth": 1.2, "alpha": 0.9}
+    point_kwargs = {"color": "C1", "s": 24, "zorder": 5}
+
+    for row_idx, y_name in enumerate(var_names):
+        y_truth = reference_values.get(y_name)
+        for col_idx, x_name in enumerate(var_names):
+            ax = axes[row_idx, col_idx]
+            if ax is None:
+                continue
+
+            x_truth = reference_values.get(x_name)
+
+            if marginal and row_idx == col_idx:
+                if x_truth is not None:
+                    ax.axvline(x_truth, **line_kwargs)
+                continue
+
+            if triangle == "lower" and row_idx <= col_idx:
+                continue
+            if triangle == "upper" and row_idx >= col_idx:
+                continue
+            if triangle not in {"lower", "upper", "both"} and row_idx == col_idx:
+                continue
+
+            if x_truth is not None:
+                ax.axvline(x_truth, **line_kwargs)
+            if y_truth is not None:
+                ax.axhline(y_truth, **line_kwargs)
+            if x_truth is not None and y_truth is not None:
+                ax.scatter([x_truth], [y_truth], **point_kwargs)
+
+
 class Samples(eqx.Module):
     """Container for posterior samples.
 
@@ -678,7 +739,7 @@ class Samples(eqx.Module):
 
         return az.from_dict({"posterior": data_dict})
 
-    def plot_corner(  # noqa: C901
+    def plot_corner(
         self,
         params: list[str] | None = None,
         truths: dict[str, Any] | None = None,
@@ -751,7 +812,9 @@ class Samples(eqx.Module):
                         target_unit = param_units.get(param, "")
                         reference_values[param] = float(ustrip(target_unit, truth_val))
                     else:
-                        reference_values[param] = float(truth_val)
+                        reference_values[param] = (
+                            float(truth_val) if truth_val is not None else None
+                        )
             except (KeyError, ValueError):
                 continue
 
@@ -785,13 +848,6 @@ class Samples(eqx.Module):
                 var_name_map=resolved_labels  # ty: ignore[invalid-argument-type]
             )
 
-        # Add reference values if provided
-        if reference_values:
-            default_kwargs.setdefault("visuals", {})
-            default_kwargs["visuals"]["point_estimate"] = {"color": "C1"}
-            default_kwargs.setdefault("stats", {})
-            default_kwargs["stats"]["point_estimate"] = reference_values
-
         # Merge with user kwargs (user kwargs take precedence)
         default_kwargs.update(plot_kwargs)
 
@@ -799,4 +855,12 @@ class Samples(eqx.Module):
             "figsize", (3 * len(var_names) + 1.5, 3 * len(var_names))
         )
 
-        return az.plot_pair(idata, **default_kwargs)
+        plot_matrix = az.plot_pair(idata, **default_kwargs)
+        _overlay_corner_truths(
+            plot_matrix,
+            var_names,
+            reference_values,
+            marginal=bool(default_kwargs.get("marginal", True)),
+            triangle=default_kwargs.get("triangle", "lower"),
+        )
+        return plot_matrix
