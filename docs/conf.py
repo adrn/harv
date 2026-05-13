@@ -110,6 +110,9 @@ autoapi_options = ["members", "undoc-members", "show-inheritance"]
 autodoc_typehints = "description"
 autodoc_typehints_format = "short"
 
+# Don't show class signature with the class' name.
+autodoc_class_signature = "separated"
+
 autodoc_default_options = {
     "members": True,
     "undoc-members": True,
@@ -119,7 +122,7 @@ autodoc_default_options = {
 }
 
 always_document_param_types = True
-typehints_use_signature = True
+# typehints_use_signature = True
 
 # -- Options for HTML output ---------------------------------------------------
 
