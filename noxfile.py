@@ -11,6 +11,12 @@ nox.options.default_venv_backend = "uv"
 
 @session(uv_groups=["docs"], reuse_venv=True)
 def docs(s: nox.Session, /) -> None:
+    s.notify("build_api_docs")
+    s.notify("sphinx_build")
+
+
+@session(uv_groups=["docs"], reuse_venv=True)
+def sphinx_build(s: nox.Session, /) -> None:
     """Build the docs. Pass "--serve" to serve. Pass "-b linkcheck" to check links."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--serve", action="store_true", help="Serve after building")
@@ -57,16 +63,16 @@ def docs(s: nox.Session, /) -> None:
         s.run("sphinx-build", "--keep-going", *shared_args)
 
 
-# @session(uv_groups=["docs"], reuse_venv=True)
-# def build_api_docs(s: nox.Session, /) -> None:
-#     """Build (regenerate) API docs."""
-#     s.chdir("docs")
-#     s.run(
-#         "sphinx-apidoc",
-#         "-o",
-#         "api/",
-#         "--module-first",
-#         "--no-toc",
-#         "--force",
-#         "../src/harv",
-#     )
+@session(uv_groups=["docs"], reuse_venv=True)
+def build_api_docs(s: nox.Session, /) -> None:
+    """Build (regenerate) API docs."""
+    s.chdir("docs")
+    s.run(
+        "sphinx-apidoc",
+        "-o",
+        "api/",
+        "--module-first",
+        "--no-toc",
+        "--force",
+        "../src/harv",
+    )

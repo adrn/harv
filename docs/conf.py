@@ -41,7 +41,10 @@ extensions = [
     # This allows you to create :::{todo} sections that will not be rendered
     # in the live docs if you want to leave notes for future work in the docs
     "sphinx.ext.todo",
-    "autoapi.extension",
+    # "autoapi.extension",
+    "sphinx.ext.autodoc",  # TODO: replace with autodoc2
+    "sphinx.ext.autosummary",  # TODO: replace with autodoc2
+    "sphinx.ext.mathjax",
     "sphinx_autodoc_typehints",
     "rtds_action",
 ]
@@ -73,6 +76,9 @@ myst_enable_extensions = [
     "colon_fence",
     "deflist",
     "attrs_inline",
+    "deflist",
+    "dollarmath",  # for $, $$
+    "amsmath",
 ]
 
 myst_heading_anchors = 3
@@ -120,7 +126,32 @@ typehints_use_signature = True
 html_theme = "furo"
 html_static_path = ["_static"]
 html_logo = "_static/logo_med.png"
-html_css_files = ["custom.css"]
+html_css_files = [
+    "custom.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/fontawesome.min.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/solid.min.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/brands.min.css",
+]
+
+html_theme_options = {
+    "source_repository": "https://github.com/adrn/harv",
+    "source_branch": "main",
+    "source_directory": "docs/",
+    "footer_icons": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/adrn/harv",
+            "html": "",
+            "class": "fa-brands fa-solid fa-github fa-2x",
+        },
+        # {
+        #     "name": "PyPI",
+        #     "url": "https://pypi.org/project/harv/",
+        #     "html": "<img src='https://img.shields.io/pypi/v/harv' alt='PyPI'>",
+        #     "class": "",
+        # },
+    ],
+}
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = "harv_doc"

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-:::{toctree}
+:::\{toctree}
 :maxdepth: 2
 :hidden:
 :caption: Contents:
@@ -18,13 +18,14 @@ harv is ...
 :color: primary
 :class: sd-rounded-pill float-left -->
 
-:::{toctree}
+:::\{toctree}
 :maxdepth: 1
 :caption: Contents:
 
 concepts
 sharp-bits
 tutorials/index
+api/index
 :::
 
 ## Overview
