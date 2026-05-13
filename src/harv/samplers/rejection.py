@@ -312,14 +312,14 @@ class RejectionSampler(AbstractSampler):
 
     Parameters
     ----------
-    prior : RejectionPrior
+    prior
         Prior distributions for nonlinear (and optionally linear) parameters.
-    model : AbstractComponentModel or JointModel
+    model
         Fully constructed model template (no data, no linear_prior).
-    marginalized_names : tuple of str or None, optional
+    marginalized_names
         Linear parameter names to analytically marginalize. If None, all
         Gaussian linear parameters are auto-classified for marginalization.
-    batch_size : int, optional
+    batch_size
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
 

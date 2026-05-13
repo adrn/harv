@@ -31,10 +31,10 @@ class PeriodDependentKPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_K0 : Q["speed"]
+    sigma_K0
         RV semi-amplitude scale (km/s) at the reference period ``P0``.
         Default: 30 km/s -- appropriate for stellar binary searches.
-    P0 : Q["time"]
+    P0
         Numeric value of the reference period in units of ``P0_unit``.
 
     Notes
@@ -70,7 +70,7 @@ class PeriodDependentKPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct whose ``.period`` and ``.eccentricity`` fields
             are accessible.  ``.period`` must be a ``Quantity`` compatible
             with ``P0_unit``.
@@ -111,10 +111,10 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_a0 : Q["length"]
+    sigma_a0
         Semi-major axis scale in physical units (e.g. AU) at the reference
         period ``P0``.  Converted to angular size via the parallax.
-    P0 : Q["time"]
+    P0
         Reference period.
 
     Notes
@@ -146,7 +146,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct with ``.period`` (``Quantity``),
             ``.eccentricity`` (float), and ``.parallax`` (``Quantity``)
             fields.
@@ -187,7 +187,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_v0 : Q["speed"]
+    sigma_v0
         Transverse-velocity dispersion scale (e.g. km/s).
 
     Notes
@@ -216,7 +216,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct with a ``.parallax`` (``Quantity``) field.
 
         Returns

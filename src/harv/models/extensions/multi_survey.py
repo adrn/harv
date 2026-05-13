@@ -22,13 +22,13 @@ class MultiSurveyOffset(AbstractExtension):
 
     Parameters
     ----------
-    indicator_matrix : jax.Array, shape (n_obs, n_non_ref)
+    indicator_matrix
         Binary matrix: ``indicator_matrix[i, j] == 1`` iff observation *i* belongs to
         the *j*-th non-reference instrument.
-    instrument_names : tuple of str
+    instrument_names
         Ordered names of the non-reference instruments (same column order as
         ``indicator_matrix``). Used as parameter names.
-    obs_unit : str
+    obs_unit
         Physical unit string for the offset parameters (must match the observation unit
         of the model, e.g. ``"km/s"``).
 

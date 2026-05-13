@@ -84,11 +84,11 @@ class StandardRV(AbstractParameterization):
 
         Parameters
         ----------
-        sin_f : jax.Array, shape (n_obs,)
+        sin_f
             Sine of true anomaly (unit-stripped).
-        cos_f : jax.Array, shape (n_obs,)
+        cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values : dict
+        nl_values
             Must contain ``"eccentricity"`` and ``"arg_peri"`` (both unit-stripped
             scalars).
 
@@ -163,11 +163,11 @@ class EcoswEsinwRV(AbstractParameterization):
 
         Parameters
         ----------
-        sin_f : jax.Array, shape (n_obs,)
+        sin_f
             Sine of true anomaly (unit-stripped).
-        cos_f : jax.Array, shape (n_obs,)
+        cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values : dict
+        nl_values
             Must contain ``"ecosw"`` and ``"esinw"`` (dimensionless scalars). The
             eccentricity and arg_peri are derived internally.
 

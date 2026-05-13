@@ -34,9 +34,9 @@ class RVModel(AbstractComponentModel):
 
     Parameters
     ----------
-    parameterization : StandardRV or EcoswEsinwRV
+    parameterization
         Declares parameter names/roles and builds the base design matrix.
-    extensions : tuple of Extension
+    extensions
         Model extensions (jitter, trends, offsets, GP, ...).
 
     Examples

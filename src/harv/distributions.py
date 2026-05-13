@@ -27,9 +27,9 @@ class QuantityDistribution(eqx.Module):
 
     Parameters
     ----------
-    distribution : dist.Distribution
+    distribution
         The underlying numpyro distribution (works with bare floats).
-    unit : str or tuple[str, ...]
+    unit
         Physical unit of the samples.  A single string for scalar
         distributions; a tuple for multivariate distributions where each
         element may have a different unit.

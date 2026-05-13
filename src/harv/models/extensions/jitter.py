@@ -28,7 +28,7 @@ class Jitter(AbstractExtension):
 
     Parameters
     ----------
-    param_unit : str
+    param_unit
         Physical unit string for the jitter parameter metadata. Default ``""``
         (dimensionless / observation units).
 

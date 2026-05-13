@@ -31,11 +31,11 @@ class GaiaAstrometryModel(AbstractComponentModel):
 
     Parameters
     ----------
-    parameterization : StandardGaiaAstrometry
+    parameterization
         Declares parameter names/roles and builds the base design matrix.
-    extensions : tuple of Extension
+    extensions
         Model extensions (jitter, trends, ...).
-    pm_time_unit : str or None
+    pm_time_unit
         If not None, override the proper motion units in the design matrix to
         use this unit instead of the default (obs_unit / yr).
 

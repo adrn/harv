@@ -21,13 +21,13 @@ class MonomialTrend(AbstractExtension):
 
     Parameters
     ----------
-    order : int
+    order
         Polynomial order (number of trend terms). Must be >= 1.
-    time_unit : str
+    time_unit
         Unit string for time -- used in ``ParamInfo`` metadata.
-    obs_unit : str
+    obs_unit
         Unit string for the observations -- used in ``ParamInfo`` metadata.
-    astrometry : bool
+    astrometry
         If ``True``, add *two* columns per order (RA + Dec, projected by scan angle)
         with exponents ``k + 1`` to avoid degeneracy with the base proper-motion
         columns. Default ``False`` (single column per order).

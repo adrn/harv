@@ -88,20 +88,20 @@ class StandardGaiaAstrometry(AbstractParameterization):
 
         Parameters
         ----------
-        sin_f : jax.Array, shape (n_obs,)
+        sin_f
             Sine of true anomaly (unit-stripped).
-        cos_f : jax.Array, shape (n_obs,)
+        cos_f
             Cosine of true anomaly (unit-stripped).
-        dt : jax.Array, shape (n_obs,)
+        dt
             Time elapsed since reference epoch (unit-stripped, in internal
             time unit, typically years).
-        sin_psi : jax.Array, shape (n_obs,)
+        sin_psi
             Sine of scan angle.
-        cos_psi : jax.Array, shape (n_obs,)
+        cos_psi
             Cosine of scan angle.
-        parallax_factor : jax.Array, shape (n_obs,)
+        parallax_factor
             Parallax factor (unit-stripped).
-        nl_values : dict
+        nl_values
             Must contain ``"eccentricity"``, ``"arg_peri"``,
             ``"lon_asc_node"``, ``"cos_i"`` (unit-stripped scalars).
 
