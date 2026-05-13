@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 @final
@@ -34,7 +34,7 @@ class MonomialTrend(AbstractExtension):
 
     Examples
     --------
-    >>> from harv.extensions import MonomialTrend
+    >>> from harv.models.extensions import MonomialTrend
     >>> trend = MonomialTrend(order=2)
     >>> [p.name for p in trend.extra_params()]
     ['trend_1', 'trend_2']

@@ -12,7 +12,7 @@ from abc import abstractmethod
 
 import equinox as eqx
 
-from harv.extensions.base import ParamInfo
+from harv.models.extensions.base import ParamInfo
 
 
 class AbstractParameterization(eqx.Module):

@@ -22,7 +22,6 @@ from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
@@ -30,6 +29,7 @@ from harv.models._helpers import (
     _resolve_prior_to_mvn,
     _unwrap_dist,
 )
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 class _MargComponents(NamedTuple):

@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 @final
@@ -41,8 +41,8 @@ class GP(AbstractExtension):
 
     Examples
     --------
-    >>> from harv.extensions.base import ParamInfo
-    >>> from harv.extensions.gp import GP; GP(
+    >>> from harv.models.extensions.base import ParamInfo
+    >>> from harv.models.extensions.gp import GP; GP(
     ...     kernel_builder=lambda hp: hp["gp_amp"] ** 2,
     ...     hyperparams=(ParamInfo("gp_amp", "km/s"),),
     ...     time_unit="day",

@@ -64,7 +64,7 @@ class AbstractDatasetContainer(eqx.Module):
 
         Parameters
         ----------
-        data_type : type
+        data_type
             Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by.
 
         Examples
@@ -95,7 +95,7 @@ class AbstractDatasetContainer(eqx.Module):
 
         Parameters
         ----------
-        data_type : type
+        data_type
             Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
             stacking.
 
@@ -126,10 +126,10 @@ class AbstractDatasetContainer(eqx.Module):
 
         Parameters
         ----------
-        data_type : type
+        data_type
             Concrete data class (e.g. RVData, GaiaAstrometryData) to filter by before
             stacking.
-        reference : str
+        reference
             Name of the reference dataset to use for time coordinates and metadata. Must
             be one of the keys in the returned dict from
             get_datasets_by_type(data_type).
@@ -160,11 +160,12 @@ class AbstractDatasetContainer(eqx.Module):
 
         Parameters
         ----------
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on. If ``None``, a new figure is created.
-        add_legend : bool, optional
+        ax
+            The :class:`matplotlib.axes.Axes` instance to draw on. If ``None``, a new
+            figure is created.
+        add_legend
             Whether to add a legend labelled by component name. Default: ``True``.
-        color_cycler : matplotlib cycler, optional
+        color_cycler
             A :class:`matplotlib.cycler.Cycler` whose ``"color"`` key supplies
             per-component colors.  When ``None`` (default), colors are taken from
             the current ``axes.prop_cycle`` rcParam.
@@ -174,7 +175,8 @@ class AbstractDatasetContainer(eqx.Module):
 
         Returns
         -------
-        ax : matplotlib.axes.Axes
+        ax
+            The :class:`matplotlib.axes.Axes` instance.
 
         Examples
         --------

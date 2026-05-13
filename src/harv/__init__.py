@@ -45,7 +45,7 @@ __all__ = (
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
 from harv.distributions import QD, QuantityDistribution
-from harv.extensions import (
+from harv.models.extensions import (
     AbstractExtension,
     GP,
     Jitter,

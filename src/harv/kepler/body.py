@@ -7,13 +7,12 @@ import astropy.units as apyu
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
-from unxt import ustrip
+from unxt import Q, ustrip
 
 from harv.custom_types import (
     BatchQTime,
     BatchVec3QLength,
     BatchVec3QSpeed,
-    QTime,
     ScalarFloat,
     ScalarQLength,
     ScalarQMass,
@@ -142,7 +141,7 @@ class KeplerianBody(eqx.Module):
         orbit: KeplerianBody
             The body's orbit about the system barycenter.
         """
-        period = QTime.from_(period)
+        period = Q["time"].from_(period)  # ty: ignore[unresolved-reference]
         a_rel = jnp.cbrt((G * m_total * period**2) / (4 * jnp.pi**2))
         a_body = a_rel * (1 - m_body / m_total)
 

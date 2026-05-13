@@ -25,7 +25,6 @@ from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import ParamInfo
 from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import (
     AbstractComponentModel,
@@ -33,6 +32,7 @@ from harv.models.component import (
     _resolve_prior_to_mvn,
     _sample_nonlinear_params,
 )
+from harv.models.extensions.base import ParamInfo
 
 
 def _split_nl_values(

@@ -6,8 +6,8 @@ import pytest
 from numpyro import handlers
 
 from harv.distributions import QuantityDistribution as QD
-from harv.extensions import Jitter, MonomialTrend
 from harv.models import RVModel
+from harv.models.extensions import Jitter, MonomialTrend
 
 # Re-alias shared fixtures to shorter names used throughout this module.
 nonlinear_priors = pytest.fixture(name="nonlinear_priors")(

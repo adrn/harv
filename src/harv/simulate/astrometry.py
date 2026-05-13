@@ -22,7 +22,6 @@ from harv.custom_types import (
     BatchFloat,
     BatchQAngle,
     BatchQTime,
-    QAngle,
     ScalarQAngle,
     ScalarQAngularSpeed,
     ScalarQTime,
@@ -324,7 +323,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
 
     data = GaiaAstrometryData(
         time=times,
-        al_position=QAngle.from_(y_al),
+        al_position=Q["angle"].from_(y_al),  # ty: ignore[unresolved-reference]
         al_position_err=al_error,
         scan_angle=scan_angle,
         parallax_factor=jnp.asarray(parallax_factor),

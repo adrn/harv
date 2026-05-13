@@ -69,7 +69,7 @@ class AbstractData(eqx.Module):
 
         Parameters
         ----------
-        key : int, slice, or array-like
+        key
             Index or slice to apply to the observation axis.
 
         Returns
@@ -162,20 +162,22 @@ class GaiaAstrometryData(AbstractAstrometryData):
 
         Parameters
         ----------
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on.  If ``None``, uses ``plt.gca()``.
-        al_unit : str, optional
+        ax
+            :class:`matplotlib.axes.Axes` instance to draw on.  If ``None``, uses
+            ``plt.gca()``.
+        al_unit
             Display unit for the along-scan position.  Defaults to the data's own unit.
-        add_labels : bool, optional
+        add_labels
             Add axis labels.
-        relative_to_t_ref : bool, optional
+        relative_to_t_ref
             Plot time relative to ``t_ref``.
         **kwargs
             Passed to ``ax.errorbar()``.  Defaults can be overridden.
 
         Returns
         -------
-        ax : matplotlib.axes.Axes
+        ax
+            The :class:`matplotlib.axes.Axes` instance.
 
         Examples
         --------
@@ -270,16 +272,17 @@ class RVData(AbstractData):
 
         Parameters
         ----------
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on.  If ``None``, uses ``plt.gca()``.
-        rv_unit : str, optional
+        ax
+            The :class:`matplotlib.axes.Axes` instance to draw on.  If ``None``, uses
+            ``plt.gca()``.
+        rv_unit
             Display unit for the RV axis.  Defaults to the data's own unit.
-        add_labels : bool, optional
+        add_labels
             Add axis labels.
-        relative_to_t_ref : bool, optional
+        relative_to_t_ref
             Plot time relative to ``t_ref``.  Mutually exclusive with
             ``phase_fold``.
-        phase_fold : Q["time"], optional
+        phase_fold
             If given, fold observations to orbital phase using this period:
             x = (time - t_ref) / phase_fold mod 1.  Mutually exclusive with
             ``relative_to_t_ref``.
@@ -288,7 +291,8 @@ class RVData(AbstractData):
 
         Returns
         -------
-        ax : matplotlib.axes.Axes
+        ax
+            The :class:`matplotlib.axes.Axes` instance.
 
         Examples
         --------

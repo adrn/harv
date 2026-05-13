@@ -12,8 +12,8 @@ from typing import Any, final
 import jax
 import quaxed.numpy as jnp
 
-from harv.extensions.base import ParamInfo
 from harv.kepler.orbits import thiele_innes_ABFG
+from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
 
 

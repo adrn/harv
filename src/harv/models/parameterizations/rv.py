@@ -18,8 +18,8 @@ import jax
 import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
-from harv.extensions.base import ParamInfo
 from harv.kepler.orbits import rv_shape
+from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
 
 

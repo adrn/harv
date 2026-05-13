@@ -14,10 +14,10 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
 
-from harv.custom_types import BatchQTime, NQAny, NTime, QTime, ScalarQTime
+from harv.custom_types import BatchQTime, NQAny, NTime, ScalarQTime
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
-from harv.extensions.multi_survey import MultiSurveyOffset
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
+from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.samplers import Samples
 
 try:
@@ -322,7 +322,7 @@ def _plot_extension_extra_noise(
     block with an optional plotting capability/protocol instead of adding plot
     hooks back onto the base extension API.
     """
-    from .extensions.jitter import Jitter  # noqa: PLC0415
+    from harv.models.extensions.jitter import Jitter  # noqa: PLC0415
 
     if isinstance(ext, Jitter):
         return jnp.asarray(hp["jitter"])
@@ -339,8 +339,8 @@ def _plot_extension_rv_signal(
     data_t_ref: Any,
 ) -> Any | None:
     """Private plotting adapter for extension-driven RV curve adjustments."""
-    from .extensions.gp import GP  # noqa: PLC0415
-    from .extensions.trend import MonomialTrend  # noqa: PLC0415
+    from harv.models.extensions.gp import GP  # noqa: PLC0415
+    from harv.models.extensions.trend import MonomialTrend  # noqa: PLC0415
 
     if isinstance(ext, GP):
         time_unit = ext.time_unit or str(t_grid.unit)
@@ -444,7 +444,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     apply_median_offsets : bool, optional
         Shift non-reference instrument data by the posterior median offset so
         all instruments land in the reference frame.  Only applies when a
-        :class:`~harv.extensions.MultiSurveyOffset` extension is present.
+        :class:`~harv.models.extensions.MultiSurveyOffset` extension is present.
         Default: ``True``.
     plot_kwargs : dict, optional
         Style overrides for orbit model curves.
@@ -547,7 +547,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     )
 
     # Extract median period and t_ref for phase-folding and plotting
-    median_period = QTime.from_(jnp.median(samples["period"]))
+    median_period = Q["time"].from_(  # ty: ignore[unresolved-reference]
+        jnp.median(samples["period"])
+    )
     ref_idx = int(jnp.argmin(jnp.abs(samples["period"] - median_period)))
     ref_period = samples["period"][ref_idx]
     ref_t_peri = samples["t_peri"][ref_idx]
@@ -735,7 +737,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         if time_grid is not None:
             t_grid = time_grid
         elif rv_datasets:
-            all_times = QTime.from_(
+            all_times = Q["time"].from_(  # ty: ignore[unresolved-reference]
                 jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
             )
             t_grid = get_t_grid(all_times, median_period)

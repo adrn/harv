@@ -15,9 +15,9 @@ import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
 from harv.data import RVData
-from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 
 # Type alias for any RV parameterization

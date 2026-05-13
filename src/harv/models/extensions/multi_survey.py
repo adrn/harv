@@ -8,7 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 @final
@@ -35,7 +35,7 @@ class MultiSurveyOffset(AbstractExtension):
     Examples
     --------
     >>> import jax.numpy as jnp
-    >>> from harv.extensions import MultiSurveyOffset
+    >>> from harv.models.extensions import MultiSurveyOffset
     >>> indicator = jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
     >>> ext = MultiSurveyOffset(indicator, ("espresso", "keck"), "km/s")
     >>> [p.name for p in ext.extra_params()]

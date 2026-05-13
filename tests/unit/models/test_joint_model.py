@@ -8,8 +8,8 @@ from numpyro import handlers
 from unxt import Q
 
 from harv.distributions import QuantityDistribution as QD
-from harv.extensions import Jitter
 from harv.models import JointModel, RVModel
+from harv.models.extensions import Jitter
 from harv.samplers import RejectionPrior, RejectionSampler
 
 # Re-alias shared fixtures to shorter names used throughout this module.

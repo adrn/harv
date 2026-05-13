@@ -36,7 +36,7 @@ class ParamInfo(eqx.Module):
 
     Examples
     --------
-    >>> from harv.extensions.base import ParamInfo
+    >>> from harv.models.extensions.base import ParamInfo
     >>> p = ParamInfo("period", "time")
     >>> p.name
     'period'

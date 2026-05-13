@@ -8,8 +8,8 @@ different ``run()`` signatures and internal state.
 
 import equinox as eqx
 
-from harv.extensions.base import AbstractExtension
 from harv.models.component import AbstractComponentModel
+from harv.models.extensions.base import AbstractExtension
 from harv.models.joint import JointModel
 from harv.samplers.rejection_prior import RejectionPrior
 
