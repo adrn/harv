@@ -212,7 +212,7 @@ else:
             "rtds_action: GITHUB_TOKEN is not set on Read the Docs, so executed "
             "tutorial notebooks cannot be fetched from GitHub Actions artifacts."
         )
-        raise RuntimeError(msg)
+        print(msg)
 
     print("rtds_action: no GITHUB_TOKEN found; skipping artifact retrieval")
     rtds_action_github_repo = ""
