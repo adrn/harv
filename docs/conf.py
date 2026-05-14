@@ -95,17 +95,6 @@ exclude_patterns = [
     "spec.md",
 ]
 
-# --------- setup autoapi defaults for your api docs ---------------
-
-# AutoAPI configuration
-autoapi_type = "python"
-# point AutoAPI at your package sources; adjust if using src layout
-autoapi_dirs = ["../src"]
-# Don't let AutoAPI automatically insert a toctree (avoid duplicates)
-autoapi_add_toctree = False
-autoapi_keep_files = False
-autoapi_options = ["members", "undoc-members", "show-inheritance"]
-
 # -- Autodoc settings ---------------------------------------------------
 
 autodoc_typehints = "description"
@@ -136,6 +125,7 @@ html_css_files = [
     "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/solid.min.css",
     "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/brands.min.css",
 ]
+html_favicon = "_static/favicon.png"
 
 html_theme_options = {
     "source_repository": "https://github.com/adrn/harv",
