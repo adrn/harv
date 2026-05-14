@@ -12,7 +12,7 @@ rv/4-sb2
 rv/5-gp-extension
 ::::
 
-::::{toctree}
+<!-- ::::{toctree}
 :maxdepth: 1
 :caption: Gaia astrometry
 
@@ -25,4 +25,4 @@ astrometry/0-getting-started
 
 case-studies/HD285968
 case-studies/gaia-bh3
-::::
+:::: -->
