@@ -15,7 +15,7 @@ from unxt import Q
 
 from harv.data import RVData
 from harv.distributions import QD
-from harv.extensions import Jitter, MultiSurveyOffset
+from harv.models.extensions import Jitter, MultiSurveyOffset
 from harv.models.joint import JointModel
 from harv.models.rv import RVModel
 from harv.samplers.base import AbstractSampler

@@ -19,4 +19,3 @@ pytest_collect_file = Sybil(
 install_import_hook("harv.kepler", "beartype.beartype")
 install_import_hook("harv.likelihood", "beartype.beartype")
 install_import_hook("harv.models", "beartype.beartype")
-install_import_hook("harv.extensions", "beartype.beartype")

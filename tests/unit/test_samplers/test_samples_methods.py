@@ -17,11 +17,11 @@ from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
-from harv.extensions import Jitter, MonomialTrend
-from harv.extensions.base import ParamInfo
-from harv.extensions.gp import GP
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.models.astrometry import GaiaAstrometryModel
+from harv.models.extensions import Jitter, MonomialTrend
+from harv.models.extensions.base import ParamInfo
+from harv.models.extensions.gp import GP
 from harv.models.joint import JointModel
 from harv.models.rv import RVModel
 from harv.plot import get_alpha, plot_gaia_astrometry, plot_gaia_sky_orbit, plot_rv

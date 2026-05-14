@@ -2,8 +2,8 @@
 
 :class:`RVModel` is a *template* carrying a parameterization (default
 :class:`~harv.models.parameterizations.rv.StandardRV`) and extensions. Data and
-linear priors are passed at evaluation time to :meth:`log_prob` /
-:meth:`sample_conditional_linear` / :meth:`numpyro_model`.
+linear priors are passed at evaluation time to :meth:`.RVModel.log_prob` /
+:meth:`.RVModel.sample_conditional_linear` / :meth:`.RVModel.numpyro_model`.
 """
 
 __all__ = ("RVModel",)
@@ -15,9 +15,9 @@ import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
 from harv.data import RVData
-from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 
 # Type alias for any RV parameterization
@@ -34,9 +34,9 @@ class RVModel(AbstractComponentModel):
 
     Parameters
     ----------
-    parameterization : StandardRV or EcoswEsinwRV
+    parameterization
         Declares parameter names/roles and builds the base design matrix.
-    extensions : tuple of Extension
+    extensions
         Model extensions (jitter, trends, offsets, GP, ...).
 
     Examples

@@ -14,10 +14,10 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
 
-from harv.custom_types import BatchQTime, NQAny, NTime, QTime, ScalarQTime
+from harv.custom_types import BatchQTime, NQAny, NTime, ScalarQTime
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
-from harv.extensions.multi_survey import MultiSurveyOffset
 from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
+from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.samplers import Samples
 
 try:
@@ -157,22 +157,21 @@ def get_t_grid(
 
     Parameters
     ----------
-    times : Q["time"]
+    times
         Observation times.
-    period : Q["time"]
+    period
         Orbital period (scalar).  Used to set the grid spacing as ``period /
         n_points_per_period``.
-    span_buffer_factor : float, optional
+    span_buffer_factor
         Fractional buffer added to each side of the observation baseline. Default: 0.1
         (10% on each side).
-    n_points_per_period : int, optional
+    n_points_per_period
         Number of grid points per orbital period.  Default: 256.
-    max_t_grid : int or None, optional
+    max_t_grid
         Maximum number of grid points. Default: 1e6. Set to None to disable.
 
     Returns
     -------
-    t_grid : Q["time"]
         Regular time grid spanning the buffered observation range.
 
     Examples
@@ -322,7 +321,7 @@ def _plot_extension_extra_noise(
     block with an optional plotting capability/protocol instead of adding plot
     hooks back onto the base extension API.
     """
-    from .extensions.jitter import Jitter  # noqa: PLC0415
+    from harv.models.extensions.jitter import Jitter  # noqa: PLC0415
 
     if isinstance(ext, Jitter):
         return jnp.asarray(hp["jitter"])
@@ -339,8 +338,8 @@ def _plot_extension_rv_signal(
     data_t_ref: Any,
 ) -> Any | None:
     """Private plotting adapter for extension-driven RV curve adjustments."""
-    from .extensions.gp import GP  # noqa: PLC0415
-    from .extensions.trend import MonomialTrend  # noqa: PLC0415
+    from harv.models.extensions.gp import GP  # noqa: PLC0415
+    from harv.models.extensions.trend import MonomialTrend  # noqa: PLC0415
 
     if isinstance(ext, GP):
         time_unit = ext.time_unit or str(t_grid.unit)
@@ -404,36 +403,36 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
     Parameters
     ----------
-    samples : Samples
+    samples
         Posterior samples from :class:`~harv.samplers.RejectionSampler` or
         :class:`~harv.samplers.NumpyroSampler`.
-    data : RVData or SourceData or SystemData, optional
+    data
         Observed RV data to overplot.  When ``None``, only orbit model curves are
         drawn (no data points, no instrument-colour cycling).
-    extensions : tuple of AbstractExtension, optional
+    extensions
         Extensions used during sampling. Plotting has private built-in support
         for GP conditional-mean overlays and jitter-driven error-bar widening.
         Default: no extensions.
-    n_samples : int | None, optional
+    n_samples
         Number of posterior curves to draw.  Set to None to draw all samples.  Default:
         128.
-    time_grid : Q["time"], optional
+    time_grid
         Explicit time grid used to evaluate and plot the posterior orbit curves.
         When provided, this is used instead of the default phase grid or
         :func:`get_t_grid`. If ``phase_fold_median=True``, the supplied time grid
         is converted to phase using the reference sample's period and periastron time.
-    show_signal_components : bool, optional
+    show_signal_components
         Whether to plot the Keplerian signal and the combined extension-driven
         contribution as separate curves instead of plotting their sum. This
         decomposition view is only supported for time-domain RV plots with
         observed data. Default: ``False``.
-    relative_to_t_ref : bool, optional
+    relative_to_t_ref
         Whether to plot time relative to the reference epoch (t_ref) of the data.
-    relative_to_median_v_sys : bool, optional
+    relative_to_median_v_sys
         Whether to shift all curves by the median systemic velocity (v_sys) of the
         samples, so that the curves show only the relative RV variations. Only applies
         when a "v_sys" parameter is present in the samples. Default: False.
-    phase_fold_median : bool, optional
+    phase_fold_median
         If ``True``, fold data and model to orbital phase using the sample closest to
         the median period. Phase zero is set to that sample's ``t_peri`` value. Only
         that single reference orbit curve is drawn — plotting multiple samples on a
@@ -441,24 +440,24 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         spread. When plot-aware extensions are present, the reference sample's
         extension contribution is subtracted from the data before folding so the
         Keplerian orbit overlays the phase-folded points. Default: ``False``.
-    apply_median_offsets : bool, optional
+    apply_median_offsets
         Shift non-reference instrument data by the posterior median offset so
         all instruments land in the reference frame.  Only applies when a
-        :class:`~harv.extensions.MultiSurveyOffset` extension is present.
+        :class:`~harv.models.extensions.MultiSurveyOffset` extension is present.
         Default: ``True``.
-    plot_kwargs : dict, optional
+    plot_kwargs
         Style overrides for orbit model curves.
-    data_plot_kwargs : dict, optional
+    data_plot_kwargs
         Style overrides for data points.
-    extra_err_plot_kwargs : dict, optional
+    extra_err_plot_kwargs
         Style overrides for the widened error bars drawn when a jitter extension
         is present.  Keys override the defaults (marker="", ecolor="#6b2828",
         alpha=0.5).
-    color_cycler : matplotlib cycler, optional
+    color_cycler
         Colour cycler used to assign distinct colours to each instrument's data
         points.  When ``None`` (default) the current ``axes.prop_cycle`` from
         ``matplotlib.rcParams`` is used.
-    ax : matplotlib.axes.Axes, optional
+    ax
         Axes to draw into.  If ``None`` (default), a new figure and axes are
         created and the axes object is returned.
     **kwargs
@@ -466,7 +465,6 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
     Returns
     -------
-    ax : matplotlib.axes.Axes
         The axes plotted to.
 
     Raises
@@ -547,7 +545,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     )
 
     # Extract median period and t_ref for phase-folding and plotting
-    median_period = QTime.from_(jnp.median(samples["period"]))
+    median_period = Q["time"].from_(  # ty: ignore[unresolved-reference]
+        jnp.median(samples["period"])
+    )
     ref_idx = int(jnp.argmin(jnp.abs(samples["period"] - median_period)))
     ref_period = samples["period"][ref_idx]
     ref_t_peri = samples["t_peri"][ref_idx]
@@ -735,7 +735,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         if time_grid is not None:
             t_grid = time_grid
         elif rv_datasets:
-            all_times = QTime.from_(
+            all_times = Q["time"].from_(  # ty: ignore[unresolved-reference]
                 jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
             )
             t_grid = get_t_grid(all_times, median_period)
@@ -884,25 +884,25 @@ def plot_gaia_sky_orbit(
 
     Parameters
     ----------
-    orbit_params : dict
+    orbit_params
         Orbital parameters for a single sample.  Required keys: ``"period"``,
         ``"eccentricity"``, ``"t_peri"``, ``"arg_peri"``, ``"cos_i"``,
         ``"lon_asc_node"``, ``"semi_major_axis"``.  ``"t_peri"`` should be the
         absolute periastron time (i.e. ``t_ref + phase_peri * period``).
-    data : GaiaAstrometryData, optional
+    data
         Gaia epoch astrometry data.  When ``None``, only the model ellipse is
         drawn.
-    n_grid : int, optional
+    n_grid
         Number of phase points used to draw the smooth orbit curve.  Default: 500.
-    errorbar_scale : float, optional
+    errorbar_scale
         Scale factor applied to the half-length of each scan-direction line
         segment (default 1.0 = 1-sigma).
-    plot_kwargs : dict, optional
+    plot_kwargs
         Style overrides for the orbit curve (forwarded to ``ax.plot``).
-    data_plot_kwargs : dict, optional
+    data_plot_kwargs
         Style overrides for the per-epoch scan-direction segments (forwarded to
         ``ax.plot``).
-    ax : matplotlib.axes.Axes, optional
+    ax
         Axes to draw into.  If ``None`` (default), a new figure is created and
         returned.
     **kwargs
@@ -910,7 +910,6 @@ def plot_gaia_sky_orbit(
 
     Returns
     -------
-    fig : matplotlib.figure.Figure or None
         The figure if *ax* was ``None``, else ``None``.
 
     Raises
@@ -1056,32 +1055,32 @@ def plot_gaia_astrometry(  # noqa: C901 -- plotting code is inherently complex
 
     Parameters
     ----------
-    samples : Samples
+    samples
         Posterior samples from a Gaia astrometry or joint model.
-    data : GaiaAstrometryData
+    data
         The data conditioned on by the model.  Required (panel 1 needs the
         scan angles and parallax factors).
-    extensions : tuple of AbstractExtension, optional
+    extensions
         Currently unused; reserved for parity with :func:`plot_rv`.
-    n_samples : int or None, optional
+    n_samples
         Number of posterior orbit overlays to draw on panel 1.  Set to ``None``
         to draw every sample.  Default: 128.
-    phase_fold_median : bool, optional
+    phase_fold_median
         If ``True``, fold panel 1 to orbital phase using the sample closest to
         the median period.  Phase zero is set to that sample's ``t_peri``.
         Only the reference orbit curve is drawn (multiple samples on a phase
         axis defined by one period would be misleading), and the median
         parallax contribution is auto-subtracted from the data.
         Default: ``False``.
-    plot_kwargs : dict, optional
+    plot_kwargs
         Style overrides for the panel-1 orbit-model lines.
-    data_plot_kwargs : dict, optional
+    data_plot_kwargs
         Style overrides for the panel-1 data error bars.
-    sky_orbit_kwargs : dict, optional
+    sky_orbit_kwargs
         Forwarded to :func:`plot_gaia_sky_orbit` for panel 2.
-    figsize : tuple, optional
+    figsize
         Figure size when *axes* is ``None``.  Default: ``(10, 5)``.
-    axes : (matplotlib.axes.Axes, matplotlib.axes.Axes), optional
+    axes
         Two axes to draw into.  If ``None`` (default), a new 1x2 figure is
         created and returned.
     **kwargs
@@ -1089,7 +1088,6 @@ def plot_gaia_astrometry(  # noqa: C901 -- plotting code is inherently complex
 
     Returns
     -------
-    fig : matplotlib.figure.Figure or None
         The figure if *axes* was ``None``, else ``None``.
 
     Raises

@@ -31,12 +31,11 @@ def _synchronize_t_refs(
 
     Parameters
     ----------
-    datasets : dict[str, AbstractData]
+    datasets
         Named datasets, possibly with different ``t_ref`` values.
 
     Returns
     -------
-    dict[str, AbstractData]
         Same datasets with ``t_ref`` replaced by the global mean time.
     """
     if len(datasets) <= 1:
@@ -58,15 +57,10 @@ def stack_datasets[DT: AbstractData](
 
     Parameters
     ----------
-    datasets : dict[str, AbstractData]
+    datasets
         Ordered mapping of instrument name -> dataset.  Dict order determines
         the row order in the stacked output; it must match the order used when
-        building the indicator matrix (see :func:`build_rv_indicator_matrix`).
-
-    Returns
-    -------
-    data
-        Single dataset containing all observations stacked in dict order.
+        building the indicator matrix (see :func:`build_indicator_matrix`).
 
     Examples
     --------
@@ -125,19 +119,21 @@ def build_indicator_matrix[DT: AbstractData](
 
     Parameters
     ----------
-    datasets : dict[str, AbstractData]
+    datasets
         Ordered mapping of instrument name -> dataset.  Dict order must match the order
         used when stacking (see :func:`stack_datasets`).
-    reference : str
+    reference
         Name of the reference instrument (its observations get no offset
         column).
 
     Returns
     -------
-    indicator_matrix : jax.Array
+    stacked : DT
+        Stacked dataset containing all observations.
+    indicator : jax.Array | None
         Shape ``(n_obs_total, n_non_ref)``.  ``indicator[i, j] = 1`` when
         observation ``i`` belongs to non-reference instrument ``j``.
-    instrument_names : tuple[str, ...]
+    instrument_names : tuple[str, ...] | None
         Names of the non-reference instruments, in column order.
 
     Examples

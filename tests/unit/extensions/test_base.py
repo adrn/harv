@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import pytest
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 class TestParamInfo:

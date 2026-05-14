@@ -3,9 +3,6 @@
 This module provides :class:`QuantityDistribution`, a thin wrapper that
 pairs a numpyro distribution with a physical unit string so that samples
 carry explicit units via ``unxt.Q``.
-
-It also exports the :data:`PriorDist` type alias and the private
-:func:`_unwrap_dist` helper used throughout ``harv.samplers``.
 """
 
 from typing import Any
@@ -27,9 +24,9 @@ class QuantityDistribution(eqx.Module):
 
     Parameters
     ----------
-    distribution : dist.Distribution
+    distribution
         The underlying numpyro distribution (works with bare floats).
-    unit : str or tuple[str, ...]
+    unit
         Physical unit of the samples.  A single string for scalar
         distributions; a tuple for multivariate distributions where each
         element may have a different unit.

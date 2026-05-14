@@ -5,6 +5,7 @@ import os
 import sys
 import importlib.metadata
 from datetime import datetime
+import pytz
 
 # Ensure src/ is on the path so autodoc can find the package
 sys.path.insert(0, os.path.abspath("../src"))
@@ -15,7 +16,8 @@ current_year = datetime.now().year
 # -- General project information -----------------------------
 # General information about the project.
 project = "harv"
-copyright = "Copyright © 2026 harv authors"
+author = f"{project} Developers"
+copyright = f"{datetime.now(pytz.timezone('UTC')).year}, {author}"
 html_show_sphinx = False
 
 # Try to get the version info for the project you're documenting, acts as replacement for
@@ -25,8 +27,6 @@ try:
     version = importlib.metadata.version("harv")
 except importlib.metadata.PackageNotFoundError:
     version = "0.0.0"
-
-# -- General configuration -----------------------------------------------------
 
 # -- General configuration -----------------------------------------------------
 
@@ -41,7 +41,10 @@ extensions = [
     # This allows you to create :::{todo} sections that will not be rendered
     # in the live docs if you want to leave notes for future work in the docs
     "sphinx.ext.todo",
-    "autoapi.extension",
+    # "autoapi.extension",
+    "sphinx.ext.autodoc",  # TODO: replace with autodoc2
+    "sphinx.ext.autosummary",  # TODO: replace with autodoc2
+    "sphinx.ext.mathjax",
     "sphinx_autodoc_typehints",
     "rtds_action",
 ]
@@ -62,6 +65,9 @@ pygments_style = "default"
 # Usually you set "language" from the command line for these cases.
 language = "en"
 
+# Suppress the module name of the python reference if it can be resolved.
+python_use_unqualified_type_names = True
+
 # -- Options for extensions ----------------------------------------------------
 # https://myst-parser.readthedocs.io/en/latest/syntax/optional.html
 # -- Options for myst markdown formatting
@@ -70,6 +76,9 @@ myst_enable_extensions = [
     "colon_fence",
     "deflist",
     "attrs_inline",
+    "deflist",
+    "dollarmath",  # for $, $$
+    "amsmath",
 ]
 
 myst_heading_anchors = 3
@@ -83,32 +92,105 @@ exclude_patterns = [
     ".DS_Store",
     "tutorials/data",
     "_static/*.ipynb",
+    "spec.md",
 ]
 
-# --------- setup autoapi defaults for your api docs ---------------
+# -- Autodoc settings ---------------------------------------------------
 
-# AutoAPI configuration
-autoapi_type = "python"
-# point AutoAPI at your package sources; adjust if using src layout
-autoapi_dirs = ["../src"]
-# Don't let AutoAPI automatically insert a toctree (avoid duplicates)
-autoapi_add_toctree = False
-autoapi_keep_files = False
-autoapi_options = ["members", "undoc-members", "show-inheritance"]
+autodoc_typehints = "description"
+autodoc_typehints_format = "short"
+
+# Don't show class signature with the class' name.
+autodoc_class_signature = "separated"
+
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": True,
+    "inherited-members": True,
+    "show-inheritance": True,
+    "member-order": "bysource",
+}
+
+always_document_param_types = True
+# typehints_use_signature = True
 
 # -- Options for HTML output ---------------------------------------------------
 
 html_theme = "furo"
 html_static_path = ["_static"]
 html_logo = "_static/logo_med.png"
-html_css_files = ["custom.css"]
+html_css_files = [
+    "custom.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/fontawesome.min.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/solid.min.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/brands.min.css",
+]
+html_favicon = "_static/favicon.png"
+
+html_theme_options = {
+    "source_repository": "https://github.com/adrn/harv",
+    "source_branch": "main",
+    "source_directory": "docs/",
+    "footer_icons": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/adrn/harv",
+            "html": "",
+            "class": "fa-brands fa-solid fa-github fa-2x",
+        },
+        # {
+        #     "name": "PyPI",
+        #     "url": "https://pypi.org/project/harv/",
+        #     "html": "<img src='https://img.shields.io/pypi/v/harv' alt='PyPI'>",
+        #     "class": "",
+        # },
+    ],
+}
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = "harv_doc"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/", None),
+    # Canonical URL (jax.readthedocs.io now redirects here)
+    "jax": ("https://docs.jax.dev/en/latest/", None),
+    "jaxtyping": ("https://docs.kidger.site/jaxtyping/", None),
+    "astropy": ("https://docs.astropy.org/en/stable/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "equinox": ("https://docs.kidger.site/equinox/", None),
+    "quax": ("https://docs.kidger.site/quax/", None),
+    "unxt": ("https://unxt.readthedocs.io/en/latest/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
+    "numpyro": ("https://num.pyro.ai/en/stable/", None),
 }
+
+nitpick_ignore = [
+    # Keep this ignore: Sphinx emits unresolved typing.Union references from
+    # generated type signatures with <unknown> source locations, so there is no
+    # stable doc target to fix directly yet.
+    # TODO: Revisit after upgrading Sphinx and/or sphinx-autodoc-typehints.
+    ("py:data", "typing.Union"),
+    # ArrayLike is documented as py:data in JAX (it's a type alias), but
+    # sphinx_autodoc_typehints emits it as py:class — the mismatch cannot be
+    # resolved via intersphinx regardless of URL.
+    ("py:class", "ArrayLike"),
+    ("py:class", "jax.typing.ArrayLike"),
+    # Parametric unxt.Quantity[PhysicalType('...')] types render as bare
+    # Quantity / PhysicalType under python_use_unqualified_type_names=True;
+    # neither symbol has a stable doc target in the unxt inventory.
+    ("py:class", "Quantity"),
+    ("py:class", "PhysicalType"),
+    ("py:class", "unxt.Q"),
+]
+
+# TypedNdArray is a JAX-private type (jax._src.basearray) with no public docs.
+# jax._src.* are private JAX implementation paths never in the public inventory.
+nitpick_ignore_regex = [
+    (r"py:class", r"jaxtyping\..*"),  # TODO: remove
+    (r"py:class", r".*TypedNdArray.*"),
+    (r"py:class", r"jax\._src\..*"),
+]
+
 
 nb_execution_mode = "off"
 
@@ -130,7 +212,7 @@ else:
             "rtds_action: GITHUB_TOKEN is not set on Read the Docs, so executed "
             "tutorial notebooks cannot be fetched from GitHub Actions artifacts."
         )
-        raise RuntimeError(msg)
+        print(msg)
 
     print("rtds_action: no GITHUB_TOKEN found; skipping artifact retrieval")
     rtds_action_github_repo = ""

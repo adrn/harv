@@ -14,7 +14,7 @@ from unxt import Q, uconvert
 
 from harv.data import RVData
 from harv.distributions import QD
-from harv.extensions import MultiSurveyOffset
+from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
 from harv.samplers.rejection_prior import RejectionPrior

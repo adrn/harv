@@ -45,37 +45,37 @@ def simulate_rv_sb1_data(
 
     Parameters
     ----------
-    seed : int, optional
+    seed
         Random seed for reproducibility. Default: 42.
-    n_obs : int, optional
+    n_obs
         Number of observations. Default: 50.
-    baseline : Q["time"], optional
+    baseline
         Time baseline for observations. Default: 5 years.
-    period : Q["time"], optional
+    period
         Orbital period. If None, randomly drawn from [10, 1000] days.
-    eccentricity : float, optional
+    eccentricity
         Orbital eccentricity. If None, randomly drawn from [0, 0.7].
-    t_peri : Q["time"], optional
+    t_peri
         Time of periastron passage. If None, randomly drawn from [0, period].
-    arg_peri : Q["angle"], optional
+    arg_peri
         Argument of periastron omega. If None, randomly drawn from [0, 2pi].
-    rv_semiamp : Q["speed"], optional
+    rv_semiamp
         RV semi-amplitude. If None, randomly drawn from [1, 50] km/s.
-    v_sys : Q["speed"], optional
+    v_sys
         Systemic velocity. If None, randomly drawn ~ N(0, 20) km/s.
-    rv_err : Q["speed"], optional
+    rv_err
         RV measurement uncertainties (1-sigma). If None, randomly drawn from
         U(0.01, 0.5) km/s for each observation.
-    t_ref : Q["time"], optional
+    t_ref
         Reference time. If None, randomly chosen.
-    instrument : str, optional
+    instrument
         Instrument name for the observations. Default: "default".
 
     Returns
     -------
-    data : RVData
+    data
         Simulated RV data container.
-    true_params : dict
+    true_params
         Dictionary of true parameter values used in simulation.
 
     Examples
@@ -187,41 +187,41 @@ def simulate_rv_multisurv_data(  # noqa: C901
 
     Parameters
     ----------
-    instruments : dict[str, Q["speed"] | None]
+    instruments
         Mapping from instrument name to its zero-point offset.  Pass ``None``
         for the reference instrument (offset = 0).  Example::
 
             {"keck": None, "espresso": Q(3.5, "km/s")}
 
-    seed : int, optional
+    seed
         Random seed. Default: 42.
-    n_obs_per_instrument : int, optional
+    n_obs_per_instrument
         Number of observations per instrument. Default: 30.
-    baseline : Q["time"], optional
+    baseline
         Total time baseline. Default: 5 years.
-    period : Q["time"], optional
+    period
         Orbital period. Randomly drawn if None.
-    eccentricity : float, optional
+    eccentricity
         Orbital eccentricity. Randomly drawn if None.
-    t_peri : Q["time"], optional
+    t_peri
         Time of periastron passage. Randomly drawn if None.
-    arg_peri : Q["angle"], optional
+    arg_peri
         Argument of periastron. Randomly drawn if None.
-    rv_semiamp : Q["speed"], optional
+    rv_semiamp
         RV semi-amplitude. Randomly drawn if None.
-    v_sys : Q["speed"], optional
+    v_sys
         Systemic velocity of the reference instrument. Randomly drawn if None.
-    rv_err : Q["speed"], optional
+    rv_err
         Measurement uncertainty (same for all instruments and observations).
         Randomly drawn if None.
-    t_ref : Q["time"], optional
+    t_ref
         Reference epoch. Randomly drawn if None.
 
     Returns
     -------
-    source_data : SourceData
+    source_data
         Multi-instrument RV data container.
-    true_params : dict
+    true_params
         True parameter values: ``period``, ``eccentricity``, ``t_peri``,
         ``arg_peri``, ``rv_semiamp``, ``v_sys``, and one entry per non-reference
         instrument named ``"offset_{name}"``.

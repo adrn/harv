@@ -25,7 +25,6 @@ from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import ParamInfo
 from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import (
     AbstractComponentModel,
@@ -33,6 +32,7 @@ from harv.models.component import (
     _resolve_prior_to_mvn,
     _sample_nonlinear_params,
 )
+from harv.models.extensions.base import ParamInfo
 
 
 def _split_nl_values(
@@ -121,13 +121,13 @@ def _sample_explicit_linear_prior(
 
     Unifies two cases that previously needed separate code paths:
 
-    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are
-      sampled directly via ``numpyro.sample``; if a ``QuantityDistribution`` is
-      provided the result is unit-stripped to ``target_unit``.
+    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are sampled
+      directly via ``numpyro.sample``; if a ``QuantityDistribution`` is provided the
+      result is unit-stripped to ``target_unit``.
     * Callable priors (e.g. :class:`PeriodDependentKPrior`) are resolved to a
-      :class:`numpyro.distributions.Normal` at the current ``nl_values`` /
-      ``extra_values`` and then sampled.  The resolver returns values already
-      expressed in ``target_unit``, so no further unit-strip is performed.
+      :class:`numpyro.distributions.distributions.Normal` at the current ``nl_values`` /
+      ``extra_values`` and then sampled.  The resolver returns values already expressed
+      in ``target_unit``, so no further unit-strip is performed.
 
     Parameters
     ----------
@@ -150,7 +150,6 @@ def _sample_explicit_linear_prior(
 
     Returns
     -------
-    jax.Array
         The sampled value, unit-stripped to ``target_unit``.
     """
     _site = site_name if site_name is not None else name
@@ -186,10 +185,10 @@ class JointModel(eqx.Module):
 
     Parameters
     ----------
-    components : dict[str, AbstractComponentModel]
+    components
         Named component models. Keys are used to namespace component-specific
         parameters (e.g. ``"rv.jitter"``).
-    shared_params : tuple of str
+    shared_params
         Names of orbital parameters shared across all components (e.g.
         ``("period", "eccentricity", "phase_peri", "arg_peri")``).
 
@@ -214,19 +213,19 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        components : dict[str, AbstractComponentModel]
+        components
             RV and Gaia astrometry component models
             (e.g. ``{"rv": ..., "astro": ...}``).
-        shared_params : tuple of str, optional
+        shared_params
             Override the default shared orbital parameters. Defaults to
             ``("period", "eccentricity", "phase_peri", "arg_peri")``.
-        shared_linear_params : tuple of str, optional
+        shared_linear_params
             Linear parameter names shared across components. Defaults to
             ``()`` (no shared linear params for heterogeneous joint models).
 
         Returns
         -------
-        JointModel
+            The constructed JointModel.
         """
         if shared_params is None:
             shared_params = _DEFAULT_SHARED_PARAMS
@@ -261,31 +260,31 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        prior : RejectionPrior
+        prior
             SB2-style prior.  Keys for named component-specific parameters (e.g.,
             ``rv_semiamp``) must correspond to the component names in
             *component_names*. For example, with the default names "primary" and
             "secondary", the prior must have keys "primary.rv_semiamp" and
             "secondary.rv_semiamp". Other linear parameters (e.g. "v_sys") are
             automatically treated as shared across components.
-        component_names : tuple of str, optional
+        component_names
             Names of the two SB2 components. Defaults to ``("primary", "secondary")``.
-        extensions : tuple or dict, optional
+        extensions
             Extensions to attach to each component.
 
             - A bare ``tuple`` is applied to **all** components.
             - A ``dict`` is keyed by component name; missing keys yield no extensions
               for that component.
-        shared_params : optional
+        shared_params
             Defaults to the standard nonlinear shared orbital params. For example,
             "period", "eccentricity", "phase_peri", and "arg_peri".
-        shared_linear_params : optional
+        shared_linear_params
             Defaults to every key in ``prior.linear_prior`` except the ``rv_semiamp``
             keys.
 
         Returns
         -------
-        JointModel
+            The constructed JointModel.
 
         Examples
         --------
@@ -470,7 +469,7 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        linear_prior : dict or None
+        linear_prior
             The merged linear-prior dict (with ``"comp.param"`` qualified keys for
             non-shared params).  ``None`` means treat all linear params as
             marginalizable.
@@ -516,7 +515,7 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        linear_prior : dict or None
+        linear_prior
             The merged linear-prior dict.  ``None`` means treat all linear params
             as marginalizable.
         """
@@ -653,15 +652,16 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        per_comp_marg : dict[str, tuple[str, ...]]
-            Per-component marginalized parameter names.  Always populated
-            (no ``None`` sentinel): callers do not need to special-case
-            ``marginalized_names is None``.
-        any_shared_marg : bool
-            ``True`` iff at least one name in ``shared_linear_params`` is
-            being marginalized in any component, in which case the joint
-            marginalization path must be used.  ``False`` means the existing
-            per-component summation gives the correct answer.
+            ``(per_comp_marg, any_shared_marg)``.
+
+            ``per_comp_marg`` is the per-component marginalized parameter names.
+            Always populated (no ``None`` sentinel): callers do not need to
+            special-case ``marginalized_names is None``.
+
+            ``any_shared_marg`` is ``True`` iff at least one name in
+            ``shared_linear_params`` is being marginalized in any component, in
+            which case the joint marginalization path must be used.  ``False``
+            means the existing per-component summation gives the correct answer.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
             self._per_component_linear_prior(linear_prior)
@@ -703,30 +703,31 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        comp_nl : dict[str, dict[str, Any]]
+        comp_nl
             Per-component nonlinear values, with any explicit linear values
             already routed in by ``_route_explicit_linear``.
-        per_comp_marg : dict[str, tuple[str, ...]]
+        per_comp_marg
             Per-component marginalized parameter names.
-        data : SystemData or dict[str, AbstractData]
+        data
             Per-component data, indexed by component name.
-        linear_prior : dict or None
+        linear_prior
             Flat merged linear-prior dict (``"comp.param"`` qualified for
             non-shared params).
 
         Returns
         -------
-        marg_dist : MarginalizedLinear
-            Single joint marginalized-Gaussian likelihood.
-        y_joint : jax.Array, shape (Σ n_obs_i,)
-            Concatenated residual-subtracted observations.
-        global_cols : list of (name, owner)
-            Column ordering used for decomposing joint samples back into
-            per-component and shared values.  ``owner`` is ``None`` for
-            shared columns, else the component name.
-        explicit_by_comp : dict[str, dict[str, Any]]
-            Explicit (non-marginalized) linear values per component,
-            extracted from each component's building blocks.
+            ``(marg_dist, y_joint, global_cols, explicit_by_comp)``.
+
+            ``marg_dist`` is the single joint marginalized-Gaussian likelihood.
+
+            ``y_joint`` is the concatenated residual-subtracted observations.
+
+            ``global_cols`` is the column ordering used for decomposing joint
+            samples back into per-component and shared values.  ``owner`` is
+            ``None`` for shared columns, else the component name.
+
+            ``explicit_by_comp`` is the explicit (non-marginalized) linear values
+            per component, extracted from each component's building blocks.
         """
         shared_set = set(self.shared_linear_params)
         per_comp_lp: dict[str, dict[str, Any] | None] = (
@@ -862,30 +863,28 @@ class JointModel(eqx.Module):
     ) -> jax.Array:
         """Compute the joint log-likelihood.
 
-        When ``shared_linear_params`` contains names that are being
-        analytically marginalized, a single joint
-        :class:`~numpyro_ext.distributions.MarginalizedLinear` is built
-        spanning all components (the *joint path*).  Otherwise the
-        per-component log-likelihoods are summed as before.
+        When ``shared_linear_params`` contains names that are being analytically
+        marginalized, a single joint ``numpyro_ext.distributions.MarginalizedLinear`` is
+        built spanning all components (the *joint path*).  Otherwise the per-component
+        log-likelihoods are summed as before.
 
         Parameters
         ----------
-        nl_values : dict
+        nl_values
             Flat dict of parameter values. Shared orbital params use bare names
             (``"period"``, ``"eccentricity"``, etc.). Component-specific nonlinear
             params use ``"component.param"`` convention (e.g. ``"rv.jitter"``).
-        data : SystemData or dict[str, AbstractData]
+        data
             Per-component data, indexed by component name.
-        linear_prior : dict or None
+        linear_prior
             Flat merged linear-prior dict. ``None`` means treat all linear params as
             marginalizable.
-        marginalized_names : tuple of str or None
+        marginalized_names
             Optional linear parameter names to marginalize. Component-qualified names
             are accepted (e.g. ``"rv.parallax"`` or just ``"parallax"`` if unambiguous).
 
         Returns
         -------
-        jax.Array
             Scalar log-likelihood.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
@@ -946,22 +945,23 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values : dict
+        nl_values
             Flat parameter values dict.
-        key : jax.Array
+        key
             JAX PRNG key.
-        data : SystemData or dict[str, AbstractData]
+        data
             Per-component data, indexed by component name.
-        linear_prior : dict or None
+        linear_prior
             Flat merged linear-prior dict.
-        marginalized_names : tuple of str or None
+        marginalized_names
             Optional linear parameter names to marginalize.
 
         Returns
         -------
-        dict
+            Sampled parameter values. The structure depends on the path:
+
             - *Default path* (no shared marginalization): ``dict[comp_name,
-              dict[param_name, array]]``
+              dict[param_name, array]]``.
             - *Joint path* (shared marginalization): mixed dict where shared
               params are top-level and per-component params are in sub-dicts
               keyed by component name.
@@ -1038,25 +1038,25 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        nonlinear_priors : dict[str, PriorDist]
+        nonlinear_priors
             Prior distributions for all nonlinear parameters. Shared orbital
             params use bare names. Component-specific params use
             ``"component.param"`` convention.
-        data : SystemData or dict[str, AbstractData]
+        data
             Per-component data, indexed by component name.
-        linear_prior : dict or None
+        linear_prior
             Flat merged linear-prior dict.
-        marginalized : bool
+        marginalized
             If ``True`` (default), linear parameters are marginalized
             per-component. If ``False``, all parameters are sampled
             explicitly.
-        marginalized_names : tuple of str or None
+        marginalized_names
             Optional linear parameter names to marginalize when
             ``marginalized=True``. Component-qualified names are accepted.
 
         Returns
         -------
-        model_fn : callable
+            A numpyro model function suitable for use with a sampler.
         """
         if not marginalized and marginalized_names is not None:
             msg = "marginalized_names cannot be set when marginalized=False"

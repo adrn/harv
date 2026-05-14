@@ -18,8 +18,8 @@ import jax
 import quaxed.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
-from harv.extensions.base import ParamInfo
 from harv.kepler.orbits import rv_shape
+from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
 
 
@@ -84,17 +84,17 @@ class StandardRV(AbstractParameterization):
 
         Parameters
         ----------
-        sin_f : jax.Array, shape (n_obs,)
+        sin_f
             Sine of true anomaly (unit-stripped).
-        cos_f : jax.Array, shape (n_obs,)
+        cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values : dict
+        nl_values
             Must contain ``"eccentricity"`` and ``"arg_peri"`` (both unit-stripped
             scalars).
 
         Returns
         -------
-        jax.Array, shape (n_obs, 2)
+            Design matrix block, shape ``(n_obs, 2)``.
         """
         rv_col = rv_shape(
             sin_f, cos_f, nl_values["eccentricity"], nl_values["arg_peri"]
@@ -163,17 +163,17 @@ class EcoswEsinwRV(AbstractParameterization):
 
         Parameters
         ----------
-        sin_f : jax.Array, shape (n_obs,)
+        sin_f
             Sine of true anomaly (unit-stripped).
-        cos_f : jax.Array, shape (n_obs,)
+        cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values : dict
+        nl_values
             Must contain ``"ecosw"`` and ``"esinw"`` (dimensionless scalars). The
             eccentricity and arg_peri are derived internally.
 
         Returns
         -------
-        jax.Array, shape (n_obs, 2)
+            Design matrix block, shape ``(n_obs, 2)``.
         """
         ecosw = nl_values["ecosw"]
         esinw = nl_values["esinw"]

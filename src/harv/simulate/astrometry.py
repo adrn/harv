@@ -22,7 +22,6 @@ from harv.custom_types import (
     BatchFloat,
     BatchQAngle,
     BatchQTime,
-    QAngle,
     ScalarQAngle,
     ScalarQAngularSpeed,
     ScalarQTime,
@@ -47,18 +46,17 @@ def fake_parallax_factor(
 
     Parameters
     ----------
-    time : Q["time"]
+    time
         Observation times.
-    ra : Q["angle"]
+    ra
         Right ascension of the source.
-    dec : Q["angle"]
+    dec
         Declination of the source.
-    scan_angle : Q["angle"]
+    scan_angle
         Gaia scan angle at each observation.
 
     Returns
     -------
-    parallax_factor : jax.Array
         Dimensionless parallax factor for each observation.
 
     Examples
@@ -114,56 +112,56 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
 
     Parameters
     ----------
-    times : Q["time"], optional
+    times
         Observation times. Default: 100 times evenly spaced over 5 years.
-    scan_angle : Q["angle"]
+    scan_angle
         Gaia scan angles at each observation.
-    parallax_factor : BatchFloat
+    parallax_factor
         Pre-computed parallax factors.
-    baseline : Q["time"], optional
+    baseline
         Time baseline for observations. Default: 5 years.
-    n_obs : int, optional
+    n_obs
         Number of observations to simulate (used if times/scan_angle/parallax_factor are
         None).
-    period : Q["time"], optional
+    period
         Orbital period. If None, randomly drawn from [0, 3] years.
-    eccentricity : float, optional
+    eccentricity
         Orbital eccentricity. If None, randomly drawn from [0, 0.9].
-    t_peri : Q["time"], optional
+    t_peri
         Time of periastron passage. If None, randomly drawn from [0, period].
-    arg_peri : Q["angle"], optional
+    arg_peri
         Argument of periastron omega. If None, randomly drawn from [0, 2pi].
-    lon_asc_node : Q["angle"], optional
+    lon_asc_node
         Longitude of ascending node Omega. If None, randomly drawn from [0, 2pi].
-    inclination : Q["angle"], optional
+    inclination
         Orbital inclination. If None, randomly drawn from cos(i) ~ U(-1, 1).
-    semi_major_axis : Q["angle"], optional
+    semi_major_axis
         Semi-major axis in angular units. If None, randomly drawn from [0.5, 50] mas.
-    alpha0 : Q["angle"], optional
+    alpha0
         Small RA offset from reference position at t_ref. Default: 0 mas.
         This is a linear parameter, not the absolute RA.
-    delta0 : Q["angle"], optional
+    delta0
         Small Dec offset from reference position at t_ref. Default: 0 mas.
         This is a linear parameter, not the absolute Dec.
-    mu_alpha : Q["angular speed"], optional
+    mu_alpha
         Proper motion in RA. If None, randomly drawn ~ N(0, 10 mas/yr).
-    mu_delta : Q["angular speed"], optional
+    mu_delta
         Proper motion in Dec. If None, randomly drawn ~ N(0, 10 mas/yr).
-    parallax : Q["angle"], optional
+    parallax
         Parallax. If None, randomly drawn from Exp(10 mas).
-    al_error : Q["angle"], optional
+    al_error
         Along-scan measurement errors (1-sigma). If None, randomly drawn from
         U(0.02, 0.1) mas for each observation.
-    t_ref : Q["time"], optional
+    t_ref
         Reference time for astrometry. If None, randomly chosen.
-    seed : int, optional
+    seed
         Random seed for reproducibility. Default: 42.
 
     Returns
     -------
-    data : GaiaAstrometryData
+    data
         Simulated Gaia astrometry data container.
-    true_params : dict
+    true_params
         Dictionary of true parameter values used in simulation, including:
         period, eccentricity, semi_major_axis, t_peri, alpha0, delta0, mu_alpha,
         mu_delta, parallax, A, B, F, G (Thiele-Innes), arg_peri, lon_asc_node,
@@ -324,7 +322,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
 
     data = GaiaAstrometryData(
         time=times,
-        al_position=QAngle.from_(y_al),
+        al_position=Q["angle"].from_(y_al),  # ty: ignore[unresolved-reference]
         al_position_err=al_error,
         scan_angle=scan_angle,
         parallax_factor=jnp.asarray(parallax_factor),

@@ -171,11 +171,12 @@ class RejectionPrior(eqx.Module):
 
     Parameters
     ----------
-    nonlinear_priors : dict[str, PriorDist]
+    nonlinear_priors
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
-        :class:`QuantityDistribution` wrapper for parameters with physical units).
-    linear_prior : dict[str, PriorDist | LinearPriorCallable]
+        :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
+        physical units).
+    linear_prior
         Per-parameter priors for linear parameters. Each entry is classified:
 
         - ``dist.Normal`` or ``QD(Normal)`` -- Gaussian, can be analytically
@@ -187,7 +188,7 @@ class RejectionPrior(eqx.Module):
 
         When using ``default_rv()`` with ``offsets``, the non-reference offset
         priors are automatically included as linear parameters.
-    extension_priors : dict[str, PriorDist]
+    extension_priors
         Priors for extension parameters declared via ``extra_params()``.
 
     Examples
@@ -235,14 +236,13 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        key : jax.Array
+        key
             Random key for sampling.
-        n_samples : int
+        n_samples
             Number of samples to draw.
 
         Returns
         -------
-        samples : dict[str, jax.Array]
             Dictionary mapping each parameter name to an array of shape
             ``(n_samples,)``.  Values are bare JAX arrays regardless of
             whether the distribution is wrapped in ``QuantityDistribution``.
@@ -290,9 +290,9 @@ class RejectionPrior(eqx.Module):
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
 
-        The default linear prior for the RV semi-amplitude ,:math:`K`, has a standard
-        deviation that scales with period and eccentricity to keep the prior
-        approximately constant in companion mass at fixed primary mass:
+        The default linear prior for the RV semi-amplitude $K$ has a standard deviation
+        that scales with period and eccentricity to keep the prior approximately
+        constant in companion mass at fixed primary mass:
 
         .. math::
 
@@ -300,31 +300,31 @@ class RejectionPrior(eqx.Module):
                 \left(\frac{P}{P_0}\right)^{-1/3}
                 \left(1 - e^2\right)^{-1/2}
 
-        The systemic velocity :math:`v_0` has a fixed Gaussian prior with specified
-        scale ``sigma_v0``.
+        The systemic velocity $v_0$ has a fixed Gaussian prior with specified scale
+        ``sigma_v0``.
 
         Parameters
         ----------
-        period_min : Q["time"]
-            Lower bound for the log-uniform period prior.  Pass a ``Quantity`` with time
-            units (e.g. ``u.Q(50, "day")``) so the sampler can convert to whatever unit
-            the data uses.
-        period_max : Q["time"]
+        period_min
+            Lower bound for the log-uniform period prior.  Pass a `unxt.Quantity` with
+            time units (e.g. ``u.Q(50, "day")``) so the sampler can convert to whatever
+            unit the data uses.
+        period_max
             Upper bound for the log-uniform period prior (same unit as ``period_min``).
-        sigma_K0 : Q["speed"]
+        sigma_K0
             RV semi-amplitude scale at the reference period ``P0``. For binary-star
             systems, a reasonable value is around 30 km/s. For exoplanets, something
             less than 1 km/s might be appropriate.
-        sigma_v0 : Q["speed"]
+        sigma_v0
             Systemic velocity prior scale.
-        P0 : Q["time"]
+        P0
             Reference period for the K prior scaling.  Default: 1 yr.
-        offsets : dict[str, QuantityDistribution | None], optional
+        offsets
             Multi-instrument offset priors. Keys are instrument names, values are
-            ``QuantityDistribution`` priors (or ``None`` for the reference instrument).
-            Non-reference priors are merged into ``linear_prior`` automatically;
-            reference entries (``None``) are ignored.
-        **kwargs : PriorDist
+            `harv.QuantityDistribution` priors (or ``None`` for the reference
+            instrument). Non-reference priors are merged into ``linear_prior``
+            automatically; reference entries (``None``) are ignored.
+        **kwargs
             Override any default nonlinear or linear prior by name, or add extension
             parameter priors for unknown names (e.g. ``jitter=QD(...)``,
             ``espresso=QD(...)``).  Unknown names are not validated here -- the sampler
@@ -332,7 +332,7 @@ class RejectionPrior(eqx.Module):
 
         Returns
         -------
-        prior : RejectionPrior
+        RejectionPrior
             Prior configured for RV data.
 
         Examples
@@ -431,9 +431,9 @@ class RejectionPrior(eqx.Module):
         velocity.
 
         Parallax is explicitly sampled here (not analytically marginalized) by
-        specifying it as a :class:`~numpyro.distributions.HalfNormal` distribution even
-        though it is a linear parameter. This is needed for the semi-major axis and
-        proper motion priors above.
+        specifying it as a ``numpyro.distributions.HalfNormal``
+        distribution even though it is a linear parameter. This is needed for the
+        semi-major axis and proper motion priors above.
 
         If the catalog parallax is trustworthy (e.g., for exoplanet cases), you can
         instead pass a tight Gaussian prior on parallax, which will then get
@@ -441,30 +441,29 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        period_min : Q["time"]
+        period_min
             Lower bound for the log-uniform period prior.
-        period_max : Q["time"]
+        period_max
             Upper bound for the log-uniform period prior.
-        sigma_a0 : Q["length"]
+        sigma_a0
             Semi-major axis scale in physical length units (e.g. AU) at reference period
             ``P0``.
-        sigma_parallax : Q["angle"]
+        sigma_parallax
             Scale for the half-normal parallax prior (mas).
-        sigma_pos : Q["angle"]
+        sigma_pos
             Scale for the position (ra0, dec0) Gaussian priors (mas).
-        sigma_vtan : Q["speed"]
+        sigma_vtan
             Transverse-velocity dispersion scale (e.g. km/s) for the proper-motion
             (pmra, pmdec) priors.  Converted to angular proper motion via the sampled
             parallax.
-        P0 : Q["time"]
+        P0
             Reference period for the semi-major axis scaling.  Default: 1 yr.
-        **kwargs : PriorDist
+        **kwargs
             Override any default nonlinear or linear prior by name, or add extension
             parameter priors for unknown names.
 
         Returns
         -------
-        prior : RejectionPrior
             Prior configured for Gaia astrometry data.
 
         Examples
@@ -555,26 +554,26 @@ class RejectionPrior(eqx.Module):
 
         Parameters
         ----------
-        period_min : Q["time"]
+        period_min
             Lower bound for the log-uniform period prior.
-        period_max : Q["time"]
+        period_max
             Upper bound for the log-uniform period prior.
-        sigma_K0 : Q["speed"]
+        sigma_K0
             RV semi-amplitude scale at the reference period ``P0``.
-        sigma_v0 : Q["speed"]
+        sigma_v0
             Systemic velocity prior scale.
-        P0 : Q["time"]
+        P0
             Reference period for the K prior scaling.  Default: 1 yr.
-        component_names : tuple[str, str]
+        component_names
             Names of the two components.  These are used to construct the linear prior
             keys for the semi-amplitudes (e.g. "primary.rv_semiamp" and
             "secondary.rv_semiamp").
-        **kwargs : PriorDist
+        **kwargs
             Override any default nonlinear or linear prior by name.
 
         Returns
         -------
-        prior : RejectionPrior
+            Prior configured for SB2 RV data.
 
         Examples
         --------

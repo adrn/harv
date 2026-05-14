@@ -99,7 +99,7 @@ def process_scanning_law(
 
     Returns
     -------
-    per_pixel : dict
+    dict
         Maps pixel_id -> np.ndarray[DTYPE] of unique scans
     """
     time_window_mask = (df["bjd"] >= (bjd_range[0] - GAIA_TIME_ORIGIN_JD)) & (

@@ -34,9 +34,9 @@ def save_sampler(path: str | Path, sampler: Any) -> None:
 
     Parameters
     ----------
-    path : str or Path
+    path
         Output file path.  By convention use a ``.pkl`` extension.
-    sampler : RejectionSampler or NumpyroSampler
+    sampler
         The sampler to save.  Any picklable object is accepted.
 
     Examples
@@ -53,12 +53,12 @@ def load_sampler(path: str | Path) -> Any:
 
     Parameters
     ----------
-    path : str or Path
+    path
         Path to the ``.pkl`` checkpoint file.
 
     Returns
     -------
-    sampler : RejectionSampler or NumpyroSampler
+    harv.samplers.RejectionSampler
         Restored sampler with all prior distributions and extensions intact.
 
     Examples

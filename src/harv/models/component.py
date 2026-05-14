@@ -22,7 +22,6 @@ from unxt import Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.extensions.base import AbstractExtension, ParamInfo
 from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
@@ -30,6 +29,7 @@ from harv.models._helpers import (
     _resolve_prior_to_mvn,
     _unwrap_dist,
 )
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 class _MargComponents(NamedTuple):
@@ -334,20 +334,20 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values : dict
+        nl_values
             Nonlinear parameter values (unit-stripped scalars).
-        marginalized_names : tuple of str
+        marginalized_names
             Which linear params to marginalize.
-        explicit_linear : dict
+        explicit_linear
             Values for any linear params evaluated explicitly (unit-stripped).
         data
             Raw data object (passed to extensions and to ``_strip_obs``).
-        linear_prior : dict or None
+        linear_prior
             Per-parameter priors for analytic marginalization.
 
         Returns
         -------
-        _MargBuildingBlocks
+            Marginalization building blocks for this component.
         """
         X = self._full_design_matrix(nl_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
@@ -427,20 +427,21 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values : dict
+        nl_values
             Nonlinear parameter values (unit-stripped scalars).
-        marginalized_names : tuple of str
+        marginalized_names
             Which linear params to marginalize.
-        explicit_linear : dict
+        explicit_linear
             Values for any linear params evaluated explicitly (unit-stripped).
         data
             Raw data object (passed to extensions).
-        linear_prior : dict or None
+        linear_prior
             Per-parameter priors for analytic marginalization.
 
         Returns
         -------
-        _MargComponents
+            Per-component marginalization components ready to be summed
+            into a joint marginalization.
         """
         blocks = self._build_marg_blocks(
             nl_values, marginalized_names, explicit_linear, data, linear_prior
@@ -498,23 +499,22 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values : dict
+        nl_values
             Parameter values.  In auto mode this may contain explicit
             linear parameter values alongside the nonlinear ones.
         data
             Runtime observation data (RVData / GaiaAstrometryData / SystemData).
-        linear_prior : dict or None
+        linear_prior
             Per-parameter priors for analytic marginalization. Required for
             auto and manual-marginalization modes.
-        linear_values : dict or None
+        linear_values
             Explicit linear parameter values (unit-stripped).  When given
             without ``marginalized_names``, triggers explicit evaluation.
-        marginalized_names : tuple of str or None
+        marginalized_names
             Which linear params to marginalize (manual mode).
 
         Returns
         -------
-        jax.Array
             Scalar log-likelihood.
         """
         # Auto mode: classify from linear_prior, extract explicit from values
@@ -655,29 +655,28 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nonlinear_priors : dict[str, PriorDist]
+        nonlinear_priors
             Prior distributions for nonlinear parameters. Keys are parameter
             names (e.g. ``"period"``, ``"eccentricity"``). Values are
-            :class:`~numpyro.distributions.Distribution` or
+            :class:`~numpyro.distributions.distribution.Distribution` or
             :class:`~harv.distributions.QuantityDistribution`.
         data
             Runtime observation data (RVData / GaiaAstrometryData).
-        linear_prior : dict or None
+        linear_prior
             Per-parameter priors for the linear parameters. Required when
             any marginalization happens (``marginalized=True`` or full
             non-marginalized mode that still needs explicit linear priors).
-        marginalized : bool
+        marginalized
             If ``True`` (default), linear parameters are analytically
             marginalized and only nonlinear parameters are sampled. If
             ``False``, all parameters are sampled explicitly.
-        marginalized_names : tuple of str or None
+        marginalized_names
             Optional subset of linear parameter names to analytically
             marginalize when ``marginalized=True``. ``None`` means use the
             model's automatic prior-based classification.
 
         Returns
         -------
-        model_fn : callable
             A no-argument callable suitable for ``numpyro.infer.MCMC``.
         """
         if not marginalized and marginalized_names is not None:

@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 from unxt.quantity import AllowValue, ustrip
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 @final
@@ -27,22 +27,22 @@ class GP(AbstractExtension):
 
     Parameters
     ----------
-    kernel_builder : callable
+    kernel_builder
         Receives the full nonlinear-parameter dict (unit-stripped) and returns a
         callable kernel object that can be called with ``(X, Xp)`` to produce the kernel
         matrix. For example, from ``tinygp``.
-    hyperparams : tuple of ParamInfo
+    hyperparams
         Nonlinear hyperparameters declared by this extension (e.g. ``gp_amp``,
         ``gp_length_scale``). These are sampled alongside other nonlinear model
         parameters.
-    time_unit : str
+    time_unit
         Unit to strip times to before building the coordinate array. Default ``""``
         (dimensionless / already stripped).
 
     Examples
     --------
-    >>> from harv.extensions.base import ParamInfo
-    >>> from harv.extensions.gp import GP; GP(
+    >>> from harv.models.extensions.base import ParamInfo
+    >>> from harv.models.extensions.gp import GP; GP(
     ...     kernel_builder=lambda hp: hp["gp_amp"] ** 2,
     ...     hyperparams=(ParamInfo("gp_amp", "km/s"),),
     ...     time_unit="day",

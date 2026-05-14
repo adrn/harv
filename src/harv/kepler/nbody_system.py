@@ -89,7 +89,6 @@ class TwoBodySystem(AbstractNBodySystem):
 
         Returns
         -------
-        pos
             3D position vector(s) of specified body relative to barycenter
         """
         r2 = self.companion.get_position(time)
@@ -112,7 +111,6 @@ class TwoBodySystem(AbstractNBodySystem):
 
         Returns
         -------
-        pos
             3D position vector(s) of companion relative to primary
         """
         r2 = self.position_barycentric(time, 1)
@@ -130,7 +128,6 @@ class TwoBodySystem(AbstractNBodySystem):
 
         Returns
         -------
-        vel
             3D velocity vector(s) of specified body relative to barycenter
         """
         v2 = self.companion.get_velocity(time)  # companion barycentric velocity
@@ -153,7 +150,6 @@ class TwoBodySystem(AbstractNBodySystem):
 
         Returns
         -------
-        vel
             3D velocity vector(s) of companion relative to primary
         """
         v2 = self.velocity_barycentric(time, 1)

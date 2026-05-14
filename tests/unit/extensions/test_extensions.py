@@ -8,13 +8,13 @@ from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData
 from harv.distributions import QuantityDistribution as QD
-from harv.extensions import (
+from harv.models import RVModel
+from harv.models.extensions import (
     AbstractExtension,
     Jitter,
     MonomialTrend,
     MultiSurveyOffset,
 )
-from harv.models import RVModel
 from harv.samplers import RejectionPrior, RejectionSampler
 
 # ======================================================================

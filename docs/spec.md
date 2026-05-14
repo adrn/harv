@@ -447,18 +447,17 @@ ______________________________________________________________________
 
 ## Layered architecture overview
 
-The package follows a five-layer separation of concerns:
+The package follows a layered separation of concerns:
 
 1. **Parameterizations** (`harv.models.parameterizations`) -- declare parameter
    names, units, roles (linear / nonlinear), and build design matrices. This is
    the single source of truth for what parameters a model has.
 
-1. **Extensions** (`harv.extensions`) -- pluggable modifiers that add parameters
-   and/or alter the design matrix or covariance (jitter, trends, offsets, GP).
-
-1. **Component models** (`harv.models.component`, `harv.models.rv`,
-   `harv.models.astrometry`) -- combine data + parameterization + extensions,
-   evaluate log-likelihoods (marginalized or explicit), generate numpyro models.
+1. **Component models** (`harv.models.component`, `harv.models.extensions`,
+   `harv.models.rv`, `harv.models.astrometry`) -- combine data + parameterization +
+   extensions,evaluate log-likelihoods (marginalized or explicit), generate numpyro
+   models. Extensions are pluggable modifiers that add parameters and/or alter the
+   design matrix or covariance (jitter, trends, offsets, GP).
 
 1. **Composition** (`harv.models.joint`) -- `JointModel` composes multiple
    component models with shared orbital parameters.
@@ -469,7 +468,7 @@ The package follows a five-layer separation of concerns:
 
 ______________________________________________________________________
 
-## Parameter metadata (`harv.extensions.base.ParamInfo`)
+## Parameter metadata (`harv.models.extensions.base.ParamInfo`)
 
 `ParamInfo(eqx.Module)` is a frozen descriptor for a single model parameter:
 
@@ -574,7 +573,7 @@ as `phase_peri * period + t_ref`.
 
 ______________________________________________________________________
 
-## Extensions (`harv.extensions`)
+## Extensions (`harv.models.extensions`)
 
 ### `AbstractExtension`
 
@@ -600,7 +599,7 @@ of the covariance via `modify_covariance`. Works on both 1-d (diagonal) and
 2-d (full) covariance representations.
 
 ```python
-from harv.extensions import Jitter
+from harv.models.extensions import Jitter
 ext = Jitter(param_unit="km/s")
 ```
 
@@ -622,7 +621,7 @@ Stores a pre-computed indicator matrix and appends it as extra linear-parameter
 columns. Each column corresponds to a non-reference instrument.
 
 ```python
-from harv.extensions import MultiSurveyOffset
+from harv.models.extensions import MultiSurveyOffset
 ext = MultiSurveyOffset(indicator_matrix, ("espresso", "keck"), "km/s")
 ```
 
@@ -633,7 +632,7 @@ the observation covariance, enabling correlated-noise modeling while preserving
 compatibility with the linear marginalization framework.
 
 ```python
-from harv.extensions import GP, ParamInfo
+from harv.models.extensions import GP, ParamInfo
 gp = GP(
     kernel_builder=lambda hp: hp["gp_amp"] ** 2 * tinygp.kernels.ExpSquared(hp["gp_scale"]),
     hyperparams=(
@@ -1043,7 +1042,7 @@ Jitter requires **two** things:
    has a matching entry in `prior.extension_priors`.
 
 ```python
-from harv.extensions import Jitter
+from harv.models.extensions import Jitter
 from harv.samplers import RejectionSampler, RejectionPrior
 from harv.distributions import QD
 import numpyro.distributions as dist
@@ -1570,7 +1569,7 @@ from unxt import Q
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models import RVModel, GaiaAstrometryModel, JointModel
-from harv.extensions import Jitter, MultiSurveyOffset
+from harv.models.extensions import Jitter, MultiSurveyOffset
 from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler
 
 # --- Minimal RV-only case ---

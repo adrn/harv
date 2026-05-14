@@ -31,20 +31,21 @@ class PeriodDependentKPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_K0 : Q["speed"]
+    sigma_K0
         RV semi-amplitude scale (km/s) at the reference period ``P0``.
         Default: 30 km/s -- appropriate for stellar binary searches.
-    P0 : Q["time"]
+    P0
         Numeric value of the reference period in units of ``P0_unit``.
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable` and is
-    the default ``linear_prior`` returned by :meth:`RejectionPrior.default_rv`.
+    This class implements the ``LinearPriorCallable`` protocol and is the default
+    ``linear_prior`` returned by
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.
 
-    See Also
-    --------
-    Price-Whelan et al. (2017) -- *The Joker: A Custom Monte Carlo Sampler for
+    References
+    ----------
+    Price-Whelan et al. (2017) — *The Joker: A Custom Monte Carlo Sampler for
     Binary-star and Exoplanet Radial Velocity Data*.
 
     Examples
@@ -56,8 +57,8 @@ class PeriodDependentKPrior(eqx.Module):
     Unit("km / s")
 
     Used as the default ``linear_prior`` for ``rv_semiamp`` in
-    :meth:`RejectionPrior.default_rv`.  Called with a param struct to
-    condition on nonlinear parameters:
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.  Called with a
+    param struct to condition on nonlinear parameters:
 
     >>> qd = prior(params)  # doctest: +SKIP
     """
@@ -70,7 +71,7 @@ class PeriodDependentKPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct whose ``.period`` and ``.eccentricity`` fields
             are accessible.  ``.period`` must be a ``Quantity`` compatible
             with ``P0_unit``.
@@ -111,17 +112,17 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_a0 : Q["length"]
+    sigma_a0
         Semi-major axis scale in physical units (e.g. AU) at the reference
         period ``P0``.  Converted to angular size via the parallax.
-    P0 : Q["time"]
+    P0
         Reference period.
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable`
+    This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``semi_major_axis`` returned by
-    :meth:`RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have ``.period``, ``.eccentricity``, and
     ``.parallax`` fields.  ``parallax`` is available because it is classified
@@ -146,7 +147,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct with ``.period`` (``Quantity``),
             ``.eccentricity`` (float), and ``.parallax`` (``Quantity``)
             fields.
@@ -187,14 +188,14 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
     Parameters
     ----------
-    sigma_v0 : Q["speed"]
+    sigma_v0
         Transverse-velocity dispersion scale (e.g. km/s).
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable`
+    This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
-    :meth:`RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have a ``.parallax`` field (``Quantity`` with
     angular units).  ``parallax`` is available because it is classified as an
@@ -216,7 +217,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
         Parameters
         ----------
-        params :
+        params
             A parameter struct with a ``.parallax`` (``Quantity``) field.
 
         Returns

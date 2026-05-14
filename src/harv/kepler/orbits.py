@@ -167,8 +167,7 @@ def compute_true_anomaly_components(
 
     Returns
     -------
-    sin_f, cos_f
-        True anomaly components, each shape (n,)
+        ``(sin_f, cos_f)`` — true anomaly components, each shape ``(n,)``.
 
     Examples
     --------
@@ -217,7 +216,6 @@ def rv_at_times(
 
     Returns
     -------
-    rv
         Radial velocities in the same unit as ``rv_semiamp`` and ``v_sys``.
 
     Examples
@@ -287,8 +285,8 @@ def astrometric_orbit_at_times(
 
     Returns
     -------
-    delta_ra, delta_dec
-        Sky-plane offsets in the same unit as ``semi_major_axis``.
+        ``(delta_ra, delta_dec)`` — sky-plane offsets in the same unit as
+        ``semi_major_axis``.
 
     Examples
     --------

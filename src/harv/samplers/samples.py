@@ -46,30 +46,30 @@ class Samples(eqx.Module):
 
     Parameters
     ----------
-    nonlinear : dict[str, Q]
+    nonlinear
         Nonlinear parameter samples, one Q per parameter. Keys: ``"period"``,
         ``"eccentricity"``, ``"phase_peri"``, and optionally ``"arg_peri"``,
         ``"cos_i"``, ``"lon_asc_node"``. Units: period has time units; angles have
         ``"rad"``; dimensionless parameters have unit ``""``.
-    linear : dict[str, Q]
+    linear
         Linear parameter samples, one Q per parameter. Keys: e.g. ``"rv_semiamp"``,
         ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``, ``"pmra"``, ``"pmdec"``,
         ``"parallax"``, ``"semi_major_axis"`` for astrometry.  Units are data-driven
         (e.g. ``"km/s"`` for RV).
-    data_type : str
+    data_type
         Informational label identifying the model that produced these samples (e.g.
         ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``). Stored in HDF5 for
         round-tripping.
-    metadata : dict[str, Any], optional
+    metadata
         Additional metadata (``t_ref``, ``num_chains``, acceptance rate, etc.).
-    linear_extension_names : tuple[str, ...]
+    linear_extension_names
         Names of linear parameters introduced by extensions (instrument offsets,
         polynomial trends, etc.) beyond the base linear set.
 
     Examples
     --------
-    ``Samples`` is normally produced by :meth:`RejectionSampler.run`, but can
-    be constructed directly for testing or manual use:
+    ``Samples`` is normally produced by :meth:`~harv.RejectionSampler.run`, but can be
+    constructed directly for testing or manual use:
 
     >>> from unxt import Q
     >>> from harv.samplers.samples import Samples
@@ -132,7 +132,7 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        key : str or int or slice or array
+        key
             If ``str``, returns the named parameter array (with units).
             If ``int``, ``slice``, or boolean/integer array, returns a new
             ``Samples`` with all parameter arrays sliced along the sample axis.
@@ -140,9 +140,9 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        values : Q or jnp.ndarray
+        values
             When ``key`` is a string.
-        sliced : Samples
+        sliced
             When ``key`` is an int, slice, or array index.
 
         Examples
@@ -353,13 +353,12 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        key : str, optional
+        key
             If provided, return median for this parameter only.
             If None, return dict of medians for all parameters.
 
         Returns
         -------
-        median : dict or Q or Array
             Median value(s).
 
         Examples
@@ -401,15 +400,14 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        key : str
+        key
             Parameter name.
-        percentiles : list or tuple of float, optional
+        percentiles
             Percentile values to compute (0-100). Default: (16, 50, 84)
             which corresponds to the 16th, 50th, 84th percentiles for Gaussian.
 
         Returns
         -------
-        percentiles : list
             Percentile values with appropriate units.
 
         Examples
@@ -444,12 +442,11 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        params : list of str, optional
+        params
             List of parameter names to summarize. If None, summarizes all.
 
         Returns
         -------
-        summary : dict
             Dictionary mapping parameter names to their statistics.
 
         Examples
@@ -496,7 +493,7 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        filename : str or Path
+        filename
             Output HDF5 filename.
 
         Examples
@@ -545,12 +542,11 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        filename : str or Path
+        filename
             Input HDF5 filename.
 
         Returns
         -------
-        samples : Samples
             Loaded samples object.
 
         Examples
@@ -622,17 +618,16 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        params : list of str, optional
+        params
             Parameters to include.  If ``None``, all parameters returned by
             :meth:`keys` are included.
-        labels : dict[str, str], optional
+        labels
             Override display names for specific parameters, e.g. ``{"period": "period
             [day]", "rv_semiamp": "K [km/s]"}``. Parameters not listed use their plain
             parameter name as the label.
 
         Returns
         -------
-        idata : arviz.InferenceData
             Inference data suitable for ``arviz.plot_pair``, ``arviz.summary``, etc.
 
         Raises
@@ -694,12 +689,12 @@ class Samples(eqx.Module):
 
         Parameters
         ----------
-        params : list of str, optional
+        params
             Parameters to include in corner plot. If None, selects a default
             set based on data_type.
-        truths : dict, optional
+        truths
             Dictionary of true parameter values to overplot as reference values.
-        labels : dict[str, str], optional
+        labels
             Override display names for specific parameters, e.g. ``{"period": "period
             [day]", "rv_semiamp": "K [km/s]"}``. Parameters not listed use their plain
             parameter name as the label.
@@ -708,8 +703,7 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        axes : np.ndarray
-            Array of matplotlib axes from arviz.plot_pair().
+            Array of axes from ``arviz.plot_pair``.
 
         Examples
         --------

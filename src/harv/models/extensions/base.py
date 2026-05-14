@@ -26,17 +26,17 @@ class ParamInfo(eqx.Module):
 
     Parameters
     ----------
-    name : str
+    name
         Parameter name.  Must not contain ``"."`` (reserved for
         :class:`~harv.models.joint.JointModel` tied-parameter paths).
-    unit : str
+    unit
         Unit string (e.g. ``"day"``, ``"km/s"``, ``""`` for dimensionless).
-    linear : bool
+    linear
         Whether the parameter enters the model linearly (default ``False``).
 
     Examples
     --------
-    >>> from harv.extensions.base import ParamInfo
+    >>> from harv.models.extensions.base import ParamInfo
     >>> p = ParamInfo("period", "time")
     >>> p.name
     'period'
@@ -101,17 +101,17 @@ class AbstractExtension(eqx.Module):
 
         Parameters
         ----------
-        X : jax.Array, shape (n_obs, n_cols)
+        X
             Current design matrix (base + earlier extensions).
-        data : AbstractData
+        data
             Observation data (unit-stripped times, etc. accessed via helpers).
-        nl_values : dict
+        nl_values
             Current nonlinear parameter values (unit-stripped scalars).
 
         Returns
         -------
-        jax.Array, shape (n_obs, n_cols + n_extra)
-            Updated design matrix.  Return ``X`` unchanged if not applicable.
+            Updated design matrix, shape ``(n_obs, n_cols + n_extra)``.
+            Return ``X`` unchanged if not applicable.
         """
         return X
 
@@ -125,18 +125,17 @@ class AbstractExtension(eqx.Module):
 
         Parameters
         ----------
-        cov : jax.Array, shape (n_obs,) or (n_obs, n_obs)
+        cov
             Current covariance.  Diagonal (1-d) when only measurement errors
             are present; full (2-d) after a GP extension adds off-diagonal
-            structure.
-        data : AbstractData
+            structure. shape (n_obs,) or (n_obs, n_obs)
+        data
             Observation data.
-        nl_values : dict
+        nl_values
             Current nonlinear parameter values (unit-stripped scalars).
 
         Returns
         -------
-        jax.Array
             Updated covariance (same or promoted shape).  Return ``cov``
             unchanged if not applicable.
         """

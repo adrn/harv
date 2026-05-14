@@ -35,6 +35,7 @@ repos:
     rev: 1.0.0
     hooks:
       - id: mdformat
+        exclude: ^docs/.*\.md$
         additional_dependencies:
           [mdformat-gfm, mdformat-myst, mdformat-footnote]
   - repo: https://github.com/kynan/nbstripout

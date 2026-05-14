@@ -13,15 +13,15 @@ from unxt.quantity import AllowValue, ustrip
 
 from harv.distributions import QuantityDistribution
 
-type PriorDist = dist.Distribution | QuantityDistribution
+PriorDist = dist.Distribution | QuantityDistribution
 # Union type for prior distributions (bare numpyro or unit-aware).
 
-type LinearPriorCallable = Callable[..., QuantityDistribution | dist.Normal]
+LinearPriorCallable = Callable[..., QuantityDistribution | dist.Normal]
 # Callable that returns a Normal-like prior given nonlinear parameter values.
 
-type LinearPriorDist = PriorDist | LinearPriorCallable
+LinearPriorDist = PriorDist | LinearPriorCallable
 
-type LinearPriorDict = dict[str, LinearPriorDist]
+LinearPriorDict = dict[str, LinearPriorDist]
 # Per-parameter linear prior dictionary.
 
 

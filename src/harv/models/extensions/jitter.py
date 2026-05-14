@@ -2,7 +2,7 @@
 
 Examples
 --------
->>> from harv.extensions import Jitter; [p.name for p in Jitter().extra_params()]
+>>> from harv.models.extensions import Jitter; [p.name for p in Jitter().extra_params()]
 ['jitter']
 """
 
@@ -14,7 +14,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from harv.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.base import AbstractExtension, ParamInfo
 
 
 @final
@@ -28,13 +28,13 @@ class Jitter(AbstractExtension):
 
     Parameters
     ----------
-    param_unit : str
+    param_unit
         Physical unit string for the jitter parameter metadata. Default ``""``
         (dimensionless / observation units).
 
     Examples
     --------
-    >>> from harv.extensions import Jitter
+    >>> from harv.models.extensions import Jitter
     >>> j = Jitter(param_unit="km/s")
     >>> j.extra_params()[0].unit
     'km/s'

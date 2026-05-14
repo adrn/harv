@@ -10,9 +10,9 @@ from unxt import Q
 
 from harv.data import RVData
 from harv.distributions import QD
-from harv.extensions.base import AbstractExtension, ParamInfo
-from harv.extensions.gp import GP
-from harv.extensions.jitter import Jitter
+from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.gp import GP
+from harv.models.extensions.jitter import Jitter
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler, _prepare_sampler_model
 from harv.samplers.rejection_prior import RejectionPrior
