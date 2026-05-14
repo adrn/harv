@@ -18,9 +18,9 @@ from harv.models.extensions.base import ParamInfo
 class AbstractParameterization(eqx.Module):
     """Abstract base for model parameterizations.
 
-    Subclasses must implement :meth:`params` (returning all parameter
-    descriptors) and :meth:`design_matrix`.  The :meth:`nonlinear_params`
-    and :meth:`linear_params` convenience methods are derived automatically.
+    Subclasses must implement :meth:`params` (returning all parameter descriptors).  The
+    :meth:`nonlinear_params` and :meth:`linear_params` convenience methods are derived
+    automatically.
     """
 
     @abstractmethod

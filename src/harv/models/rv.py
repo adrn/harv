@@ -2,8 +2,8 @@
 
 :class:`RVModel` is a *template* carrying a parameterization (default
 :class:`~harv.models.parameterizations.rv.StandardRV`) and extensions. Data and
-linear priors are passed at evaluation time to :meth:`log_prob` /
-:meth:`sample_conditional_linear` / :meth:`numpyro_model`.
+linear priors are passed at evaluation time to :meth:`.RVModel.log_prob` /
+:meth:`.RVModel.sample_conditional_linear` / :meth:`.RVModel.numpyro_model`.
 """
 
 __all__ = ("RVModel",)

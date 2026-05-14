@@ -92,6 +92,7 @@ exclude_patterns = [
     ".DS_Store",
     "tutorials/data",
     "_static/*.ipynb",
+    "spec.md",
 ]
 
 # --------- setup autoapi defaults for your api docs ---------------
@@ -169,6 +170,8 @@ intersphinx_mapping = {
     "equinox": ("https://docs.kidger.site/equinox/", None),
     "quax": ("https://docs.kidger.site/quax/", None),
     "unxt": ("https://unxt.readthedocs.io/en/latest/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
+    "numpyro": ("https://num.pyro.ai/en/stable/", None),
 }
 
 nitpick_ignore = [
@@ -182,9 +185,12 @@ nitpick_ignore = [
     # resolved via intersphinx regardless of URL.
     ("py:class", "ArrayLike"),
     ("py:class", "jax.typing.ArrayLike"),
-    # Private internal helper class from unxt with no public docs
-    # ("py:class", "unxt._src.quantity.quantity.Quantity[PhysicalType('length')]"),
-    # ("py:class", "Q"),
+    # Parametric unxt.Quantity[PhysicalType('...')] types render as bare
+    # Quantity / PhysicalType under python_use_unqualified_type_names=True;
+    # neither symbol has a stable doc target in the unxt inventory.
+    ("py:class", "Quantity"),
+    ("py:class", "PhysicalType"),
+    ("py:class", "unxt.Q"),
 ]
 
 # TypedNdArray is a JAX-private type (jax._src.basearray) with no public docs.

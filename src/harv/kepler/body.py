@@ -138,7 +138,6 @@ class KeplerianBody(eqx.Module):
 
         Returns
         -------
-        orbit: KeplerianBody
             The body's orbit about the system barycenter.
         """
         period = Q["time"].from_(period)  # ty: ignore[unresolved-reference]
@@ -178,7 +177,6 @@ class KeplerianBody(eqx.Module):
 
         Returns
         -------
-        m_body : ScalarQMass
             The mass of this body.
         """
         a_rel = jnp.cbrt((G * m_total * self.period**2) / (4 * jnp.pi**2))

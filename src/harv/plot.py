@@ -172,7 +172,6 @@ def get_t_grid(
 
     Returns
     -------
-    t_grid
         Regular time grid spanning the buffered observation range.
 
     Examples
@@ -466,7 +465,6 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
     Returns
     -------
-    ax
         The axes plotted to.
 
     Raises
@@ -912,7 +910,6 @@ def plot_gaia_sky_orbit(
 
     Returns
     -------
-    fig
         The figure if *ax* was ``None``, else ``None``.
 
     Raises
@@ -1091,7 +1088,6 @@ def plot_gaia_astrometry(  # noqa: C901 -- plotting code is inherently complex
 
     Returns
     -------
-    fig
         The figure if *axes* was ``None``, else ``None``.
 
     Raises

@@ -57,7 +57,6 @@ def fake_parallax_factor(
 
     Returns
     -------
-    parallax_factor
         Dimensionless parallax factor for each observation.
 
     Examples

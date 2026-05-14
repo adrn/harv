@@ -85,7 +85,6 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
 
         Returns
         -------
-        scan_data
             Structured array containing the scan data for the specified healpix pixel.
         """
         with h5py.File(self.file_path, "r") as f:
@@ -117,7 +116,6 @@ class GaiaReducedCommandedScanLaw(AbstractGaiaScanLaw):
 
         Returns
         -------
-        scan_data
             Structured array containing the scan data for the specified sky location.
         """
         ra_deg = ustrip("deg", Q.from_(ra))

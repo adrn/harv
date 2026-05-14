@@ -110,8 +110,8 @@ class AbstractExtension(eqx.Module):
 
         Returns
         -------
-        jax.Array, shape (n_obs, n_cols + n_extra)
-            Updated design matrix.  Return ``X`` unchanged if not applicable.
+            Updated design matrix, shape ``(n_obs, n_cols + n_extra)``.
+            Return ``X`` unchanged if not applicable.
         """
         return X
 
@@ -136,7 +136,6 @@ class AbstractExtension(eqx.Module):
 
         Returns
         -------
-        cov
             Updated covariance (same or promoted shape).  Return ``cov``
             unchanged if not applicable.
         """

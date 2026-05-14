@@ -121,13 +121,13 @@ def _sample_explicit_linear_prior(
 
     Unifies two cases that previously needed separate code paths:
 
-    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are
-      sampled directly via ``numpyro.sample``; if a ``QuantityDistribution`` is
-      provided the result is unit-stripped to ``target_unit``.
+    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are sampled
+      directly via ``numpyro.sample``; if a ``QuantityDistribution`` is provided the
+      result is unit-stripped to ``target_unit``.
     * Callable priors (e.g. :class:`PeriodDependentKPrior`) are resolved to a
-      :class:`numpyro.distributions.Normal` at the current ``nl_values`` /
-      ``extra_values`` and then sampled.  The resolver returns values already
-      expressed in ``target_unit``, so no further unit-strip is performed.
+      :class:`numpyro.distributions.distributions.Normal` at the current ``nl_values`` /
+      ``extra_values`` and then sampled.  The resolver returns values already expressed
+      in ``target_unit``, so no further unit-strip is performed.
 
     Parameters
     ----------
@@ -150,7 +150,6 @@ def _sample_explicit_linear_prior(
 
     Returns
     -------
-    arr
         The sampled value, unit-stripped to ``target_unit``.
     """
     _site = site_name if site_name is not None else name
@@ -226,7 +225,7 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        JointModel
+            The constructed JointModel.
         """
         if shared_params is None:
             shared_params = _DEFAULT_SHARED_PARAMS
@@ -285,7 +284,7 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        JointModel
+            The constructed JointModel.
 
         Examples
         --------
@@ -653,15 +652,16 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        per_comp_marg
-            Per-component marginalized parameter names.  Always populated
-            (no ``None`` sentinel): callers do not need to special-case
-            ``marginalized_names is None``.
-        any_shared_marg
-            ``True`` iff at least one name in ``shared_linear_params`` is
-            being marginalized in any component, in which case the joint
-            marginalization path must be used.  ``False`` means the existing
-            per-component summation gives the correct answer.
+            ``(per_comp_marg, any_shared_marg)``.
+
+            ``per_comp_marg`` is the per-component marginalized parameter names.
+            Always populated (no ``None`` sentinel): callers do not need to
+            special-case ``marginalized_names is None``.
+
+            ``any_shared_marg`` is ``True`` iff at least one name in
+            ``shared_linear_params`` is being marginalized in any component, in
+            which case the joint marginalization path must be used.  ``False``
+            means the existing per-component summation gives the correct answer.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
             self._per_component_linear_prior(linear_prior)
@@ -716,17 +716,18 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        marg_dist
-            Single joint marginalized-Gaussian likelihood.
-        y_joint
-            Concatenated residual-subtracted observations.
-        global_cols
-            Column ordering used for decomposing joint samples back into
-            per-component and shared values.  ``owner`` is ``None`` for
-            shared columns, else the component name.
-        explicit_by_comp
-            Explicit (non-marginalized) linear values per component,
-            extracted from each component's building blocks.
+            ``(marg_dist, y_joint, global_cols, explicit_by_comp)``.
+
+            ``marg_dist`` is the single joint marginalized-Gaussian likelihood.
+
+            ``y_joint`` is the concatenated residual-subtracted observations.
+
+            ``global_cols`` is the column ordering used for decomposing joint
+            samples back into per-component and shared values.  ``owner`` is
+            ``None`` for shared columns, else the component name.
+
+            ``explicit_by_comp`` is the explicit (non-marginalized) linear values
+            per component, extracted from each component's building blocks.
         """
         shared_set = set(self.shared_linear_params)
         per_comp_lp: dict[str, dict[str, Any] | None] = (
@@ -862,11 +863,10 @@ class JointModel(eqx.Module):
     ) -> jax.Array:
         """Compute the joint log-likelihood.
 
-        When ``shared_linear_params`` contains names that are being
-        analytically marginalized, a single joint
-        :class:`~numpyro_ext.distributions.MarginalizedLinear` is built
-        spanning all components (the *joint path*).  Otherwise the
-        per-component log-likelihoods are summed as before.
+        When ``shared_linear_params`` contains names that are being analytically
+        marginalized, a single joint ``numpyro_ext.distributions.MarginalizedLinear`` is
+        built spanning all components (the *joint path*).  Otherwise the per-component
+        log-likelihoods are summed as before.
 
         Parameters
         ----------
@@ -885,7 +885,6 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        log_prob
             Scalar log-likelihood.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
@@ -959,9 +958,10 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        params
+            Sampled parameter values. The structure depends on the path:
+
             - *Default path* (no shared marginalization): ``dict[comp_name,
-              dict[param_name, array]]``
+              dict[param_name, array]]``.
             - *Joint path* (shared marginalization): mixed dict where shared
               params are top-level and per-component params are in sub-dicts
               keyed by component name.
@@ -1056,7 +1056,7 @@ class JointModel(eqx.Module):
 
         Returns
         -------
-        model_fn
+            A numpyro model function suitable for use with a sampler.
         """
         if not marginalized and marginalized_names is not None:
             msg = "marginalized_names cannot be set when marginalized=False"

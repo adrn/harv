@@ -174,7 +174,8 @@ class RejectionPrior(eqx.Module):
     nonlinear_priors
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
-        :class:`QuantityDistribution` wrapper for parameters with physical units).
+        :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
+        physical units).
     linear_prior
         Per-parameter priors for linear parameters. Each entry is classified:
 
@@ -242,7 +243,6 @@ class RejectionPrior(eqx.Module):
 
         Returns
         -------
-        samples
             Dictionary mapping each parameter name to an array of shape
             ``(n_samples,)``.  Values are bare JAX arrays regardless of
             whether the distribution is wrapped in ``QuantityDistribution``.
@@ -290,9 +290,9 @@ class RejectionPrior(eqx.Module):
     ) -> "RejectionPrior":
         r"""Create default prior for radial velocity data.
 
-        The default linear prior for the RV semi-amplitude ,:math:`K`, has a standard
-        deviation that scales with period and eccentricity to keep the prior
-        approximately constant in companion mass at fixed primary mass:
+        The default linear prior for the RV semi-amplitude $K$ has a standard deviation
+        that scales with period and eccentricity to keep the prior approximately
+        constant in companion mass at fixed primary mass:
 
         .. math::
 
@@ -300,15 +300,15 @@ class RejectionPrior(eqx.Module):
                 \left(\frac{P}{P_0}\right)^{-1/3}
                 \left(1 - e^2\right)^{-1/2}
 
-        The systemic velocity :math:`v_0` has a fixed Gaussian prior with specified
-        scale ``sigma_v0``.
+        The systemic velocity $v_0$ has a fixed Gaussian prior with specified scale
+        ``sigma_v0``.
 
         Parameters
         ----------
         period_min
-            Lower bound for the log-uniform period prior.  Pass a ``Quantity`` with time
-            units (e.g. ``u.Q(50, "day")``) so the sampler can convert to whatever unit
-            the data uses.
+            Lower bound for the log-uniform period prior.  Pass a `unxt.Quantity` with
+            time units (e.g. ``u.Q(50, "day")``) so the sampler can convert to whatever
+            unit the data uses.
         period_max
             Upper bound for the log-uniform period prior (same unit as ``period_min``).
         sigma_K0
@@ -321,9 +321,9 @@ class RejectionPrior(eqx.Module):
             Reference period for the K prior scaling.  Default: 1 yr.
         offsets
             Multi-instrument offset priors. Keys are instrument names, values are
-            ``QuantityDistribution`` priors (or ``None`` for the reference instrument).
-            Non-reference priors are merged into ``linear_prior`` automatically;
-            reference entries (``None``) are ignored.
+            `harv.QuantityDistribution` priors (or ``None`` for the reference
+            instrument). Non-reference priors are merged into ``linear_prior``
+            automatically; reference entries (``None``) are ignored.
         **kwargs
             Override any default nonlinear or linear prior by name, or add extension
             parameter priors for unknown names (e.g. ``jitter=QD(...)``,
@@ -332,7 +332,7 @@ class RejectionPrior(eqx.Module):
 
         Returns
         -------
-        prior
+        RejectionPrior
             Prior configured for RV data.
 
         Examples
@@ -431,9 +431,9 @@ class RejectionPrior(eqx.Module):
         velocity.
 
         Parallax is explicitly sampled here (not analytically marginalized) by
-        specifying it as a :class:`~numpyro.distributions.HalfNormal` distribution even
-        though it is a linear parameter. This is needed for the semi-major axis and
-        proper motion priors above.
+        specifying it as a ``numpyro.distributions.HalfNormal``
+        distribution even though it is a linear parameter. This is needed for the
+        semi-major axis and proper motion priors above.
 
         If the catalog parallax is trustworthy (e.g., for exoplanet cases), you can
         instead pass a tight Gaussian prior on parallax, which will then get
@@ -464,7 +464,6 @@ class RejectionPrior(eqx.Module):
 
         Returns
         -------
-        prior
             Prior configured for Gaia astrometry data.
 
         Examples
@@ -574,7 +573,7 @@ class RejectionPrior(eqx.Module):
 
         Returns
         -------
-        prior
+            Prior configured for SB2 RV data.
 
         Examples
         --------

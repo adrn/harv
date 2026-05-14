@@ -227,10 +227,11 @@ def _build_extra_numpyro_model(
 class NumpyroSampler(AbstractSampler):
     """MCMC sampler for Keplerian orbital parameters using numpyro.
 
-    Builds a numpyro model from a component model (or joint model) and runs
-    warm-started MCMC from rejection-sampler output, returning a
-    :class:`Samples` container. Data is passed to :meth:`run` rather than at
-    construction, so the same configured sampler can be applied to multiple datasets.
+    Builds a numpyro model from a component model (or joint model) and runs warm-started
+    MCMC from rejection-sampler output, returning a
+    :class:`~harv.samplers.samples.Samples` container. Data is passed to :meth:`run`
+    rather than at construction, so the same configured sampler can be applied to
+    multiple datasets.
 
     Parameters
     ----------
@@ -242,14 +243,6 @@ class NumpyroSampler(AbstractSampler):
         astrometry data.
     extensions
         Model extensions (jitter, trends, offsets, GP) supplied at construction time.
-        Mutually exclusive with ``model``: when the sampler is built via
-        :meth:`from_model` this field stays empty and the actual extensions live on
-        the attached model. Use :meth:`get_extensions` to retrieve the effective
-        extensions regardless of construction path.
-
-    See Also
-    --------
-    NumpyroSampler.from_model : Expert path for pre-built models.
 
     Examples
     --------
@@ -319,7 +312,6 @@ class NumpyroSampler(AbstractSampler):
 
         Returns
         -------
-        samples
             Posterior samples container with nonlinear and linear parameters.
         """
         samples = init_samples

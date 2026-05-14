@@ -1,6 +1,7 @@
 """Dataset containers for multi-component and multi-instrument data."""
 
 __all__ = (
+    "AbstractDatasetContainer",
     "DatasetType",
     "InputData",
     "SourceData",
@@ -166,16 +167,15 @@ class AbstractDatasetContainer(eqx.Module):
         add_legend
             Whether to add a legend labelled by component name. Default: ``True``.
         color_cycler
-            A :class:`matplotlib.cycler.Cycler` whose ``"color"`` key supplies
-            per-component colors.  When ``None`` (default), colors are taken from
-            the current ``axes.prop_cycle`` rcParam.
+            A ``cycler.Cycler`` whose ``"color"`` key supplies per-component colors.
+            When ``None`` (default), colors are taken from the current
+            ``axes.prop_cycle`` rcParam.
         **kwargs
             Forwarded to each component's ``.plot()`` method.  A ``color``
             keyword here overrides the cycler for all components.
 
         Returns
         -------
-        ax
             The :class:`matplotlib.axes.Axes` instance.
 
         Examples
@@ -324,7 +324,7 @@ class SourceData(AbstractDatasetContainer):
         single axes would overlay incompatible y-axes. Use
         :meth:`get_datasets_by_type` to filter to a single type first when needed.
 
-        Parameters mirror :meth:`AbstractDatasetContainer.plot`.
+        Parameters mirror :meth:`.AbstractDatasetContainer.plot`.
 
         Raises
         ------

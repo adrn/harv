@@ -107,7 +107,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
 
         Returns
         -------
-        jax.Array, shape (n_obs, 6)
+            Design matrix block, shape ``(n_obs, 6)``.
         """
         ecc = nl_values["eccentricity"]
         arg_peri = nl_values["arg_peri"]

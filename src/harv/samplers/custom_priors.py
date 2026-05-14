@@ -39,12 +39,13 @@ class PeriodDependentKPrior(eqx.Module):
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable` and is
-    the default ``linear_prior`` returned by :meth:`RejectionPrior.default_rv`.
+    This class implements the ``LinearPriorCallable`` protocol and is the default
+    ``linear_prior`` returned by
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.
 
-    See Also
-    --------
-    Price-Whelan et al. (2017) -- *The Joker: A Custom Monte Carlo Sampler for
+    References
+    ----------
+    Price-Whelan et al. (2017) — *The Joker: A Custom Monte Carlo Sampler for
     Binary-star and Exoplanet Radial Velocity Data*.
 
     Examples
@@ -56,8 +57,8 @@ class PeriodDependentKPrior(eqx.Module):
     Unit("km / s")
 
     Used as the default ``linear_prior`` for ``rv_semiamp`` in
-    :meth:`RejectionPrior.default_rv`.  Called with a param struct to
-    condition on nonlinear parameters:
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.  Called with a
+    param struct to condition on nonlinear parameters:
 
     >>> qd = prior(params)  # doctest: +SKIP
     """
@@ -119,9 +120,9 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable`
+    This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``semi_major_axis`` returned by
-    :meth:`RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have ``.period``, ``.eccentricity``, and
     ``.parallax`` fields.  ``parallax`` is available because it is classified
@@ -192,9 +193,9 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
 
     Notes
     -----
-    This class implements :class:`~harv.likelihood.helpers.LinearPriorCallable`
+    This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
-    :meth:`RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have a ``.parallax`` field (``Quantity`` with
     angular units).  ``parallax`` is available because it is classified as an

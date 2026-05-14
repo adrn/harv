@@ -347,7 +347,7 @@ class AbstractComponentModel(eqx.Module):
 
         Returns
         -------
-        blocks
+            Marginalization building blocks for this component.
         """
         X = self._full_design_matrix(nl_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
@@ -440,7 +440,8 @@ class AbstractComponentModel(eqx.Module):
 
         Returns
         -------
-        components
+            Per-component marginalization components ready to be summed
+            into a joint marginalization.
         """
         blocks = self._build_marg_blocks(
             nl_values, marginalized_names, explicit_linear, data, linear_prior
@@ -514,7 +515,6 @@ class AbstractComponentModel(eqx.Module):
 
         Returns
         -------
-        log_prob
             Scalar log-likelihood.
         """
         # Auto mode: classify from linear_prior, extract explicit from values
@@ -658,7 +658,7 @@ class AbstractComponentModel(eqx.Module):
         nonlinear_priors
             Prior distributions for nonlinear parameters. Keys are parameter
             names (e.g. ``"period"``, ``"eccentricity"``). Values are
-            :class:`~numpyro.distributions.Distribution` or
+            :class:`~numpyro.distributions.distribution.Distribution` or
             :class:`~harv.distributions.QuantityDistribution`.
         data
             Runtime observation data (RVData / GaiaAstrometryData).
@@ -677,7 +677,6 @@ class AbstractComponentModel(eqx.Module):
 
         Returns
         -------
-        model_fn
             A no-argument callable suitable for ``numpyro.infer.MCMC``.
         """
         if not marginalized and marginalized_names is not None:

@@ -94,7 +94,7 @@ class StandardRV(AbstractParameterization):
 
         Returns
         -------
-        jax.Array, shape (n_obs, 2)
+            Design matrix block, shape ``(n_obs, 2)``.
         """
         rv_col = rv_shape(
             sin_f, cos_f, nl_values["eccentricity"], nl_values["arg_peri"]
@@ -173,7 +173,7 @@ class EcoswEsinwRV(AbstractParameterization):
 
         Returns
         -------
-        jax.Array, shape (n_obs, 2)
+            Design matrix block, shape ``(n_obs, 2)``.
         """
         ecosw = nl_values["ecosw"]
         esinw = nl_values["esinw"]

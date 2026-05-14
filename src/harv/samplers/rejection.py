@@ -379,7 +379,6 @@ class RejectionSampler(AbstractSampler):
 
         Returns
         -------
-        samples
             Posterior samples container.
         """
         prepared = _prepare_sampler_model(

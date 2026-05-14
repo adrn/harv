@@ -8,9 +8,3 @@ Generated reference documentation for the public harv package.
    :caption: Packages
 
    harv
-   harv.data
-   harv.extensions
-   harv.kepler
-   harv.models
-   harv.samplers
-   harv.simulate

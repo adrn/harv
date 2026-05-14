@@ -58,7 +58,7 @@ def load_sampler(path: str | Path) -> Any:
 
     Returns
     -------
-    sampler
+    harv.samplers.RejectionSampler
         Restored sampler with all prior distributions and extensions intact.
 
     Examples

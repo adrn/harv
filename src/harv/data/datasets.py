@@ -74,7 +74,6 @@ class AbstractData(eqx.Module):
 
         Returns
         -------
-        AbstractData
             New instance of the same concrete class with sliced arrays.
 
         Examples
@@ -176,7 +175,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
 
         Returns
         -------
-        ax
+        matplotlib.axes.Axes
             The :class:`matplotlib.axes.Axes` instance.
 
         Examples
@@ -291,7 +290,7 @@ class RVData(AbstractData):
 
         Returns
         -------
-        ax
+        matplotlib.axes.Axes
             The :class:`matplotlib.axes.Axes` instance.
 
         Examples

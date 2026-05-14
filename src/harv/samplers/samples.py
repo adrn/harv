@@ -68,8 +68,8 @@ class Samples(eqx.Module):
 
     Examples
     --------
-    ``Samples`` is normally produced by :meth:`RejectionSampler.run`, but can
-    be constructed directly for testing or manual use:
+    ``Samples`` is normally produced by :meth:`~harv.RejectionSampler.run`, but can be
+    constructed directly for testing or manual use:
 
     >>> from unxt import Q
     >>> from harv.samplers.samples import Samples
@@ -359,7 +359,6 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        median
             Median value(s).
 
         Examples
@@ -409,7 +408,6 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        percentiles
             Percentile values with appropriate units.
 
         Examples
@@ -449,7 +447,6 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        summary
             Dictionary mapping parameter names to their statistics.
 
         Examples
@@ -550,7 +547,6 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        samples
             Loaded samples object.
 
         Examples
@@ -632,7 +628,6 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        idata
             Inference data suitable for ``arviz.plot_pair``, ``arviz.summary``, etc.
 
         Raises
@@ -708,7 +703,7 @@ class Samples(eqx.Module):
 
         Returns
         -------
-        plot_matrix
+            Array of axes from ``arviz.plot_pair``.
 
         Examples
         --------

@@ -16,6 +16,7 @@ rv/5-gp-extension
 :maxdepth: 1
 :caption: Gaia astrometry
 
+astrometry/0-getting-started
 ::::
 
 ::::{toctree}
