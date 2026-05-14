@@ -5,9 +5,12 @@
 :::{toctree}
 :maxdepth: 2
 :hidden:
-:caption: Contents:
 
 Home <self>
+concepts
+sharp-bits
+tutorials/index
+api/index
 :::
 
 harv is ...
@@ -18,21 +21,10 @@ harv is ...
 :color: primary
 :class: sd-rounded-pill float-left -->
 
-:::{toctree}
-:maxdepth: 1
-:caption: Contents:
-
-concepts
-sharp-bits
-tutorials/index
-api/index
-:::
-
 ## Overview
 
 TODO: describe harv
 
-## Copyright
+## Installation
 
-- Copyright © 2026 TODO.
-- Free software distributed under the MIT License.
+TODO
