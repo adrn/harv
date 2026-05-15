@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, final
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
+from unxt.quantity import ustrip
 
 from harv.kepler.orbits import thiele_innes_ABFG
 from harv.models.extensions.base import ParamInfo
@@ -149,56 +150,50 @@ class StandardGaiaAstrometry(AbstractParameterization):
 
 @final
 class ThieleInnesGaiaAstrometry(AbstractParameterization):
-    """Thiele-Innes parameterization for Gaia epoch astrometry.
+    r"""Thiele-Innes parameterization for Gaia epoch astrometry.
 
-    Replaces the four Campbell orientation parameters ``(arg_peri,
-    lon_asc_node, cos_i, semi_major_axis)`` with the four Thiele-Innes
-    constants ``(ti_A, ti_B, ti_F, ti_G)``, which enter the along-scan model
-    *linearly*.  This reduces the nonlinear parameter space from 6-D to 3-D,
-    making rejection and MCMC sampling significantly cheaper.
+    Replaces the four Campbell orientation parameters ``(arg_peri, lon_asc_node, cos_i,
+    semi_major_axis)`` with the four Thiele-Innes constants ``(ti_A, ti_B, ti_F,
+    ti_G)``, which enter the along-scan model *linearly*.  This reduces the nonlinear
+    parameter space from 6-D to 3-D.
 
     The along-scan measurement model is:
 
     .. math::
 
-        w = (\\alpha_{*,0} + \\mu_\\alpha \\Delta t)\\sin\\psi
-            + (\\delta_0 + \\mu_\\delta \\Delta t)\\cos\\psi
-            + \\varpi \\cdot pf
-            + (B X + G Y)\\sin\\psi
-            + (A X + F Y)\\cos\\psi
-
-    where :math:`X = (r/a)\\cos f`, :math:`Y = (r/a)\\sin f`.
+        w = (\alpha_{*,0} + \mu_\alpha \Delta t)\sin\psi
+            + (\delta_0 + \mu_\delta \Delta t)\cos\psi
+            + \varpi \cdot pf
+            + (B X + G Y)\sin\psi
+            + (A X + F Y)\cos\psi
 
     - Nonlinear: ``period``, ``eccentricity``, ``phase_peri`` (3 params)
     - Linear: ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``,
       ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G`` (9 params)
 
-    The Jacobian correction is **always applied**: a flat prior on the
-    Thiele-Innes constants is not the same as a flat prior on the physical
-    Campbell elements :math:`(a_0, \\omega, \\Omega, \\cos i)`.  The zeroth-order
-    correction (evaluated at the conditional-mean TI constants) multiplies the
-    marginal likelihood by :math:`(a_0 + \\delta_a)^{-m}(\\sin^2 i + \\delta_{s})^{-1}`,
-    where :math:`m = 3` (uniform prior in :math:`a_0`) or :math:`m = 4`
-    (log-uniform), and :math:`\\delta_a`, :math:`\\delta_s` are numerical
-    floors that prevent singularities near face-on orbits or zero semi-major
-    axis.
+    The Jacobian correction is **always applied**: a flat prior on the Thiele-Innes
+    constants is not the same as a flat prior on the physical Campbell elements
+    :math:`(a_0, \omega, \Omega, \cos i)`.  The zeroth-order correction (evaluated at
+    the conditional-mean TI constants) multiplies the marginal likelihood by :math:`(a_0
+    + \delta_a)^{-m}(\sin^2 i + \delta_{s})^{-1}`, where :math:`m = 3` (uniform prior in
+    :math:`a_0`) or :math:`m = 4` (log-uniform), and :math:`\delta_a`, :math:`\delta_s`
+    are numerical floors that prevent singularities near face-on orbits or zero
+    semi-major axis.
 
     The recommended way to construct this class is via :meth:`from_data`,
-    which sets ``a_floor = Med(σ_AL) / sqrt(N)`` automatically.
+    which sets ``a_floor = med(sigma_AL) / sqrt(N)`` automatically.
 
     Parameters
     ----------
     a_floor : float
-        Floor on :math:`a_0` (in the same angular units as the astrometric
-        data, e.g. mas) used to regularize the Jacobian correction near zero
-        semi-major axis.  Required.
+        Floor on :math:`a_0` (in the same angular units as the astrometric data, e.g.
+        mas) used to regularize the Jacobian correction near zero semi-major axis.
+        Required.
     sin2i_floor : float, optional
-        Floor on :math:`\\sin^2 i` for the Jacobian denominator.
-        Default 0.01 (following Hsieh et al.).
+        Floor on :math:`\sin^2 i` for the Jacobian denominator. Default 0.01.
     log_uniform_in_a : bool, optional
-        If ``True``, assume a log-uniform (Jeffreys) prior on :math:`a_0`
-        (uses :math:`m = 4`).  Default ``False`` (uniform in :math:`a_0`,
-        :math:`m = 3`).
+        If ``True``, assume a log-uniform (Jeffreys) prior on :math:`a_0` (uses :math:`m
+        = 4`).  Default ``False`` (uniform in :math:`a_0`, :math:`m = 3`).
 
     Examples
     --------
@@ -221,14 +216,14 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sin2i_floor: float = 0.01,
         log_uniform_in_a: bool = False,
     ) -> "ThieleInnesGaiaAstrometry":
-        """Construct with ``a_floor = Med(σ_AL) / sqrt(N)`` from the data.
+        r"""Construct with ``a_floor = med(sigma_AL) / sqrt(N)`` from the data.
 
         Parameters
         ----------
         data : GaiaAstrometryData
             Along-scan epoch astrometry data.
         sin2i_floor : float, optional
-            Floor on :math:`\\sin^2 i`.  Default 0.01.
+            Floor on :math:`\sin^2 i`.  Default 0.01.
         log_uniform_in_a : bool, optional
             Use log-uniform prior on :math:`a_0`.  Default ``False``.
 
@@ -253,8 +248,6 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         >>> p.a_floor > 0
         True
         """
-        from unxt.quantity import ustrip
-
         errs = ustrip(str(data.al_position_err.unit), data.al_position_err)
         a_floor = float(jnp.median(errs) / jnp.sqrt(jnp.asarray(errs).size))
         return cls(
@@ -292,8 +285,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     ) -> jax.Array:
         """Build (n_obs, 9) along-scan design matrix.
 
-        Columns: [ra0, dec0, pmra, pmdec, parallax,
-        ti_A, ti_B, ti_F, ti_G].
+        Columns: [ra0, dec0, pmra, pmdec, parallax, ti_A, ti_B, ti_F, ti_G].
 
         Parameters
         ----------
@@ -344,18 +336,18 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     def linear_log_prior_correction(
         self, linear_map: dict[str, jax.Array]
     ) -> jax.Array:
-        """Zeroth-order Jacobian correction for the Campbell ↔ Thiele-Innes change of variables.
+        r"""Zeroth-order Jacobian correction for the Thiele-Innes change of variables.
 
-        Evaluates :math:`-m \\ln(a_0 + \\delta_a) - \\ln(\\sin^2 i + \\delta_s)`
-        at the conditional-mean Thiele-Innes constants, where :math:`a_0` and
-        :math:`\\sin^2 i` are derived from the standard identities:
+        Evaluates :math:`-m \ln(a_0 + \delta_a) - \ln(\sin^2 i + \delta_s)` at the
+        conditional-mean Thiele-Innes constants, where :math:`a_0` and :math:`\sin^2 i`
+        are derived from the standard identities:
 
         .. math::
 
-            u &= \\tfrac{1}{2}(A^2 + B^2 + F^2 + G^2) \\\\
-            v &= AG - BF \\\\
-            a_0 &= \\sqrt{u + \\sqrt{\\max(u^2 - v^2, 0)}} \\\\
-            \\sin^2 i &= 1 - v^2 / a_0^4
+            u &= \tfrac{1}{2}(A^2 + B^2 + F^2 + G^2) \\
+            v &= AG - BF \\
+            a_0 &= \sqrt{u + \sqrt{\max(u^2 - v^2, 0)}} \\
+            \sin^2 i &= 1 - v^2 / a_0^4
 
         Parameters
         ----------

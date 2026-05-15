@@ -13,11 +13,15 @@ import numpy as np
 import numpyro
 import numpyro.distributions as ndist
 import pytest
-from unxt import Q
+from unxt import Q, ustrip
 
 from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
-from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
+from harv.kepler.orbits import (
+    astrometric_orbit_at_times,
+    rv_at_times,
+    thiele_innes_ABFG,
+)
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions import Jitter, MonomialTrend
 from harv.models.extensions.base import ParamInfo
@@ -1457,3 +1461,118 @@ class TestPlotCombined:
         fig = plot_gaia_astrometry(combined_samples, data=gaia_data)
         assert hasattr(fig, "savefig")
         plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Thiele-Innes to Campbell conversion
+# ---------------------------------------------------------------------------
+
+_ARG_PERI = 0.7
+_LON_ASC_NODE = 1.3
+_COS_I = 0.5
+_A = 2.5  # mas
+
+
+@pytest.fixture
+def ti_samples() -> Samples:
+    """Samples with Thiele-Innes linear params built from known Campbell elements."""
+    A, B, F, G = thiele_innes_ABFG(
+        jnp.cos(_ARG_PERI),
+        jnp.sin(_ARG_PERI),
+        jnp.cos(_LON_ASC_NODE),
+        jnp.sin(_LON_ASC_NODE),
+        _COS_I,
+    )
+    nonlinear = {
+        "period": Q(jnp.ones(N) * 90.0, "day"),
+        "eccentricity": Q(jnp.ones(N) * 0.1, ""),
+        "phase_peri": Q(jnp.ones(N) * 0.3, ""),
+    }
+    linear = {
+        "ra0": Q(jnp.zeros(N), "mas"),
+        "dec0": Q(jnp.zeros(N), "mas"),
+        "pmra": Q(jnp.ones(N) * 10.0, "mas/yr"),
+        "pmdec": Q(jnp.ones(N) * -5.0, "mas/yr"),
+        "parallax": Q(jnp.ones(N) * 5.0, "mas"),
+        "ti_A": Q(jnp.ones(N) * float(_A * A), "mas"),
+        "ti_B": Q(jnp.ones(N) * float(_A * B), "mas"),
+        "ti_F": Q(jnp.ones(N) * float(_A * F), "mas"),
+        "ti_G": Q(jnp.ones(N) * float(_A * G), "mas"),
+    }
+    return Samples(
+        nonlinear=nonlinear,
+        linear=linear,
+        data_type="GaiaAstrometryModel",
+        metadata={"t_ref": 0.0},
+    )
+
+
+class TestThieleInnesToCampbell:
+    def test_output_keys(self, ti_samples: Samples) -> None:
+        result = ti_samples.thiele_innes_to_campbell()
+        assert set(result.nonlinear.keys()) == {
+            "period",
+            "eccentricity",
+            "phase_peri",
+            "arg_peri",
+            "lon_asc_node",
+            "cos_i",
+        }
+        assert "semi_major_axis" in result.linear
+        for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
+            assert name not in result.linear
+
+    def test_preserved_params(self, ti_samples: Samples) -> None:
+        result = ti_samples.thiele_innes_to_campbell()
+        assert "ra0" in result.linear
+        assert "parallax" in result.linear
+
+    def test_recovered_semi_major_axis(self, ti_samples: Samples) -> None:
+        result = ti_samples.thiele_innes_to_campbell()
+
+        a_out = ustrip("mas", result.linear["semi_major_axis"])
+        assert jnp.allclose(a_out, _A, atol=1e-5)
+
+    def test_recovered_cos_i(self, ti_samples: Samples) -> None:
+        result = ti_samples.thiele_innes_to_campbell()
+
+        cos_i_out = ustrip("", result.nonlinear["cos_i"])
+        assert jnp.allclose(cos_i_out, _COS_I, atol=1e-5)
+
+    def test_recovered_arg_peri(self, ti_samples: Samples) -> None:
+        # (ω, Ω) and (ω+π, Ω+π) are degenerate; verify via TI round-trip
+        result = ti_samples.thiele_innes_to_campbell()
+
+        arg_peri_out = ustrip("rad", result.nonlinear["arg_peri"])[0]
+        lon_asc_node_out = ustrip("rad", result.nonlinear["lon_asc_node"])[0]
+        cos_i_out = ustrip("", result.nonlinear["cos_i"])[0]
+        A_rt, B_rt, *_ = thiele_innes_ABFG(
+            jnp.cos(arg_peri_out),
+            jnp.sin(arg_peri_out),
+            jnp.cos(lon_asc_node_out),
+            jnp.sin(lon_asc_node_out),
+            cos_i_out,
+        )
+        # Must recover original unit TI constants (a0 cancels)
+        A, B, *_ = thiele_innes_ABFG(
+            jnp.cos(_ARG_PERI),
+            jnp.sin(_ARG_PERI),
+            jnp.cos(_LON_ASC_NODE),
+            jnp.sin(_LON_ASC_NODE),
+            _COS_I,
+        )
+        assert jnp.allclose(A_rt, A, atol=1e-5)
+        assert jnp.allclose(B_rt, B, atol=1e-5)
+
+    def test_missing_ti_raises(self) -> None:
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.ones(3), "day"),
+                "eccentricity": Q(jnp.zeros(3), ""),
+                "phase_peri": Q(jnp.zeros(3), ""),
+            },
+            linear={"ra0": Q(jnp.zeros(3), "mas")},
+            data_type="GaiaAstrometryModel",
+        )
+        with pytest.raises(RuntimeError, match="ti_"):
+            samples.thiele_innes_to_campbell()

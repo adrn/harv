@@ -14,6 +14,8 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.kepler.orbits import campbell_from_thiele_innes
+
 try:
     import arviz as az
     from arviz_base.labels import MapLabeller
@@ -427,10 +429,19 @@ class Samples(eqx.Module):
             )
             raise RuntimeError(msg)
 
-        vals = campbell_from_thiele_innes(**{n[3]: self.linear[n] for n in ti_names})
-        # TODO: need to sort into nonlinear/linear
+        campbell = campbell_from_thiele_innes(
+            **{n[3]: self.linear[n] for n in ti_names}
+        )
+        new_nl = {
+            **self.nonlinear,
+            "arg_peri": campbell["arg_peri"],
+            "lon_asc_node": campbell["lon_asc_node"],
+            "cos_i": campbell["cos_i"],
+        }
+        new_lin = {k: v for k, v in self.linear.items() if k not in ti_names}
+        new_lin["semi_major_axis"] = campbell["semi_major_axis"]
         return Samples(
-            nonlinear=self.nonlinear,
+            nonlinear=new_nl,
             linear=new_lin,
             data_type=self.data_type,
             metadata=self.metadata,

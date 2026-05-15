@@ -163,19 +163,24 @@ def campbell_from_thiele_innes(
         v &= A\,G - B\,F \\
         a_0 &= \sqrt{u + \sqrt{\max(u^2 - v^2, 0)}} \\
         \omega + \Omega &= \mathrm{atan2}(B - F, A + G) \\
-        \omega - \Omega &= \mathrm{atan2}(B + F, G - A) \\
+        \omega - \Omega &= \mathrm{atan2}(-B - F, A - G) \\
         \cos i &= v / a_0^2
 
     The convention ``cos_i ≥ 0`` is adopted here.
     """
     u = 0.5 * (A**2 + B**2 + F**2 + G**2)
     v = A * G - B * F
-    a0 = jnp.sqrt(u + jnp.sqrt(jnp.maximum(u * u - v * v, 0.0)))
-    wPO = jnp.arctan2(B - F, A + G)  # ω + Ω
-    wMO = jnp.arctan2(B + F, G - A)  # ω - Ω
-    arg_peri = jnp.mod(0.5 * (wPO + wMO), 2.0 * jnp.pi)
-    lon_asc_node = jnp.mod(0.5 * (wPO - wMO), 2.0 * jnp.pi)
-    cos_i = jnp.abs(v / jnp.maximum(a0**2, 1e-30))
+    a0 = jnp.sqrt(u + jnp.sqrt(jnp.maximum(u * u - v * v, Q(0.0, (u * u).unit))))
+    # arctan2 of same-unit Quantities returns Q[rad]; strip before mod
+    wPO = ustrip(AllowValue, "rad", jnp.arctan2(B - F, A + G))  # ω + Ω
+    wMO = ustrip(AllowValue, "rad", jnp.arctan2(-B - F, A - G))  # ω - Ω
+    arg_peri = Q(jnp.mod(0.5 * (wPO + wMO), 2.0 * jnp.pi), "rad")
+    lon_asc_node = Q(jnp.mod(0.5 * (wPO - wMO), 2.0 * jnp.pi), "rad")
+    # v/a0² is dimensionless; strip and rewrap to ensure consistent output type
+    cos_i = Q(
+        ustrip(AllowValue, "", jnp.abs(v / jnp.maximum(a0**2, Q(1e-30, (a0**2).unit)))),
+        "",
+    )
     return {
         "semi_major_axis": a0,
         "arg_peri": arg_peri,

@@ -2,10 +2,12 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 from unxt import Q, ustrip
 
 from harv.kepler import KeplerianOrientation
 from harv.kepler.orbits import (
+    campbell_from_thiele_innes,
     mean_anomaly,
     rv_shape,
     thiele_innes_ABFG,
@@ -168,3 +170,85 @@ class TestThieleInnesABFG:
         vmap_ti = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))
         As, _Bs, _Fs, _Gs = vmap_ti(cos_ws, sin_ws, 1.0, 0.0, 1.0)
         assert As.shape == (3,)
+
+
+class TestCampbellFromThieleInnes:
+    """Round-trip tests"""
+
+    @pytest.mark.parametrize(
+        ("arg_peri", "lon_asc_node", "cos_i", "a"),
+        [
+            (0.5, 1.0, 0.6, 3.0),
+            (0.0, 0.0, 1.0, 1.0),  # face-on, aligned
+            (1.2, 2.3, 0.3, 5.0),
+            (3.1, 0.7, 0.9, 0.5),
+        ],
+    )
+    def test_round_trip(
+        self,
+        arg_peri: float,
+        lon_asc_node: float,
+        cos_i: float,
+        a: float,
+    ) -> None:
+        # Forward pass: Campbell → TI
+        A, B, F, G = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        # Inverse pass: TI → Campbell
+        result = campbell_from_thiele_innes(
+            Q(a * A, "mas"), Q(a * B, "mas"), Q(a * F, "mas"), Q(a * G, "mas")
+        )
+        # Inversion is 2-fold degenerate: (ω,Ω) and (ω+π, Ω+π) give identical TI
+        # constants. Check invariants: a0, cos_i, and the TI constants themselves.
+        assert jnp.allclose(ustrip("mas", result["semi_major_axis"]), a, atol=1e-5)
+        assert jnp.allclose(ustrip("", result["cos_i"]), cos_i, atol=1e-5)
+        # Re-compute TI from the recovered Campbell elements; must recover original
+        # A,B,F,G
+        A_rt, B_rt, F_rt, G_rt = thiele_innes_ABFG(
+            jnp.cos(ustrip("rad", result["arg_peri"])),
+            jnp.sin(ustrip("rad", result["arg_peri"])),
+            jnp.cos(ustrip("rad", result["lon_asc_node"])),
+            jnp.sin(ustrip("rad", result["lon_asc_node"])),
+            ustrip("", result["cos_i"]),
+        )
+        assert jnp.allclose(A_rt, A, atol=1e-5)
+        assert jnp.allclose(B_rt, B, atol=1e-5)
+        assert jnp.allclose(F_rt, F, atol=1e-5)
+        assert jnp.allclose(G_rt, G, atol=1e-5)
+
+    def test_round_trip_quantity(self) -> None:
+        arg_peri, lon_asc_node, cos_i = 0.7, 1.3, 0.5
+        a = Q(2.5, "mas")
+        A, B, F, G = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        result = campbell_from_thiele_innes(a * A, a * B, a * F, a * G)
+        assert jnp.allclose(
+            ustrip("mas", result["semi_major_axis"]), ustrip("mas", a), atol=1e-5
+        )
+        assert jnp.allclose(ustrip("", result["cos_i"]), cos_i, atol=1e-5)
+
+    def test_jit(self) -> None:
+        arg_peri, lon_asc_node, cos_i, a = 0.5, 1.0, 0.6, 3.0
+        A, B, F, G = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        result = jax.jit(campbell_from_thiele_innes)(
+            Q(a * A, "mas"), Q(a * B, "mas"), Q(a * F, "mas"), Q(a * G, "mas")
+        )
+        assert jnp.isfinite(ustrip("mas", result["semi_major_axis"]))
+        assert jnp.isfinite(ustrip("rad", result["arg_peri"]))
+        assert jnp.isfinite(ustrip("", result["cos_i"]))
