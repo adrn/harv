@@ -941,12 +941,12 @@ parameter names from `StandardRV`: `period`, `eccentricity`, `phase_peri`,
 ```python
 RejectionPrior.default_gaia_astrometry(
     *,
-    period_min: Q["time"],             # required
-    period_max: Q["time"],             # required
-    sigma_a0: Q["length"],             # required — semi-major axis scale
-    sigma_parallax: Q["angle"],        # required — parallax prior scale
-    sigma_pos: Q["angle"],             # required — position prior scale
-    sigma_vtan: Q["speed"],            # required — tangential velocity dispersion scale
+    period_min: Q["time"] | None = None,
+    period_max: Q["time"] | None = None,
+    sigma_a0: Q["length"] | None = None,        # required unless semi_major_axis= given
+    sigma_parallax: Q["angle"] | None = None,   # required unless parallax= given
+    sigma_pos: Q["angle"] | None = None,        # required unless ra0= and dec0= given
+    sigma_vtan: Q["speed"] | None = None,       # required unless pmra= and pmdec= given
     P0: Q["time"] = Q(1.0, "yr"),
     **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
 ) -> RejectionPrior
@@ -972,6 +972,10 @@ parameter name as a keyword argument. Valid names are the nonlinear and linear
 parameter names from `StandardGaiaAstrometry`: `period`, `eccentricity`,
 `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node`, `ra0`, `dec0`, `pmra`, `pmdec`,
 `parallax`, `semi_major_axis`.
+
+When a linear prior is supplied directly via `**kwargs`, the corresponding scale
+argument (`sigma_parallax`, `sigma_pos`, `sigma_a0`, or `sigma_vtan`) must be
+omitted — passing both raises `TypeError`.
 
 Parallax is classified as explicit automatically because `HalfNormal` cannot be
 analytically marginalized. For exoplanet searches where the catalog parallax is

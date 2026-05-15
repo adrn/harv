@@ -138,6 +138,52 @@ def _make_pm_prior(
     return ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)
 
 
+def _make_parallax_prior(
+    *,
+    parallax: LinearPriorDist | None = None,
+    sigma_parallax: ScalarQAngle | None = None,
+) -> LinearPriorDist:
+    if parallax is not None:
+        if sigma_parallax is not None:
+            raise TypeError("Cannot specify both parallax and sigma_parallax")
+        return parallax
+    if sigma_parallax is None:
+        raise TypeError("Must specify either parallax or sigma_parallax")
+    return QuantityDistribution(dist.HalfNormal(ustrip("mas", sigma_parallax)), "mas")
+
+
+def _make_pos_prior(
+    *,
+    pos: LinearPriorDist | None = None,
+    sigma_pos: ScalarQAngle | None = None,
+    name: str = "ra0/dec0",
+) -> LinearPriorDist:
+    if pos is not None:
+        if sigma_pos is not None:
+            raise TypeError(
+                f"Cannot specify both an explicit {name} prior and sigma_pos"
+            )
+        return pos
+    if sigma_pos is None:
+        raise TypeError(f"Must specify either an explicit {name} prior or sigma_pos")
+    return QuantityDistribution(dist.Normal(0.0, ustrip("mas", sigma_pos)), "mas")
+
+
+def _make_semi_major_axis_prior(
+    *,
+    semi_major_axis: LinearPriorDist | None = None,
+    sigma_a0: ScalarQLength | None = None,
+    P0: ScalarQTime = Q(1.0, "yr"),
+) -> LinearPriorDist:
+    if semi_major_axis is not None:
+        if sigma_a0 is not None:
+            raise TypeError("Cannot specify both semi_major_axis and sigma_a0")
+        return semi_major_axis
+    if sigma_a0 is None:
+        raise TypeError("Must specify either semi_major_axis or sigma_a0")
+    return PeriodDependentSemiMajorAxisPrior(sigma_a0=sigma_a0, P0=P0)
+
+
 class RejectionPrior(eqx.Module):
     """Prior distribution for rejection sampling of Keplerian orbits.
 
@@ -405,9 +451,9 @@ class RejectionPrior(eqx.Module):
         *,
         period_min: ScalarQTime | None = None,
         period_max: ScalarQTime | None = None,
-        sigma_a0: ScalarQLength,
-        sigma_parallax: ScalarQAngle,
-        sigma_pos: ScalarQAngle,
+        sigma_a0: ScalarQLength | None = None,
+        sigma_parallax: ScalarQAngle | None = None,
+        sigma_pos: ScalarQAngle | None = None,
         sigma_vtan: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
@@ -447,20 +493,25 @@ class RejectionPrior(eqx.Module):
             Upper bound for the log-uniform period prior.
         sigma_a0
             Semi-major axis scale in physical length units (e.g. AU) at reference period
-            ``P0``.
+            ``P0``.  Required unless ``semi_major_axis`` is passed via ``**kwargs``.
         sigma_parallax
-            Scale for the half-normal parallax prior (mas).
+            Scale for the half-normal parallax prior (mas).  Required unless
+            ``parallax`` is passed via ``**kwargs``.
         sigma_pos
-            Scale for the position (ra0, dec0) Gaussian priors (mas).
+            Scale for the position (ra0, dec0) Gaussian priors (mas).  Required unless
+            both ``ra0`` and ``dec0`` are passed via ``**kwargs``.
         sigma_vtan
             Transverse-velocity dispersion scale (e.g. km/s) for the proper-motion
-            (pmra, pmdec) priors.  Converted to angular proper motion via the sampled
-            parallax.
+            (pmra, pmdec) priors.  Required unless both ``pmra`` and ``pmdec`` are
+            passed via ``**kwargs``.
         P0
             Reference period for the semi-major axis scaling.  Default: 1 yr.
         **kwargs
             Override any default nonlinear or linear prior by name, or add extension
-            parameter priors for unknown names.
+            parameter priors for unknown names.  Valid linear overrides:
+            ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``, ``semi_major_axis``.
+            When a prior is supplied directly (e.g. ``parallax=QD(...)``), the
+            corresponding scale argument (e.g. ``sigma_parallax``) must be omitted.
 
         Returns
         -------
@@ -483,7 +534,6 @@ class RejectionPrior(eqx.Module):
         >>> sorted(prior.nonlinear_priors.keys())
         ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
         """
-        # TODO: make sigma_pos, sigma_a0, sigma_parallax optional
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -500,11 +550,11 @@ class RejectionPrior(eqx.Module):
         }
 
         linear_prior: LinearPriorDict = {
-            "ra0": QuantityDistribution(
-                dist.Normal(0.0, ustrip("mas", sigma_pos)), "mas"
+            "ra0": _make_pos_prior(
+                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
             ),
-            "dec0": QuantityDistribution(
-                dist.Normal(0.0, ustrip("mas", sigma_pos)), "mas"
+            "dec0": _make_pos_prior(
+                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
             ),
             "pmra": _make_pm_prior(
                 pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
@@ -512,11 +562,14 @@ class RejectionPrior(eqx.Module):
             "pmdec": _make_pm_prior(
                 pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
             ),
-            "parallax": QuantityDistribution(
-                dist.HalfNormal(ustrip("mas", sigma_parallax)), "mas"
+            "parallax": _make_parallax_prior(
+                parallax=kwargs.pop("parallax", None),
+                sigma_parallax=sigma_parallax,
             ),
-            "semi_major_axis": PeriodDependentSemiMajorAxisPrior(
-                sigma_a0=sigma_a0, P0=P0
+            "semi_major_axis": _make_semi_major_axis_prior(
+                semi_major_axis=kwargs.pop("semi_major_axis", None),
+                sigma_a0=sigma_a0,
+                P0=P0,
             ),
         }
 

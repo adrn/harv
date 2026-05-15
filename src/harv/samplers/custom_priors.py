@@ -158,6 +158,15 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
             Prior over the astrometric semi-major axis, in the same
             angular unit as ``params.parallax``.
         """
+        if not hasattr(params, "parallax"):
+            raise AttributeError(
+                "PeriodDependentSemiMajorAxisPrior requires 'parallax' to be "
+                "explicitly sampled, but it is not available in the parameter proxy. "
+                "This happens when 'parallax' has a Gaussian (Normal) prior and is "
+                "analytically marginalized. Override 'semi_major_axis' with an "
+                "explicit prior, or use a non-Gaussian parallax prior "
+                "(e.g., HalfNormal)."
+            )
         P_ratio = ustrip("", params.period / self.P0)
         # By the definition of parallax (varpi == 1 AU / d), the angular
         # semi-major axis is a_angular = a_physical [AU] * varpi [angle].
@@ -228,6 +237,14 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
         """
         # Convert velocity to AU/yr so that (AU/yr) x parallax [angle]
         # gives angular speed [angle/yr].
+        if not hasattr(params, "parallax"):
+            raise AttributeError(
+                "ParallaxDependentProperMotionPrior requires 'parallax' to be "
+                "explicitly sampled, but it is not available in the parameter proxy. "
+                "This happens when 'parallax' has a Gaussian (Normal) prior and is "
+                "analytically marginalized. Override 'pmra'/'pmdec' with explicit "
+                "priors, or use a non-Gaussian parallax prior (e.g. HalfNormal)."
+            )
         sigma_v_au_yr = ustrip("AU/yr", self.sigma_v0)
         plx_unit = str(params.parallax.unit)
         plx_val = ustrip(plx_unit, params.parallax)
