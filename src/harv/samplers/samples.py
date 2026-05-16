@@ -14,7 +14,12 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
-from harv.kepler.orbits import campbell_from_thiele_innes
+from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.gaia import (
+    StandardGaiaAstrometry,
+    ThieleInnesGaiaAstrometry,
+)
+from harv.samplers.conversion import convert_parameterization
 
 try:
     import arviz as az
@@ -423,26 +428,41 @@ class Samples(eqx.Module):
 
         """
         ti_names = ("ti_A", "ti_B", "ti_F", "ti_G")
+        if not any(n in self.linear for n in ti_names):
+            return self
         if not all(n in self.linear for n in ti_names):
             msg = "TI to Campbell conversion requires linear parameters: " + ", ".join(
                 ti_names
             )
             raise RuntimeError(msg)
 
-        campbell = campbell_from_thiele_innes(
-            **{n[3]: self.linear[n] for n in ti_names}
+        return self.convert_parameterization(
+            source=ThieleInnesGaiaAstrometry(a_floor=0.0),
+            target=StandardGaiaAstrometry(),
         )
-        new_nl = {
-            **self.nonlinear,
-            "arg_peri": campbell["arg_peri"],
-            "lon_asc_node": campbell["lon_asc_node"],
-            "cos_i": campbell["cos_i"],
-        }
-        new_lin = {k: v for k, v in self.linear.items() if k not in ti_names}
-        new_lin["semi_major_axis"] = campbell["semi_major_axis"]
+
+    def convert_parameterization(
+        self,
+        *,
+        source: AbstractParameterization,
+        target: AbstractParameterization,
+    ) -> "Samples":
+        """Convert stored values between supported parameterizations.
+
+        Wraps :func:`harv.samplers.convert_parameterization`, returning a new
+        :class:`Samples` with ``metadata``, ``data_type``, and
+        ``linear_extension_names`` preserved.  The initial implementation
+        supports single-component RV and Gaia astrometry parameterizations only.
+        """
+        new_nonlinear, new_linear = convert_parameterization(
+            self.nonlinear,
+            self.linear,
+            source=source,
+            target=target,
+        )
         return Samples(
-            nonlinear=new_nl,
-            linear=new_lin,
+            nonlinear=new_nonlinear,
+            linear=new_linear,
             data_type=self.data_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,

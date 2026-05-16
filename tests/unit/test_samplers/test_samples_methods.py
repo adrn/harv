@@ -1565,13 +1565,19 @@ class TestThieleInnesToCampbell:
         assert jnp.allclose(B_rt, B, atol=1e-5)
 
     def test_missing_ti_raises(self) -> None:
+        # Partial TI constants (present but incomplete) raise; a complete
+        # absence of TI constants is a no-op (see test_samples.py).
         samples = Samples(
             nonlinear={
                 "period": Q(jnp.ones(3), "day"),
                 "eccentricity": Q(jnp.zeros(3), ""),
                 "phase_peri": Q(jnp.zeros(3), ""),
             },
-            linear={"ra0": Q(jnp.zeros(3), "mas")},
+            linear={
+                "ra0": Q(jnp.zeros(3), "mas"),
+                "ti_A": Q(jnp.zeros(3), "mas"),
+                "ti_B": Q(jnp.zeros(3), "mas"),
+            },
             data_type="GaiaAstrometryModel",
         )
         with pytest.raises(RuntimeError, match="ti_"):

@@ -395,6 +395,18 @@ or dimensionless `Q` objects, because their inputs are always already dimensionl
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
 - `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
 
+Orbital-element conversions translate between equivalent element sets. They accept
+and return `Q` objects, and back the parameterization-conversion machinery (see
+"Parameterization conversion"):
+
+- `campbell_from_thiele_innes(A, B, F, G)` — invert physical Thiele-Innes constants
+  to Campbell elements `(semi_major_axis, arg_peri, lon_asc_node, cos_i)`; adopts the
+  `cos_i ≥ 0` convention and wraps angles into `[0, 2π)`.
+- `thiele_innes_from_campbell(semi_major_axis, arg_peri, lon_asc_node, cos_i)` — the
+  forward direction, returning physical Thiele-Innes constants `(A, B, F, G)`.
+- `ecc_omega_from_ecosw_esinw(ecosw, esinw)` — `(e, ω) = (√(ecosw²+esinw²), atan2(esinw, ecosw))`.
+- `ecosw_esinw_from_ecc_omega(eccentricity, arg_peri)` — `(e·cos ω, e·sin ω)`.
+
 Higher-level convenience functions compose these building blocks:
 
 - `compute_true_anomaly_components(time, period, eccentricity, t_peri)` — returns (sin f, cos f) at given times
@@ -563,7 +575,9 @@ The recommended constructor is `ThieleInnesGaiaAstrometry.from_data(data)`, whic
 sets `a_floor = Med(σ_AL) / sqrt(N)` automatically.
 
 After sampling with this parameterization, convert the Thiele-Innes linear parameters
-to Campbell elements via `samples.thiele_innes_to_campbell()`.
+to Campbell elements via
+`samples.convert_parameterization(source=ThieleInnesGaiaAstrometry(...), target=StandardGaiaAstrometry())`
+or the convenience wrapper `samples.thiele_innes_to_campbell()`.
 
 **Limitation**: the RV forward model is not linear in `(A, B, F, G)`, so joint
 RV+astrometry fits must use `StandardGaiaAstrometry`.
@@ -606,12 +620,37 @@ prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in t
 prior. `Samples` exposes a derived `"t_peri"` key that reconstructs the absolute time
 as `phase_peri * period + t_ref`.
 
+### Parameterization conversion
+
+Parameter values can be converted between supported parameterizations without
+re-running the sampler.
+
+The standalone helper
+`harv.samplers.convert_parameterization(nonlinear, linear, *, source, target)`
+converts two parameter dictionaries and returns new `(nonlinear, linear)`
+dictionaries in the target representation.
+
+`Samples.convert_parameterization(source=..., target=...)` wraps the same logic and
+returns a new `Samples`, preserving `metadata`, `data_type`, and
+`linear_extension_names`.
+
+The first implementation supports **single-component** parameterizations only:
+
+- RV: `StandardRV <-> EcoswEsinwRV`
+- Gaia astrometry: `StandardGaiaAstrometry <-> ThieleInnesGaiaAstrometry`
+
+Any extra parameters not declared by the source parameterization (for example,
+extension parameters like jitter or polynomial-trend coefficients) are preserved
+unchanged. Joint / namespaced sample dicts are out of scope for this first pass and
+must raise a clear error.
+
 ### `Samples.thiele_innes_to_campbell()`
 
 When sampling with `ThieleInnesGaiaAstrometry`, the posterior `Samples` object carries
 the Thiele-Innes constants `ti_A, ti_B, ti_F, ti_G` as linear parameters.
-`samples.thiele_innes_to_campbell()` converts them to the physical Campbell elements
-`semi_major_axis, arg_peri, lon_asc_node, cos_i` using the standard inversion:
+`samples.thiele_innes_to_campbell()` is a convenience wrapper around
+`Samples.convert_parameterization(...)` that converts them to the physical Campbell
+elements `semi_major_axis, arg_peri, lon_asc_node, cos_i` using the standard inversion:
 
 ```
 u = (A²+B²+F²+G²) / 2
@@ -623,8 +662,9 @@ cos i = |v / a_0²|    # cos_i ≥ 0 convention
 ```
 
 The method returns a new `Samples` with the TI constants replaced by the Campbell
-elements.  The 2-fold degeneracy inherent in pure astrometry (face-on reflections)
-means `cos_i` is not unique; the convention `cos_i ≥ 0` is adopted.
+elements. If no TI constants are present, it is a no-op. The 2-fold degeneracy
+inherent in pure astrometry (face-on reflections) means `cos_i` is not unique; the
+convention `cos_i ≥ 0` is adopted.
 
 ______________________________________________________________________
 
@@ -1325,6 +1365,12 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
   predicted by the wrapped sample is identical to the original; the convention
   it enforces is `K >= 0`, `a >= 0`, `arg_peri in [0, 2*pi)`. No-op when
   `arg_peri` is missing or no entries are negative.
+- `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
+  parameter values between supported single-component RV or Gaia parameterizations.
+  Extra non-base parameters are preserved unchanged; unsupported families or
+  namespaced sample dicts raise a clear error.
+- `thiele_innes_to_campbell() -> Samples` — convenience wrapper for the Gaia
+  `ThieleInnesGaiaAstrometry -> StandardGaiaAstrometry` conversion.
 - `to_arviz(params=None)` -- export to `arviz.InferenceData`
 - `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz

@@ -12,6 +12,10 @@ __all__ = (
     "rv_shape",
     "thiele_innes_ABFG",
     "true_anomaly_from_mean",
+    "campbell_from_thiele_innes",
+    "thiele_innes_from_campbell",
+    "ecc_omega_from_ecosw_esinw",
+    "ecosw_esinw_from_ecc_omega",
     "compute_true_anomaly_components",
     "rv_at_times",
     "astrometric_orbit_at_times",
@@ -26,8 +30,9 @@ from unxt.quantity import AllowValue, ustrip
 
 from harv.custom_types import (
     BatchFloat,
+    BatchFloatLike,
     BatchQAngle,
-    BatchQAny,
+    BatchQDimless,
     BatchQSpeed,
     BatchQTime,
     ScalarFloat,
@@ -101,16 +106,20 @@ def rv_shape(
 
 
 def thiele_innes_ABFG(
-    cos_arg_peri: ScalarFloat,
-    sin_arg_peri: ScalarFloat,
-    cos_lon_asc_node: ScalarFloat,
-    sin_lon_asc_node: ScalarFloat,
-    cos_i: ScalarFloat,
-) -> tuple[ScalarFloat, ScalarFloat, ScalarFloat, ScalarFloat]:
+    cos_arg_peri: BatchFloatLike,
+    sin_arg_peri: BatchFloatLike,
+    cos_lon_asc_node: BatchFloatLike,
+    sin_lon_asc_node: BatchFloatLike,
+    cos_i: BatchFloatLike,
+) -> tuple[BatchFloatLike, BatchFloatLike, BatchFloatLike, BatchFloatLike]:
     """Compute unit Thiele-Innes constants (A, B, F, G).
 
     Returns the constants with an implicit semi-major axis of 1. Multiply each
     by ``a`` to recover the physical Thiele-Innes constants.
+
+    Inputs are dimensionless and may be scalar or batched (plain scalars, JAX
+    arrays, or dimensionless :class:`~unxt.Q`); the computation broadcasts
+    elementwise.
 
     The sky-plane orbital displacement uses the Thiele-Innes coordinates
     ``X = (cos E - e)`` and ``Y = sqrt(1-e^2) sin E``, or equivalently in
@@ -140,10 +149,11 @@ def thiele_innes_ABFG(
     B = cos_arg_peri * sin_lon_asc_node + sin_arg_peri * cos_lon_asc_node * cos_i
     F = -(sin_arg_peri * cos_lon_asc_node + cos_arg_peri * sin_lon_asc_node * cos_i)
     G = -(sin_arg_peri * sin_lon_asc_node - cos_arg_peri * cos_lon_asc_node * cos_i)
-    # cast: arithmetic on ScalarFloat inputs may return AbstractQuantity via quax
-    # dispatch; mypy cannot verify that AbstractQuantity satisfies ScalarFloat.
+    # cast: arithmetic on BatchFloatLike inputs may return AbstractQuantity via
+    # quax dispatch; mypy cannot verify AbstractQuantity satisfies BatchFloatLike.
     return cast(
-        "tuple[ScalarFloat, ScalarFloat, ScalarFloat, ScalarFloat]", (A, B, F, G)
+        "tuple[BatchFloatLike, BatchFloatLike, BatchFloatLike, BatchFloatLike]",
+        (A, B, F, G),
     )
 
 
@@ -152,7 +162,7 @@ def campbell_from_thiele_innes(
     B: BatchQAngle,
     F: BatchQAngle,
     G: BatchQAngle,
-) -> dict[str, BatchQAny]:
+) -> dict[str, Q]:
     r"""Invert Thiele-Innes constants to Campbell orbital elements.
 
     This follows Halbwachs, Pourbaix, et al. 2023 (see the appendix):
@@ -170,7 +180,13 @@ def campbell_from_thiele_innes(
     """
     u = 0.5 * (A**2 + B**2 + F**2 + G**2)
     v = A * G - B * F
-    a0 = jnp.sqrt(u + jnp.sqrt(jnp.maximum(u * u - v * v, Q(0.0, (u * u).unit))))
+    # cast: jnp.sqrt on Quantity inputs returns AbstractQuantity via quax
+    # dispatch; arg_peri, lon_asc_node, and cos_i below are re-wrapped with
+    # Q(...), so the returned dict is uniformly typed as concrete Quantity.
+    a0 = cast(
+        "BatchQAngle",
+        jnp.sqrt(u + jnp.sqrt(jnp.maximum(u * u - v * v, Q(0.0, (u * u).unit)))),
+    )
     # arctan2 of same-unit Quantities returns Q[rad]; strip before mod
     wPO = ustrip(AllowValue, "rad", jnp.arctan2(B - F, A + G))  # ω + Ω
     wMO = ustrip(AllowValue, "rad", jnp.arctan2(-B - F, A - G))  # ω - Ω
@@ -187,6 +203,118 @@ def campbell_from_thiele_innes(
         "lon_asc_node": lon_asc_node,
         "cos_i": cos_i,
     }
+
+
+def thiele_innes_from_campbell(
+    semi_major_axis: BatchQAngle,
+    arg_peri: BatchQAngle,
+    lon_asc_node: BatchQAngle,
+    cos_i: BatchQDimless,
+) -> tuple[BatchQAngle, BatchQAngle, BatchQAngle, BatchQAngle]:
+    r"""Convert Campbell orbital elements to physical Thiele-Innes constants.
+
+    The forward direction of the change of variables inverted by
+    :func:`campbell_from_thiele_innes`.  The unit Thiele-Innes constants from
+    :func:`thiele_innes_ABFG` are scaled by the semi-major axis:
+
+    .. math::
+
+        (A, B, F, G) = a_0 \cdot
+            \mathrm{thiele\_innes\_ABFG}(\cos\omega, \sin\omega,
+                                        \cos\Omega, \sin\Omega, \cos i)
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import thiele_innes_from_campbell
+    >>> A, B, F, G = thiele_innes_from_campbell(
+    ...     Q(2.0, "mas"), Q(0.5, "rad"), Q(1.0, "rad"), Q(0.3, ""),
+    ... )
+    >>> A.unit
+    Unit("mas")
+    """
+    A, B, F, G = thiele_innes_ABFG(
+        jnp.cos(arg_peri),
+        jnp.sin(arg_peri),
+        jnp.cos(lon_asc_node),
+        jnp.sin(lon_asc_node),
+        cos_i,
+    )
+    # cast: multiplying a Quantity returns AbstractQuantity via quax dispatch,
+    # which ty cannot verify is a subtype of BatchQAngle.
+    return cast(
+        "tuple[BatchQAngle, BatchQAngle, BatchQAngle, BatchQAngle]",
+        (
+            semi_major_axis * A,
+            semi_major_axis * B,
+            semi_major_axis * F,
+            semi_major_axis * G,
+        ),
+    )
+
+
+def ecc_omega_from_ecosw_esinw(
+    ecosw: BatchQDimless,
+    esinw: BatchQDimless,
+) -> tuple[BatchQDimless, BatchQAngle]:
+    r"""Convert ``(e cos omega, e sin omega)`` to eccentricity and arg. of periastron.
+
+    The inverse of :func:`ecosw_esinw_from_ecc_omega`:
+
+    .. math::
+
+        e &= \sqrt{\mathrm{ecosw}^2 + \mathrm{esinw}^2} \\
+        \omega &= \mathrm{atan2}(\mathrm{esinw}, \mathrm{ecosw})
+
+    The returned ``arg_peri`` lies in ``(-pi, pi]`` (the range of ``atan2``); use
+    :meth:`harv.samplers.Samples.wrap_angles` to wrap it into ``[0, 2*pi)`` if a
+    prior requires that range.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import ecc_omega_from_ecosw_esinw
+    >>> ecc, arg_peri = ecc_omega_from_ecosw_esinw(Q(0.6, ""), Q(0.8, ""))
+    >>> float(ecc.value)
+    1.0
+    >>> arg_peri.unit
+    Unit("rad")
+    """
+    eccentricity = jnp.sqrt(ecosw**2 + esinw**2)
+    arg_peri = jnp.arctan2(esinw, ecosw)
+    # cast: jnp ops on Quantity inputs return AbstractQuantity via quax dispatch,
+    # which ty cannot verify is a subtype of the declared return types.
+    return cast("tuple[BatchQDimless, BatchQAngle]", (eccentricity, arg_peri))
+
+
+def ecosw_esinw_from_ecc_omega(
+    eccentricity: BatchQDimless,
+    arg_peri: BatchQAngle,
+) -> tuple[BatchQDimless, BatchQDimless]:
+    r"""Convert eccentricity and arg. of periastron to ``(e cos omega, e sin omega)``.
+
+    The inverse of :func:`ecc_omega_from_ecosw_esinw`:
+
+    .. math::
+
+        \mathrm{ecosw} &= e \cos\omega \\
+        \mathrm{esinw} &= e \sin\omega
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.kepler.orbits import ecosw_esinw_from_ecc_omega
+    >>> ecosw, esinw = ecosw_esinw_from_ecc_omega(Q(0.5, ""), Q(0.0, "rad"))
+    >>> float(ecosw.value)
+    0.5
+    >>> float(esinw.value)
+    0.0
+    """
+    ecosw = eccentricity * jnp.cos(arg_peri)
+    esinw = eccentricity * jnp.sin(arg_peri)
+    # cast: arithmetic on Quantity inputs returns AbstractQuantity via quax
+    # dispatch, which ty cannot verify is a subtype of BatchQDimless.
+    return cast("tuple[BatchQDimless, BatchQDimless]", (ecosw, esinw))
 
 
 def compute_true_anomaly_components(

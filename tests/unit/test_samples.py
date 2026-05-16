@@ -5,7 +5,11 @@ import jax.numpy as jnp
 import pytest
 from unxt import Q, ustrip
 
-from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
+from harv.kepler.orbits import (
+    astrometric_orbit_at_times,
+    rv_at_times,
+    thiele_innes_ABFG,
+)
 from harv.samplers.samples import Samples
 
 
@@ -588,16 +592,14 @@ class TestSamplesWrapAngles:
 
 def _make_ti_samples(n: int = 4) -> Samples:
     """Helper: Thiele-Innes Samples with known Campbell elements."""
-    from harv.kepler.orbits import thiele_innes_ABFG
-
     a0 = jnp.ones(n) * 2.0
     arg_peri = jnp.linspace(0.2, 1.5, n)
     lon_asc_node = jnp.linspace(0.5, 2.0, n)
     cos_i = jnp.linspace(0.3, 0.8, n)
 
     A_arr, B_arr, F_arr, G_arr = jax.vmap(
-        lambda w, O, ci: thiele_innes_ABFG(
-            jnp.cos(w), jnp.sin(w), jnp.cos(O), jnp.sin(O), ci
+        lambda w, lon_node, ci: thiele_innes_ABFG(
+            jnp.cos(w), jnp.sin(w), jnp.cos(lon_node), jnp.sin(lon_node), ci
         )
     )(arg_peri, lon_asc_node, cos_i)
 
@@ -637,8 +639,9 @@ class TestThieleInnesToCampbell:
     def test_replaces_ti_with_campbell_keys(self):
         s, *_ = _make_ti_samples()
         converted = s.thiele_innes_to_campbell()
-        for k in ("semi_major_axis", "arg_peri", "lon_asc_node", "cos_i"):
-            assert k in converted.linear
+        assert "semi_major_axis" in converted.linear
+        for k in ("arg_peri", "lon_asc_node", "cos_i"):
+            assert k in converted.nonlinear
         for k in ("ti_A", "ti_B", "ti_F", "ti_G"):
             assert k not in converted.linear
 
@@ -667,20 +670,18 @@ class TestThieleInnesToCampbell:
 
     def test_round_trip_ti_constants(self):
         """Converting Campbell→TI→Campbell→TI should reproduce the original TI."""
-        from harv.kepler.orbits import thiele_innes_ABFG
-
         s, *_ = _make_ti_samples()
         converted = s.thiele_innes_to_campbell()
         # Rebuild TI from the recovered Campbell elements
         w_rec = converted["arg_peri"].value
-        O_rec = converted["lon_asc_node"].value
+        lon_asc_node_rec = converted["lon_asc_node"].value
         ci_rec = converted["cos_i"].value
         a0_rec = converted["semi_major_axis"].value
         A_rt, B_rt, F_rt, G_rt = jax.vmap(
-            lambda w, O, ci: thiele_innes_ABFG(
-                jnp.cos(w), jnp.sin(w), jnp.cos(O), jnp.sin(O), ci
+            lambda w, lon_node, ci: thiele_innes_ABFG(
+                jnp.cos(w), jnp.sin(w), jnp.cos(lon_node), jnp.sin(lon_node), ci
             )
-        )(w_rec, O_rec, ci_rec)
+        )(w_rec, lon_asc_node_rec, ci_rec)
         unit = str(s.linear["ti_A"].unit)
         A_orig = ustrip(unit, s.linear["ti_A"])
         B_orig = ustrip(unit, s.linear["ti_B"])

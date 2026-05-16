@@ -18,8 +18,10 @@ from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
-from harv.models.parameterizations.gaia import StandardGaiaAstrometry
+from harv.models.parameterizations.gaia import (
+    StandardGaiaAstrometry,
+    ThieleInnesGaiaAstrometry,
+)
 
 
 @final
@@ -48,7 +50,9 @@ class GaiaAstrometryModel(AbstractComponentModel):
     ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
     """
 
-    parameterization: AbstractParameterization = StandardGaiaAstrometry()
+    parameterization: StandardGaiaAstrometry | ThieleInnesGaiaAstrometry = (
+        StandardGaiaAstrometry()
+    )
     extensions: tuple[AbstractExtension, ...] = ()
     _: KW_ONLY
     pm_time_unit: str = "yr"
@@ -131,7 +135,6 @@ class GaiaAstrometryModel(AbstractComponentModel):
             else:
                 nl_stripped[name] = ustrip(AllowValue, "", nl_values[name])
 
-        # TODO: we need to implement an abstract design_matrix method
         X = self.parameterization.design_matrix(
             sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nl_stripped
         )

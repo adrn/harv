@@ -71,6 +71,14 @@ DIMENSIONED_BATCH_TYPES: frozenset[Any] = frozenset(
 
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 
+# Like ScalarFloat but shape-agnostic (a strict superset): plain Python/NumPy
+# scalars, JAX arrays of any rank, or dimensionless Quantities of any rank.
+# Use for shape-agnostic building blocks that broadcast over scalar or batched
+# inputs (see docs/spec.md, "Shared building blocks").
+BatchFloatLike = (
+    Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
+)
+
 
 def float_converter(x: ScalarFloat) -> Float[jax.Array, ""]:
     """Converter for dimensionless scalar float fields.
