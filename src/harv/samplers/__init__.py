@@ -7,6 +7,7 @@ the main RejectionSampler class, and the Samples container for posterior samples
 from harv.distributions import QD, QuantityDistribution
 
 from .base import AbstractSampler
+from .conversion import convert_parameterization
 from .custom_priors import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
@@ -24,6 +25,7 @@ __all__ = [
     "ParallaxDependentProperMotionPrior",
     "PeriodDependentKPrior",
     "PeriodDependentSemiMajorAxisPrior",
+    "convert_parameterization",
     "QD",
     "QuantityDistribution",
     "RejectionPrior",

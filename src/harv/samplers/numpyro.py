@@ -432,6 +432,28 @@ class NumpyroSampler(AbstractSampler):
     ) -> dict[str, Any]:
         """Build init_params dict from rejection-sampler posterior."""
         _scalar_init = num_chains == 1
+        sample_linear_keys = set(samples.linear)
+        joint_linear_name_counts: dict[str, int] = {}
+        if isinstance(_model, JointModel):
+            for component in _model.components.values():
+                for name in component._all_linear_names():
+                    joint_linear_name_counts[name] = (
+                        joint_linear_name_counts.get(name, 0) + 1
+                    )
+
+        def _resolve_sample_linear_name(name: str) -> str | None:
+            if name in sample_linear_keys:
+                return name
+            if not isinstance(_model, JointModel) or "." not in name:
+                return None
+
+            _, base_name = name.split(".", 1)
+            if base_name in _model.shared_linear_params:
+                return base_name if base_name in sample_linear_keys else None
+            if joint_linear_name_counts.get(base_name, 0) == 1:
+                return base_name if base_name in sample_linear_keys else None
+            return None
+
         # Cycle through available samples to fill num_chains slots.
         # When n_samples >= num_chains this picks the first num_chains distinct
         # samples; when n_samples < num_chains (e.g. only 1 rejection sample
@@ -470,9 +492,12 @@ class NumpyroSampler(AbstractSampler):
                 }
             )
             for name, d in effective_linear_prior.items():
-                if name not in explicit_linear_name_set or name not in samples.linear:
+                if name not in explicit_linear_name_set:
                     continue
-                qty = samples.linear[name]
+                sample_name = _resolve_sample_linear_name(name)
+                if sample_name is None:
+                    continue
+                qty = samples.linear[sample_name]
                 if isinstance(d, QuantityDistribution):
                     prior_unit = str(d.unit)
                     vals = ustrip(prior_unit, qty)
@@ -498,15 +523,22 @@ class NumpyroSampler(AbstractSampler):
             and isinstance(effective_linear_prior, dict)
         ):
             # Full model: include init values for _linear site.
-            gaussian_names = [
-                n
-                for n in effective_linear_prior
-                if not _needs_explicit_sampling(effective_linear_prior[n])
-                and n in samples.linear
+            gaussian_name_pairs = [
+                (name, _resolve_sample_linear_name(name))
+                for name in effective_linear_prior
+                if not _needs_explicit_sampling(effective_linear_prior[name])
             ]
-            if gaussian_names:
+            gaussian_name_pairs = [
+                (name, sample_name)
+                for name, sample_name in gaussian_name_pairs
+                if sample_name is not None
+            ]
+            if gaussian_name_pairs:
                 lin_arr = np.column_stack(
-                    [np.asarray(samples.linear[n].value) for n in gaussian_names]
+                    [
+                        np.asarray(samples.linear[sample_name].value)
+                        for _, sample_name in gaussian_name_pairs
+                    ]
                 )
                 if _scalar_init:
                     init_params["_linear"] = jnp.asarray(lin_arr[0])

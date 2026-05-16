@@ -564,7 +564,22 @@ class AbstractComponentModel(eqx.Module):
         c = self._build_marginalized_linear(
             nl_values, marginalized_names, explicit_linear, data, linear_prior
         )
-        return c.dist.log_prob(c.obs)
+        base_lp: jax.Array = c.dist.log_prob(c.obs)
+
+        # Apply optional Jacobian correction from the parameterization.
+        # This is non-trivial for e.g. ThieleInnesGaiaAstrometry, where the
+        # TI linear params (A,B,F,G) are not the natural physical params
+        # (a0, ω, Ω, cos i) and a Jacobian correction is needed to recover
+        # the correct posterior.  The conditional mean is a zeroth-order
+        # approximation following Hsieh et al.
+        parameterization = getattr(self, "parameterization", None)
+        if parameterization is not None:
+            cond_mean = c.dist.conditional(c.obs).mean  # (n_marg_params,)
+            linear_map = dict(zip(c.marg_names, cond_mean, strict=True))
+            correction = parameterization.linear_log_prior_correction(linear_map)
+            if correction is not None:
+                return base_lp + correction
+        return base_lp
 
     def _log_prob_explicit(
         self,

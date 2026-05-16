@@ -54,6 +54,7 @@ BatchQLength = Real[Q["length"], "*batch"]
 BatchQSpeed = Real[Q["speed"], "*batch"]
 BatchQTime = Real[Q["time"], "*batch"]
 BatchFloat = Float[jax.Array, "*batch"] | BatchQDimless
+BatchQAny = Real[AbstractQuantity, "*batch"]
 
 # Set of all Batch-level Quantity types that carry physical dimensions.
 # Used by AbstractParameters.__init_subclass__ to auto-detect which fields
@@ -69,6 +70,14 @@ DIMENSIONED_BATCH_TYPES: frozenset[Any] = frozenset(
 )
 
 ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
+
+# Like ScalarFloat but shape-agnostic (a strict superset): plain Python/NumPy
+# scalars, JAX arrays of any rank, or dimensionless Quantities of any rank.
+# Use for shape-agnostic building blocks that broadcast over scalar or batched
+# inputs (see docs/spec.md, "Shared building blocks").
+BatchFloatLike = (
+    Float[jax.Array, "*batch"] | np.floating[Any] | float | int | BatchQDimless
+)
 
 
 def float_converter(x: ScalarFloat) -> Float[jax.Array, ""]:

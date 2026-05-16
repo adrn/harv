@@ -182,7 +182,7 @@ src/harv/
 │   ├── parameterizations/    # Parameter declarations and design matrices
 │   │   ├── _base.py         # AbstractParameterization base class
 │   │   ├── rv.py            # StandardRV, EcoswEsinwRV
-│   │   └── gaia.py          # StandardGaiaAstrometry
+│   │   └── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
 │   ├── component.py         # AbstractComponentModel (marginalization, numpyro)
 │   ├── rv.py                # RVModel (final)
 │   ├── astrometry.py        # GaiaAstrometryModel (final)
@@ -395,6 +395,18 @@ or dimensionless `Q` objects, because their inputs are always already dimensionl
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
 - `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
 
+Orbital-element conversions translate between equivalent element sets. They accept
+and return `Q` objects, and back the parameterization-conversion machinery (see
+"Parameterization conversion"):
+
+- `campbell_from_thiele_innes(A, B, F, G)` — invert physical Thiele-Innes constants
+  to Campbell elements `(semi_major_axis, arg_peri, lon_asc_node, cos_i)`; adopts the
+  `cos_i ≥ 0` convention and wraps angles into `[0, 2π)`.
+- `thiele_innes_from_campbell(semi_major_axis, arg_peri, lon_asc_node, cos_i)` — the
+  forward direction, returning physical Thiele-Innes constants `(A, B, F, G)`.
+- `ecc_omega_from_ecosw_esinw(ecosw, esinw)` — `(e, ω) = (√(ecosw²+esinw²), atan2(esinw, ecosw))`.
+- `ecosw_esinw_from_ecc_omega(eccentricity, arg_peri)` — `(e·cos ω, e·sin ω)`.
+
 Higher-level convenience functions compose these building blocks:
 
 - `compute_true_anomaly_components(time, period, eccentricity, t_peri)` — returns (sin f, cos f) at given times
@@ -533,6 +545,57 @@ The design matrix columns are
 where the Thiele-Innes orbital element combines the (A, B, F, G) constants
 with the X, Y orbital coordinates.
 
+### `ThieleInnesGaiaAstrometry`
+
+Alternative Gaia parameterization that moves the four Thiele-Innes constants
+`(A, B, F, G)` from the nonlinear to the linear parameter set, reducing the
+nonlinear space from 6-D to 3-D.  This is the approach described in Hsieh et al.
+("Astrometric Orbit Fitting with Marginalization over Linear Parameters").
+
+- Nonlinear: `period`, `eccentricity`, `phase_peri`.
+- Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `ti_A`, `ti_B`, `ti_F`, `ti_G`.
+- Design matrix shape: `(n_obs, 9)`.
+
+By default a Jacobian correction is applied: a flat prior on the Thiele-Innes
+constants is not equivalent to a flat prior on the physical Campbell elements
+`(a_0, ω, Ω, cos i)`.  The zeroth-order correction (evaluated at the conditional-mean
+TI constants following Hsieh et al.) multiplies the marginal likelihood by the factor
+`(a_0 + δ_a)^{-m} (sin²i + δ_s)^{-1}`, where `m = 3` for a uniform prior on `a_0`
+and `m = 4` for a log-uniform prior.
+
+The correction can be disabled with `apply_jacobian_correction=False`, which makes
+`linear_log_prior_correction` return `None` (no correction) — appropriate when the
+priors are genuinely intended to be flat in the Thiele-Innes constants.
+
+Constructor parameters:
+
+| Parameter                   | Type           | Default | Description                                                                         |
+| --------------------------- | -------------- | ------- | ----------------------------------------------------------------------------------- |
+| `a_floor`                   | `float \| None` | `None`  | Floor on `a_0` (in obs units, e.g. mas).  **Required when the correction is on.**   |
+| `sin2i_floor`               | `float \| None` | `None`  | Floor on `sin²i` for the Jacobian denominator.  Falls back to `0.01` when `None`.   |
+| `log_uniform_in_a`          | `bool \| None`  | `None`  | Use log-uniform prior on `a_0` (`m=4`).  Falls back to `False` when `None`.          |
+| `apply_jacobian_correction` | `bool`         | `True`  | Whether to apply the Jacobian correction.                                           |
+
+Validation (enforced in `__check_init__`):
+
+- When `apply_jacobian_correction=True`, `a_floor` must be supplied (non-`None`);
+  `sin2i_floor` and `log_uniform_in_a` are optional and fall back to their defaults.
+- When `apply_jacobian_correction=False`, none of `a_floor`, `sin2i_floor`, or
+  `log_uniform_in_a` may be supplied — they must all be left as `None`.
+
+The recommended constructor is `ThieleInnesGaiaAstrometry.from_data(data)`, which
+sets `a_floor = Med(σ_AL) / sqrt(N)` automatically.  Pass
+`from_data(data, apply_jacobian_correction=False)` to construct a correction-free
+parameterization without deriving `a_floor`.
+
+After sampling with this parameterization, convert the Thiele-Innes linear parameters
+to Campbell elements via
+`samples.convert_parameterization(source=ThieleInnesGaiaAstrometry(...), target=StandardGaiaAstrometry())`
+or the convenience wrapper `samples.thiele_innes_to_campbell()`.
+
+**Limitation**: the RV forward model is not linear in `(A, B, F, G)`, so joint
+RV+astrometry fits must use `StandardGaiaAstrometry`.
+
 ### Parameter naming convention
 
 All parameter names follow the rule: **use the standard descriptive name; abbreviate
@@ -570,6 +633,52 @@ absolute `t_peri`. This decouples the phase from the period scale, simplifies th
 prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
 prior. `Samples` exposes a derived `"t_peri"` key that reconstructs the absolute time
 as `phase_peri * period + t_ref`.
+
+### Parameterization conversion
+
+Parameter values can be converted between supported parameterizations without
+re-running the sampler.
+
+The standalone helper
+`harv.samplers.convert_parameterization(nonlinear, linear, *, source, target)`
+converts two parameter dictionaries and returns new `(nonlinear, linear)`
+dictionaries in the target representation.
+
+`Samples.convert_parameterization(source=..., target=...)` wraps the same logic and
+returns a new `Samples`, preserving `metadata`, `data_type`, and
+`linear_extension_names`.
+
+The first implementation supports **single-component** parameterizations only:
+
+- RV: `StandardRV <-> EcoswEsinwRV`
+- Gaia astrometry: `StandardGaiaAstrometry <-> ThieleInnesGaiaAstrometry`
+
+Any extra parameters not declared by the source parameterization (for example,
+extension parameters like jitter or polynomial-trend coefficients) are preserved
+unchanged. Joint / namespaced sample dicts are out of scope for this first pass and
+must raise a clear error.
+
+### `Samples.thiele_innes_to_campbell()`
+
+When sampling with `ThieleInnesGaiaAstrometry`, the posterior `Samples` object carries
+the Thiele-Innes constants `ti_A, ti_B, ti_F, ti_G` as linear parameters.
+`samples.thiele_innes_to_campbell()` is a convenience wrapper around
+`Samples.convert_parameterization(...)` that converts them to the physical Campbell
+elements `semi_major_axis, arg_peri, lon_asc_node, cos_i` using the standard inversion:
+
+```
+u = (A²+B²+F²+G²) / 2
+v = A·G − B·F
+a_0 = sqrt(u + sqrt(max(u² − v², 0)))
+ω + Ω = atan2(B − F, A + G)
+ω − Ω = atan2(−B − F, A − G)
+cos i = |v / a_0²|    # cos_i ≥ 0 convention
+```
+
+The method returns a new `Samples` with the TI constants replaced by the Campbell
+elements. If no TI constants are present, it is a no-op. The 2-fold degeneracy
+inherent in pure astrometry (face-on reflections) means `cos_i` is not unique; the
+convention `cos_i ≥ 0` is adopted.
 
 ______________________________________________________________________
 
@@ -722,10 +831,12 @@ no data or linear prior are stored as fields. Both are passed at call time.
 
 `@final` concrete model for Gaia epoch astrometry. Models are **pure templates**.
 
-| Field              | Type                     | Default                    |
-| ------------------ | ------------------------ | -------------------------- |
-| `parameterization` | `StandardGaiaAstrometry` | `StandardGaiaAstrometry()` |
-| `extensions`       | `tuple`                  | `()`                       |
+| Field              | Type                       | Default                    |
+| ------------------ | -------------------------- | -------------------------- |
+| `data`             | `GaiaAstrometryData`       | (required)                 |
+| `parameterization` | `AbstractParameterization` | `StandardGaiaAstrometry()` |
+| `linear_prior`     | `dict \| None`             | `None`                     |
+| `extensions`       | `tuple`                    | `()`                       |
 
 Overrides `_linear_param_units()` because astrometric linear params have mixed
 units (mas vs mas/yr for proper motions).
@@ -941,12 +1052,12 @@ parameter names from `StandardRV`: `period`, `eccentricity`, `phase_peri`,
 ```python
 RejectionPrior.default_gaia_astrometry(
     *,
-    period_min: Q["time"],             # required
-    period_max: Q["time"],             # required
-    sigma_a0: Q["length"],             # required — semi-major axis scale
-    sigma_parallax: Q["angle"],        # required — parallax prior scale
-    sigma_pos: Q["angle"],             # required — position prior scale
-    sigma_vtan: Q["speed"],            # required — tangential velocity dispersion scale
+    period_min: Q["time"] | None = None,
+    period_max: Q["time"] | None = None,
+    sigma_a0: Q["length"] | None = None,        # required unless semi_major_axis= given
+    sigma_parallax: Q["angle"] | None = None,   # required unless parallax= given
+    sigma_pos: Q["angle"] | None = None,        # required unless ra0= and dec0= given
+    sigma_vtan: Q["speed"] | None = None,       # required unless pmra= and pmdec= given
     P0: Q["time"] = Q(1.0, "yr"),
     **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
 ) -> RejectionPrior
@@ -972,6 +1083,10 @@ parameter name as a keyword argument. Valid names are the nonlinear and linear
 parameter names from `StandardGaiaAstrometry`: `period`, `eccentricity`,
 `phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node`, `ra0`, `dec0`, `pmra`, `pmdec`,
 `parallax`, `semi_major_axis`.
+
+When a linear prior is supplied directly via `**kwargs`, the corresponding scale
+argument (`sigma_parallax`, `sigma_pos`, `sigma_a0`, or `sigma_vtan`) must be
+omitted — passing both raises `TypeError`.
 
 Parallax is classified as explicit automatically because `HalfNormal` cannot be
 analytically marginalized. For exoplanet searches where the catalog parallax is
@@ -1264,6 +1379,12 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
   predicted by the wrapped sample is identical to the original; the convention
   it enforces is `K >= 0`, `a >= 0`, `arg_peri in [0, 2*pi)`. No-op when
   `arg_peri` is missing or no entries are negative.
+- `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
+  parameter values between supported single-component RV or Gaia parameterizations.
+  Extra non-base parameters are preserved unchanged; unsupported families or
+  namespaced sample dicts raise a clear error.
+- `thiele_innes_to_campbell() -> Samples` — convenience wrapper for the Gaia
+  `ThieleInnesGaiaAstrometry -> StandardGaiaAstrometry` conversion.
 - `to_arviz(params=None)` -- export to `arviz.InferenceData`
 - `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz

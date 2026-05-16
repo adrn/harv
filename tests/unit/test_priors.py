@@ -2,6 +2,7 @@
 
 import jax.random as jr
 import numpyro.distributions as dist
+import pytest
 from unxt import Q
 
 from harv.distributions import QD
@@ -207,9 +208,13 @@ class TestParameterOverrides:
 
     def test_astro_override_linear(self):
         """Linear prior can be overridden in astrometry constructor."""
-        custom_parallax = QD(dist.Normal(5.0, 0.5), "mas")
+        # HalfNormal is non-Gaussian → explicitly sampled → dependent callables work
+        custom_parallax = QD(dist.HalfNormal(0.5), "mas")
+        kwargs = {
+            k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
+        }
         prior = RejectionPrior.default_gaia_astrometry(
-            **_DEFAULT_ASTRO_KWARGS, parallax=custom_parallax
+            **kwargs, parallax=custom_parallax
         )
         assert prior.linear_prior["parallax"] is custom_parallax
 
@@ -221,6 +226,75 @@ class TestParameterOverrides:
         )
         assert "fake" in prior.extension_priors
         assert prior.extension_priors["fake"] is fake_dist
+
+    def test_astro_override_parallax_omits_sigma_parallax(self):
+        """Passing parallax= directly lets sigma_parallax be omitted."""
+        custom_parallax = QD(dist.Normal(5.0, 0.5), "mas")
+        kwargs = {
+            k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
+        }
+        prior = RejectionPrior.default_gaia_astrometry(
+            **kwargs, parallax=custom_parallax
+        )
+        assert prior.linear_prior["parallax"] is custom_parallax
+
+    def test_astro_override_pos_omits_sigma_pos(self):
+        """Passing ra0= and dec0= directly lets sigma_pos be omitted."""
+        custom_ra0 = QD(dist.Normal(0.0, 10.0), "mas")
+        custom_dec0 = QD(dist.Normal(0.0, 10.0), "mas")
+        kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_pos"}
+        prior = RejectionPrior.default_gaia_astrometry(
+            **kwargs, ra0=custom_ra0, dec0=custom_dec0
+        )
+        assert prior.linear_prior["ra0"] is custom_ra0
+        assert prior.linear_prior["dec0"] is custom_dec0
+
+    def test_astro_override_semi_major_axis_omits_sigma_a0(self):
+        """Passing semi_major_axis= directly lets sigma_a0 be omitted."""
+        custom_sma = QD(dist.HalfNormal(5.0), "mas")
+        kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_a0"}
+        prior = RejectionPrior.default_gaia_astrometry(
+            **kwargs, semi_major_axis=custom_sma
+        )
+        assert prior.linear_prior["semi_major_axis"] is custom_sma
+
+    def test_astro_override_pmra_pmdec_omits_sigma_vtan(self):
+        """Passing pmra= and pmdec= directly lets sigma_vtan be omitted."""
+        custom_pmra = QD(dist.Normal(0.0, 10.0), "mas/yr")
+        custom_pmdec = QD(dist.Normal(0.0, 10.0), "mas/yr")
+        kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_vtan"}
+        prior = RejectionPrior.default_gaia_astrometry(
+            **kwargs, pmra=custom_pmra, pmdec=custom_pmdec
+        )
+        assert prior.linear_prior["pmra"] is custom_pmra
+        assert prior.linear_prior["pmdec"] is custom_pmdec
+
+    def test_astro_conflict_raises_parallax(self):
+        """Providing both parallax= and sigma_parallax= raises TypeError."""
+
+        custom_parallax = QD(dist.Normal(5.0, 0.5), "mas")
+        with pytest.raises(TypeError, match="Cannot specify both"):
+            RejectionPrior.default_gaia_astrometry(
+                **_DEFAULT_ASTRO_KWARGS, parallax=custom_parallax
+            )
+
+    def test_astro_conflict_raises_sigma_a0(self):
+        """Providing both semi_major_axis= and sigma_a0= raises TypeError."""
+
+        custom_sma = QD(dist.HalfNormal(5.0), "mas")
+        with pytest.raises(TypeError, match="Cannot specify both"):
+            RejectionPrior.default_gaia_astrometry(
+                **_DEFAULT_ASTRO_KWARGS, semi_major_axis=custom_sma
+            )
+
+    def test_astro_missing_all_raises(self):
+        """Omitting sigma_parallax and parallax= raises TypeError."""
+
+        kwargs = {
+            k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
+        }
+        with pytest.raises(TypeError, match="Must specify either"):
+            RejectionPrior.default_gaia_astrometry(**kwargs)
 
 
 class TestPriorValidation:
