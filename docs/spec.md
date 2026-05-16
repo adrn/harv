@@ -556,23 +556,37 @@ nonlinear space from 6-D to 3-D.  This is the approach described in Hsieh et al.
 - Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax`, `ti_A`, `ti_B`, `ti_F`, `ti_G`.
 - Design matrix shape: `(n_obs, 9)`.
 
-The Jacobian correction is **always applied**: a flat prior on the Thiele-Innes
+By default a Jacobian correction is applied: a flat prior on the Thiele-Innes
 constants is not equivalent to a flat prior on the physical Campbell elements
 `(a_0, ω, Ω, cos i)`.  The zeroth-order correction (evaluated at the conditional-mean
 TI constants following Hsieh et al.) multiplies the marginal likelihood by the factor
 `(a_0 + δ_a)^{-m} (sin²i + δ_s)^{-1}`, where `m = 3` for a uniform prior on `a_0`
 and `m = 4` for a log-uniform prior.
 
+The correction can be disabled with `apply_jacobian_correction=False`, which makes
+`linear_log_prior_correction` return `None` (no correction) — appropriate when the
+priors are genuinely intended to be flat in the Thiele-Innes constants.
+
 Constructor parameters:
 
-| Parameter          | Type    | Default | Description                                             |
-| ------------------ | ------- | ------- | ------------------------------------------------------- |
-| `a_floor`          | `float` | —       | Floor on `a_0` (in obs units, e.g. mas).  **Required.** |
-| `sin2i_floor`      | `float` | `0.01`  | Floor on `sin²i` for the Jacobian denominator.          |
-| `log_uniform_in_a` | `bool`  | `False` | Use log-uniform prior on `a_0` (`m=4`).                 |
+| Parameter                   | Type           | Default | Description                                                                         |
+| --------------------------- | -------------- | ------- | ----------------------------------------------------------------------------------- |
+| `a_floor`                   | `float \| None` | `None`  | Floor on `a_0` (in obs units, e.g. mas).  **Required when the correction is on.**   |
+| `sin2i_floor`               | `float \| None` | `None`  | Floor on `sin²i` for the Jacobian denominator.  Falls back to `0.01` when `None`.   |
+| `log_uniform_in_a`          | `bool \| None`  | `None`  | Use log-uniform prior on `a_0` (`m=4`).  Falls back to `False` when `None`.          |
+| `apply_jacobian_correction` | `bool`         | `True`  | Whether to apply the Jacobian correction.                                           |
+
+Validation (enforced in `__check_init__`):
+
+- When `apply_jacobian_correction=True`, `a_floor` must be supplied (non-`None`);
+  `sin2i_floor` and `log_uniform_in_a` are optional and fall back to their defaults.
+- When `apply_jacobian_correction=False`, none of `a_floor`, `sin2i_floor`, or
+  `log_uniform_in_a` may be supplied — they must all be left as `None`.
 
 The recommended constructor is `ThieleInnesGaiaAstrometry.from_data(data)`, which
-sets `a_floor = Med(σ_AL) / sqrt(N)` automatically.
+sets `a_floor = Med(σ_AL) / sqrt(N)` automatically.  Pass
+`from_data(data, apply_jacobian_correction=False)` to construct a correction-free
+parameterization without deriving `a_floor`.
 
 After sampling with this parameterization, convert the Thiele-Innes linear parameters
 to Campbell elements via

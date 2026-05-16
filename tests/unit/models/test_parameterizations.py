@@ -3,7 +3,10 @@
 import jax
 import jax.numpy as jnp
 import pytest
+from unxt import Q
 
+from harv.data import GaiaAstrometryData
+from harv.kepler.orbits import thiele_innes_ABFG
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
@@ -227,8 +230,6 @@ class TestThieleInnesGaiaAstrometry:
         When ti_A, ti_B, ti_F, ti_G equal the Thiele-Innes constants derived from
         the Campbell angles, the orbit contribution X @ theta should match.
         """
-        from harv.kepler.orbits import thiele_innes_ABFG
-
         n = 8
         key = jax.random.key(42)
         sin_f = jax.random.normal(key, (n,))
@@ -351,12 +352,7 @@ class TestThieleInnesGaiaAstrometry:
         assert c4 < c3  # larger m → more negative correction
 
     def test_from_data(self):
-        """from_data sets a_floor = Med(σ_AL)/sqrt(N) correctly."""
-        import jax.numpy as jnp
-        from unxt import Q
-
-        from harv.data import GaiaAstrometryData
-
+        """from_data sets a_floor = Med(sigma_AL)/sqrt(N) correctly."""
         errs = jnp.array([0.04, 0.05, 0.06, 0.03])
         data = GaiaAstrometryData(
             time=Q(jnp.zeros(4), "day"),
@@ -399,3 +395,71 @@ class TestThieleInnesGaiaAstrometry:
             linear_map["ti_G"],
         )
         assert jnp.isfinite(result)
+
+    def test_apply_jacobian_correction_disabled_returns_none(self):
+        """With the switch off, linear_log_prior_correction returns None."""
+        p = ThieleInnesGaiaAstrometry(apply_jacobian_correction=False)
+        assert p.apply_jacobian_correction is False
+        assert p.a_floor is None
+        # linear_map is ignored entirely when the correction is disabled.
+        assert p.linear_log_prior_correction({}) is None
+
+    def test_correction_enabled_by_default(self):
+        """apply_jacobian_correction defaults to True (current behavior)."""
+        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        assert p.apply_jacobian_correction is True
+        linear_map = {
+            "ti_A": jnp.array(1.5),
+            "ti_B": jnp.array(0.3),
+            "ti_F": jnp.array(-0.4),
+            "ti_G": jnp.array(1.0),
+        }
+        assert p.linear_log_prior_correction(linear_map) is not None
+
+    def test_requires_a_floor_when_correction_enabled(self):
+        """a_floor is mandatory when the correction is on (the default)."""
+        with pytest.raises(ValueError, match="a_floor is required"):
+            ThieleInnesGaiaAstrometry()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"a_floor": 0.01},
+            {"sin2i_floor": 0.01},
+            {"log_uniform_in_a": True},
+            {"a_floor": 0.01, "sin2i_floor": 0.02},
+        ],
+    )
+    def test_rejects_floor_params_when_correction_disabled(self, kwargs):
+        """Floor params must be left as None when the correction is disabled."""
+        with pytest.raises(ValueError, match="must be left unset"):
+            ThieleInnesGaiaAstrometry(apply_jacobian_correction=False, **kwargs)
+
+    def test_sin2i_floor_falls_back_to_default(self):
+        """sin2i_floor=None reproduces the documented 0.01 fallback."""
+        linear_map = {
+            "ti_A": jnp.array(1.5),
+            "ti_B": jnp.array(0.3),
+            "ti_F": jnp.array(-0.4),
+            "ti_G": jnp.array(1.0),
+        }
+        p_default = ThieleInnesGaiaAstrometry(a_floor=0.05)
+        p_explicit = ThieleInnesGaiaAstrometry(a_floor=0.05, sin2i_floor=0.01)
+        assert jnp.allclose(
+            p_default.linear_log_prior_correction(linear_map),
+            p_explicit.linear_log_prior_correction(linear_map),
+        )
+
+    def test_from_data_disabled_skips_a_floor(self):
+        """from_data(..., apply_jacobian_correction=False) needs no a_floor."""
+        data = GaiaAstrometryData(
+            time=Q(jnp.zeros(4), "day"),
+            al_position=Q(jnp.zeros(4), "mas"),
+            al_position_err=Q(jnp.array([0.04, 0.05, 0.06, 0.03]), "mas"),
+            scan_angle=Q(jnp.zeros(4), "rad"),
+            parallax_factor=jnp.zeros(4),
+        )
+        p = ThieleInnesGaiaAstrometry.from_data(data, apply_jacobian_correction=False)
+        assert p.apply_jacobian_correction is False
+        assert p.a_floor is None
+        assert p.linear_log_prior_correction({}) is None

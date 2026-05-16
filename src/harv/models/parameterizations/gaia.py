@@ -171,7 +171,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     - Linear: ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``,
       ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G`` (9 params)
 
-    The Jacobian correction is **always applied**: a flat prior on the Thiele-Innes
+    By default a Jacobian correction is applied: a flat prior on the Thiele-Innes
     constants is not the same as a flat prior on the physical Campbell elements
     :math:`(a_0, \omega, \Omega, \cos i)`.  The zeroth-order correction (evaluated at
     the conditional-mean TI constants) multiplies the marginal likelihood by :math:`(a_0
@@ -180,20 +180,38 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     are numerical floors that prevent singularities near face-on orbits or zero
     semi-major axis.
 
+    The correction can be disabled with ``apply_jacobian_correction=False``, which
+    makes :meth:`linear_log_prior_correction` return ``None`` -- appropriate when the
+    priors are genuinely intended to be flat in the Thiele-Innes constants.
+
     The recommended way to construct this class is via :meth:`from_data`,
     which sets ``a_floor = med(sigma_AL) / sqrt(N)`` automatically.
 
     Parameters
     ----------
-    a_floor : float
+    a_floor : float or None, optional
         Floor on :math:`a_0` (in the same angular units as the astrometric data, e.g.
         mas) used to regularize the Jacobian correction near zero semi-major axis.
-        Required.
-    sin2i_floor : float, optional
-        Floor on :math:`\sin^2 i` for the Jacobian denominator. Default 0.01.
-    log_uniform_in_a : bool, optional
-        If ``True``, assume a log-uniform (Jeffreys) prior on :math:`a_0` (uses :math:`m
-        = 4`).  Default ``False`` (uniform in :math:`a_0`, :math:`m = 3`).
+        Required (non-``None``) when ``apply_jacobian_correction=True``; must be
+        ``None`` when it is ``False``.
+    sin2i_floor : float or None, optional
+        Floor on :math:`\sin^2 i` for the Jacobian denominator.  Falls back to
+        ``0.01`` when ``None``.  Must be ``None`` when
+        ``apply_jacobian_correction=False``.
+    log_uniform_in_a : bool or None, optional
+        If ``True``, assume a log-uniform (Jeffreys) prior on :math:`a_0` (uses
+        :math:`m = 4`).  Falls back to ``False`` (uniform in :math:`a_0`,
+        :math:`m = 3`) when ``None``.  Must be ``None`` when
+        ``apply_jacobian_correction=False``.
+    apply_jacobian_correction : bool, optional
+        Whether to apply the Jacobian correction.  Default ``True``.
+
+    Raises
+    ------
+    ValueError
+        If ``apply_jacobian_correction=True`` but ``a_floor`` is ``None``, or if
+        ``apply_jacobian_correction=False`` but any of ``a_floor``, ``sin2i_floor``,
+        or ``log_uniform_in_a`` is supplied.
 
     Examples
     --------
@@ -203,18 +221,55 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     ['period', 'eccentricity', 'phase_peri']
     >>> [pp.name for pp in p.linear_params()]
     ['ra0', 'dec0', 'pmra', 'pmdec', 'parallax', 'ti_A', 'ti_B', 'ti_F', 'ti_G']
+
+    Disable the Jacobian correction (no floor parameters needed):
+
+    >>> p = ThieleInnesGaiaAstrometry(apply_jacobian_correction=False)
+    >>> p.linear_log_prior_correction({}) is None
+    True
     """
 
-    a_floor: float
-    sin2i_floor: float = 0.01
-    log_uniform_in_a: bool = eqx.field(static=True, default=False)
+    a_floor: float | None = None
+    sin2i_floor: float | None = None
+    log_uniform_in_a: bool | None = eqx.field(static=True, default=None)
+    apply_jacobian_correction: bool = eqx.field(static=True, default=True)
+
+    def __check_init__(self) -> None:
+        """Validate that floor parameters match ``apply_jacobian_correction``."""
+        if self.apply_jacobian_correction:
+            if self.a_floor is None:
+                msg = (
+                    "a_floor is required when apply_jacobian_correction=True (it "
+                    "floors a_0 in the Jacobian correction). Pass a_floor=..., use "
+                    "ThieleInnesGaiaAstrometry.from_data(data), or set "
+                    "apply_jacobian_correction=False to disable the correction."
+                )
+                raise ValueError(msg)
+        else:
+            supplied = sorted(
+                name
+                for name, value in (
+                    ("a_floor", self.a_floor),
+                    ("sin2i_floor", self.sin2i_floor),
+                    ("log_uniform_in_a", self.log_uniform_in_a),
+                )
+                if value is not None
+            )
+            if supplied:
+                msg = (
+                    "Jacobian-correction parameters must be left unset (None) when "
+                    f"apply_jacobian_correction=False, but got: {supplied}."
+                )
+                raise ValueError(msg)
 
     @classmethod
     def from_data(
         cls,
         data: "GaiaAstrometryData",
-        sin2i_floor: float = 0.01,
-        log_uniform_in_a: bool = False,
+        sin2i_floor: float | None = None,
+        log_uniform_in_a: bool | None = None,
+        *,
+        apply_jacobian_correction: bool = True,
     ) -> "ThieleInnesGaiaAstrometry":
         r"""Construct with ``a_floor = med(sigma_AL) / sqrt(N)`` from the data.
 
@@ -222,10 +277,15 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         ----------
         data : GaiaAstrometryData
             Along-scan epoch astrometry data.
-        sin2i_floor : float, optional
-            Floor on :math:`\sin^2 i`.  Default 0.01.
-        log_uniform_in_a : bool, optional
-            Use log-uniform prior on :math:`a_0`.  Default ``False``.
+        sin2i_floor : float or None, optional
+            Floor on :math:`\sin^2 i`.  Falls back to ``0.01`` when ``None``.
+        log_uniform_in_a : bool or None, optional
+            Use log-uniform prior on :math:`a_0`.  Falls back to ``False`` when
+            ``None``.
+        apply_jacobian_correction : bool, optional
+            Whether to apply the Jacobian correction.  Default ``True``.  When
+            ``False``, ``a_floor`` is not derived and ``sin2i_floor`` /
+            ``log_uniform_in_a`` must be left as ``None``.
 
         Returns
         -------
@@ -248,12 +308,15 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         >>> p.a_floor > 0
         True
         """
+        if not apply_jacobian_correction:
+            return cls(apply_jacobian_correction=False)
         errs = ustrip(str(data.al_position_err.unit), data.al_position_err)
         a_floor = float(jnp.median(errs) / jnp.sqrt(jnp.asarray(errs).size))
         return cls(
             a_floor=a_floor,
             sin2i_floor=sin2i_floor,
             log_uniform_in_a=log_uniform_in_a,
+            apply_jacobian_correction=True,
         )
 
     def params(self) -> tuple[ParamInfo, ...]:
@@ -316,8 +379,8 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         Y = r_over_a * sin_f  # (n_obs,)
 
         # Each TI constant multiplies a specific combination of (X,Y) and scan:
-        #   Δα = (B*X + G*Y) * sin_psi  → columns for ti_B and ti_G
-        #   Δδ = (A*X + F*Y) * cos_psi  → columns for ti_A and ti_F
+        #   dra = (B*X + G*Y) * sin_psi  -> columns for ti_B and ti_G
+        #   ddec = (A*X + F*Y) * cos_psi  -> columns for ti_A and ti_F
         return jnp.stack(
             [
                 sin_psi,  # ra0
@@ -325,22 +388,23 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 sin_psi * dt,  # pmra
                 cos_psi * dt,  # pmdec
                 parallax_factor,  # parallax
-                X * cos_psi,  # ti_A  (coefficient of A in Δδ projection)
-                X * sin_psi,  # ti_B  (coefficient of B in Δα projection)
-                Y * cos_psi,  # ti_F  (coefficient of F in Δδ projection)
-                Y * sin_psi,  # ti_G  (coefficient of G in Δα projection)
+                X * cos_psi,  # ti_A  (coefficient of A in ddec projection)
+                X * sin_psi,  # ti_B  (coefficient of B in dra projection)
+                Y * cos_psi,  # ti_F  (coefficient of F in ddec projection)
+                Y * sin_psi,  # ti_G  (coefficient of G in dra projection)
             ],
             axis=-1,
         )
 
     def linear_log_prior_correction(
         self, linear_map: dict[str, jax.Array]
-    ) -> jax.Array:
+    ) -> jax.Array | None:
         r"""Zeroth-order Jacobian correction for the Thiele-Innes change of variables.
 
-        Evaluates :math:`-m \ln(a_0 + \delta_a) - \ln(\sin^2 i + \delta_s)` at the
-        conditional-mean Thiele-Innes constants, where :math:`a_0` and :math:`\sin^2 i`
-        are derived from the standard identities:
+        Returns ``None`` (no correction) when ``apply_jacobian_correction=False``.
+        Otherwise evaluates :math:`-m \ln(a_0 + \delta_a) - \ln(\sin^2 i + \delta_s)`
+        at the conditional-mean Thiele-Innes constants, where :math:`a_0` and
+        :math:`\sin^2 i` are derived from the standard identities:
 
         .. math::
 
@@ -353,13 +417,25 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         ----------
         linear_map : dict[str, jax.Array]
             Conditional-mean values of the marginalized linear parameters.
-            Must contain keys ``"ti_A"``, ``"ti_B"``, ``"ti_F"``, ``"ti_G"``.
+            Must contain keys ``"ti_A"``, ``"ti_B"``, ``"ti_F"``, ``"ti_G"`` when
+            the correction is enabled (ignored when it is disabled).
 
         Returns
         -------
-        jax.Array
-            Scalar log-correction.
+        jax.Array or None
+            Scalar log-correction, or ``None`` when the correction is disabled.
         """
+        if not self.apply_jacobian_correction:
+            return None
+
+        # __check_init__ guarantees a_floor is not None here; re-narrow for
+        # type-checkers and fall back to the documented defaults otherwise.
+        a_floor = self.a_floor
+        if a_floor is None:  # pragma: no cover - guarded by __check_init__
+            msg = "a_floor must be set when apply_jacobian_correction=True"
+            raise ValueError(msg)
+        sin2i_floor = 0.01 if self.sin2i_floor is None else self.sin2i_floor
+
         A = linear_map["ti_A"]
         B = linear_map["ti_B"]
         F = linear_map["ti_F"]
@@ -373,4 +449,4 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sin2i = jnp.clip(1.0 - v**2 / jnp.maximum(a0**4, 1e-30), 0.0, None)
 
         m = 4 if self.log_uniform_in_a else 3
-        return -m * jnp.log(a0 + self.a_floor) - jnp.log(sin2i + self.sin2i_floor)
+        return -m * jnp.log(a0 + a_floor) - jnp.log(sin2i + sin2i_floor)
