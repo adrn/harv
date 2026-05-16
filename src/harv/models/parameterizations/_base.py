@@ -38,7 +38,8 @@ class AbstractParameterization(eqx.Module):
         return tuple(p for p in self.params() if p.linear)
 
     def linear_log_prior_correction(
-        self, linear_map: dict[str, jax.Array]
+        self,
+        linear_map: dict[str, jax.Array],  # noqa: ARG002
     ) -> jax.Array | None:
         """Optional log-prior correction added to the marginal log-likelihood.
 

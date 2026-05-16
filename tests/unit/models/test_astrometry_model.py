@@ -6,7 +6,9 @@ import numpyro.distributions as dist
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
+from harv.kepler.orbits import thiele_innes_ABFG
 from harv.models.astrometry import GaiaAstrometryModel
+from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 
 
 def _make_astro_data(n_obs=50):
@@ -143,19 +145,13 @@ class TestGaiaAstrometryModelThieleInnes:
         }
 
     def test_construction(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
-        data = _make_astro_data()
         p = ThieleInnesGaiaAstrometry(a_floor=0.01)
-        model = GaiaAstrometryModel(data=data, parameterization=p)
+        model = GaiaAstrometryModel(parameterization=p)
         assert isinstance(model.parameterization, ThieleInnesGaiaAstrometry)
 
     def test_param_names(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
-        data = _make_astro_data()
         model = GaiaAstrometryModel(
-            data=data, parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
+            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
         )
         assert set(model._all_nonlinear_names()) == {
             "period",
@@ -175,23 +171,19 @@ class TestGaiaAstrometryModelThieleInnes:
         }
 
     def test_design_matrix_shape(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
         data = _make_astro_data(n_obs=20)
         model = GaiaAstrometryModel(
-            data=data, parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
+            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
         )
-        X = model._base_design_matrix(self._ti_nl_values())
+        X = model._base_design_matrix(self._ti_nl_values(), data=data)
         assert X.shape == (20, 9)
 
     def test_linear_param_units(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            data=data, parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
+            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
         )
-        units = model._linear_param_units()
+        units = model._linear_param_units(data)
         assert units["pmra"] == "mas/yr"
         assert units["ti_A"] == "mas"
         assert units["ti_B"] == "mas"
@@ -199,40 +191,31 @@ class TestGaiaAstrometryModelThieleInnes:
         assert units["ti_G"] == "mas"
 
     def test_log_prob_finite(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            data=data,
             parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
-            linear_prior=self._ti_prior(),
         )
-        ll = model.log_prob(self._ti_nl_values())
+        ll = model.log_prob(
+            self._ti_nl_values(), data=data, linear_prior=self._ti_prior()
+        )
         assert jnp.isfinite(ll)
 
     def test_log_prob_jit(self):
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            data=data,
             parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
-            linear_prior=self._ti_prior(),
         )
         nl = self._ti_nl_values()
 
         @jax.jit
         def fn():
-            return model.log_prob(nl)
+            return model.log_prob(nl, data=data, linear_prior=self._ti_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
 
     def test_orbit_contribution_matches_standard(self):
         """TI and Standard models produce identical orbit contributions."""
-        from harv.kepler.orbits import thiele_innes_ABFG
-        from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
-
         a0 = 1.5
         arg_peri, lon_asc_node, cos_i = 0.8, 1.1, 0.6
         A, B, F, G = thiele_innes_ABFG(
@@ -259,14 +242,13 @@ class TestGaiaAstrometryModelThieleInnes:
             "phase_peri": 0.0,
         }
 
-        model_std = GaiaAstrometryModel(data=data)
+        model_std = GaiaAstrometryModel()
         model_ti = GaiaAstrometryModel(
-            data=data,
             parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
         )
 
-        X_std = model_std._base_design_matrix(nl_std)
-        X_ti = model_ti._base_design_matrix(nl_ti)
+        X_std = model_std._base_design_matrix(nl_std, data=data)
+        X_ti = model_ti._base_design_matrix(nl_ti, data=data)
 
         # Standard orbit column (col 5): scaled by a0 externally
         orbit_std = X_std[:, 5] * a0
