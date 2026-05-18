@@ -51,6 +51,7 @@ BatchQAngle = Real[Q["angle"], "*batch"]
 BatchQAngularSpeed = Real[Q["angular_speed"], "*batch"]
 BatchQDimless = Real[Q["dimensionless"], "*batch"]
 BatchQLength = Real[Q["length"], "*batch"]
+BatchQMass = Real[Q["mass"], "*batch"]
 BatchQSpeed = Real[Q["speed"], "*batch"]
 BatchQTime = Real[Q["time"], "*batch"]
 BatchFloat = Float[jax.Array, "*batch"] | BatchQDimless

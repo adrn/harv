@@ -117,8 +117,10 @@ class TestSamplesAccess:
         assert "log_period" in keys
         assert "eccentricity" in keys
         assert "parallax" in keys
-        # 6 nonlinear + 6 linear + 3 derived (log_period, t_peri, inclination) = 15
-        assert len(keys) == 15
+        assert "semi_major_axis_AU" in keys
+        # 6 nonlinear + 6 linear + 4 derived
+        # (log_period, t_peri, inclination, semi_major_axis_AU) = 16
+        assert len(keys) == 16
 
     def test_unit_conversion_angles(self):
         """Test that angles are returned with correct units."""

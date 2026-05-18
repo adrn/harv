@@ -455,6 +455,26 @@ positions/velocities for both components via `position_barycentric(time, body_id
 `position_relative(time)`, `velocity_barycentric(time, body_idx)`, and
 `velocity_relative(time)`.
 
+### Mass functions (`harv.kepler.masses`)
+
+Pure, unit-aware functions that turn posterior orbital elements into physical
+masses and physical orbit sizes. They are shape-agnostic (scalar or batched
+inputs) and `jax.jit` / `jax.vmap` friendly. Used by the `Samples` derived
+quantities (see "`Samples` container").
+
+- `binary_mass_function(period, rv_semiamp, eccentricity) -> Q["mass"]` —
+  `f(m) = P K^3 (1 - e^2)^{3/2} / (2 pi G) = m_2^3 sin^3 i / (m_1 + m_2)^2`,
+  returned in `Msun`.
+- `astrometric_mass_function(a_physical, period) -> Q["mass"]` —
+  `f(m) = 4 pi^2 a^3 / (G P^2)`, returned in `Msun`. With `a` the primary's
+  barycentric (photocentre) orbit size this equals `m_2^3 / (m_1 + m_2)^2`
+  (dark/faint-companion assumption).
+- `companion_mass_from_mass_function(mass_function, m1, sini=1.0) -> Q["mass"]`
+  — solves `m_2^3 sin^3 i / (m_1 + m_2)^2 = f` for `m_2` by bisection;
+  `sini=1` yields the minimum companion mass.
+- `semi_major_axis_physical(a_angular, parallax) -> Q["length"]` — physical
+  semi-major axis `a = (a_angular / parallax)` in `AU`.
+
 ______________________________________________________________________
 
 ## Layered architecture overview
@@ -1276,6 +1296,7 @@ sampler.run(
     max_posterior_samples: int | None = None,
     seed: int = 0,
   ignore_non_finite: bool = False,
+  return_logprobs: bool = False,
 ) -> Samples
 ```
 
@@ -1286,6 +1307,12 @@ name (e.g. `{"rv": rv_data, "astro": astro_data}`).
 - `ignore_non_finite` -- when `True`, any `NaN` or infinite log-likelihoods
   are treated as rejected samples by replacing them with `-inf` before the
   rejection step. Default: `False`.
+- `return_logprobs` -- when `True`, the returned `Samples` carries per-sample
+  log-probabilities: `ln_likelihood` (the marginal log-likelihood) and
+  `ln_prior` (the summed nonlinear-prior log-density). These enable
+  `Samples.map_sample()` and the `Samples.ln_posterior` property. Default:
+  `False`. (Currently `RejectionSampler`-only; `NumpyroSampler` does not yet
+  populate these fields.)
 
 ### `batch_size` and GPU support
 
@@ -1341,6 +1368,13 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 | `metadata`               | `dict[str, Any]` (static)  | Contains `t_ref` and extra info                              |
 | `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)         |
 | `data_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
+| `ln_likelihood`          | `jax.Array \| None`        | Per-sample marginal log-likelihood (see `return_logprobs`)   |
+| `ln_prior`               | `jax.Array \| None`        | Per-sample nonlinear-prior log-density (see `return_logprobs`) |
+
+`ln_likelihood` and `ln_prior` are optional pytree leaves: they are `None`
+unless the sampler was run with `return_logprobs=True`. They are carried
+through slicing, `wrap_angles`, and `convert_parameterization`, and persisted
+by `to_hdf5` / `from_hdf5`.
 
 ### Dict-style and index access
 
@@ -1353,6 +1387,9 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
   - `"log_period"` → dimensionless array (`log10(period in data time units)`)
   - `"t_peri"` → `Q` (derived from `phase_peri * period + t_ref`)
   - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
+  - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
+  - `"semi_major_axis_AU"` → `Q` in `AU` (present only for astrometry samples
+    carrying `semi_major_axis` and `parallax`)
 
 Integer, slice, or array keys return a new `Samples` with all parameter arrays
 sliced along the sample axis:
@@ -1388,6 +1425,39 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
 - `to_arviz(params=None)` -- export to `arviz.InferenceData`
 - `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz
+- `ln_posterior -> jax.Array` — per-sample log-posterior (`ln_prior +
+  ln_likelihood`); raises `ValueError` if either was not stored
+
+#### Sample analysis
+
+Ported from `thejoker.samples_analysis`. Methods that need the observed time
+sampling take the `data` object; all support single-component samples only
+(namespaced joint-model samples raise a clear error).
+
+- `map_sample(return_index=False) -> Samples` — the maximum a posteriori sample
+  (highest `ln_posterior`), as a length-1 `Samples`. Requires `return_logprobs`.
+- `period_unimodal(data) -> bool` — whether the period samples lie in one mode.
+- `period_modes(data, n_clusters=2) -> (bool, Q, ndarray)` — K-means clustering
+  of `log(period)` into modes (needs the optional `scikit-learn` dependency).
+- `max_phase_gap(data) -> ndarray` — largest circular phase-coverage gap, per
+  sample.
+- `phase_coverage(data, n_bins=10) -> ndarray` — fraction of phase bins occupied.
+- `periods_spanned(data) -> ndarray` — number of periods spanned by the data.
+- `phase_coverage_per_period(data) -> ndarray` — max observations within one
+  period.
+
+#### Derived physical quantities
+
+These wrap the pure functions in `harv.kepler.masses` (see "Mass functions").
+
+- `binary_mass_function() -> Q` — RV binary mass function, in `Msun`.
+- `semi_major_axis_AU() -> Q` — physical semi-major axis (`AU`) from the angular
+  size and parallax (astrometry samples).
+- `companion_mass(m1, *, sini=None) -> Q` — companion mass given the primary
+  mass `m1`. RV samples use the binary mass function (default `sini=1`, i.e. the
+  minimum companion mass); astrometry samples use the dark-companion astrometric
+  mass function and ignore `sini`.
+- `minimum_companion_mass(m1) -> Q` — convenience for `companion_mass(m1, sini=1)`.
 
 ______________________________________________________________________
 

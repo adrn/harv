@@ -303,6 +303,26 @@ def _wrap_unit_values(
     return result
 
 
+def _evaluate_nonlinear_log_prior(
+    priors: dict[str, Any], samples: dict[str, jax.Array]
+) -> jax.Array:
+    """Sum the nonlinear-prior log-densities over all sampled parameters.
+
+    ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
+    space the prior distributions sample in (see ``RejectionPrior``).
+    """
+    total: jax.Array | None = None
+    for name, dist in priors.items():
+        if name not in samples:
+            continue
+        lp = _unwrap_dist(dist).log_prob(samples[name])
+        total = lp if total is None else total + lp
+    if total is None:
+        n = len(next(iter(samples.values()))) if samples else 0
+        return jnp.zeros(n)
+    return total
+
+
 @final
 class RejectionSampler(AbstractSampler):
     """Rejection sampler for Keplerian orbital parameters.
@@ -346,7 +366,7 @@ class RejectionSampler(AbstractSampler):
 
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def run(
+    def run(  # noqa: C901
         self,
         data: Any,
         *,
@@ -354,6 +374,7 @@ class RejectionSampler(AbstractSampler):
         max_posterior_samples: int | None = None,
         seed: int | None = None,
         ignore_non_finite: bool = False,
+        return_logprobs: bool = False,
     ) -> Samples:
         """Run rejection sampling.
 
@@ -376,6 +397,12 @@ class RejectionSampler(AbstractSampler):
             treated as rejected samples by replacing them with ``-inf`` before
             the rejection step. If ``False`` (default), non-finite values are
             left unchanged.
+        return_logprobs
+            If ``True``, store per-sample log-probabilities on the returned
+            :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
+            marginal log-likelihood) and ``ln_prior`` (the summed nonlinear
+            prior log-density).  These enable :meth:`Samples.map_sample` and
+            the :attr:`Samples.ln_posterior` property.  Default ``False``.
 
         Returns
         -------
@@ -419,6 +446,7 @@ class RejectionSampler(AbstractSampler):
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
+        accepted_log_likelihood = log_likelihoods[accepted_mask]
 
         linear_key = jr.fold_in(key, 2)
         # TODO: support oversampling of linear parameters?
@@ -443,6 +471,7 @@ class RejectionSampler(AbstractSampler):
                 )
                 accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
                 linear_samples = {k: v[idx] for k, v in linear_samples.items()}
+                accepted_log_likelihood = accepted_log_likelihood[idx]
 
         # Build nonlinear dict as Quantities with units from the prior.
         # Base orbital params come from prior.nonlinear_priors.
@@ -478,12 +507,22 @@ class RejectionSampler(AbstractSampler):
             )
             metadata["t_ref_unit"] = _t_unit
 
+        ln_likelihood_arr: jax.Array | None = None
+        ln_prior_arr: jax.Array | None = None
+        if return_logprobs:
+            ln_likelihood_arr = accepted_log_likelihood
+            ln_prior_arr = _evaluate_nonlinear_log_prior(
+                _all_nl_priors, accepted_nonlinear
+            )
+
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_samples),
             data_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
+            ln_likelihood=ln_likelihood_arr,
+            ln_prior=ln_prior_arr,
         )
 
     @eqx.filter_jit
