@@ -837,6 +837,15 @@ model extracts them automatically in auto mode.
    which linear params to marginalize.
 1. **Explicit evaluation**: pass `linear_values` without `marginalized_names`.
 
+### `chi_squared`
+
+`chi_squared(nl_values, linear_values, data) -> jax.Array` returns the
+goodness-of-fit statistic `χ² = rᵀ C⁻¹ r` for one fully-specified parameter set,
+where `r = y_obs - X y` is the residual and `C` is the extension-modified
+observation covariance (so jitter inflation and GP covariances are included).
+Unlike `log_prob`, it does not marginalize the linear parameters. It backs
+`Samples.chi2` / `Samples.reduced_chi2`.
+
 ### `RVModel`
 
 `@final` concrete model for radial velocity data. Models are **pure templates**:
@@ -1311,8 +1320,7 @@ name (e.g. `{"rv": rv_data, "astro": astro_data}`).
   log-probabilities: `ln_likelihood` (the marginal log-likelihood) and
   `ln_prior` (the summed nonlinear-prior log-density). These enable
   `Samples.map_sample()` and the `Samples.ln_posterior` property. Default:
-  `False`. (Currently `RejectionSampler`-only; `NumpyroSampler` does not yet
-  populate these fields.)
+  `False`. Supported by both `RejectionSampler.run` and `NumpyroSampler.run`.
 
 ### `batch_size` and GPU support
 
@@ -1344,6 +1352,13 @@ Both sampler classes own marginalization policy. Set
 `marginalized_names=(...)` on `RejectionSampler` or `NumpyroSampler` to request
 an explicit subset of linear parameters to marginalize. Any non-Gaussian linear
 priors are still sampled explicitly even if they appear in that tuple.
+
+`NumpyroSampler.run` also accepts `return_logprobs` (default `False`). When
+`True` the returned `Samples` carries `ln_likelihood` (the marginal
+log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
+`ln_prior` (the summed nonlinear-prior log-density). This requires
+`marginalized=True`, a single-component model, and no `extra_model`; other
+configurations raise `NotImplementedError`.
 
 Two model variants are supported via `marginalized`:
 
@@ -1445,6 +1460,20 @@ sampling take the `data` object; all support single-component samples only
 - `periods_spanned(data) -> ndarray` — number of periods spanned by the data.
 - `phase_coverage_per_period(data) -> ndarray` — max observations within one
   period.
+
+#### Goodness of fit
+
+- `chi2(data, model) -> jax.Array` — per-sample :math:`\chi^2` against the data,
+  evaluated from the model prediction; see
+  `AbstractComponentModel.chi_squared`. The `model` argument is the
+  single-component model used for the fit.
+- `reduced_chi2(data, model, *, dof=None) -> jax.Array` — per-sample reduced
+  :math:`\chi^2` (`chi2 / dof`). `dof` defaults to `n_obs - n_params`, counting
+  every fitted parameter (orbital + linear + extension); pass `dof=` to override.
+
+`chi2` differs from the stored `ln_likelihood`, which is the *marginal*
+log-likelihood (linear parameters integrated out) rather than a goodness-of-fit
+statistic.
 
 #### Derived physical quantities
 

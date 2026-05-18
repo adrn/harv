@@ -371,6 +371,40 @@ class TestNumpyroSamplerRun:
         )
         assert result.data_type == "RVModel"
 
+    def test_return_logprobs(self, rv_samples, rv_sampler_and_data):
+        """return_logprobs populates ln_likelihood / ln_prior on the output."""
+        sampler, data = rv_sampler_and_data
+        result = sampler.run(
+            data,
+            init_samples=rv_samples,
+            seed=5,
+            num_chains=2,
+            num_warmup=5,
+            num_samples=5,
+            chain_method="sequential",
+            return_logprobs=True,
+        )
+        assert result.ln_likelihood is not None
+        assert result.ln_prior is not None
+        assert result.ln_likelihood.shape == (result.n_samples,)
+        assert result.ln_prior.shape == (result.n_samples,)
+        assert jnp.all(jnp.isfinite(result.ln_posterior))
+
+    def test_default_run_has_no_logprobs(self, rv_samples, rv_sampler_and_data):
+        """Without return_logprobs the log-prob fields stay None."""
+        sampler, data = rv_sampler_and_data
+        result = sampler.run(
+            data,
+            init_samples=rv_samples,
+            seed=6,
+            num_chains=2,
+            num_warmup=5,
+            num_samples=5,
+            chain_method="sequential",
+        )
+        assert result.ln_likelihood is None
+        assert result.ln_prior is None
+
     def test_raises_for_empty_samples(self, empty_rv_samples, rv_sampler_and_data):
         """run() raises ValueError when there are no posterior samples."""
         sampler, data = rv_sampler_and_data

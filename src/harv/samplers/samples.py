@@ -870,6 +870,93 @@ class Samples(eqx.Module):
             out[s] = max(int(base.max()), int(offset.max()))
         return out
 
+    def chi2(self, data: Any, model: Any) -> jax.Array:
+        r"""Per-sample goodness-of-fit :math:`\chi^2` against the data.
+
+        For each posterior sample, evaluates the model prediction at the stored
+        parameter values and returns
+        :math:`\chi^2 = r^\top C^{-1} r` (see
+        :meth:`~harv.models.component.AbstractComponentModel.chi_squared`).
+        Jitter and other extension noise terms are included via ``C``.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        model
+            The component model used for the fit (``RVModel`` or
+            ``GaiaAstrometryModel``); provides the prediction and noise model.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+        """
+        self._require_single_component("chi2")
+
+        # Match the parameter form the model's design-matrix machinery expects
+        # (the same convention the samplers' ``log_prob`` calls use): dimensioned
+        # *base* orbital parameters stay as Quantities; dimensionless base
+        # parameters and all extension parameters (e.g. jitter) are unit-stripped.
+        base_nl_units = {
+            p.name: p.unit for p in model.parameterization.params() if not p.linear
+        }
+        nl_for_model = {
+            name: value
+            if base_nl_units.get(name, "")
+            else ustrip(str(value.unit), value)
+            for name, value in self.nonlinear.items()
+        }
+
+        # Linear parameters are unit-stripped to the model's linear-param units.
+        linear_units = model._linear_param_units(data)
+        linear_stripped = {
+            name: ustrip(linear_units.get(name, ""), value)
+            for name, value in self.linear.items()
+        }
+
+        def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
+            return model.chi_squared(nl_i, lin_i, data)
+
+        return jax.vmap(_one)(nl_for_model, linear_stripped)
+
+    def reduced_chi2(
+        self, data: Any, model: Any, *, dof: int | None = None
+    ) -> jax.Array:
+        r"""Per-sample reduced :math:`\chi^2` (:math:`\chi^2 / \mathrm{dof}`).
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        model
+            The component model used for the fit.
+        dof
+            Degrees of freedom. Defaults to ``n_obs - n_params``, where
+            ``n_params`` counts every fitted parameter (orbital + linear +
+            extension). A well-fitting model gives reduced :math:`\chi^2` near 1.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+
+        Raises
+        ------
+        ValueError
+            If ``dof`` (default or supplied) is not positive.
+        """
+        if dof is None:
+            n_params = len(model._all_nonlinear_names()) + len(
+                model._all_linear_names()
+            )
+            dof = int(data.n_times) - n_params
+        if dof <= 0:
+            msg = (
+                f"Degrees of freedom must be positive, got dof={dof} "
+                f"(n_obs={int(data.n_times)}). Pass an explicit dof= if needed."
+            )
+            raise ValueError(msg)
+        return self.chi2(data, model) / dof
+
     # ========================================================================
     # Derived physical quantities (masses, physical orbit size)
     #

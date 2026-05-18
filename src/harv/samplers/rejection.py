@@ -13,7 +13,11 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
+from harv.models._helpers import (
+    _evaluate_nonlinear_log_prior,
+    _needs_explicit_sampling,
+    _unwrap_dist,
+)
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.samplers.base import AbstractSampler
@@ -301,26 +305,6 @@ def _wrap_unit_values(
         if isinstance(d, QuantityDistribution) and name in base_names:
             result[name] = Q(result[name], str(d.unit))
     return result
-
-
-def _evaluate_nonlinear_log_prior(
-    priors: dict[str, Any], samples: dict[str, jax.Array]
-) -> jax.Array:
-    """Sum the nonlinear-prior log-densities over all sampled parameters.
-
-    ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
-    space the prior distributions sample in (see ``RejectionPrior``).
-    """
-    total: jax.Array | None = None
-    for name, dist in priors.items():
-        if name not in samples:
-            continue
-        lp = _unwrap_dist(dist).log_prob(samples[name])
-        total = lp if total is None else total + lp
-    if total is None:
-        n = len(next(iter(samples.values()))) if samples else 0
-        return jnp.zeros(n)
-    return total
 
 
 @final

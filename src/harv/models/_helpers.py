@@ -6,6 +6,7 @@ import types
 from collections.abc import Callable
 from typing import Any, cast
 
+import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from unxt import Q
@@ -30,6 +31,27 @@ def _unwrap_dist(v: PriorDist) -> Any:
     if isinstance(v, QuantityDistribution):
         return v.distribution
     return v
+
+
+def _evaluate_nonlinear_log_prior(
+    priors: dict[str, PriorDist], samples: dict[str, jax.Array]
+) -> jax.Array:
+    """Sum nonlinear-prior log-densities over all sampled parameters.
+
+    ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
+    space the prior distributions sample in (see ``RejectionPrior``). Used by
+    the samplers' ``return_logprobs`` path to record per-sample ``ln_prior``.
+    """
+    total: jax.Array | None = None
+    for name, prior in priors.items():
+        if name not in samples:
+            continue
+        lp = _unwrap_dist(prior).log_prob(samples[name])
+        total = lp if total is None else total + lp
+    if total is None:
+        n = len(next(iter(samples.values()))) if samples else 0
+        return jnp.zeros(n)
+    return total
 
 
 def _needs_explicit_sampling(d: PriorDist | LinearPriorCallable) -> bool:
