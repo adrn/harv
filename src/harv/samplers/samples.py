@@ -10,10 +10,12 @@ from typing import Any, overload
 
 import equinox as eqx
 import h5py
+import jax
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.kepler import masses
 from harv.models.parameterizations._base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
@@ -173,10 +175,32 @@ class Samples(eqx.Module):
     # Names of linear params introduced by extensions (offsets, trends, etc.).
     linear_extension_names: tuple[str, ...] = eqx.field(static=True, default=())
 
+    # Optional per-sample log-probabilities from the sampling run.  Pytree
+    # leaves (or None) so slicing and tree transforms carry them through.
+    # Populated only when a sampler is run with ``return_logprobs=True``.
+    ln_likelihood: jax.Array | None = None
+    ln_prior: jax.Array | None = None
+
     @property
     def n_samples(self) -> int:
         """Number of posterior samples."""
         return int(next(iter(self.nonlinear.values())).shape[0])
+
+    @property
+    def ln_posterior(self) -> jax.Array:
+        """Per-sample log-posterior density, ``ln_prior + ln_likelihood``.
+
+        Both ``ln_prior`` and ``ln_likelihood`` must have been stored (run the
+        sampler with ``return_logprobs=True``); otherwise :class:`ValueError`
+        is raised.
+        """
+        if self.ln_prior is None or self.ln_likelihood is None:
+            msg = (
+                "ln_posterior requires both ln_prior and ln_likelihood to be "
+                "stored; re-run the sampler with return_logprobs=True."
+            )
+            raise ValueError(msg)
+        return self.ln_prior + self.ln_likelihood
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
@@ -184,6 +208,10 @@ class Samples(eqx.Module):
         derived_keys = ["log_period", "t_peri"]
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
+        if "rv_semiamp" in self.linear:
+            derived_keys.append("binary_mass_function")
+        if "semi_major_axis" in self.linear and "parallax" in self.linear:
+            derived_keys.append("semi_major_axis_AU")
         return base_keys + derived_keys
 
     def __contains__(self, key: object) -> bool:
@@ -247,6 +275,10 @@ class Samples(eqx.Module):
                 data_type=self.data_type,
                 metadata=self.metadata,
                 linear_extension_names=self.linear_extension_names,
+                ln_likelihood=(
+                    None if self.ln_likelihood is None else self.ln_likelihood[idx]
+                ),
+                ln_prior=None if self.ln_prior is None else self.ln_prior[idx],
             )
 
         if key in self.nonlinear:
@@ -284,6 +316,12 @@ class Samples(eqx.Module):
                 return Q(jnp.arccos(cos_i), "rad")
             msg = "Inclination only available for astrometry/combined data"
             raise KeyError(msg)
+
+        if key == "binary_mass_function":
+            return self.binary_mass_function()
+
+        if key == "semi_major_axis_AU":
+            return self.semi_major_axis_AU()
 
         msg = f"Parameter '{key}' not found"
         raise KeyError(msg)
@@ -412,6 +450,8 @@ class Samples(eqx.Module):
             data_type=self.data_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
+            ln_likelihood=self.ln_likelihood,
+            ln_prior=self.ln_prior,
         )
 
     def thiele_innes_to_campbell(self) -> "Samples":
@@ -466,6 +506,8 @@ class Samples(eqx.Module):
             data_type=self.data_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
+            ln_likelihood=self.ln_likelihood,
+            ln_prior=self.ln_prior,
         )
 
     def median(
@@ -610,6 +652,419 @@ class Samples(eqx.Module):
 
         return result
 
+    # ========================================================================
+    # Sample analysis (ported from thejoker.samples_analysis)
+    #
+
+    def _require_single_component(self, method: str) -> None:
+        """Raise if the samples carry namespaced (joint-model) parameters."""
+        namespaced = sorted(k for k in (*self.nonlinear, *self.linear) if "." in k)
+        if namespaced:
+            msg = (
+                f"{method}() supports single-component samples only; namespaced "
+                f"(joint-model) parameters are not supported: {namespaced!r}"
+            )
+            raise NotImplementedError(msg)
+
+    def _phases(self, data: Any) -> np.ndarray:
+        """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
+
+        Phase is ``((time - t_ref) / period) mod 1`` evaluated at each sample's
+        period.
+        """
+        period = self.nonlinear["period"]
+        t_unit = str(period.unit)
+        time = np.asarray(ustrip(t_unit, data.time))
+        t_ref = float(ustrip(t_unit, data.t_ref))
+        period_val = np.asarray(ustrip(t_unit, period))
+        return ((time[None, :] - t_ref) / period_val[:, None]) % 1.0
+
+    def map_sample(
+        self, *, return_index: bool = False
+    ) -> "Samples | tuple[Samples, int]":
+        """Return the maximum a posteriori (MAP) sample.
+
+        Selects the single sample with the highest :attr:`ln_posterior`.
+
+        Parameters
+        ----------
+        return_index
+            If ``True``, also return the integer index of the MAP sample.
+
+        Returns
+        -------
+            A length-1 :class:`Samples` with the MAP sample, or
+            ``(Samples, index)`` when ``return_index`` is ``True``.
+
+        Raises
+        ------
+        ValueError
+            If per-sample log-probabilities were not stored (run the sampler
+            with ``return_logprobs=True``).
+        """
+        idx = int(jnp.argmax(self.ln_posterior))
+        map_sample = self[idx]
+        if return_index:
+            return map_sample, idx
+        return map_sample
+
+    def period_unimodal(self, data: Any) -> bool:
+        """Whether the period samples lie within a single mode.
+
+        Uses the criterion ``ptp(P) < 4 * P_min**2 / (2*pi*T)``, where ``T`` is
+        the data time span -- the period spacing at which adjacent aliases
+        become resolvable (see thejoker's ``is_P_unimodal``).
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to (for the observed time span).
+        """
+        self._require_single_component("period_unimodal")
+        period = self.nonlinear["period"]
+        t_unit = str(period.unit)
+        period_val = np.asarray(ustrip(t_unit, period))
+        time = np.asarray(ustrip(t_unit, data.time))
+        span = float(np.ptp(time))
+        p_min = float(np.min(period_val))
+        delta = 4.0 * p_min**2 / (2.0 * np.pi * span)
+        return bool(np.ptp(period_val) < delta)
+
+    def period_modes(
+        self, data: Any, n_clusters: int = 2
+    ) -> tuple[bool, Q, np.ndarray]:
+        """Cluster the period samples and test each mode for unimodality.
+
+        Runs K-means on ``log(period)`` (experimental; see thejoker's
+        ``is_P_Kmodal``).  Requires the optional ``scikit-learn`` dependency.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        n_clusters
+            Number of period modes to cluster into. Default 2.
+
+        Returns
+        -------
+            ``(all_unimodal, mode_periods, n_per_mode)`` -- whether every mode
+            is individually unimodal, the median period of each mode (a ``Q``),
+            and the sample count per mode.
+        """
+        self._require_single_component("period_modes")
+        try:
+            from sklearn.cluster import KMeans  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            msg = "period_modes() requires the optional 'scikit-learn' dependency."
+            raise ImportError(msg) from exc
+
+        period = self.nonlinear["period"]
+        t_unit = str(period.unit)
+        period_val = np.asarray(ustrip(t_unit, period))
+        labels = KMeans(n_clusters=n_clusters).fit_predict(
+            np.log(period_val).reshape(-1, 1)
+        )
+
+        unimodal: list[bool] = []
+        mode_periods: list[float] = []
+        n_per_mode: list[int] = []
+        for j in np.unique(labels):
+            mask = labels == j
+            sub = self[mask]
+            unimodal.append(True if sub.n_samples == 1 else sub.period_unimodal(data))
+            mode_periods.append(float(np.median(period_val[mask])))
+            n_per_mode.append(int(mask.sum()))
+
+        return all(unimodal), Q(np.array(mode_periods), t_unit), np.array(n_per_mode)
+
+    def max_phase_gap(self, data: Any) -> np.ndarray:
+        """Largest gap in orbital-phase coverage, per sample.
+
+        The maximum gap between consecutive observations on the (circular)
+        phase axis -- the ESA Gaia "maximum phase gap" statistic.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``; values in ``[0, 1]``.
+        """
+        self._require_single_component("max_phase_gap")
+        phases = np.sort(self._phases(data), axis=1)
+        if phases.shape[1] < 2:
+            return np.ones(phases.shape[0])
+        gaps = np.diff(phases, axis=1)
+        wrap = 1.0 - (phases[:, -1] - phases[:, 0])
+        return np.maximum(gaps.max(axis=1), wrap)
+
+    def phase_coverage(self, data: Any, n_bins: int = 10) -> np.ndarray:
+        """Fraction of phase bins containing at least one observation.
+
+        The ESA Gaia "phase coverage" statistic, per sample.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        n_bins
+            Number of equal-width phase bins. Default 10.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``; values in ``[0, 1]``.
+        """
+        self._require_single_component("phase_coverage")
+        phases = self._phases(data)  # (n_samples, n_obs)
+        bin_idx = np.clip((phases * n_bins).astype(int), 0, n_bins - 1)
+        # Count occupied bins per sample with bincount, so the only allocations
+        # are bin_idx and per-row (n_bins,) temporaries -- never an
+        # (n_samples, n_obs, n_bins) broadcast tensor.
+        occupied = np.array(
+            [np.count_nonzero(np.bincount(row, minlength=n_bins)) for row in bin_idx]
+        )
+        return occupied / n_bins
+
+    def periods_spanned(self, data: Any) -> np.ndarray:
+        """Number of orbital periods spanned by the data, per sample.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+        """
+        self._require_single_component("periods_spanned")
+        period = self.nonlinear["period"]
+        t_unit = str(period.unit)
+        time = np.asarray(ustrip(t_unit, data.time))
+        period_val = np.asarray(ustrip(t_unit, period))
+        return float(np.ptp(time)) / period_val
+
+    def phase_coverage_per_period(self, data: Any) -> np.ndarray:
+        """Maximum number of observations within any single period, per sample.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+        """
+        self._require_single_component("phase_coverage_per_period")
+        period = self.nonlinear["period"]
+        t_unit = str(period.unit)
+        time = np.asarray(ustrip(t_unit, data.time))
+        t_ref = float(ustrip(t_unit, data.t_ref))
+        period_val = np.asarray(ustrip(t_unit, period))
+        n_per = (time - t_ref) / period_val[:, None]  # (n_samples, n_obs)
+
+        out = np.empty(n_per.shape[0], dtype=int)
+        for s, row in enumerate(n_per):
+            # Two integer-period binnings offset by half a period catch windows
+            # that straddle a bin edge; take the larger maximum count.
+            base = np.bincount((row - row.min()).astype(int))
+            offset = np.bincount((row - row.min() + 0.5).astype(int))
+            out[s] = max(int(base.max()), int(offset.max()))
+        return out
+
+    def chi2(self, data: Any, model: Any) -> jax.Array:
+        r"""Per-sample goodness-of-fit :math:`\chi^2` against the data.
+
+        For each posterior sample, evaluates the model prediction at the stored
+        parameter values and returns
+        :math:`\chi^2 = r^\top C^{-1} r` (see
+        :meth:`~harv.models.component.AbstractComponentModel.chi_squared`).
+        Jitter and other extension noise terms are included via ``C``.
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        model
+            The component model used for the fit (``RVModel`` or
+            ``GaiaAstrometryModel``); provides the prediction and noise model.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+        """
+        self._require_single_component("chi2")
+
+        # Match the parameter form the model's design-matrix machinery expects
+        # (the same convention the samplers' ``log_prob`` calls use): dimensioned
+        # *base* orbital parameters stay as Quantities; dimensionless base
+        # parameters and all extension parameters (e.g. jitter) are unit-stripped.
+        base_nl_units = {
+            p.name: p.unit for p in model.parameterization.params() if not p.linear
+        }
+        nl_for_model = {
+            name: value
+            if base_nl_units.get(name, "")
+            else ustrip(str(value.unit), value)
+            for name, value in self.nonlinear.items()
+        }
+
+        # Linear parameters are unit-stripped to the model's linear-param units.
+        linear_units = model._linear_param_units(data)
+        linear_stripped = {
+            name: ustrip(linear_units.get(name, ""), value)
+            for name, value in self.linear.items()
+        }
+
+        def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
+            return model.chi_squared(nl_i, lin_i, data)
+
+        return jax.vmap(_one)(nl_for_model, linear_stripped)
+
+    def reduced_chi2(
+        self, data: Any, model: Any, *, dof: int | None = None
+    ) -> jax.Array:
+        r"""Per-sample reduced :math:`\chi^2` (:math:`\chi^2 / \mathrm{dof}`).
+
+        Parameters
+        ----------
+        data
+            The data the samples were fit to.
+        model
+            The component model used for the fit.
+        dof
+            Degrees of freedom. Defaults to ``n_obs - n_params``, where
+            ``n_params`` counts every fitted parameter (orbital + linear +
+            extension). A well-fitting model gives reduced :math:`\chi^2` near 1.
+
+        Returns
+        -------
+            Array of shape ``(n_samples,)``.
+
+        Raises
+        ------
+        ValueError
+            If ``dof`` (default or supplied) is not positive.
+        """
+        if dof is None:
+            n_params = len(model._all_nonlinear_names()) + len(
+                model._all_linear_names()
+            )
+            dof = int(data.n_times) - n_params
+        if dof <= 0:
+            msg = (
+                f"Degrees of freedom must be positive, got dof={dof} "
+                f"(n_obs={int(data.n_times)}). Pass an explicit dof= if needed."
+            )
+            raise ValueError(msg)
+        return self.chi2(data, model) / dof
+
+    # ========================================================================
+    # Derived physical quantities (masses, physical orbit size)
+    #
+
+    def binary_mass_function(self) -> Q:
+        """Binary mass function from the RV orbital elements.
+
+        See :func:`harv.kepler.masses.binary_mass_function`.
+
+        Returns
+        -------
+            The binary mass function (a ``Q`` in solar masses), one per sample.
+
+        Raises
+        ------
+        KeyError
+            If the samples do not contain ``rv_semiamp`` (not an RV fit).
+        """
+        self._require_single_component("binary_mass_function")
+        if "rv_semiamp" not in self.linear:
+            msg = "binary_mass_function() requires RV samples with 'rv_semiamp'."
+            raise KeyError(msg)
+        return masses.binary_mass_function(
+            self.nonlinear["period"],
+            self.linear["rv_semiamp"],
+            self.nonlinear["eccentricity"],
+        )
+
+    def semi_major_axis_AU(self) -> Q:
+        """Physical semi-major axis (AU) from the angular orbit size + parallax.
+
+        See :func:`harv.kepler.masses.semi_major_axis_physical`.
+
+        Returns
+        -------
+            The physical semi-major axis (a ``Q`` in AU), one per sample.
+
+        Raises
+        ------
+        KeyError
+            If the samples lack ``semi_major_axis`` or ``parallax``.
+        """
+        self._require_single_component("semi_major_axis_AU")
+        if "semi_major_axis" not in self.linear or "parallax" not in self.linear:
+            msg = (
+                "semi_major_axis_AU() requires astrometry samples with "
+                "'semi_major_axis' and 'parallax'."
+            )
+            raise KeyError(msg)
+        return masses.semi_major_axis_physical(
+            self.linear["semi_major_axis"], self.linear["parallax"]
+        )
+
+    def companion_mass(self, m1: Q, *, sini: float | None = None) -> Q:
+        """Companion mass :math:`m_2` given the primary mass.
+
+        For RV samples the mass function is
+        :func:`~harv.kepler.masses.binary_mass_function`; ``sini`` defaults to 1
+        (the *minimum* companion mass).  For astrometry samples the dark-companion
+        astrometric mass function is used and ``sini`` is ignored (the inclination
+        is already encoded in the physical orbit size).
+
+        Parameters
+        ----------
+        m1
+            Primary mass (a ``Q``).
+        sini
+            Sine of the inclination, for RV samples only. Default 1 (edge-on).
+
+        Returns
+        -------
+            The companion mass (a ``Q`` in solar masses), one per sample.
+        """
+        self._require_single_component("companion_mass")
+        is_astrometry = "semi_major_axis" in self.linear and "parallax" in self.linear
+        if "rv_semiamp" in self.linear and not is_astrometry:
+            mass_function = self.binary_mass_function()
+            return masses.companion_mass_from_mass_function(
+                mass_function, m1, 1.0 if sini is None else sini
+            )
+        if is_astrometry:
+            mass_function = masses.astrometric_mass_function(
+                self.semi_major_axis_AU(), self.nonlinear["period"]
+            )
+            return masses.companion_mass_from_mass_function(mass_function, m1, 1.0)
+        msg = (
+            "companion_mass() needs either RV ('rv_semiamp') or astrometry "
+            "('semi_major_axis' + 'parallax') samples."
+        )
+        raise KeyError(msg)
+
+    def minimum_companion_mass(self, m1: Q) -> Q:
+        """Minimum companion mass (edge-on, ``sin i = 1``).
+
+        Convenience wrapper for :meth:`companion_mass` with ``sini=1``.
+
+        Parameters
+        ----------
+        m1
+            Primary mass (a ``Q``).
+        """
+        return self.companion_mass(m1, sini=1.0)
+
     def to_hdf5(self, filename: str | Path) -> None:
         """Save samples to HDF5 file.
 
@@ -641,6 +1096,12 @@ class Samples(eqx.Module):
             for key, qty in self.linear.items():
                 ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
+
+            # Store optional per-sample log-probabilities (dimensionless).
+            if self.ln_likelihood is not None:
+                f.create_dataset("ln_likelihood", data=np.asarray(self.ln_likelihood))
+            if self.ln_prior is not None:
+                f.create_dataset("ln_prior", data=np.asarray(self.ln_prior))
 
             # Store metadata
             meta_group = f.create_group("metadata")
@@ -705,7 +1166,10 @@ class Samples(eqx.Module):
                     continue
                 if key.endswith("_value"):
                     continue
-                if key.endswith("_unit"):
+                # A "<base>_unit" attr is half of a stored Q only when the
+                # matching "<base>_value" attr exists; otherwise it is just a
+                # plain string-valued metadata entry (e.g. "t_ref_unit").
+                if key.endswith("_unit") and f"{key[:-5]}_value" in meta.attrs:
                     base_key = key[:-5]
                     value = meta.attrs[f"{base_key}_value"]
                     unit = meta.attrs[key]
@@ -725,12 +1189,20 @@ class Samples(eqx.Module):
                 unit = ds.attrs.get("unit", "")
                 linear[key] = Q(jnp.array(ds[:]), unit)
 
+            # Optional per-sample log-probabilities (absent in older files).
+            ln_likelihood = (
+                jnp.array(f["ln_likelihood"][:]) if "ln_likelihood" in f else None
+            )
+            ln_prior = jnp.array(f["ln_prior"][:]) if "ln_prior" in f else None
+
         return cls(
             nonlinear=nonlinear,
             linear=linear,
             data_type=data_type,
             linear_extension_names=linear_extension_names,
             metadata=metadata,
+            ln_likelihood=ln_likelihood,
+            ln_prior=ln_prior,
         )
 
     def to_arviz(

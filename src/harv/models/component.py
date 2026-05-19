@@ -604,6 +604,55 @@ class AbstractComponentModel(eqx.Module):
             arr_obs
         )
 
+    def chi_squared(
+        self,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+        data: Any,
+    ) -> jax.Array:
+        r"""Goodness-of-fit :math:`\chi^2` for one fully-specified parameter set.
+
+        Unlike :meth:`log_prob` (which marginalizes the linear parameters and
+        returns a *marginal* log-likelihood), this evaluates the model at the
+        given linear-parameter values and returns the residual statistic
+
+        .. math::
+
+            \chi^2 = r^\top C^{-1} r, \qquad r = y_\mathrm{obs} - X\,y,
+
+        where :math:`C` is the (extension-modified) observation covariance.  For
+        a diagonal covariance this is :math:`\sum_i r_i^2 / \sigma_i^2`; a
+        Gaussian-process extension promotes :math:`C` to a full matrix and the
+        Mahalanobis form is used.  Jitter is included via the inflated :math:`C`.
+
+        Parameters
+        ----------
+        nl_values
+            Nonlinear parameter values (orbital + any extension parameters), in
+            the same form accepted by :meth:`log_prob`.
+        linear_values
+            Linear parameter values, unit-stripped to the model's linear
+            parameter units (see :meth:`_linear_param_units`).
+        data
+            Runtime observation data.
+
+        Returns
+        -------
+            Scalar :math:`\chi^2`.
+        """
+        X = self._full_design_matrix(nl_values, data)
+        arr_obs, arr_obs_err = self._strip_obs(data)
+        cov = self._full_obs_err(arr_obs_err, nl_values, data)
+
+        y = jnp.array(
+            [linear_values.get(name, 0.0) for name in self._all_linear_names()]
+        )
+        resid = arr_obs - X @ y
+
+        if cov.ndim == 1:
+            return jnp.sum(resid**2 / cov)
+        return resid @ jnp.linalg.solve(cov, resid)
+
     def sample_conditional_linear(
         self,
         nl_values: dict[str, Any],

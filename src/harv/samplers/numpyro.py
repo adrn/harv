@@ -21,7 +21,12 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
+from harv.models._helpers import (
+    PriorDist,
+    _evaluate_nonlinear_log_prior,
+    _needs_explicit_sampling,
+    _unwrap_dist,
+)
 from harv.models.component import (
     AbstractComponentModel,
     _apply_unit_conversions,
@@ -260,7 +265,7 @@ class NumpyroSampler(AbstractSampler):
     ... )  # doctest: +SKIP
     """
 
-    def run(
+    def run(  # noqa: C901
         self,
         data: Any,
         *,
@@ -274,6 +279,7 @@ class NumpyroSampler(AbstractSampler):
         num_warmup: int = 500,
         num_samples: int = 1000,
         chain_method: str = "parallel",
+        return_logprobs: bool = False,
     ) -> "Samples":
         """Run MCMC warm-started from rejection-sampler output.
 
@@ -309,6 +315,14 @@ class NumpyroSampler(AbstractSampler):
         chain_method
             How to run chains: ``"parallel"``, ``"sequential"``, or
             ``"vectorized"``. Default: ``"parallel"``.
+        return_logprobs
+            If ``True``, store per-sample log-probabilities on the returned
+            :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
+            marginal log-likelihood, re-evaluated via ``model.log_prob``) and
+            ``ln_prior`` (the summed nonlinear-prior log-density). Enables
+            :meth:`Samples.map_sample` and :attr:`Samples.ln_posterior`.
+            Requires ``marginalized=True``, a single-component model, and no
+            ``extra_model``. Default ``False``.
 
         Returns
         -------
@@ -330,6 +344,16 @@ class NumpyroSampler(AbstractSampler):
         if not marginalized and self.marginalized_names is not None:
             msg = "marginalized_names cannot be set when marginalized=False"
             raise ValueError(msg)
+        if return_logprobs:
+            if not marginalized:
+                msg = "return_logprobs requires marginalized=True."
+                raise NotImplementedError(msg)
+            if extra_model is not None:
+                msg = "return_logprobs is not supported together with extra_model."
+                raise NotImplementedError(msg)
+            if isinstance(self.model, JointModel):
+                msg = "return_logprobs is not yet supported for JointModel."
+                raise NotImplementedError(msg)
 
         if kernel is None:
             kernel = _numpyro_infer.NUTS
@@ -416,6 +440,7 @@ class NumpyroSampler(AbstractSampler):
             effective_marginalized_names=effective_marginalized_names,
             linear_extension_names=linear_extension_names,
             num_chains=num_chains,
+            return_logprobs=return_logprobs,
         )
 
     def _build_init_params(  # noqa: C901
@@ -562,6 +587,7 @@ class NumpyroSampler(AbstractSampler):
         effective_marginalized_names: tuple[str, ...] | None,
         linear_extension_names: tuple[str, ...],
         num_chains: int = 1,
+        return_logprobs: bool = False,
     ) -> Samples:
         """Convert a numpyro posterior dict into a :class:`Samples` container."""
         prior = self.prior
@@ -613,13 +639,82 @@ class NumpyroSampler(AbstractSampler):
             )
             metadata["t_ref_unit"] = _t_unit
 
+        # Optional per-sample log-probabilities.
+        ln_likelihood_arr: jax.Array | None = None
+        ln_prior_arr: jax.Array | None = None
+        if return_logprobs:
+            # ``run`` rejects JointModel when return_logprobs=True, so ``model``
+            # is always a single-component model on this path.
+            ln_prior_arr = _evaluate_nonlinear_log_prior(_all_nl_priors, posterior)
+            ln_likelihood_arr = self._marginal_log_likelihood(
+                cast("AbstractComponentModel", model),
+                posterior,
+                data,
+                effective_linear_prior,
+                effective_marginalized_names,
+                nonlinear_extension_priors,
+            )
+
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_q),
             data_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
+            ln_likelihood=ln_likelihood_arr,
+            ln_prior=ln_prior_arr,
         )
+
+    def _marginal_log_likelihood(
+        self,
+        model: AbstractComponentModel,
+        posterior: dict[str, Any],
+        data: Any,
+        effective_linear_prior: dict[str, Any] | None,
+        effective_marginalized_names: tuple[str, ...] | None,
+        nonlinear_extension_priors: dict[str, Any],
+    ) -> jax.Array:
+        """Per-sample marginal log-likelihood for the MCMC posterior.
+
+        Re-evaluates ``model.log_prob`` over the posterior draws, yielding the
+        same marginal log-likelihood that ``RejectionSampler`` stores. Only
+        single-component models reach here (``run`` rejects joint models when
+        ``return_logprobs=True``).
+        """
+        prior = self.prior
+        base_names = model._base_nonlinear_names()
+        linear_units = model._linear_param_units(data)
+        marg_names = (
+            model._auto_marginalized_names(effective_linear_prior)
+            if effective_marginalized_names is None
+            else effective_marginalized_names
+        )
+        explicit_keys = [
+            name
+            for name in set(model._all_linear_names()) - set(marg_names)
+            if name in posterior
+        ]
+
+        nl_keys = [k for k in prior.nonlinear_priors if k in posterior]
+        nl_keys += [
+            k for k in nonlinear_extension_priors if k in posterior and k not in nl_keys
+        ]
+        filtered = {k: posterior[k] for k in (*nl_keys, *explicit_keys)}
+
+        def _one(sample: dict[str, jax.Array]) -> jax.Array:
+            wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
+            for pkey in explicit_keys:
+                if pkey not in wrapped:
+                    unit = linear_units.get(pkey, "")
+                    wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
+            return model.log_prob(
+                wrapped,
+                data,
+                linear_prior=effective_linear_prior,
+                marginalized_names=effective_marginalized_names,
+            )
+
+        return jax.vmap(_one)(filtered)
 
     def _sample_conditional_linear(  # noqa: C901
         self,

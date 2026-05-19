@@ -13,7 +13,11 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import _needs_explicit_sampling, _unwrap_dist
+from harv.models._helpers import (
+    _evaluate_nonlinear_log_prior,
+    _needs_explicit_sampling,
+    _unwrap_dist,
+)
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.samplers.base import AbstractSampler
@@ -346,7 +350,7 @@ class RejectionSampler(AbstractSampler):
 
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def run(
+    def run(  # noqa: C901
         self,
         data: Any,
         *,
@@ -354,6 +358,7 @@ class RejectionSampler(AbstractSampler):
         max_posterior_samples: int | None = None,
         seed: int | None = None,
         ignore_non_finite: bool = False,
+        return_logprobs: bool = False,
     ) -> Samples:
         """Run rejection sampling.
 
@@ -376,6 +381,12 @@ class RejectionSampler(AbstractSampler):
             treated as rejected samples by replacing them with ``-inf`` before
             the rejection step. If ``False`` (default), non-finite values are
             left unchanged.
+        return_logprobs
+            If ``True``, store per-sample log-probabilities on the returned
+            :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
+            marginal log-likelihood) and ``ln_prior`` (the summed nonlinear
+            prior log-density).  These enable :meth:`Samples.map_sample` and
+            the :attr:`Samples.ln_posterior` property.  Default ``False``.
 
         Returns
         -------
@@ -419,6 +430,7 @@ class RejectionSampler(AbstractSampler):
 
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
+        accepted_log_likelihood = log_likelihoods[accepted_mask]
 
         linear_key = jr.fold_in(key, 2)
         # TODO: support oversampling of linear parameters?
@@ -443,6 +455,7 @@ class RejectionSampler(AbstractSampler):
                 )
                 accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
                 linear_samples = {k: v[idx] for k, v in linear_samples.items()}
+                accepted_log_likelihood = accepted_log_likelihood[idx]
 
         # Build nonlinear dict as Quantities with units from the prior.
         # Base orbital params come from prior.nonlinear_priors.
@@ -478,12 +491,22 @@ class RejectionSampler(AbstractSampler):
             )
             metadata["t_ref_unit"] = _t_unit
 
+        ln_likelihood_arr: jax.Array | None = None
+        ln_prior_arr: jax.Array | None = None
+        if return_logprobs:
+            ln_likelihood_arr = accepted_log_likelihood
+            ln_prior_arr = _evaluate_nonlinear_log_prior(
+                _all_nl_priors, accepted_nonlinear
+            )
+
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_samples),
             data_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
+            ln_likelihood=ln_likelihood_arr,
+            ln_prior=ln_prior_arr,
         )
 
     @eqx.filter_jit
