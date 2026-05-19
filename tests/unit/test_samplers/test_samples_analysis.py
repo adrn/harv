@@ -5,10 +5,6 @@ mass-function / physical-orbit-size helpers and the optional per-sample
 log-probability storage.
 """
 
-import shutil
-import uuid
-from pathlib import Path
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -126,30 +122,21 @@ class TestLogProbStorage:
         assert sub.ln_prior.shape == (10,)
         assert jnp.allclose(sub.ln_likelihood, s.ln_likelihood[:10])
 
-    def test_hdf5_roundtrip(self, tmp_path_in_repo):
+    def test_hdf5_roundtrip(self, tmp_path):
         s = _rv_samples(n=30, with_logprobs=True)
-        path = tmp_path_in_repo / "samples_logprob.h5"
+        path = tmp_path / "samples_logprob.h5"
         s.to_hdf5(path)
         loaded = Samples.from_hdf5(path)
         assert jnp.allclose(loaded.ln_likelihood, s.ln_likelihood)
         assert jnp.allclose(loaded.ln_prior, s.ln_prior)
 
-    def test_hdf5_roundtrip_without_logprobs(self, tmp_path_in_repo):
+    def test_hdf5_roundtrip_without_logprobs(self, tmp_path):
         s = _rv_samples(n=30)
-        path = tmp_path_in_repo / "samples_plain.h5"
+        path = tmp_path / "samples_plain.h5"
         s.to_hdf5(path)
         loaded = Samples.from_hdf5(path)
         assert loaded.ln_likelihood is None
         assert loaded.ln_prior is None
-
-
-@pytest.fixture
-def tmp_path_in_repo():
-    """A temporary directory inside the repository (CLAUDE.md file rules)."""
-    d = Path(__file__).parent / f"_tmp_{uuid.uuid4().hex[:8]}"
-    d.mkdir()
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
