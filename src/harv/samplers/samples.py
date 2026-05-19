@@ -817,10 +817,15 @@ class Samples(eqx.Module):
             Array of shape ``(n_samples,)``; values in ``[0, 1]``.
         """
         self._require_single_component("phase_coverage")
-        phases = self._phases(data)
+        phases = self._phases(data)  # (n_samples, n_obs)
         bin_idx = np.clip((phases * n_bins).astype(int), 0, n_bins - 1)
-        occupied = (bin_idx[:, :, None] == np.arange(n_bins)[None, None, :]).any(axis=1)
-        return occupied.sum(axis=1) / n_bins
+        # Count occupied bins per sample with bincount, so the only allocations
+        # are bin_idx and per-row (n_bins,) temporaries -- never an
+        # (n_samples, n_obs, n_bins) broadcast tensor.
+        occupied = np.array(
+            [np.count_nonzero(np.bincount(row, minlength=n_bins)) for row in bin_idx]
+        )
+        return occupied / n_bins
 
     def periods_spanned(self, data: Any) -> np.ndarray:
         """Number of orbital periods spanned by the data, per sample.

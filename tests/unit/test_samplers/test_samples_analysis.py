@@ -189,6 +189,21 @@ class TestPhaseStatistics:
         assert cov.shape == (30,)
         assert np.all((cov >= 0.0) & (cov <= 1.0))
 
+    def test_phase_coverage_known_value(self):
+        # period = 10 d, t_ref = 0: phase = (time / 10) mod 1. Times 0.5, 1.5,
+        # 2.5 d give phases 0.05, 0.15, 0.25 -> bins 0, 1, 2 of 10 occupied.
+        data = RVData(
+            time=Q(np.array([0.5, 1.5, 2.5]), "day"),
+            rv=Q(np.zeros(3), "km/s"),
+            rv_err=Q(np.ones(3), "km/s"),
+            t_ref=Q(0.0, "day"),
+        )
+        s = _rv_samples(n=5, period=np.full(5, 10.0))
+        cov = s.phase_coverage(data, n_bins=10)
+        assert cov.shape == (5,)
+        # 3 of 10 bins occupied, identically for every sample.
+        assert np.allclose(cov, 0.3)
+
     def test_periods_spanned(self, rv_data):
         s = _rv_samples(n=20, period=np.full(20, 50.0))
         spanned = s.periods_spanned(rv_data)
