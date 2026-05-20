@@ -265,7 +265,7 @@ class NumpyroSampler(AbstractSampler):
     ... )  # doctest: +SKIP
     """
 
-    def run(  # noqa: C901
+    def run(
         self,
         data: Any,
         *,
@@ -321,8 +321,8 @@ class NumpyroSampler(AbstractSampler):
             marginal log-likelihood, re-evaluated via ``model.log_prob``) and
             ``ln_prior`` (the summed nonlinear-prior log-density). Enables
             :meth:`Samples.map_sample` and :attr:`Samples.ln_posterior`.
-            Requires ``marginalized=True``, a single-component model, and no
-            ``extra_model``. Default ``False``.
+            Requires ``marginalized=True`` and no ``extra_model``. Default
+            ``False``.
 
         Returns
         -------
@@ -350,9 +350,6 @@ class NumpyroSampler(AbstractSampler):
                 raise NotImplementedError(msg)
             if extra_model is not None:
                 msg = "return_logprobs is not supported together with extra_model."
-                raise NotImplementedError(msg)
-            if isinstance(self.model, JointModel):
-                msg = "return_logprobs is not yet supported for JointModel."
                 raise NotImplementedError(msg)
 
         if kernel is None:
@@ -643,11 +640,9 @@ class NumpyroSampler(AbstractSampler):
         ln_likelihood_arr: jax.Array | None = None
         ln_prior_arr: jax.Array | None = None
         if return_logprobs:
-            # ``run`` rejects JointModel when return_logprobs=True, so ``model``
-            # is always a single-component model on this path.
             ln_prior_arr = _evaluate_nonlinear_log_prior(_all_nl_priors, posterior)
             ln_likelihood_arr = self._marginal_log_likelihood(
-                cast("AbstractComponentModel", model),
+                model,
                 posterior,
                 data,
                 effective_linear_prior,
@@ -667,7 +662,7 @@ class NumpyroSampler(AbstractSampler):
 
     def _marginal_log_likelihood(
         self,
-        model: AbstractComponentModel,
+        model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
         data: Any,
         effective_linear_prior: dict[str, Any] | None,
@@ -677,23 +672,49 @@ class NumpyroSampler(AbstractSampler):
         """Per-sample marginal log-likelihood for the MCMC posterior.
 
         Re-evaluates ``model.log_prob`` over the posterior draws, yielding the
-        same marginal log-likelihood that ``RejectionSampler`` stores. Only
-        single-component models reach here (``run`` rejects joint models when
-        ``return_logprobs=True``).
+        same marginal log-likelihood that ``RejectionSampler`` stores. Supports
+        both single-component models and :class:`~harv.models.joint.JointModel`.
         """
         prior = self.prior
         base_names = model._base_nonlinear_names()
-        linear_units = model._linear_param_units(data)
-        marg_names = (
-            model._auto_marginalized_names(effective_linear_prior)
-            if effective_marginalized_names is None
-            else effective_marginalized_names
-        )
-        explicit_keys = [
-            name
-            for name in set(model._all_linear_names()) - set(marg_names)
-            if name in posterior
-        ]
+
+        if isinstance(model, JointModel):
+            # Build flat linear_units from all components.
+            linear_units: dict[str, str] = {}
+            for comp_name, comp in model.components.items():
+                linear_units.update(comp._linear_param_units(data[comp_name]))
+
+            # Resolve per-component marginalized names.
+            per_comp_marg, _ = model._resolve_marginalization(
+                effective_marginalized_names, effective_linear_prior
+            )
+
+            # Build explicit posterior keys: qualified for per-component params
+            # (e.g. "rv.jitter"), bare for shared params (e.g. "v_sys").
+            shared_lin = set(model.shared_linear_params)
+            seen: set[str] = set()
+            explicit_keys: list[str] = []
+            for comp_name, comp in model.components.items():
+                marg_set = set(per_comp_marg[comp_name])
+                for name in comp._all_linear_names():
+                    if name in marg_set:
+                        continue
+                    pkey = name if name in shared_lin else f"{comp_name}.{name}"
+                    if pkey in posterior and pkey not in seen:
+                        seen.add(pkey)
+                        explicit_keys.append(pkey)
+        else:
+            linear_units = model._linear_param_units(data)
+            marg_names = (
+                model._auto_marginalized_names(effective_linear_prior)
+                if effective_marginalized_names is None
+                else effective_marginalized_names
+            )
+            explicit_keys = [
+                name
+                for name in set(model._all_linear_names()) - set(marg_names)
+                if name in posterior
+            ]
 
         nl_keys = [k for k in prior.nonlinear_priors if k in posterior]
         nl_keys += [
@@ -705,7 +726,8 @@ class NumpyroSampler(AbstractSampler):
             wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
             for pkey in explicit_keys:
                 if pkey not in wrapped:
-                    unit = linear_units.get(pkey, "")
+                    bare = pkey.split(".", 1)[-1] if "." in pkey else pkey
+                    unit = linear_units.get(bare, "")
                     wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
             return model.log_prob(
                 wrapped,

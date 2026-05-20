@@ -830,6 +830,29 @@ class TestNumpyroSamplerCombinedWithJitter:
         )
         assert result.n_samples == 8  # 2 chains x 4 samples
 
+    def test_return_logprobs_joint_model(
+        self, combined_samples_with_jitter, combined_sampler_and_data
+    ):
+        """return_logprobs=True works for JointModel (marginalized path)."""
+        sampler, data = combined_sampler_and_data
+        num_chains = 2
+        num_samples = 3
+        result = sampler.run(
+            data,
+            init_samples=combined_samples_with_jitter,
+            seed=44,
+            num_chains=num_chains,
+            num_warmup=3,
+            num_samples=num_samples,
+            chain_method="sequential",
+            return_logprobs=True,
+        )
+        assert isinstance(result, Samples)
+        assert result.ln_likelihood is not None
+        assert result.ln_prior is not None
+        assert result.ln_likelihood.shape == (num_chains * num_samples,)
+        assert result.ln_prior.shape == (num_chains * num_samples,)
+
     def test_run_full_completes(
         self, combined_samples_with_jitter, combined_sampler_and_data
     ):

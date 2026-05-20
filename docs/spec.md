@@ -1357,8 +1357,8 @@ priors are still sampled explicitly even if they appear in that tuple.
 `True` the returned `Samples` carries `ln_likelihood` (the marginal
 log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
 `ln_prior` (the summed nonlinear-prior log-density). This requires
-`marginalized=True`, a single-component model, and no `extra_model`; other
-configurations raise `NotImplementedError`.
+`marginalized=True` and no `extra_model`; other configurations raise
+`NotImplementedError`.
 
 Two model variants are supported via `marginalized`:
 
