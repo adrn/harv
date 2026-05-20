@@ -6,6 +6,7 @@ builds the numpyro model closure directly.
 """
 
 import uuid
+import warnings
 from collections.abc import Callable
 from typing import Any, cast, final
 
@@ -17,6 +18,9 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
 from numpyro.distributions import biject_to
+from numpyro.infer import SVI, Trace_ELBO
+from numpyro.infer.autoguide import AutoDelta
+from numpyro.infer.initialization import init_to_value
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
@@ -440,6 +444,158 @@ class NumpyroSampler(AbstractSampler):
             return_logprobs=return_logprobs,
         )
 
+    def optimize(
+        self,
+        samples: "Samples",
+        data: Any,
+        *,
+        seed: int | None = None,
+        max_passes: int = 10,
+        tol: float = 1e-4,
+    ) -> "Samples":
+        """Refine each input sample to the local posterior MAP via BFGS.
+
+        Uses :func:`numpyro.optim.Minimize` (BFGS via
+        :func:`jax.scipy.optimize.minimize`) with an
+        :class:`~numpyro.infer.autoguide.AutoDelta` guide to find the local mode of
+        ``log_prior + marginal_log_likelihood`` starting from each sample in
+        *samples*. The returned :class:`~harv.samplers.samples.Samples` has the
+        refined nonlinear values, linear values set to the conditional posterior
+        **mean** (equal to the conditional MAP since the conditional is Gaussian)
+        at the refined nonlinear point, and populated ``ln_likelihood`` /
+        ``ln_prior``.
+
+        Particularly useful when rejection sampling returns a single sample inside
+        a posterior mode -- this moves it from a random acceptance point to the
+        mode peak.
+
+        Parameters
+        ----------
+        samples
+            Posterior samples (e.g. from :meth:`RejectionSampler.run`) used as
+            warm starts. Each sample seeds an independent BFGS run.
+        data
+            Observed data (same shape/type as :meth:`run`).
+        seed
+            Random number seed. If not specified, picks a seed based on the
+            current time.
+        max_passes
+            Maximum number of BFGS restarts per sample. The wrapped
+            ``jax.scipy.optimize.minimize`` BFGS often quits early when its line
+            search fails; restarting from the previous result frequently
+            recovers further progress. Default 10.
+        tol
+            Loss-change tolerance for the BFGS-restart loop. If the loss
+            decreases by less than ``tol`` on a pass, optimization is
+            considered converged. Default ``1e-4``.
+
+        Returns
+        -------
+            Refined samples with ``ln_likelihood`` and ``ln_prior`` populated.
+
+        Notes
+        -----
+        Only the marginalized path is supported (matches
+        ``run(marginalized=True)``). ``extra_model`` is not supported.
+
+        Emits :class:`UserWarning` for any sample that does not converge within
+        ``max_passes`` BFGS restarts; the returned point for such a sample may
+        not be the local MAP.
+        """
+        if samples.n_samples == 0:
+            msg = "Cannot optimize: no samples provided."
+            raise ValueError(msg)
+
+        prepared = _prepare_sampler_model(
+            self.prior, self.model, self.marginalized_names
+        )
+        model_obj = prepared.model
+        nonlinear_extension_priors = prepared.nonlinear_extension_priors
+        effective_linear_prior = prepared.effective_linear_prior
+        effective_marginalized_names = prepared.effective_marginalized_names
+        linear_extension_names = prepared.linear_extension_names
+
+        all_priors = _build_all_priors(self.prior, nonlinear_extension_priors)
+        numpyro_model = model_obj.numpyro_model(
+            all_priors,
+            data,
+            effective_linear_prior,
+            marginalized=True,
+            marginalized_names=effective_marginalized_names,
+        )
+
+        seed_int = uuid.uuid4().int >> 96 if seed is None else seed
+        rng_key = jr.key(seed_int)
+
+        per_sample_maps: list[dict[str, jax.Array]] = []
+        for i in range(samples.n_samples):
+            init = self._build_init_params(
+                model_obj,
+                samples[i],
+                effective_linear_prior=effective_linear_prior,
+                effective_marginalized_names=effective_marginalized_names,
+                marginalized=True,
+                num_chains=1,
+            )
+            guide = AutoDelta(numpyro_model, init_loc_fn=init_to_value(values=init))
+            svi = SVI(
+                numpyro_model,
+                guide,
+                numpyro.optim.Minimize(),
+                loss=Trace_ELBO(),
+            )
+            state = svi.init(rng_key)
+            # ``numpyro.optim.Minimize`` wraps ``jax.scipy.optimize.minimize``
+            # BFGS, whose line search frequently aborts early with
+            # ``success=False``. Restarting from the last point recovers further
+            # progress; loop until the loss change falls below ``tol`` or we hit
+            # ``max_passes``. Track the best (lowest-loss) state seen so the
+            # final point is robust to occasional BFGS uphill steps near the
+            # minimum.
+            best_state = state
+            best_loss = jnp.inf
+            prev_loss = jnp.inf
+            last_change = jnp.inf
+            converged = False
+            for _ in range(max_passes):
+                state, loss = svi.update(state)
+                if loss < best_loss:
+                    best_state = state
+                    best_loss = loss
+                last_change = jnp.abs(prev_loss - loss)
+                if last_change < tol:
+                    converged = True
+                    break
+                prev_loss = loss
+            if not converged:
+                warnings.warn(
+                    f"BFGS did not converge for sample {i} after "
+                    f"{max_passes} restarts (last loss change={float(last_change):.3e},"
+                    f" tol={tol:.1e}). Returned point may not be the local MAP.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            per_sample_maps.append(guide.median(svi.get_params(best_state)))
+
+        posterior = {
+            k: jnp.stack([d[k] for d in per_sample_maps]) for k in per_sample_maps[0]
+        }
+
+        return self._posterior_to_samples(
+            model_obj,
+            posterior,
+            rng_key,
+            data=data,
+            effective_linear_prior=effective_linear_prior,
+            marginalized=True,
+            nonlinear_extension_priors=nonlinear_extension_priors,
+            effective_marginalized_names=effective_marginalized_names,
+            linear_extension_names=linear_extension_names,
+            num_chains=1,
+            return_logprobs=True,
+            use_mean=True,
+        )
+
     def _build_init_params(  # noqa: C901
         self,
         _model: AbstractComponentModel | JointModel,
@@ -585,6 +741,7 @@ class NumpyroSampler(AbstractSampler):
         linear_extension_names: tuple[str, ...],
         num_chains: int = 1,
         return_logprobs: bool = False,
+        use_mean: bool = False,
     ) -> Samples:
         """Convert a numpyro posterior dict into a :class:`Samples` container."""
         prior = self.prior
@@ -611,6 +768,7 @@ class NumpyroSampler(AbstractSampler):
                 effective_marginalized_names,
                 data,
                 effective_linear_prior,
+                use_mean=use_mean,
             )
         else:
             # Non-marginalized: linear params are in the posterior as named
@@ -747,8 +905,14 @@ class NumpyroSampler(AbstractSampler):
         effective_marginalized_names: tuple[str, ...] | None,
         data: Any,
         effective_linear_prior: dict[str, Any] | None,
+        *,
+        use_mean: bool = False,
     ) -> dict[str, AbstractQuantity]:
-        """Conditionally sample linear params given MCMC nonlinear posterior."""
+        """Conditionally sample linear params given MCMC nonlinear posterior.
+
+        When ``use_mean=True``, the conditional posterior mean is returned for
+        each marginalized linear parameter instead of a random draw.
+        """
         prior = self.prior
         base_names = model._base_nonlinear_names()
         if isinstance(model, JointModel):
@@ -836,6 +1000,7 @@ class NumpyroSampler(AbstractSampler):
                 data,
                 linear_prior=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
+                use_mean=use_mean,
             )
 
         result = jax.vmap(_sample_one)(keys, filtered)

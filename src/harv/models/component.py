@@ -662,6 +662,7 @@ class AbstractComponentModel(eqx.Module):
         linear_prior: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
         explicit_linear: dict[str, jax.Array] | None = None,
+        use_mean: bool = False,
     ) -> dict[str, jax.Array]:
         """Sample linear parameters from the conditional posterior.
 
@@ -671,6 +672,13 @@ class AbstractComponentModel(eqx.Module):
 
         Returns all linear parameter values (both sampled and explicit),
         unit-stripped.
+
+        When ``use_mean=True``, the conditional posterior **mean** is returned
+        for the marginalized linear parameters instead of a random draw. For
+        a Gaussian conditional this is also the conditional MAP. This is the
+        appropriate choice when completing a MAP estimate (see
+        :meth:`~harv.samplers.NumpyroSampler.optimize`); MCMC paths should keep
+        the default ``use_mean=False``.
         """
         # Auto-classify when no explicit arguments given
         if (
@@ -697,7 +705,8 @@ class AbstractComponentModel(eqx.Module):
         c = self._build_marginalized_linear(
             nl_values, marg_names, explicit_linear or {}, data, linear_prior
         )
-        sample = c.dist.conditional(c.obs).sample(key)
+        cond = c.dist.conditional(c.obs)
+        sample = cond.mean if use_mean else cond.sample(key)
 
         result: dict[str, jax.Array] = {}
         for i, name in enumerate(c.marg_names):

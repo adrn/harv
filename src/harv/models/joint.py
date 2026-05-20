@@ -936,6 +936,7 @@ class JointModel(eqx.Module):
         *,
         linear_prior: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
+        use_mean: bool = False,
     ) -> "dict[str, Any]":
         """Sample conditional linear params for each component.
 
@@ -955,6 +956,11 @@ class JointModel(eqx.Module):
             Flat merged linear-prior dict.
         marginalized_names
             Optional linear parameter names to marginalize.
+        use_mean
+            When ``True``, return the conditional posterior mean for the
+            marginalized linear parameters instead of a random draw. For a
+            Gaussian conditional this is also the conditional MAP. Default
+            ``False``.
 
         Returns
         -------
@@ -992,7 +998,8 @@ class JointModel(eqx.Module):
                     comp_nl, per_comp_marg, data, linear_prior
                 )
             )
-            samples_flat = marg_dist.conditional(y_joint).sample(key)
+            cond = marg_dist.conditional(y_joint)
+            samples_flat = cond.mean if use_mean else cond.sample(key)
 
             out: dict[str, Any] = {}
             for (nm, owner), val in zip(global_cols, samples_flat, strict=True):
@@ -1022,6 +1029,7 @@ class JointModel(eqx.Module):
                 data[name],
                 linear_prior=per_comp_lp[name],
                 marginalized_names=per_comp_marg[name],
+                use_mean=use_mean,
             )
         return results
 

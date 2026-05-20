@@ -1367,6 +1367,32 @@ Two model variants are supported via `marginalized`:
   conditionally sampled afterward to populate the returned `Samples`.
 - `marginalized=False`: MCMC samples all parameters jointly (nonlinear + linear).
 
+### `NumpyroSampler.optimize(samples, data, *, seed=None, max_passes=10, tol=1e-4) -> Samples`
+
+Refines each input sample to the local posterior MAP using BFGS via
+`numpyro.optim.Minimize` (which wraps `jax.scipy.optimize.minimize`) with an
+`AutoDelta` guide. Each sample in *samples* is used as a warm start for an
+independent BFGS run that maximises `log_prior + marginal_log_likelihood`.
+Because `jax.scipy.optimize.minimize` BFGS often quits early when its line
+search fails, `optimize` restarts BFGS up to `max_passes` times from the
+previous result, breaking when the loss change falls below `tol` and emitting
+`UserWarning` if it never does.
+
+Linear parameters at the returned MAP are taken as the conditional posterior
+**mean** (equal to the conditional MAP since the conditional is Gaussian), not
+a random draw. This matters when the conditional posterior is highly correlated
+(e.g. Thiele-Innes constants with sub-orbit data coverage), where a draw can be
+many sigma from the mean along degenerate directions and the nonlinear
+TI→Campbell conversion would amplify that noise.
+
+The returned `Samples` carries `ln_likelihood` and `ln_prior` re-evaluated at
+the optimised points. Particularly useful when `RejectionSampler.run` returns a
+single sample inside a posterior mode -- this moves it from a random acceptance
+point to the mode peak.
+
+Only the marginalized path is supported (matches `run(marginalized=True)`).
+`extra_model` is not supported.
+
 ______________________________________________________________________
 
 ## `Samples` container (`harv.samplers.samples.Samples`)
