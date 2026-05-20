@@ -232,7 +232,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     a_floor: float | None = None
     sin2i_floor: float | None = None
     log_uniform_in_a: bool | None = eqx.field(static=True, default=None)
-    apply_jacobian_correction: bool = eqx.field(static=True, default=True)
+    apply_jacobian_correction: bool = eqx.field(static=True, default=False)
 
     def __check_init__(self) -> None:
         """Validate that floor parameters match ``apply_jacobian_correction``."""
