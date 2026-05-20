@@ -1023,66 +1023,53 @@ def plot_gaia_sky_orbit(
     return None
 
 
-def plot_gaia_astrometry(  # noqa: C901 -- plotting code is inherently complex
+def plot_gaia_astrometry(
     samples: Samples,
     data: GaiaAstrometryData,
     extensions: tuple[Any, ...] = (),  # reserved for parity with plot_rv
     *,
-    n_samples: int | None = 128,
-    phase_fold_median: bool = False,
-    plot_kwargs: dict[str, Any] | None = None,
     data_plot_kwargs: dict[str, Any] | None = None,
     sky_orbit_kwargs: dict[str, Any] | None = None,
     figsize: tuple[float, float] = (10, 5),
     axes: tuple[Any, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
-    """Plot Gaia epoch-astrometry data with posterior orbit overlays.
+    """Plot the best-fit Gaia astrometry model for a single posterior sample.
 
-    Produces a two-panel figure:
+    Produces a two-panel goodness-of-fit figure for one posterior sample:
 
-    - **Panel 1**: along-scan position vs time (or orbital phase if
-      *phase_fold_median* is true) with multi-sample posterior orbit overlays.
-      Median proper motion and zero-point offsets are subtracted from the data
-      so that the parallax + orbital signal is visible.  When phase folding,
-      the median parallax contribution is also subtracted (parallax has annual
-      period and would smear when folded at the orbital period); only the
-      single reference (median-period) sample is drawn.
-    - **Panel 2**: on-sky photocentre orbital ellipse (delegated to
-      :func:`plot_gaia_sky_orbit`) for the median-period sample, with each
-      Gaia epoch shown as a scan-direction segment at the model-predicted
-      photocentre offset.
+    - **Panel 1 (left)**: on-sky photocentre orbital ellipse (delegated to
+      :func:`plot_gaia_sky_orbit`), with each Gaia epoch shown as a
+      scan-direction segment at the model-predicted photocentre offset.
+    - **Panel 2 (right)**: along-scan position residual vs time — the observed
+      ``al_position`` minus the *full* predicted model for the sample (orbital
+      wobble + parallax + proper motion + zero-point).  Residuals scatter about
+      zero, drawn with measurement error bars; a dashed line marks zero.
+
+    *samples* must contain exactly one posterior sample.  Select one beforehand
+    with ``samples[i]`` (pick by index) or
+    :meth:`~harv.samplers.Samples.map_sample` (the maximum a posteriori sample).
 
     Parameters
     ----------
     samples
-        Posterior samples from a Gaia astrometry or joint model.
+        Posterior samples from a Gaia astrometry or joint model.  Must contain
+        exactly one sample; otherwise a :class:`ValueError` is raised.
     data
-        The data conditioned on by the model.  Required (panel 1 needs the
+        The data conditioned on by the model.  Required (the residual needs the
         scan angles and parallax factors).
     extensions
         Currently unused; reserved for parity with :func:`plot_rv`.
-    n_samples
-        Number of posterior orbit overlays to draw on panel 1.  Set to ``None``
-        to draw every sample.  Default: 128.
-    phase_fold_median
-        If ``True``, fold panel 1 to orbital phase using the sample closest to
-        the median period.  Phase zero is set to that sample's ``t_peri``.
-        Only the reference orbit curve is drawn (multiple samples on a phase
-        axis defined by one period would be misleading), and the median
-        parallax contribution is auto-subtracted from the data.
-        Default: ``False``.
-    plot_kwargs
-        Style overrides for the panel-1 orbit-model lines.
     data_plot_kwargs
-        Style overrides for the panel-1 data error bars.
+        Style overrides for the panel-2 residual error bars.
     sky_orbit_kwargs
-        Forwarded to :func:`plot_gaia_sky_orbit` for panel 2.
+        Forwarded to :func:`plot_gaia_sky_orbit` for panel 1.  Orbit-curve
+        styling is reachable via ``sky_orbit_kwargs={"plot_kwargs": {...}}``.
     figsize
         Figure size when *axes* is ``None``.  Default: ``(10, 5)``.
     axes
-        Two axes to draw into.  If ``None`` (default), a new 1x2 figure is
-        created and returned.
+        Two axes to draw into, ``(sky, residual)``.  If ``None`` (default), a
+        new 1x2 figure is created and returned.
     **kwargs
         Forwarded to ``matplotlib.pyplot.subplots`` when *axes* is ``None``.
 
@@ -1094,163 +1081,111 @@ def plot_gaia_astrometry(  # noqa: C901 -- plotting code is inherently complex
     ------
     ImportError
         If matplotlib is not installed.
+    ValueError
+        If *samples* does not contain exactly one posterior sample.
 
     Examples
     --------
-    >>> fig = plot_gaia_astrometry(samples, data=gaia_data)  # doctest: +SKIP
     >>> fig = plot_gaia_astrometry(  # doctest: +SKIP
-    ...     samples, data=gaia_data, phase_fold_median=True
+    ...     samples.map_sample(), data=gaia_data
     ... )
+    >>> fig = plot_gaia_astrometry(samples[0], data=gaia_data)  # doctest: +SKIP
     """
     if plt is None:
         msg = "matplotlib is required for plot_gaia_astrometry."
         raise ImportError(msg)
 
+    if len(samples) != 1:
+        msg = (
+            f"plot_gaia_astrometry expects exactly one posterior sample, but "
+            f"got {len(samples)}. Select a single sample first, e.g. "
+            "`samples[i]` to pick one by index or `samples.map_sample()` for "
+            "the maximum a posteriori sample."
+        )
+        raise ValueError(msg)
+
     return_fig = axes is None
     if axes is None:
         fig, axes = plt.subplots(1, 2, figsize=figsize, **kwargs)
-    ax_t, ax_sky = axes
+    ax_sky, ax_resid = axes
 
-    if plot_kwargs is None:
-        plot_kwargs = {}
     if data_plot_kwargs is None:
         data_plot_kwargs = {}
     if sky_orbit_kwargs is None:
         sky_orbit_kwargs = {}
 
-    n_draw = min(len(samples), n_samples) if n_samples is not None else len(samples)
-
-    plot_kwargs = mpl.cbook.normalize_kwargs(plot_kwargs, mpl.lines.Line2D)
-    orbit_style = {**_DEFAULT_LINE_STYLE, "color": "#555555", **plot_kwargs}
-
-    time_unit = str(data.time.unit)
     obs_unit = str(data.al_position.unit)
 
-    # Reference sample (closest to median period) — defines phase folding +
-    # which sample to draw on panel 2.
-    median_period = jnp.median(samples["period"])
-    ref_idx = int(jnp.argmin(jnp.abs(samples["period"] - median_period)))
+    # Scalar value of a single-sample parameter, returned in the requested unit.
+    def _param_in(name: str, unit: str) -> float:
+        return float(ustrip(unit, samples[name][0]))
 
-    # When phase-folding, only the reference sample is drawn (matches plot_rv).
-    draw_indices = [ref_idx] if phase_fold_median else range(n_draw)
-    orbit_style.setdefault("alpha", get_alpha(len(draw_indices)))
+    # --- Panel 2: along-scan residual vs time ---
+    # Full predicted along-scan model: zero-point + proper motion + parallax +
+    # orbital wobble, following the Gaia LPC convention (see docs/spec.md
+    # "GaiaAstrometryData").
+    ra0_v = _param_in("ra0", obs_unit)
+    dec0_v = _param_in("dec0", obs_unit)
+    pmra_v = _param_in("pmra", f"{obs_unit}/yr")
+    pmdec_v = _param_in("pmdec", f"{obs_unit}/yr")
+    parallax_v = _param_in("parallax", obs_unit)
 
-    # Median linear params for the data subtraction, returned in the requested unit.
-    def _median_in(name: str, unit: str) -> float:
-        if name not in samples.linear:
-            msg = f"Required linear parameter {name!r} is missing from samples"
-            raise KeyError(msg)
-        qty = samples.linear[name]
-        med_val = float(np.median(np.asarray(qty.value)))
-        med_q = Q(med_val, str(qty.unit))
-        return float(ustrip(unit, med_q))
-
-    ra0_v = _median_in("ra0", obs_unit)
-    dec0_v = _median_in("dec0", obs_unit)
-    pmra_v = _median_in("pmra", f"{obs_unit}/yr")
-    pmdec_v = _median_in("pmdec", f"{obs_unit}/yr")
-    parallax_v = _median_in("parallax", obs_unit)
-
-    # Per-epoch geometric quantities
     psi = ustrip("rad", data.scan_angle)
     sin_psi = np.asarray(jnp.sin(psi))
     cos_psi = np.asarray(jnp.cos(psi))
     parallax_factor = np.asarray(data.parallax_factor)
     dt_yr = np.asarray(ustrip("yr", data.time - data.t_ref))
 
-    linear_subtract = (
+    # Orbital photocentre offsets at each epoch, projected onto the scan direction.
+    delta_ra, delta_dec = astrometric_orbit_at_times(
+        data.time,
+        samples["period"][0],
+        samples["eccentricity"][0],
+        samples["t_peri"][0],
+        samples["arg_peri"][0],
+        samples["cos_i"][0],
+        samples["lon_asc_node"][0],
+        samples["semi_major_axis"][0],
+    )
+    al_orbit = (
+        np.asarray(ustrip(obs_unit, delta_ra)) * sin_psi
+        + np.asarray(ustrip(obs_unit, delta_dec)) * cos_psi
+    )
+
+    al_model = (
         ra0_v * sin_psi
         + dec0_v * cos_psi
         + (pmra_v * dt_yr) * sin_psi
         + (pmdec_v * dt_yr) * cos_psi
+        + parallax_v * parallax_factor
+        + al_orbit
     )
-    if phase_fold_median:
-        # parallax wobble has annual period; fold at orbital period would smear it.
-        linear_subtract = linear_subtract + parallax_v * parallax_factor
+    residual = np.asarray(ustrip(obs_unit, data.al_position)) - al_model
 
-    al_data = np.asarray(ustrip(obs_unit, data.al_position)) - linear_subtract
-    al_err = np.asarray(ustrip(obs_unit, data.al_position_err))
+    plot_timeseries_errorbar(
+        data.time,
+        Q(residual, obs_unit),
+        data.al_position_err,
+        obs_unit=obs_unit,
+        ylabel=f"AL position residual [{obs_unit}]",
+        ax=ax_resid,
+        **data_plot_kwargs,
+    )
+    ax_resid.axhline(0.0, color="k", lw=0.8, ls="--", alpha=0.5)
+    ax_resid.set_title("Along-scan residual vs time")
 
-    # Data x-axis: time (or phase if folding)
-    ref_t_peri = samples["t_peri"][ref_idx]
-    ref_period = samples["period"][ref_idx]
-    if phase_fold_median:
-        x_data = (
-            (
-                np.asarray(ustrip(time_unit, data.time))
-                - float(ustrip(time_unit, ref_t_peri))
-            )
-            / float(ustrip(time_unit, ref_period))
-        ) % 1.0
-        xlabel = "orbital phase"
-    else:
-        x_data = np.asarray(ustrip(time_unit, data.time))
-        xlabel = f"time [{time_unit}]"
-
-    # Plot data (sorted by x for a clean ordering, but errorbar doesn't need that)
-    data_style = {**_DEFAULT_ERRORBAR_STYLE, **data_plot_kwargs}
-    ax_t.errorbar(x_data, al_data, yerr=al_err, **data_style)
-
-    # Sort epoch order for the per-sample model lines (so polylines look sensible)
-    # TODO: don't plot the orbit only at the data epochs, but use a finer grid of times
-    # like in plot_rv. Oh but maybe we can't do that easily because the parallax factor
-    # is only defined at the data epochs? Hmm. Maybe show residuals instead then?
-    order = np.argsort(x_data)
-    x_sorted = x_data[order]
-    sin_psi_s = sin_psi[order]
-    cos_psi_s = cos_psi[order]
-    parallax_factor_s = parallax_factor[order]
-    times_sorted = data.time[order]
-
-    # Per-sample model lines through the data epochs
-    for i in draw_indices:
-        period_i = samples["period"][i]
-        ecc_i = samples["eccentricity"][i]
-        t_peri_i = samples["t_peri"][i]
-        arg_peri_i = samples["arg_peri"][i]
-        cos_i_i = samples["cos_i"][i]
-        lon_asc_i = samples["lon_asc_node"][i]
-        sma_i = samples["semi_major_axis"][i]
-        parallax_i = samples["parallax"][i]
-
-        delta_ra_i, delta_dec_i = astrometric_orbit_at_times(
-            times_sorted,
-            period_i,
-            ecc_i,
-            t_peri_i,
-            arg_peri_i,
-            cos_i_i,
-            lon_asc_i,
-            sma_i,
-        )
-        al_orbit_i = (
-            np.asarray(ustrip(obs_unit, delta_ra_i)) * sin_psi_s
-            + np.asarray(ustrip(obs_unit, delta_dec_i)) * cos_psi_s
-        )
-        if phase_fold_median:
-            al_model_i = al_orbit_i
-        else:
-            parallax_i_v = float(ustrip(obs_unit, parallax_i))
-            al_model_i = al_orbit_i + parallax_i_v * parallax_factor_s
-
-        ax_t.plot(x_sorted, al_model_i, **orbit_style)
-
-    ax_t.set_xlabel(xlabel)
-    ax_t.set_ylabel(f"AL position $-$ linear model [{obs_unit}]")
-    ax_t.set_title("Along-scan vs " + ("phase" if phase_fold_median else "time"))
-
-    # Panel 2: delegate to plot_gaia_sky_orbit using the reference sample.
-    ref_orbit_params = {
-        "period": samples["period"][ref_idx],
-        "eccentricity": samples["eccentricity"][ref_idx],
-        "t_peri": samples["t_peri"][ref_idx],
-        "arg_peri": samples["arg_peri"][ref_idx],
-        "cos_i": samples["cos_i"][ref_idx],
-        "lon_asc_node": samples["lon_asc_node"][ref_idx],
-        "semi_major_axis": samples["semi_major_axis"][ref_idx],
+    # --- Panel 1: sky-projected orbit (delegated) ---
+    orbit_params = {
+        "period": samples["period"][0],
+        "eccentricity": samples["eccentricity"][0],
+        "t_peri": samples["t_peri"][0],
+        "arg_peri": samples["arg_peri"][0],
+        "cos_i": samples["cos_i"][0],
+        "lon_asc_node": samples["lon_asc_node"][0],
+        "semi_major_axis": samples["semi_major_axis"][0],
     }
-    plot_gaia_sky_orbit(ref_orbit_params, data=data, ax=ax_sky, **sky_orbit_kwargs)
-    ax_sky.set_title("Sky-projected orbit (median sample)")
+    plot_gaia_sky_orbit(orbit_params, data=data, ax=ax_sky, **sky_orbit_kwargs)
+    ax_sky.set_title("Sky-projected orbit")
 
     if return_fig:
         fig.tight_layout()
