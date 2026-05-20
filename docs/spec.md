@@ -1425,12 +1425,16 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
 - `median(key=None)` — median of one key or all keys
 - `percentile(key, percentiles=(16, 50, 84))` — compute percentiles
 - `summary(params=None)` — dict of statistics (median, mean, std, p16, p84)
-- `wrap_angles() -> Samples` — return a new `Samples` where any negative
-  `rv_semiamp` and/or `semi_major_axis` entries are flipped to positive and the
-  corresponding `arg_peri` values are shifted by `pi` (mod `2*pi`). The orbit
-  predicted by the wrapped sample is identical to the original; the convention
-  it enforces is `K >= 0`, `a >= 0`, `arg_peri in [0, 2*pi)`. No-op when
-  `arg_peri` is missing or no entries are negative.
+- `wrap_angles() -> Samples` — return a new `Samples` enforcing the convention
+  `K >= 0`, `a >= 0`. Applied in two steps: (1) negative `rv_semiamp` is flipped
+  by shifting `arg_peri` by `pi`, which flips *both* `rv_semiamp` and
+  `semi_major_axis`; (2) any `semi_major_axis` still negative afterward is
+  flipped by shifting `lon_asc_node` by `pi`, which flips `semi_major_axis`
+  alone (`lon_asc_node` does not enter the RV model). Both shifted angles are
+  wrapped to `[0, 2*pi)`. A single `arg_peri` shift cannot make both `K` and `a`
+  positive when their signs disagree, so the `lon_asc_node` shift is required.
+  The orbit predicted by the wrapped sample is identical to the original. No-op
+  when `arg_peri` is missing or no entries are negative.
 - `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
   parameter values between supported single-component RV or Gaia parameterizations.
   Extra non-base parameters are preserved unchanged; unsupported families or
@@ -1556,9 +1560,6 @@ plot_gaia_astrometry(
     data,
     extensions=(),
     *,
-    n_samples=128,
-    phase_fold_median=False,
-    plot_kwargs=None,
     data_plot_kwargs=None,
     sky_orbit_kwargs=None,
     figsize=(10, 5),
@@ -1567,19 +1568,22 @@ plot_gaia_astrometry(
 )
 ```
 
-Draw a two-panel figure for Gaia epoch astrometry posteriors:
+Draw a two-panel goodness-of-fit figure for a **single** Gaia epoch-astrometry
+posterior sample. `samples` must contain exactly one sample — select one
+beforehand with `samples[i]` (by index) or `samples.map_sample()` (the maximum
+a posteriori sample); a `Samples` with any other number of samples raises
+`ValueError`.
 
-1. **Along-scan position vs time (or phase)** with multi-sample posterior orbit
-   overlays. The median proper-motion and zero-point offsets are subtracted from
-   the data so the parallax + orbital signal is visible. When `phase_fold_median`
-   is true, the median parallax contribution is also subtracted (parallax has
-   annual period and would smear when folded at the orbital period), and only
-   the reference orbit is drawn.
-1. **Sky-projected orbital ellipse** for the median-period sample (delegates to
-   `plot_gaia_sky_orbit`).
+1. **Sky-projected orbital ellipse** for the sample (delegates to
+   `plot_gaia_sky_orbit`), with each Gaia epoch shown as a scan-direction
+   segment at the model-predicted photocenter offset.
+1. **Along-scan position residual vs time** — the observed `al_position` minus
+   the full predicted model for the sample (orbital wobble + parallax + proper
+   motion + zero-point), drawn with measurement error bars and a dashed line at
+   zero.
 
 When `axes=None`, a new 1x2 figure is created and returned; otherwise draws into
-the two given axes and returns `None`.
+the two given axes `(sky, residual)` and returns `None`.
 
 ### `plot_gaia_sky_orbit`
 
@@ -1850,7 +1854,7 @@ mcmc_samples.median("rv_semiamp")        # median semi-amplitude
 mcmc_samples.summary()          # dict of all statistics
 mcmc_samples.plot_corner()                  # arviz corner plot
 harv.plot_rv(mcmc_samples, data)                       # RV curve with data overlay
-harv.plot_gaia_astrometry(mcmc_samples, data=gaia_data)  # two-panel astrometry plot
+harv.plot_gaia_astrometry(mcmc_samples.map_sample(), data=gaia_data)  # single-sample plot
 harv.save_sampler("sampler.pkl", sampler)   # persist sampler
 mcmc_samples.to_hdf5("out.h5")             # persistence
 ```

@@ -1419,28 +1419,39 @@ class TestPlotGaiaAstrometry:
 
     def test_returns_figure(self, astro_samples, gaia_data):
         """plot_gaia_astrometry() returns a matplotlib Figure when axes=None."""
-        fig = plot_gaia_astrometry(astro_samples, data=gaia_data)
+        fig = plot_gaia_astrometry(astro_samples[0], data=gaia_data)
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_figure_has_two_axes(self, astro_samples, gaia_data):
         """The two-panel astrometry plot produces exactly two Axes."""
-        fig = plot_gaia_astrometry(astro_samples, data=gaia_data)
+        fig = plot_gaia_astrometry(astro_samples[0], data=gaia_data)
         assert len(fig.axes) == 2
         plt.close("all")
 
     def test_sky_panel_equal_aspect(self, astro_samples, gaia_data):
-        """The sky-projection panel (axes[1]) uses equal aspect ratio."""
-        fig = plot_gaia_astrometry(astro_samples, data=gaia_data)
-        assert fig.axes[1].get_aspect() != "auto"
+        """The sky-projection panel (axes[0]) uses equal aspect ratio."""
+        fig = plot_gaia_astrometry(astro_samples[0], data=gaia_data)
+        assert fig.axes[0].get_aspect() != "auto"
         plt.close("all")
 
-    def test_phase_fold_smoke(self, astro_samples, gaia_data):
-        """phase_fold_median=True runs and returns a figure."""
-        fig = plot_gaia_astrometry(
-            astro_samples, data=gaia_data, phase_fold_median=True
+    def test_multiple_samples_raises(self, astro_samples, gaia_data):
+        """Passing more than one sample raises a friendly ValueError."""
+        with pytest.raises(ValueError, match="exactly one posterior sample"):
+            plot_gaia_astrometry(astro_samples, data=gaia_data)
+        plt.close("all")
+
+    def test_residual_panel_labelled_with_zero_line(self, astro_samples, gaia_data):
+        """The residual panel (axes[1]) is labelled and has a y=0 reference line."""
+        fig = plot_gaia_astrometry(astro_samples[0], data=gaia_data)
+        ax_resid = fig.axes[1]
+        assert ax_resid.get_xlabel().startswith("time")
+        assert "residual" in ax_resid.get_ylabel()
+        has_zero_line = any(
+            len(line.get_ydata()) > 0 and np.allclose(line.get_ydata(), 0.0)
+            for line in ax_resid.get_lines()
         )
-        assert hasattr(fig, "savefig")
+        assert has_zero_line
         plt.close("all")
 
 
@@ -1492,7 +1503,7 @@ class TestPlotCombined:
         self, combined_samples, gaia_data
     ):
         """plot_gaia_astrometry works on combined samples with astrometry params."""
-        fig = plot_gaia_astrometry(combined_samples, data=gaia_data)
+        fig = plot_gaia_astrometry(combined_samples[0], data=gaia_data)
         assert hasattr(fig, "savefig")
         plt.close("all")
 

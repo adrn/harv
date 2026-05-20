@@ -535,7 +535,7 @@ class TestSamplesWrapAngles:
         assert jnp.allclose(wrapped["v_sys"].value, jnp.zeros(4))
 
     def test_joint_sb2_with_semi_major_axis(self):
-        """Hypothetical SB2 + astrometry: K's and a all flip together."""
+        """SB2 + astrometry: arg_peri shift then lon_asc_node shift."""
         samples = Samples(
             nonlinear={
                 "period": Q(jnp.full(3, 300.0), "day"),
@@ -556,19 +556,86 @@ class TestSamplesWrapAngles:
         )
         wrapped = samples.wrap_angles()
 
-        # Trigger is primary.rv_semiamp -> negative at indices 0 and 2.
-        # Both K's AND semi_major_axis flip on those indices regardless of
-        # whether semi_major_axis was already positive (it shares the same
-        # arg_peri as the K's).
+        # Step 1 (arg_peri shift) is triggered by primary.rv_semiamp, negative
+        # at indices 0 and 2; it flips both rv_semiamp keys and semi_major_axis
+        # on those samples.
         assert jnp.allclose(
             wrapped["primary.rv_semiamp"].value, jnp.array([10.0, 8.0, 6.0])
         )
         assert jnp.allclose(
             wrapped["secondary.rv_semiamp"].value, jnp.array([-4.0, -3.0, -2.0])
         )
+        # Step 2 (lon_asc_node shift) then flips every still-negative
+        # semi_major_axis, so a >= 0 holds on all samples.
         assert jnp.allclose(
-            wrapped["semi_major_axis"].value, jnp.array([-1.5, -2.0, -0.5])
+            wrapped["semi_major_axis"].value, jnp.array([1.5, 2.0, 0.5])
         )
+        assert bool((wrapped["semi_major_axis"].value >= 0).all())
+
+    def test_joint_mixed_signs_makes_K_and_a_positive(self):
+        """All four (K, a) sign combinations wrap to K >= 0 and a >= 0."""
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        wrapped = samples.wrap_angles()
+        assert bool((wrapped["rv_semiamp"].value >= 0).all())
+        assert bool((wrapped["semi_major_axis"].value >= 0).all())
+
+    def test_joint_mixed_signs_orbit_invariance(self):
+        """Joint wrap with mixed K/a signs leaves RV and astrometric orbits intact."""
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        wrapped = samples.wrap_angles()
+        rv_times = Q(jnp.linspace(0.0, 300.0, 25), "day")
+        astro_times = Q(jnp.linspace(0.0, 600.0, 25), "day")
+        # atol is loose enough to absorb float32 roundoff from the angle
+        # arithmetic; a genuine sign error would be an O(1) discrepancy.
+        for i in range(samples.n_samples):
+            rv_orig = rv_at_times(
+                rv_times,
+                samples["period"][i],
+                samples["eccentricity"][i],
+                samples["t_peri"][i],
+                samples["arg_peri"][i],
+                samples["rv_semiamp"][i],
+                samples["v_sys"][i],
+            )
+            rv_wrap = rv_at_times(
+                rv_times,
+                wrapped["period"][i],
+                wrapped["eccentricity"][i],
+                wrapped["t_peri"][i],
+                wrapped["arg_peri"][i],
+                wrapped["rv_semiamp"][i],
+                wrapped["v_sys"][i],
+            )
+            assert jnp.allclose(rv_orig.value, rv_wrap.value, atol=1e-4)
+
+            dra_orig, ddec_orig = astrometric_orbit_at_times(
+                astro_times,
+                samples["period"][i],
+                samples["eccentricity"][i],
+                samples["t_peri"][i],
+                samples["arg_peri"][i],
+                samples["cos_i"][i],
+                samples["lon_asc_node"][i],
+                samples["semi_major_axis"][i],
+            )
+            dra_wrap, ddec_wrap = astrometric_orbit_at_times(
+                astro_times,
+                wrapped["period"][i],
+                wrapped["eccentricity"][i],
+                wrapped["t_peri"][i],
+                wrapped["arg_peri"][i],
+                wrapped["cos_i"][i],
+                wrapped["lon_asc_node"][i],
+                wrapped["semi_major_axis"][i],
+            )
+            assert jnp.allclose(dra_orig.value, dra_wrap.value, atol=1e-4)
+            assert jnp.allclose(ddec_orig.value, ddec_wrap.value, atol=1e-4)
 
     def test_per_component_arg_peri_raises(self):
         """Multiple per-component arg_peri keys aren't supported (yet)."""
