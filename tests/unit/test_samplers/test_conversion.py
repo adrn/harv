@@ -169,7 +169,7 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         assert list(out_nl) == ["period", "eccentricity", "phase_peri"]
         assert list(out_lin) == [
@@ -201,12 +201,12 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         out_nl, out_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         assert "semi_major_axis" in out_lin
@@ -228,12 +228,12 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         back_nl, back_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         assert jnp.allclose(
@@ -253,13 +253,13 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         _out_nl, out_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.05),
+            source=ThieleInnesGaiaAstrometry(),
+            target=ThieleInnesGaiaAstrometry(),
         )
         for key in ("ti_A", "ti_B", "ti_F", "ti_G"):
             assert jnp.array_equal(out_lin[key].value, ti_lin[key].value)
@@ -271,7 +271,7 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         assert jnp.allclose(out_lin["excess_noise"].value, lin["excess_noise"].value)
 
@@ -282,7 +282,7 @@ class TestConvertGaia:
                 n,
                 ln,
                 source=StandardGaiaAstrometry(),
-                target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+                target=ThieleInnesGaiaAstrometry(),
             )
         )
         _, out_lin = fn(nl, lin)
@@ -372,7 +372,7 @@ class TestSamplesWrapper:
             metadata={},
         )
         converted = samples.convert_parameterization(
-            source=ThieleInnesGaiaAstrometry(a_floor=0.0),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         convenience = samples.thiele_innes_to_campbell()
