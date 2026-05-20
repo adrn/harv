@@ -176,7 +176,13 @@ def campbell_from_thiele_innes(
         \omega - \Omega &= \mathrm{atan2}(-B - F, A - G) \\
         \cos i &= v / a_0^2
 
-    The convention ``cos_i ≥ 0`` is adopted here.
+    The returned ``cos_i`` is **signed**: it preserves the sign of
+    :math:`v = AG - BF`, which determines whether the orbit is prograde
+    (``cos_i > 0``) or retrograde (``cos_i < 0``) under the LPC convention.
+    This is required for the round-trip
+    ``thiele_innes_from_campbell(*campbell_from_thiele_innes(...))`` to recover
+    the original TI constants -- a positive-only convention would silently flip
+    the sky orbit for retrograde fits.
     """
     u = 0.5 * (A**2 + B**2 + F**2 + G**2)
     v = A * G - B * F
@@ -192,9 +198,10 @@ def campbell_from_thiele_innes(
     wMO = ustrip(AllowValue, "rad", jnp.arctan2(-B - F, A - G))  # ω - Ω
     arg_peri = Q(jnp.mod(0.5 * (wPO + wMO), 2.0 * jnp.pi), "rad")
     lon_asc_node = Q(jnp.mod(0.5 * (wPO - wMO), 2.0 * jnp.pi), "rad")
-    # v/a0² is dimensionless; strip and rewrap to ensure consistent output type
+    # v/a0² is dimensionless and signed (the sign carries the cos_i sign,
+    # which is required for the inverse map to round-trip correctly).
     cos_i = Q(
-        ustrip(AllowValue, "", jnp.abs(v / jnp.maximum(a0**2, Q(1e-30, (a0**2).unit)))),
+        ustrip(AllowValue, "", v / jnp.maximum(a0**2, Q(1e-30, (a0**2).unit))),
         "",
     )
     return {

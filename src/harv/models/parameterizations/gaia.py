@@ -171,21 +171,26 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     - Linear: ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``,
       ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G`` (9 params)
 
-    By default a Jacobian correction is applied: a flat prior on the Thiele-Innes
-    constants is not the same as a flat prior on the physical Campbell elements
-    :math:`(a_0, \omega, \Omega, \cos i)`.  The zeroth-order correction (evaluated at
-    the conditional-mean TI constants) multiplies the marginal likelihood by :math:`(a_0
-    + \delta_a)^{-m}(\sin^2 i + \delta_{s})^{-1}`, where :math:`m = 3` (uniform prior in
-    :math:`a_0`) or :math:`m = 4` (log-uniform), and :math:`\delta_a`, :math:`\delta_s`
-    are numerical floors that prevent singularities near face-on orbits or zero
+    A flat prior on the Thiele-Innes constants is not the same as a flat prior on
+    the physical Campbell elements :math:`(a_0, \omega, \Omega, \cos i)`, so a
+    Jacobian correction is needed to recover the correct posterior. The
+    zeroth-order correction (evaluated at the conditional-mean TI constants)
+    multiplies the marginal likelihood by :math:`(a_0 + \delta_a)^{-m}(\sin^2 i +
+    \delta_{s})^{-1}`, where :math:`m = 3` (uniform prior in :math:`a_0`) or
+    :math:`m = 4` (log-uniform), and :math:`\delta_a`, :math:`\delta_s` are
+    numerical floors that prevent singularities near face-on orbits or zero
     semi-major axis.
 
-    The correction can be disabled with ``apply_jacobian_correction=False``, which
-    makes :meth:`linear_log_prior_correction` return ``None`` -- appropriate when the
-    priors are genuinely intended to be flat in the Thiele-Innes constants.
-
-    The recommended way to construct this class is via :meth:`from_data`,
-    which sets ``a_floor = med(sigma_AL) / sqrt(N)`` automatically.
+    **The default is ``apply_jacobian_correction=False``** because the floors
+    require sensible data-driven values that the bare constructor cannot infer.
+    The recommended way to construct this class with the correction enabled is via
+    :meth:`from_data`, which sets ``a_floor = med(sigma_AL) / sqrt(N)``
+    automatically. Without the correction, the marginal likelihood can be
+    dominated by spurious long-period configurations where the orbital signal is
+    absorbed into proper motion -- this is especially severe when the data
+    baseline is shorter than the orbital period. **For sub-orbit data baselines,
+    prefer ``ThieleInnesGaiaAstrometry.from_data(data)`` (or the Standard
+    parameterization).**
 
     Parameters
     ----------
@@ -204,7 +209,8 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         :math:`m = 3`) when ``None``.  Must be ``None`` when
         ``apply_jacobian_correction=False``.
     apply_jacobian_correction : bool, optional
-        Whether to apply the Jacobian correction.  Default ``True``.
+        Whether to apply the Jacobian correction.  Default ``False``. To enable
+        with sensible floors, use :meth:`from_data`.
 
     Raises
     ------
