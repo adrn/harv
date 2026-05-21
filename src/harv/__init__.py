@@ -18,27 +18,16 @@ __all__ = (
     "QD",
     "QuantityDistribution",
     # Models API
-    "AbstractComponentModel",
-    "AbstractExtension",
-    "AbstractParameterization",
-    "EcoswEsinwRV",
-    "GP",
     "GaiaAstrometryModel",
-    "Jitter",
     "JointModel",
-    "MultiSurveyOffset",
     "ParamInfo",
-    "MonomialTrend",
     "RVModel",
-    "StandardGaiaAstrometry",
-    "StandardRV",
     # Samplers
     "AbstractSampler",
     "NumpyroSampler",
-    "RejectionPrior",
+    "HarvPrior",
     "RejectionSampler",
     "Samples",
-    "default_sb2_prior",
     # Modules:
     "data",
     "plot",
@@ -63,14 +52,13 @@ from harv.models import (
     RVModel,
     StandardGaiaAstrometry,
     StandardRV,
+    HarvPrior,
 )
 from harv.samplers import (
     AbstractSampler,
     NumpyroSampler,
-    RejectionPrior,
     RejectionSampler,
     Samples,
-    default_sb2_prior,
 )
 from harv import data
 from harv import plot

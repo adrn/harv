@@ -5,19 +5,16 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.distributions import QD
 from harv.models.parameterizations._base import AbstractParameterization
-from harv.models.parameterizations.gaia import (
-    StandardGaiaAstrometry,
-    ThieleInnesGaiaAstrometry,
-)
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
-from harv.samplers import default_sb2_prior
-from harv.samplers.custom_priors import (
+from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
+from harv.models.priors import (
+    HarvPrior,
     ParallaxDependentProperMotionPrior,
     PeriodDependentSemiMajorAxisPrior,
+    default_sb2_prior,
 )
-from harv.samplers.rejection_prior import RejectionPrior
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = {
@@ -38,23 +35,19 @@ _DEFAULT_ASTRO_KWARGS = {
 }
 
 
-class TestRejectionPriorAstrometry:
+class TestHarvPriorAstrometry:
     """Tests for astrometry-only priors."""
 
     def test_default_gaia_astrometry_creation(self):
         """Test creating default Gaia astrometry prior."""
-        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
-
-        assert (
-            prior.n_nonlinear == 6
-        )  # period, ecc, phase_peri, cos_i, arg_peri, lon_asc_node
+        prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
         assert "cos_i" in prior.nonlinear_priors
         assert "lon_asc_node" in prior.nonlinear_priors
         assert "arg_peri" in prior.nonlinear_priors
 
     def test_astrometry_prior_sampling(self):
         """Test sampling from astrometry prior."""
-        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
+        prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
         key = jr.key(42)
 
         samples = prior.sample_nonlinear(key, n_samples=100)
@@ -80,7 +73,7 @@ class TestRejectionPriorAstrometry:
 
     def test_custom_period_bounds(self):
         """Test custom period bounds."""
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(1000.0, "day"),
             sigma_a0=Q(1e3, "AU"),
@@ -97,7 +90,7 @@ class TestRejectionPriorAstrometry:
 
     def test_linear_prior_structure(self):
         """Test linear prior is a dict with correct keys and types."""
-        prior = RejectionPrior.default_gaia_astrometry(**_DEFAULT_ASTRO_KWARGS)
+        prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
 
         assert isinstance(prior.linear_prior, dict)
         assert set(prior.linear_prior.keys()) == {
@@ -127,21 +120,20 @@ class TestRejectionPriorAstrometry:
             )
 
 
-class TestRejectionPriorRV:
+class TestHarvPriorRV:
     """Tests for RV-only priors."""
 
     def test_default_rv_creation(self):
         """Test creating default RV prior."""
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
 
-        assert prior.n_nonlinear == 4  # period, ecc, arg_peri, phase_peri
         assert "arg_peri" in prior.nonlinear_priors
         assert "cos_i" not in prior.nonlinear_priors
         assert "lon_asc_node" not in prior.nonlinear_priors
 
     def test_rv_with_extension_priors(self):
         """Test RV prior with multi-instrument offset extension priors."""
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             **_DEFAULT_RV_KWARGS,
             espresso=QD(dist.Normal(0, 5.0), "km/s"),
             harps=QD(dist.Normal(0, 10.0), "km/s"),
@@ -156,7 +148,7 @@ class TestRejectionPriorRV:
 
     def test_rv_prior_sampling(self):
         """Test sampling from RV prior."""
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
         key = jr.key(42)
 
         samples = prior.sample_nonlinear(key, n_samples=100)
@@ -176,14 +168,16 @@ class TestParameterOverrides:
     def test_rv_override_nonlinear(self):
         """Nonlinear prior can be overridden via kwargs."""
         custom_ecc = dist.Uniform(0.0, 0.5)
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, eccentricity=custom_ecc)
+        prior = hm.StandardRV().default_prior(
+            **_DEFAULT_RV_KWARGS, eccentricity=custom_ecc
+        )
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
 
     def test_rv_override_linear(self):
         """Linear prior can be overridden via kwargs (omit conflicting sigma_K0)."""
         custom_K = QD(dist.Normal(0.0, 50.0), "km/s")
         kwargs = {k: v for k, v in _DEFAULT_RV_KWARGS.items() if k != "sigma_K0"}
-        prior = RejectionPrior.default_rv(**kwargs, rv_semiamp=custom_K)
+        prior = hm.StandardRV().default_prior(**kwargs, rv_semiamp=custom_K)
         assert prior.linear_prior["rv_semiamp"] is custom_K
 
     def test_rv_override_both(self):
@@ -192,7 +186,7 @@ class TestParameterOverrides:
         custom_v0 = QD(dist.Normal(0.0, 5.0), "km/s")
         # Omit sigma_v0 since v_sys is being overridden directly.
         kwargs = {k: v for k, v in _DEFAULT_RV_KWARGS.items() if k != "sigma_v0"}
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             **kwargs, eccentricity=custom_ecc, v_sys=custom_v0
         )
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
@@ -201,14 +195,14 @@ class TestParameterOverrides:
     def test_rv_unknown_kwarg_becomes_extension_prior(self):
         """Unknown kwarg is accepted and stored in extension_priors."""
         bogus_dist = dist.Normal(0, 1)
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS, bogus=bogus_dist)
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS, bogus=bogus_dist)
         assert "bogus" in prior.extension_priors
         assert prior.extension_priors["bogus"] is bogus_dist
 
     def test_astro_override_nonlinear(self):
         """Nonlinear prior can be overridden in astrometry constructor."""
         custom_cos_i = dist.Uniform(0.0, 1.0)
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **_DEFAULT_ASTRO_KWARGS, cos_i=custom_cos_i
         )
         assert prior.nonlinear_priors["cos_i"] is custom_cos_i
@@ -220,7 +214,7 @@ class TestParameterOverrides:
         kwargs = {
             k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
         }
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, parallax=custom_parallax
         )
         assert prior.linear_prior["parallax"] is custom_parallax
@@ -228,7 +222,7 @@ class TestParameterOverrides:
     def test_astro_unknown_kwarg_becomes_extension_prior(self):
         """Unknown kwarg is accepted and stored in extension_priors."""
         fake_dist = dist.Normal(0, 1)
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **_DEFAULT_ASTRO_KWARGS, fake=fake_dist
         )
         assert "fake" in prior.extension_priors
@@ -240,7 +234,7 @@ class TestParameterOverrides:
         kwargs = {
             k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
         }
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, parallax=custom_parallax
         )
         assert prior.linear_prior["parallax"] is custom_parallax
@@ -250,7 +244,7 @@ class TestParameterOverrides:
         custom_ra0 = QD(dist.Normal(0.0, 10.0), "mas")
         custom_dec0 = QD(dist.Normal(0.0, 10.0), "mas")
         kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_pos"}
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, ra0=custom_ra0, dec0=custom_dec0
         )
         assert prior.linear_prior["ra0"] is custom_ra0
@@ -260,7 +254,7 @@ class TestParameterOverrides:
         """Passing semi_major_axis= directly lets sigma_a0 be omitted."""
         custom_sma = QD(dist.HalfNormal(5.0), "mas")
         kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_a0"}
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, semi_major_axis=custom_sma
         )
         assert prior.linear_prior["semi_major_axis"] is custom_sma
@@ -270,7 +264,7 @@ class TestParameterOverrides:
         custom_pmra = QD(dist.Normal(0.0, 10.0), "mas/yr")
         custom_pmdec = QD(dist.Normal(0.0, 10.0), "mas/yr")
         kwargs = {k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_vtan"}
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, pmra=custom_pmra, pmdec=custom_pmdec
         )
         assert prior.linear_prior["pmra"] is custom_pmra
@@ -281,7 +275,7 @@ class TestParameterOverrides:
 
         custom_parallax = QD(dist.Normal(5.0, 0.5), "mas")
         with pytest.raises(TypeError, match="Cannot specify both"):
-            RejectionPrior.default_gaia_astrometry(
+            hm.StandardGaiaAstrometry().default_prior(
                 **_DEFAULT_ASTRO_KWARGS, parallax=custom_parallax
             )
 
@@ -290,7 +284,7 @@ class TestParameterOverrides:
 
         custom_sma = QD(dist.HalfNormal(5.0), "mas")
         with pytest.raises(TypeError, match="Cannot specify both"):
-            RejectionPrior.default_gaia_astrometry(
+            hm.StandardGaiaAstrometry().default_prior(
                 **_DEFAULT_ASTRO_KWARGS, semi_major_axis=custom_sma
             )
 
@@ -301,7 +295,7 @@ class TestParameterOverrides:
             k: v for k, v in _DEFAULT_ASTRO_KWARGS.items() if k != "sigma_parallax"
         }
         with pytest.raises(TypeError, match="Must specify either"):
-            RejectionPrior.default_gaia_astrometry(**kwargs)
+            hm.StandardGaiaAstrometry().default_prior(**kwargs)
 
 
 class TestPriorValidation:
@@ -313,7 +307,7 @@ class TestPriorValidation:
         Validation of required params happens in the sampler, not the prior.
         """
         # Missing orientation params are fine at prior level
-        prior = RejectionPrior(
+        HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -324,11 +318,10 @@ class TestPriorValidation:
                 "v_sys": dist.Normal(0.0, 1000.0),
             },
         )
-        assert prior.n_nonlinear == 3  # Only the 3 provided params
 
     def test_prior_with_all_params(self):
         """Test creating a prior with all optional params."""
-        prior = RejectionPrior(
+        HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -346,7 +339,6 @@ class TestPriorValidation:
                 "semi_major_axis": dist.Normal(0.0, 1000.0),
             },
         )
-        assert prior.n_nonlinear == 6
 
 
 class TestDictLinearPrior:
@@ -354,7 +346,7 @@ class TestDictLinearPrior:
 
     def test_dict_linear_prior_is_dict(self):
         """Dict with all Normal entries is stored as dict."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -371,7 +363,7 @@ class TestDictLinearPrior:
 
     def test_dict_with_delta(self):
         """Delta entries are accepted in dict-form linear prior."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -387,7 +379,7 @@ class TestDictLinearPrior:
 
     def test_dict_with_mixed_types(self):
         """All three categories (Gaussian, Delta, explicit) in one dict."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -410,12 +402,12 @@ class TestDictLinearPrior:
 
     def test_default_rv_has_dict_linear_prior(self):
         """default_rv returns a prior with dict-form linear_prior."""
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
         assert isinstance(prior.linear_prior, dict)
 
     def test_dict_with_quantity_distribution(self):
         """QuantityDistribution entries in dict are accepted."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": dist.LogUniform(1.0, 1000.0),
                 "eccentricity": dist.Beta(0.867, 3.03),
@@ -434,25 +426,19 @@ class TestDictLinearPrior:
 class TestPriorProperties:
     """Tests for prior property methods."""
 
-    def test_parameter_counting_rv(self):
-        """Test that RV prior has 4 nonlinear parameters."""
-        rv_prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
-        assert rv_prior.n_nonlinear == 4
-
     def test_parameter_counting_rv_with_extension_priors(self):
         """Test that RV with extension priors still has 4 nonlinear parameters."""
-        rv_prior_offsets = RejectionPrior.default_rv(
+        rv_prior_offsets = hm.StandardRV().default_prior(
             **_DEFAULT_RV_KWARGS,
             inst2=QD(dist.Normal(0, 5), "km/s"),
         )
-        assert rv_prior_offsets.n_nonlinear == 4
         assert "inst2" in rv_prior_offsets.extension_priors
         # inst2 is NOT in linear_prior until routing happens at run-time
         assert "inst2" not in rv_prior_offsets.linear_prior
 
     def test_reproducible_sampling(self):
         """Test that sampling is reproducible with same seed."""
-        prior = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
 
         samples1 = prior.sample_nonlinear(jr.key(42), n_samples=100)
         samples2 = prior.sample_nonlinear(jr.key(42), n_samples=100)
@@ -462,37 +448,26 @@ class TestPriorProperties:
         assert (samples1["eccentricity"] == samples2["eccentricity"]).all()
 
 
-class TestFromParameterization:
-    """Tests for RejectionPrior.from_parameterization and per-parameterization defaults.
+class TestParameterizationDefaultPriors:
+    """Tests for ``parameterization.default_prior(...)`` on each parameterization.
 
-    These exercise the new design where each concrete parameterization owns its
-    default-prior construction, and ``from_parameterization`` is a generic
-    dispatcher.
+    Each concrete parameterization owns its default-prior construction; these
+    tests cover the parameter sets and override behavior of all four supported
+    parameterizations.
     """
 
-    def test_standard_rv_matches_default_rv(self):
-
-        via_method = RejectionPrior.from_parameterization(
-            StandardRV(), **_DEFAULT_RV_KWARGS
-        )
-        via_classmethod = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
-
-        assert (
-            sorted(via_method.nonlinear_priors.keys())
-            == sorted(via_classmethod.nonlinear_priors.keys())
-            == ["arg_peri", "eccentricity", "period", "phase_peri"]
-        )
-        assert (
-            sorted(via_method.linear_prior.keys())
-            == sorted(via_classmethod.linear_prior.keys())
-            == ["rv_semiamp", "v_sys"]
-        )
+    def test_standard_rv_keys(self):
+        prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
+        assert sorted(prior.nonlinear_priors.keys()) == [
+            "arg_peri",
+            "eccentricity",
+            "period",
+            "phase_peri",
+        ]
+        assert sorted(prior.linear_prior.keys()) == ["rv_semiamp", "v_sys"]
 
     def test_ecosw_esinw_rv_keys(self):
-
-        prior = RejectionPrior.from_parameterization(
-            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS
-        )
+        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
         assert sorted(prior.nonlinear_priors.keys()) == [
             "ecosw",
             "esinw",
@@ -502,10 +477,7 @@ class TestFromParameterization:
         assert sorted(prior.linear_prior.keys()) == ["rv_semiamp", "v_sys"]
 
     def test_ecosw_esinw_sampling_ranges(self):
-
-        prior = RejectionPrior.from_parameterization(
-            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS
-        )
+        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
         samples = prior.sample_nonlinear(jr.key(0), n_samples=200)
         for key in ("ecosw", "esinw"):
             assert samples[key].shape == (200,)
@@ -513,34 +485,31 @@ class TestFromParameterization:
             assert (samples[key] <= 1.0).all()
 
     def test_ecosw_override(self):
-
         custom = dist.Uniform(-0.5, 0.5)
-        prior = RejectionPrior.from_parameterization(
-            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS, ecosw=custom
-        )
+        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS, ecosw=custom)
         assert prior.nonlinear_priors["ecosw"] is custom
 
-    def test_standard_gaia_matches_default_gaia(self):
-
-        via_method = RejectionPrior.from_parameterization(
-            StandardGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
-        )
-        via_classmethod = RejectionPrior.default_gaia_astrometry(
-            **_DEFAULT_ASTRO_KWARGS
-        )
-
-        assert sorted(via_method.nonlinear_priors.keys()) == sorted(
-            via_classmethod.nonlinear_priors.keys()
-        )
-        assert sorted(via_method.linear_prior.keys()) == sorted(
-            via_classmethod.linear_prior.keys()
-        )
+    def test_standard_gaia_keys(self):
+        prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
+        assert sorted(prior.nonlinear_priors.keys()) == [
+            "arg_peri",
+            "cos_i",
+            "eccentricity",
+            "lon_asc_node",
+            "period",
+            "phase_peri",
+        ]
+        assert sorted(prior.linear_prior.keys()) == [
+            "dec0",
+            "parallax",
+            "pmdec",
+            "pmra",
+            "ra0",
+            "semi_major_axis",
+        ]
 
     def test_thiele_innes_keys(self):
-
-        prior = RejectionPrior.from_parameterization(
-            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
-        )
+        prior = ThieleInnesGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
         assert sorted(prior.nonlinear_priors.keys()) == [
             "eccentricity",
             "period",
@@ -560,34 +529,18 @@ class TestFromParameterization:
 
     def test_thiele_innes_ti_priors_use_period_dependent_scale(self):
         """Each TI constant should default to PeriodDependentSemiMajorAxisPrior."""
-
-        prior = RejectionPrior.from_parameterization(
-            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
-        )
+        prior = ThieleInnesGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
         for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
             assert isinstance(
                 prior.linear_prior[name], PeriodDependentSemiMajorAxisPrior
             )
 
     def test_thiele_innes_ti_override(self):
-
         custom = QD(dist.Normal(0.0, 1.0), "mas")
-        prior = RejectionPrior.from_parameterization(
-            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS, ti_A=custom
+        prior = ThieleInnesGaiaAstrometry().default_prior(
+            **_DEFAULT_ASTRO_KWARGS, ti_A=custom
         )
         assert prior.linear_prior["ti_A"] is custom
-
-    def test_method_equivalence_to_from_parameterization(self):
-        """A test.
-
-        Calling parameterization.default_prior(...) directly == from_parameterization.
-        """
-
-        p = StandardRV()
-        a = p.default_prior(**_DEFAULT_RV_KWARGS)
-        b = RejectionPrior.from_parameterization(p, **_DEFAULT_RV_KWARGS)
-        assert sorted(a.nonlinear_priors) == sorted(b.nonlinear_priors)
-        assert sorted(a.linear_prior) == sorted(b.linear_prior)
 
     def test_abstract_default_prior_raises(self):
         """The base-class stub raises NotImplementedError."""
@@ -601,11 +554,7 @@ class TestFromParameterization:
 
 
 class TestDefaultSB2Prior:
-    """A test.
-
-    Tests for the module-level ``default_sb2_prior`` (formerly
-    ``RejectionPrior.default_sb2``).
-    """
+    """Tests for the module-level ``default_sb2_prior`` factory."""
 
     def test_creation_and_keys(self):
 

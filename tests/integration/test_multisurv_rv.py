@@ -12,12 +12,12 @@ import pytest
 import quaxed.numpy as jnp
 from unxt import Q, uconvert
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.rv import simulate_rv_multisurv_data
 
 
@@ -175,7 +175,7 @@ class TestMultiSurveyRejectionSampler:
     def test_sampler_runs_and_returns_samples(self, low_snr_data):
         """Rejection sampler completes and returns a valid Samples object."""
         source_data, truth = low_snr_data
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(40.0, "day"),
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -205,7 +205,7 @@ class TestMultiSurveyRejectionSampler:
     def test_samples_have_correct_keys(self, low_snr_data):
         """Samples object has all expected parameter keys, including offset."""
         source_data, _ = low_snr_data
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(40.0, "day"),
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -231,7 +231,7 @@ class TestMultiSurveyRejectionSampler:
     def test_offset_key_absent_for_reference_instrument(self, low_snr_data):
         """The reference instrument (keck, offset=None) has no offset key."""
         source_data, _ = low_snr_data
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(40.0, "day"),
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -245,7 +245,7 @@ class TestMultiSurveyRejectionSampler:
     def test_reproducibility(self, low_snr_data):
         """Same seed produces identical samples."""
         source_data, _ = low_snr_data
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(40.0, "day"),
             period_max=Q(160.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

@@ -250,7 +250,7 @@ class JointModel(eqx.Module):
         """Build an SB2 JointModel from a prior.
 
         The ``prior`` is expected to follow the convention of
-        :func:`~harv.samplers.default_sb2_prior`: linear-prior keys
+        :func:`~harv.models.priors.default_sb2_prior`: linear-prior keys
         ``name1.rv_semiamp`` and ``name2.rv_semiamp`` map to the per-component
         ``rv_semiamp`` of the components, named "name1" and "name2" in this example, but
         they can be customized. Other linear-prior keys (e.g. ``v_sys``) are
@@ -290,7 +290,7 @@ class JointModel(eqx.Module):
         --------
         >>> from unxt import Q
         >>> from harv.models.joint import JointModel
-        >>> from harv.samplers import default_sb2_prior
+        >>> from harv.models.priors import default_sb2_prior
         >>> prior = default_sb2_prior(
         ...     period_min=Q(10., "day"), period_max=Q(1000., "day"),
         ...     sigma_K0=Q(30., "km/s"), sigma_v0=Q(50., "km/s"),

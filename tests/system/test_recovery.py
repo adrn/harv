@@ -35,13 +35,13 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q, ustrip
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
 
@@ -81,7 +81,7 @@ class TestHighSNRRVRecovery:
             v_sys=Q(0.0, "km/s"),
             rv_err=Q(5.0, "km/s"),
         )
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(50.0, "day"),
             period_max=Q(200.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -166,7 +166,7 @@ class TestMultiSurveyRVRecovery:
             v_sys=Q(0.0, "km/s"),
             rv_err=Q(5.0, "km/s"),
         )
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(50.0, "day"),
             period_max=Q(200.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -247,7 +247,7 @@ class TestLowSNRBroadPosterior:
             v_sys=Q(0.0, "km/s"),
             rv_err=Q(5.0, "km/s"),
         )
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(20.0, "day"),
             period_max=Q(500.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -377,7 +377,7 @@ class TestAstrometryLikelihoodSanity:
         log_lik_true = float(model.log_prob(nl_true, data, linear_prior=lp))
 
         # Sample 1000 random nonlinear parameter sets from the prior
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             period_min=Q(100.0, "day"),
             period_max=Q(1000.0, "day"),
             sigma_a0=Q(1e3, "AU"),

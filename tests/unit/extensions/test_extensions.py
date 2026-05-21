@@ -6,6 +6,7 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.data import GaiaAstrometryData, RVData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import RVModel
@@ -15,7 +16,7 @@ from harv.models.extensions import (
     MonomialTrend,
     MultiSurveyOffset,
 )
-from harv.samplers import RejectionPrior, RejectionSampler
+from harv.samplers import RejectionSampler
 
 # ======================================================================
 # Jitter
@@ -228,7 +229,7 @@ class TestMonomialTrend:
             rv=Q([1.0, -2.0, 0.5, 3.0, -1.0], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5, 0.5, 0.5], "km/s"),
         )
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(1_000.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

@@ -27,10 +27,19 @@ from harv.kepler.orbits import thiele_innes_ABFG
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.priors import HarvPrior
+from harv.models.priors.helpers import (
+    _apply_overrides,
+    _make_parallax_prior,
+    _make_period_prior,
+    _make_pm_prior,
+    _make_pos_prior,
+    _make_semi_major_axis_prior,
+    kipping_2013_ecc_prior,
+)
 
 if TYPE_CHECKING:
     from harv.data.datasets import GaiaAstrometryData
-    from harv.samplers.rejection_prior import RejectionPrior
 
 
 @final
@@ -169,23 +178,12 @@ class StandardGaiaAstrometry(AbstractParameterization):
         sigma_vtan: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
-    ) -> "RejectionPrior":
-        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
 
-        Same defaults as :meth:`harv.samplers.RejectionPrior.default_gaia_astrometry`
+        Same defaults as :meth:`harv.samplers.HarvPrior.default_gaia_astrometry`
         (and ``default_gaia_astrometry`` is a thin wrapper around this method).
         """
-        from harv.samplers.rejection_prior import (  # noqa: PLC0415
-            RejectionPrior,
-            _apply_overrides,
-            _make_parallax_prior,
-            _make_period_prior,
-            _make_pm_prior,
-            _make_pos_prior,
-            _make_semi_major_axis_prior,
-            kipping_2013_ecc_prior,
-        )
-
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -225,7 +223,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
         }
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-        return RejectionPrior(
+        return HarvPrior(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             extension_priors=extension_priors,
@@ -497,8 +495,8 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sigma_vtan: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
-    ) -> "RejectionPrior":
-        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 
@@ -511,7 +509,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         - ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``: same defaults as
           :meth:`StandardGaiaAstrometry.default_prior`.
         - ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G``: each uses
-          :class:`~harv.samplers.custom_priors.PeriodDependentSemiMajorAxisPrior`,
+          :class:`~harv.models.priors.custom_priors.PeriodDependentSemiMajorAxisPrior`,
           the same scaling as ``semi_major_axis`` in
           :class:`StandardGaiaAstrometry`.
 
@@ -520,17 +518,6 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         ``apply_jacobian_correction=True``) restores the correct posterior
         under a flat-Campbell-elements prior.
         """
-        from harv.samplers.rejection_prior import (  # noqa: PLC0415
-            RejectionPrior,
-            _apply_overrides,
-            _make_parallax_prior,
-            _make_period_prior,
-            _make_pm_prior,
-            _make_pos_prior,
-            _make_semi_major_axis_prior,
-            kipping_2013_ecc_prior,
-        )
-
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -569,7 +556,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             )
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-        return RejectionPrior(
+        return HarvPrior(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             extension_priors=extension_priors,

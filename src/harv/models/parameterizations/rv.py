@@ -12,7 +12,7 @@ want alternative coordinate choices (e.g. ``(K, omega)`` vs
 
 __all__ = ("EcoswEsinwRV", "StandardRV")
 
-from typing import TYPE_CHECKING, Any, final
+from typing import Any, final
 
 import jax
 import numpyro.distributions as dist
@@ -26,9 +26,14 @@ from harv.kepler.orbits import rv_shape
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
-
-if TYPE_CHECKING:
-    from harv.samplers.rejection_prior import RejectionPrior
+from harv.models.priors import HarvPrior
+from harv.models.priors.helpers import (
+    _apply_overrides,
+    _make_period_prior,
+    _make_rv_semiamp_prior,
+    _make_vsys_prior,
+    kipping_2013_ecc_prior,
+)
 
 
 @final
@@ -118,10 +123,10 @@ class StandardRV(AbstractParameterization):
         sigma_v0: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
-    ) -> "RejectionPrior":
-        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
 
-        Same defaults as :meth:`harv.samplers.RejectionPrior.default_rv` (and
+        Same defaults as :meth:`harv.samplers.HarvPrior.default_rv` (and
         ``default_rv`` is a thin wrapper around this method).
 
         Parameters
@@ -137,15 +142,6 @@ class StandardRV(AbstractParameterization):
         **kwargs
             Per-parameter prior overrides or extension priors.
         """
-        from harv.samplers.rejection_prior import (  # noqa: PLC0415
-            RejectionPrior,
-            _apply_overrides,
-            _make_period_prior,
-            _make_rv_semiamp_prior,
-            _make_vsys_prior,
-            kipping_2013_ecc_prior,
-        )
-
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -169,7 +165,7 @@ class StandardRV(AbstractParameterization):
         }
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-        return RejectionPrior(
+        return HarvPrior(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             extension_priors=extension_priors,
@@ -265,8 +261,8 @@ class EcoswEsinwRV(AbstractParameterization):
         sigma_v0: ScalarQSpeed | None = None,
         P0: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
-    ) -> "RejectionPrior":
-        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 
@@ -283,14 +279,6 @@ class EcoswEsinwRV(AbstractParameterization):
         for this parameterization; for a matched prior, sample with
         ``StandardRV`` and convert.
         """
-        from harv.samplers.rejection_prior import (  # noqa: PLC0415
-            RejectionPrior,
-            _apply_overrides,
-            _make_period_prior,
-            _make_rv_semiamp_prior,
-            _make_vsys_prior,
-        )
-
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -314,7 +302,7 @@ class EcoswEsinwRV(AbstractParameterization):
         }
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-        return RejectionPrior(
+        return HarvPrior(
             nonlinear_priors=nonlinear,
             linear_prior=linear_prior,
             extension_priors=extension_priors,

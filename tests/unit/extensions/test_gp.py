@@ -8,6 +8,7 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models.extensions.base import AbstractExtension, ParamInfo
@@ -15,7 +16,6 @@ from harv.models.extensions.gp import GP
 from harv.models.extensions.jitter import Jitter
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler, _prepare_sampler_model
-from harv.samplers.rejection_prior import RejectionPrior
 
 # ---------------------------------------------------------------------------
 # Mock kernel (avoids tinygp dependency in tests)
@@ -296,7 +296,7 @@ class TestGPWithRVModel:
         """The sampler GP path should produce at least some finite log-likelihoods."""
         data = _make_rv_data(n_obs=8)
         model = RVModel(extensions=(_make_tinygp_sho(),))
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(300.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

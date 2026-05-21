@@ -20,8 +20,8 @@ from harv.models._helpers import (
 )
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
+from harv.models.priors import HarvPrior
 from harv.samplers.base import AbstractSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
 __all__ = ("RejectionSampler",)
@@ -120,7 +120,7 @@ def _resolve_effective_marginalized_names(
 
 
 def _effective_linear_prior_from_prior(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
 ) -> dict[str, Any] | None:
     """Build the effective linear prior from prior.linear_prior + extensions.
@@ -152,7 +152,7 @@ def _effective_linear_prior_from_prior(
 
 
 def _validate_extension_priors(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
     effective_linear_prior: dict[str, Any] | None,
 ) -> None:
@@ -190,7 +190,7 @@ def _validate_extension_priors(
 
 
 def _nonlinear_extension_priors_from_model(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Derive nonlinear extension priors and linear extension names from a model.
@@ -233,7 +233,7 @@ def _nonlinear_extension_priors_from_model(
 
 
 def _ext_nonlinear_from_model(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Backward-compatible alias for nonlinear extension prior extraction."""
@@ -262,7 +262,7 @@ def _ext_nonlinear_model_keys(
 
 
 def _prepare_sampler_model(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
     marginalized_names: tuple[str, ...] | None,
 ) -> _PreparedSamplerModel:
@@ -331,14 +331,14 @@ class RejectionSampler(AbstractSampler):
     --------
     >>> from unxt import Q
     >>> import jax.numpy as jnp
-    >>> from harv import RejectionPrior, RejectionSampler, RVData
+    >>> from harv import HarvPrior, RejectionSampler, RVData
     >>> from harv.models.rv import RVModel
     >>> data = RVData(  # doctest: +SKIP
     ...     time=Q(jnp.linspace(0, 100, 5), "day"),
     ...     rv=Q(jnp.zeros(5), "km/s"),
     ...     rv_err=Q(jnp.full(5, 1.0), "km/s"),
     ... )
-    >>> prior = RejectionPrior.default_rv(  # doctest: +SKIP
+    >>> prior = HarvPrior.default_rv(  # doctest: +SKIP
     ...     period_min=Q(2.0, "day"),
     ...     period_max=Q(1000.0, "day"),
     ...     sigma_K0=Q(30.0, "km/s"),

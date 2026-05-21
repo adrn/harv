@@ -38,19 +38,19 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
+from harv.models.priors import HarvPrior
 from harv.samplers.base import AbstractSampler
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
 )
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
 __all__ = ("NumpyroSampler",)
 
 
 def _build_all_priors(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     nonlinear_extension_priors: dict[str, Any],
 ) -> dict[str, PriorDist]:
     """Merge base nonlinear_priors and extension nonlinear priors.
@@ -64,7 +64,7 @@ def _build_all_priors(
 
 def _unconstrain_init_params(
     init_params: dict[str, Any],
-    prior: RejectionPrior,
+    prior: HarvPrior,
     effective_linear_prior: dict[str, Any] | None = None,
     nonlinear_extension_priors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -256,8 +256,9 @@ class NumpyroSampler(AbstractSampler):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.samplers import RejectionPrior, NumpyroSampler
-    >>> prior = RejectionPrior.default_rv(
+    >>> from harv.models import StandardRV
+    >>> from harv.samplers import NumpyroSampler
+    >>> prior = StandardRV().default_prior(
     ...     period_min=Q(2.0, "day"),
     ...     period_max=Q(1000.0, "day"),
     ...     sigma_K0=Q(30.0, "km/s"),

@@ -11,7 +11,7 @@ import equinox as eqx
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension
 from harv.models.joint import JointModel
-from harv.samplers.rejection_prior import RejectionPrior
+from harv.models.priors import HarvPrior
 
 __all__ = ("AbstractSampler",)
 
@@ -31,7 +31,7 @@ class AbstractSampler(eqx.Module):
     abstract-final pattern.
     """
 
-    prior: RejectionPrior
+    prior: HarvPrior
     model: AbstractComponentModel | JointModel
     marginalized_names: tuple[str, ...] | None = None
 

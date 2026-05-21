@@ -17,7 +17,7 @@ import jax
 from harv.models.extensions.base import ParamInfo
 
 if TYPE_CHECKING:
-    from harv.samplers.rejection_prior import RejectionPrior
+    from harv.models.priors import HarvPrior
 
 
 class AbstractParameterization(eqx.Module):
@@ -44,8 +44,8 @@ class AbstractParameterization(eqx.Module):
         """Return only the linear parameters."""
         return tuple(p for p in self.params() if p.linear)
 
-    def default_prior(self, **kwargs: Any) -> "RejectionPrior":
-        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+    def default_prior(self, **kwargs: Any) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
 
         Each concrete parameterization overrides this with its own type-narrow
         signature for the required scale arguments (e.g. ``sigma_K0`` for RV,
@@ -61,7 +61,7 @@ class AbstractParameterization(eqx.Module):
 
         Returns
         -------
-        RejectionPrior
+        HarvPrior
             A prior whose ``nonlinear_priors`` and ``linear_prior`` entries
             match the names declared by ``self.params()``.
         """

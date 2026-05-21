@@ -15,6 +15,7 @@ import numpyro.distributions as ndist
 import pytest
 from unxt import Q, ustrip
 
+import harv.models as hm
 from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.distributions import QD
 from harv.kepler.orbits import (
@@ -27,10 +28,10 @@ from harv.models.extensions import Jitter, MonomialTrend
 from harv.models.extensions.base import ParamInfo
 from harv.models.extensions.gp import GP
 from harv.models.joint import JointModel
+from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
 from harv.plot import get_alpha, plot_gaia_astrometry, plot_gaia_sky_orbit, plot_rv
 from harv.samplers.numpyro import NumpyroSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
 try:
@@ -150,7 +151,7 @@ def rv_sampler_and_data():
     rv = Q(jnp.zeros(20), "km/s")
     rv_err = Q(jnp.ones(20) * 2.0, "km/s")
     data = RVData(time=times, rv=rv, rv_err=rv_err)
-    prior = RejectionPrior.default_rv(
+    prior = hm.StandardRV().default_prior(
         period_min=Q(50.0, "day"),
         period_max=Q(200.0, "day"),
         sigma_K0=Q(30.0, "km/s"),
@@ -439,7 +440,7 @@ class TestNumpyroSamplerRun:
         rv = Q(jnp.zeros(20), "km/s")
         rv_err = Q(jnp.ones(20) * 2.0, "km/s")
         data = RVData(time=times, rv=rv, rv_err=rv_err)
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(50.0, "day"),
             period_max=Q(200.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -614,7 +615,7 @@ class TestNumpyroSamplerNonGaussianLinear:
             scan_angle=Q(jnp.linspace(0.0, 3.14, n_obs), "rad"),
             parallax_factor=jnp.full(n_obs, 0.5),
         )
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             period_min=Q(100.0, "day"),
             period_max=Q(1000.0, "day"),
             sigma_a0=Q(5.0, "AU"),
@@ -729,9 +730,9 @@ class TestNumpyroSamplerCombinedWithJitter:
             "arg_peri": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
             "lon_asc_node": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         }
-        # Merged linear prior dict for the RejectionPrior
+        # Merged linear prior dict for the HarvPrior
         linear = {**astro_linear, **rv_linear}
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors=nonlinear,
             linear_prior=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},

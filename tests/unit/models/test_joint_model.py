@@ -8,9 +8,9 @@ from numpyro import handlers
 from unxt import Q
 
 from harv.distributions import QuantityDistribution as QD
-from harv.models import JointModel, RVModel
+from harv.models import HarvPrior, JointModel, RVModel
 from harv.models.extensions import Jitter
-from harv.samplers import RejectionPrior, RejectionSampler
+from harv.samplers import RejectionSampler
 
 # Re-alias shared fixtures to shorter names used throughout this module.
 linear_prior = pytest.fixture(name="linear_prior")(
@@ -359,7 +359,7 @@ class TestSB2RejectionSamplerLinearKeys:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),

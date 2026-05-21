@@ -21,8 +21,8 @@ from unxt import Q
 import harv
 from harv.data import RVData
 from harv.distributions import QuantityDistribution as QD
-from harv.models import JointModel, RVModel
-from harv.samplers import RejectionPrior, RejectionSampler, default_sb2_prior
+from harv.models import HarvPrior, JointModel, RVModel, default_sb2_prior
+from harv.samplers import RejectionSampler
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -77,7 +77,7 @@ def rv_data_secondary() -> RVData:
 
 
 @pytest.fixture
-def sb2_prior() -> RejectionPrior:
+def sb2_prior() -> HarvPrior:
     return default_sb2_prior(
         period_min=Q(10.0, "day"),
         period_max=Q(1000.0, "day"),
@@ -251,7 +251,7 @@ class TestRejectionSamplerFlattening:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),
@@ -349,7 +349,7 @@ class TestForSb2Factory:
 
     def test_missing_sb2_keys_raises(self):
         """Factory raises when prior lacks component-qualified semi-amplitudes."""
-        bad_prior = RejectionPrior(
+        bad_prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),
@@ -367,7 +367,7 @@ class TestForSb2Factory:
 
     def test_shared_linear_name_must_be_bare(self):
         """Shared linear params must not use component-qualified keys."""
-        bad_prior = RejectionPrior(
+        bad_prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),
@@ -389,7 +389,7 @@ class TestForSb2Factory:
 
     def test_non_shared_linear_name_must_be_qualified(self):
         """Non-shared linear params must use component-qualified keys."""
-        bad_prior = RejectionPrior(
+        bad_prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),
@@ -411,7 +411,7 @@ class TestForSb2Factory:
 
     def test_shared_nonlinear_name_must_be_bare(self):
         """Shared nonlinear params must not use component-qualified keys."""
-        bad_prior = RejectionPrior(
+        bad_prior = HarvPrior(
             nonlinear_priors={
                 "primary.period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "eccentricity": dist.Uniform(0.0, 0.9),
@@ -430,7 +430,7 @@ class TestForSb2Factory:
 
     def test_non_shared_nonlinear_name_must_be_qualified(self):
         """Non-shared nonlinear params must use component-qualified keys."""
-        bad_prior = RejectionPrior(
+        bad_prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.Uniform(10.0, 500.0), "day"),
                 "primary.eccentricity": dist.Uniform(0.0, 0.9),

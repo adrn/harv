@@ -12,6 +12,7 @@ import numpyro.distributions as ndist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.data import GaiaAstrometryData, RVData
 from harv.distributions import QD
 from harv.kepler.orbits import (
@@ -29,9 +30,9 @@ from harv.models._helpers import _evaluate_nonlinear_log_prior
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.joint import JointModel
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
+from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
 from harv.samplers.numpyro import NumpyroSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ def rv_data_and_truth():
 @pytest.fixture
 def rv_sampler(rv_data_and_truth):
     """NumpyroSampler configured for the synthetic RV data."""
-    prior = RejectionPrior.default_rv(
+    prior = hm.StandardRV().default_prior(
         period_min=Q(30.0, "day"),
         period_max=Q(150.0, "day"),
         sigma_K0=Q(20.0, "km/s"),
@@ -249,7 +250,7 @@ def joint_sampler_and_data():
         "arg_peri": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         "lon_asc_node": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }
-    prior = RejectionPrior(nonlinear_priors=nonlinear, linear_prior=linear)
+    prior = HarvPrior(nonlinear_priors=nonlinear, linear_prior=linear)
     joint = JointModel.for_rv_and_gaia(
         components={"astro": GaiaAstrometryModel(), "rv": RVModel()}
     )
@@ -392,7 +393,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
     @pytest.fixture
     def ti_sampler(self, ti_data_and_truth):
         """NumpyroSampler with TI parameterization."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(ndist.Normal(400.0, 50.0), "day"),
                 "eccentricity": ndist.TruncatedNormal(0.3, 0.2, low=0.0, high=1.0),
@@ -587,7 +588,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
     @pytest.fixture
     def bh3_ti_sampler(self, bh3_like_data_and_truth):
         """TI sampler with BH3-like setup."""
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(ndist.LogUniform(1000.0, 10_000.0), "day"),
                 "eccentricity": ndist.TruncatedNormal(0.5, 0.4, low=0.0, high=1.0),
