@@ -198,7 +198,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
                 dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
             ),
         }
-        linear_prior: dict[str, LinearPriorDist] = {
+        linear_priors: dict[str, LinearPriorDist] = {
             "ra0": _make_pos_prior(
                 pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
             ),
@@ -222,10 +222,10 @@ class StandardGaiaAstrometry(AbstractParameterization):
             ),
         }
         extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
         return HarvPrior(
             nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
+            linear_priors=linear_priors,
             extension_priors=extension_priors,
         )
 
@@ -527,7 +527,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             "eccentricity": kipping_2013_ecc_prior,
             "phase_peri": dist.Uniform(0.0, 1.0),
         }
-        linear_prior: dict[str, LinearPriorDist] = {
+        linear_priors: dict[str, LinearPriorDist] = {
             "ra0": _make_pos_prior(
                 pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
             ),
@@ -549,16 +549,16 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         # Per-constant overrides flow through kwargs ("ti_A", ...).
         for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
             override = kwargs.pop(name, None)
-            linear_prior[name] = _make_semi_major_axis_prior(
+            linear_priors[name] = _make_semi_major_axis_prior(
                 semi_major_axis=override,
                 sigma_a0=None if override is not None else sigma_a0,
                 P0=P0,
             )
         extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
         return HarvPrior(
             nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
+            linear_priors=linear_priors,
             extension_priors=extension_priors,
         )
 

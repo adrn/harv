@@ -58,7 +58,7 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.5,
             "lon_asc_node": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_prior=_linear_prior())
+        log_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
         assert jnp.isfinite(log_lik)
 
     def test_vmap_batch(self, astro_data):
@@ -76,7 +76,7 @@ class TestGaiaAstrometryModel:
             "lon_asc_node": Q(jnp.ones(n) * 1.0, "rad"),
         }
         log_liks = jax.jit(
-            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_priors=lp))
         )(nl_batch)
 
         assert log_liks.shape == (n,)
@@ -109,8 +109,8 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.0,
             "lon_asc_node": Q(0.0, "rad"),
         }
-        ll_true = model.log_prob(nl_true, data, linear_prior=lp)
-        ll_rng = model.log_prob(nl_rng, data, linear_prior=lp)
+        ll_true = model.log_prob(nl_true, data, linear_priors=lp)
+        ll_rng = model.log_prob(nl_rng, data, linear_priors=lp)
         assert ll_true > ll_rng
 
 

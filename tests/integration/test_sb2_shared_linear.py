@@ -106,7 +106,7 @@ class TestJointMargLogProb:
         )
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         lp = joint.log_prob(
-            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+            _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
         )
         assert jnp.isfinite(lp)
 
@@ -126,10 +126,10 @@ class TestJointMargLogProb:
             shared_linear_params=(),
         )
         lp_shared = joint_shared.log_prob(
-            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+            _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
         )
         lp_unshared = joint_unshared.log_prob(
-            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+            _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
         )
         assert jnp.isfinite(lp_shared)
         assert jnp.isfinite(lp_unshared)
@@ -142,7 +142,7 @@ class TestJointMargLogProb:
 
         v_sys_prior = QD(dist.Normal(0.0, 10.0), "km/s")
         k_prior = QD(dist.Normal(5.0, 5.0), "km/s")
-        linear_prior = {
+        linear_priors = {
             "primary.rv_semiamp": k_prior,
             "secondary.rv_semiamp": k_prior,
             "v_sys": v_sys_prior,  # shared
@@ -154,7 +154,7 @@ class TestJointMargLogProb:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        lp_joint = joint.log_prob(_NL_VALUES, data, linear_prior=linear_prior)
+        lp_joint = joint.log_prob(_NL_VALUES, data, linear_priors=linear_priors)
 
         # Hand-build the joint MarginalizedLinear directly.
         # Get per-component building blocks.
@@ -163,7 +163,7 @@ class TestJointMargLogProb:
         comp_nl = harv.models.joint._split_nl_values(
             _NL_VALUES, shared_nl, joint.component_names, per_comp_nl
         )
-        per_comp_lp = joint._per_component_linear_prior(linear_prior)
+        per_comp_lp = joint._per_component_linear_prior(linear_priors)
         per_comp_marg = {
             comp_name: comp._auto_marginalized_names(per_comp_lp[comp_name])
             for comp_name, comp in joint.components.items()
@@ -171,7 +171,7 @@ class TestJointMargLogProb:
         joint._route_explicit_linear(_NL_VALUES, comp_nl, per_comp_lp, per_comp_marg)
 
         marg_dist_manual, y_joint_manual, _, _ = joint._build_joint_marginalized_linear(
-            comp_nl, per_comp_marg, data, linear_prior
+            comp_nl, per_comp_marg, data, linear_priors
         )
         lp_manual = marg_dist_manual.log_prob(y_joint_manual)
 
@@ -194,7 +194,7 @@ class TestSampleConditionalLinearShape:
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
-            _NL_VALUES, key, data, linear_prior=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+            _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
         )
 
         # Shared v_sys at top level
@@ -224,7 +224,7 @@ class TestSampleConditionalLinearShape:
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
-            _NL_VALUES, key, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+            _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
         )
 
         assert "primary" in samples
@@ -241,7 +241,7 @@ class TestSampleConditionalLinearShape:
 class TestRejectionSamplerFlattening:
     def test_samples_v_sys_unnamespaced(self, rv_data_primary, rv_data_secondary):
         """After RejectionSampler on SB2 joint model, samples['v_sys'] is bare."""
-        linear_prior = {
+        linear_priors = {
             "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),  # shared
@@ -258,7 +258,7 @@ class TestRejectionSamplerFlattening:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior=linear_prior,
+            linear_priors=linear_priors,
         )
         sampler = RejectionSampler(prior, joint)
         joint_data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
@@ -285,7 +285,7 @@ class TestNumpyroSharedExplicitLinear:
     def test_shared_explicit_sampled_once(self, rv_data_primary, rv_data_secondary):
         """Shared explicit linear param appears exactly once in numpyro trace."""
         # Use a non-Gaussian prior so v_sys is classified as explicit.
-        linear_prior = {
+        linear_priors = {
             "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.HalfNormal(10.0), "km/s"),  # shared; HalfNormal → explicit
@@ -303,7 +303,7 @@ class TestNumpyroSharedExplicitLinear:
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         }
         model_fn = joint.numpyro_model(
-            nonlinear_priors, data, linear_prior, marginalized=True
+            nonlinear_priors, data, linear_priors, marginalized=True
         )
 
         with handlers.seed(rng_seed=0):
@@ -356,12 +356,12 @@ class TestForSb2Factory:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             },
         )
         with pytest.raises(
-            ValueError, match=re.escape("prior.linear_prior is missing SB2 keys")
+            ValueError, match=re.escape("prior.linear_priors is missing SB2 keys")
         ):
             JointModel.for_sb2(prior=bad_prior)
 
@@ -374,7 +374,7 @@ class TestForSb2Factory:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
                 "secondary.rv_semiamp": QD(dist.Normal(4.0, 5.0), "km/s"),
                 "primary.v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -396,7 +396,7 @@ class TestForSb2Factory:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
                 "secondary.rv_semiamp": QD(dist.Normal(4.0, 5.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -418,7 +418,7 @@ class TestForSb2Factory:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
                 "secondary.rv_semiamp": QD(dist.Normal(4.0, 5.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -440,7 +440,7 @@ class TestForSb2Factory:
                 "secondary.phase_peri": dist.Uniform(0.0, 1.0),
                 "secondary.arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
                 "secondary.rv_semiamp": QD(dist.Normal(4.0, 5.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -461,19 +461,19 @@ class TestForSb2Factory:
         """Factory-built joint model produces finite log_prob."""
         joint = JointModel.for_sb2(prior=sb2_prior)
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
-        lp = joint.log_prob(_NL_VALUES, data, linear_prior=sb2_prior.linear_prior)
+        lp = joint.log_prob(_NL_VALUES, data, linear_priors=sb2_prior.linear_priors)
         assert jnp.isfinite(lp)
 
     def test_jit_compatible(self, rv_data_primary, rv_data_secondary, sb2_prior):
         """for_sb2 model is JIT-compatible."""
         joint = JointModel.for_sb2(prior=sb2_prior)
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
-        lp_ref = sb2_prior.linear_prior
+        lp_ref = sb2_prior.linear_priors
 
         @jax.jit
         def _lp(period):
             return joint.log_prob(
-                {**_NL_VALUES, "period": Q(period, "day")}, data, linear_prior=lp_ref
+                {**_NL_VALUES, "period": Q(period, "day")}, data, linear_priors=lp_ref
             )
 
         result = _lp(100.0)
@@ -503,11 +503,13 @@ class TestPerComponentPathRegression:
 
         data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
         lp_joint = joint.log_prob(
-            _NL_VALUES, data, linear_prior=_JOINT_LINEAR_PRIOR_UNSHARED
+            _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
         )
-        lp_p = model_p.log_prob(_NL_VALUES, rv_data_primary, linear_prior=_LINEAR_PRIOR)
+        lp_p = model_p.log_prob(
+            _NL_VALUES, rv_data_primary, linear_priors=_LINEAR_PRIOR
+        )
         lp_s = model_s.log_prob(
-            _NL_VALUES, rv_data_secondary, linear_prior=_LINEAR_PRIOR
+            _NL_VALUES, rv_data_secondary, linear_priors=_LINEAR_PRIOR
         )
 
         assert jnp.allclose(lp_joint, lp_p + lp_s, atol=1e-5)

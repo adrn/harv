@@ -123,16 +123,16 @@ def _effective_linear_prior_from_prior(
     prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
 ) -> dict[str, Any] | None:
-    """Build the effective linear prior from prior.linear_prior + extensions.
+    """Build the effective linear prior from prior.linear_priors + extensions.
 
     Models are now templates and carry no ``linear_prior`` themselves.  The
     sampler computes it at run-time by merging ``prior.linear_prior`` with any
     linear-extension parameters declared on the model's extensions.
     """
     effective: dict[str, Any] | None = (
-        dict(prior.linear_prior)
-        if isinstance(prior.linear_prior, dict)
-        else prior.linear_prior
+        dict(prior.linear_priors)
+        if isinstance(prior.linear_priors, dict)
+        else prior.linear_priors
     )
     if effective is None:
         return None
@@ -319,7 +319,7 @@ class RejectionSampler(AbstractSampler):
     prior
         Prior distributions for nonlinear (and optionally linear) parameters.
     model
-        Fully constructed model template (no data, no linear_prior).
+        Fully constructed model template (no data, no linear_priors).
     marginalized_names
         Linear parameter names to analytically marginalize. If None, all
         Gaussian linear parameters are auto-classified for marginalization.
@@ -573,7 +573,7 @@ class RejectionSampler(AbstractSampler):
                 return acc.at[i].set(
                     jax.vmap(
                         lambda s: model.log_prob(
-                            s, data, linear_prior=eff_linear or None
+                            s, data, linear_priors=eff_linear or None
                         )
                     )(wrapped)
                 )
@@ -582,7 +582,7 @@ class RejectionSampler(AbstractSampler):
                     lambda sample: model.log_prob(
                         sample,
                         data,
-                        linear_prior=eff_linear or None,
+                        linear_priors=eff_linear or None,
                         marginalized_names=marginalize_names,
                     )
                 )(wrapped)
@@ -615,7 +615,7 @@ class RejectionSampler(AbstractSampler):
         nonlinear_samples: dict[str, jax.Array],
         marginalized_names: tuple[str, ...] | None,
         data: Any,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
     ) -> dict[str, AbstractQuantity]:
         """Sample linear parameters from conditional posterior using vmap.
 
@@ -645,7 +645,7 @@ class RejectionSampler(AbstractSampler):
                 wrapped,
                 key,
                 data,
-                linear_prior=linear_prior,
+                linear_priors=linear_priors,
                 marginalized_names=marginalized_names,
             )
 

@@ -319,9 +319,9 @@ class JointModel(eqx.Module):
 
         # Validate that the prior has per-component rv_semiamp keys.
         expected_names = {f"{name}.rv_semiamp" for name in component_names}
-        if not all(k in prior.linear_prior for k in expected_names):
+        if not all(k in prior.linear_priors for k in expected_names):
             raise ValueError(
-                "prior.linear_prior is missing SB2 keys: should contain "
+                "prior.linear_priors is missing SB2 keys: should contain "
                 f"{expected_names}. Use default_sb2_prior(...) or supply a "
                 "compatible prior."
             )
@@ -331,7 +331,7 @@ class JointModel(eqx.Module):
         # shared params of this type".
         default_shared_params = tuple(k for k in prior.nonlinear_priors)
         default_linear_shared_params = tuple(
-            k for k in prior.linear_prior if k not in expected_names
+            k for k in prior.linear_priors if k not in expected_names
         )
         if shared_params is None:
             shared_params = default_shared_params
@@ -351,7 +351,7 @@ class JointModel(eqx.Module):
                 f"component name. Add it to shared_params or use a qualified key."
             )
         # Non-shared, non-SB2-component bare linear keys are similarly ambiguous.
-        for key in prior.linear_prior:
+        for key in prior.linear_priors:
             if key in shared_linear_params or key in expected_names or "." in key:
                 continue
             raise ValueError(
@@ -386,14 +386,14 @@ class JointModel(eqx.Module):
                     f"prefixed with a component name."
                 )
             for comp_name in component_names:
-                if f"{comp_name}.{name}" in prior.linear_prior:
+                if f"{comp_name}.{name}" in prior.linear_priors:
                     raise ValueError(
                         f"Shared linear param {name!r} is shared and must not be "
-                        f"prefixed: found '{comp_name}.{name}' in linear_prior."
+                        f"prefixed: found '{comp_name}.{name}' in linear_priors."
                     )
-            if name not in prior.linear_prior:
+            if name not in prior.linear_priors:
                 raise ValueError(
-                    f"Shared linear param {name!r} not found in prior.linear_prior."
+                    f"Shared linear param {name!r} not found in prior.linear_priors."
                 )
 
         # Now we can build data-less template models (data supplied at run time).
@@ -433,9 +433,9 @@ class JointModel(eqx.Module):
         return result
 
     def _per_component_linear_prior(
-        self, linear_prior: dict[str, Any]
+        self, linear_priors: dict[str, Any]
     ) -> dict[str, dict[str, Any] | None]:
-        """Split a flat linear_prior dict into per-component dicts.
+        """Split a flat linear_priors dict into per-component dicts.
 
         Bare keys that appear in ``shared_linear_params`` are replicated to every
         component.  Qualified keys of the form ``"comp.param"`` are routed to the
@@ -443,7 +443,7 @@ class JointModel(eqx.Module):
         """
         shared = set(self.shared_linear_params)
         result: dict[str, dict[str, Any] | None] = {n: {} for n in self.component_names}
-        for key, prior in linear_prior.items():
+        for key, prior in linear_priors.items():
             if key in shared:
                 for cname in self.component_names:
                     d = result[cname]
@@ -458,7 +458,7 @@ class JointModel(eqx.Module):
             # Bare non-shared non-qualified keys are not routed to any component
         return result
 
-    def params_explicit(self, linear_prior: dict[str, Any] | None) -> tuple[str, ...]:
+    def params_explicit(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
         """Names of parameters that must be explicitly sampled.
 
         Shared nonlinear params use bare names (e.g. ``"period"``).
@@ -469,14 +469,14 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        linear_prior
+        linear_priors
             The merged linear-prior dict (with ``"comp.param"`` qualified keys for
             non-shared params).  ``None`` means treat all linear params as
             marginalizable.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         shared = self._shared_param_names()
@@ -507,7 +507,7 @@ class JointModel(eqx.Module):
         return shared_names + tuple(comp_specific) + tuple(explicit_lin)
 
     def params_marginalized(
-        self, linear_prior: dict[str, Any] | None
+        self, linear_priors: dict[str, Any] | None
     ) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized across all components.
 
@@ -515,13 +515,13 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        linear_prior
+        linear_priors
             The merged linear-prior dict.  ``None`` means treat all linear params
             as marginalizable.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         seen: set[str] = set()
@@ -631,7 +631,7 @@ class JointModel(eqx.Module):
     def _resolve_marginalization(
         self,
         marginalized_names: tuple[str, ...] | None,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
     ) -> tuple[dict[str, tuple[str, ...]], bool]:
         """Resolve per-component marginalized names + decide which path to take.
 
@@ -644,7 +644,7 @@ class JointModel(eqx.Module):
         marginalized_names
             User-supplied flat tuple of linear parameter names to marginalize,
             or ``None`` to use each component's auto-marginalized set.
-        linear_prior
+        linear_priors
             The merged linear-prior dict (with ``"comp.param"`` qualified keys for
             non-shared params), or ``None`` to treat all linear params as
             marginalizable.  Used to resolve the auto-marginalized set if
@@ -664,8 +664,8 @@ class JointModel(eqx.Module):
             means the existing per-component summation gives the correct answer.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         per_comp_marg = self._resolve_component_marginalized_names(marginalized_names)
@@ -688,7 +688,7 @@ class JointModel(eqx.Module):
         comp_nl: dict[str, dict[str, Any]],
         per_comp_marg: dict[str, tuple[str, ...]],
         data: Any,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
     ) -> tuple[
         MarginalizedLinear,
         jax.Array,
@@ -710,7 +710,7 @@ class JointModel(eqx.Module):
             Per-component marginalized parameter names.
         data
             Per-component data, indexed by component name.
-        linear_prior
+        linear_priors
             Flat merged linear-prior dict (``"comp.param"`` qualified for
             non-shared params).
 
@@ -731,8 +731,8 @@ class JointModel(eqx.Module):
         """
         shared_set = set(self.shared_linear_params)
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
 
@@ -858,7 +858,7 @@ class JointModel(eqx.Module):
         nl_values: dict[str, Any],
         data: Any,
         *,
-        linear_prior: dict[str, Any] | None = None,
+        linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
     ) -> jax.Array:
         """Compute the joint log-likelihood.
@@ -876,7 +876,7 @@ class JointModel(eqx.Module):
             params use ``"component.param"`` convention (e.g. ``"rv.jitter"``).
         data
             Per-component data, indexed by component name.
-        linear_prior
+        linear_priors
             Flat merged linear-prior dict. ``None`` means treat all linear params as
             marginalizable.
         marginalized_names
@@ -888,14 +888,14 @@ class JointModel(eqx.Module):
             Scalar log-likelihood.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         shared_nl = self._shared_param_names()
         per_comp_nl = self._per_component_nonlinear_names()
         per_comp_marg, any_shared_marg = self._resolve_marginalization(
-            marginalized_names, linear_prior
+            marginalized_names, linear_priors
         )
 
         comp_nl = _split_nl_values(
@@ -909,7 +909,7 @@ class JointModel(eqx.Module):
             # ``shared_linear_params`` entry is being analytically marginalized
             # so its prior is integrated *once* (not once per component).
             marg_dist, y_joint, _, _ = self._build_joint_marginalized_linear(
-                comp_nl, per_comp_marg, data, linear_prior
+                comp_nl, per_comp_marg, data, linear_priors
             )
             return marg_dist.log_prob(y_joint)
 
@@ -921,7 +921,7 @@ class JointModel(eqx.Module):
             comp.log_prob(
                 comp_nl[name],
                 data[name],
-                linear_prior=per_comp_lp[name],
+                linear_priors=per_comp_lp[name],
                 marginalized_names=per_comp_marg[name],
             )
             for name, comp in self.components.items()
@@ -934,7 +934,7 @@ class JointModel(eqx.Module):
         key: jax.Array,
         data: Any,
         *,
-        linear_prior: dict[str, Any] | None = None,
+        linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
         use_mean: bool = False,
     ) -> "dict[str, Any]":
@@ -952,7 +952,7 @@ class JointModel(eqx.Module):
             JAX PRNG key.
         data
             Per-component data, indexed by component name.
-        linear_prior
+        linear_priors
             Flat merged linear-prior dict.
         marginalized_names
             Optional linear parameter names to marginalize.
@@ -973,14 +973,14 @@ class JointModel(eqx.Module):
               keyed by component name.
         """
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         shared_nl = self._shared_param_names()
         per_comp_nl = self._per_component_nonlinear_names()
         per_comp_marg, any_shared_marg = self._resolve_marginalization(
-            marginalized_names, linear_prior
+            marginalized_names, linear_priors
         )
 
         comp_nl = _split_nl_values(
@@ -995,7 +995,7 @@ class JointModel(eqx.Module):
             # per-component entries sit in sub-dicts keyed by component name.
             marg_dist, y_joint, global_cols, explicit_by_comp = (
                 self._build_joint_marginalized_linear(
-                    comp_nl, per_comp_marg, data, linear_prior
+                    comp_nl, per_comp_marg, data, linear_priors
                 )
             )
             cond = marg_dist.conditional(y_joint)
@@ -1027,7 +1027,7 @@ class JointModel(eqx.Module):
                 comp_nl[name],
                 subkey,
                 data[name],
-                linear_prior=per_comp_lp[name],
+                linear_priors=per_comp_lp[name],
                 marginalized_names=per_comp_marg[name],
                 use_mean=use_mean,
             )
@@ -1037,7 +1037,7 @@ class JointModel(eqx.Module):
         self,
         nonlinear_priors: dict[str, PriorDist],
         data: Any,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
         *,
         marginalized: bool = True,
         marginalized_names: tuple[str, ...] | None = None,
@@ -1052,7 +1052,7 @@ class JointModel(eqx.Module):
             ``"component.param"`` convention.
         data
             Per-component data, indexed by component name.
-        linear_prior
+        linear_priors
             Flat merged linear-prior dict.
         marginalized
             If ``True`` (default), linear parameters are marginalized
@@ -1073,16 +1073,16 @@ class JointModel(eqx.Module):
             return self._build_marginalized_numpyro(
                 nonlinear_priors,
                 data,
-                linear_prior,
+                linear_priors,
                 marginalized_names=marginalized_names,
             )
-        return self._build_full_numpyro(nonlinear_priors, data, linear_prior)
+        return self._build_full_numpyro(nonlinear_priors, data, linear_priors)
 
     def _build_marginalized_numpyro(  # noqa: C901
         self,
         nonlinear_priors: dict[str, PriorDist],
         data: Any,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
         *,
         marginalized_names: tuple[str, ...] | None = None,
     ) -> Callable[[], None]:
@@ -1091,12 +1091,12 @@ class JointModel(eqx.Module):
         shared = self._shared_param_names()
         per_comp_nl = self._per_component_nonlinear_names()
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
         per_comp_marginalized_names, any_shared_marg = self._resolve_marginalization(
-            marginalized_names, linear_prior
+            marginalized_names, linear_priors
         )
 
         # Identify shared linear params that are explicitly sampled (non-Gaussian
@@ -1104,9 +1104,9 @@ class JointModel(eqx.Module):
         # and copied to every component, rather than re-sampled per component.
         shared_lin_set = set(self.shared_linear_params)
         shared_explicit_lin: set[str] = set()
-        if shared_lin_set and linear_prior is not None:
+        if shared_lin_set and linear_priors is not None:
             for nm in shared_lin_set:
-                if nm in linear_prior and _needs_explicit_sampling(linear_prior[nm]):
+                if nm in linear_priors and _needs_explicit_sampling(linear_priors[nm]):
                     shared_explicit_lin.add(nm)
 
         # Pre-classify each component's *non-shared* explicit-linear priors into
@@ -1136,12 +1136,12 @@ class JointModel(eqx.Module):
         _shared_explicit_direct_lp: dict[str, Any] = {}
         _shared_explicit_callable_lp: dict[str, Any] = {}
         _shared_param_units: dict[str, str] = {}
-        if shared_explicit_lin and linear_prior is not None:
+        if shared_explicit_lin and linear_priors is not None:
             first_comp_name = next(iter(self.component_names))
             first_comp = self.components[first_comp_name]
             pu = first_comp._linear_param_units(data[first_comp_name])
             for nm in shared_explicit_lin:
-                p = linear_prior[nm]
+                p = linear_priors[nm]
                 _shared_param_units[nm] = pu.get(nm, "")
                 if not _is_callable_prior(p):
                     _shared_explicit_direct_lp[nm] = p
@@ -1210,7 +1210,7 @@ class JointModel(eqx.Module):
                 # components — required so each shared linear prior is
                 # integrated once, not once per component.
                 marg_dist, y_joint, _, _ = joint._build_joint_marginalized_linear(
-                    comp_nl, per_comp_marginalized_names, data, linear_prior
+                    comp_nl, per_comp_marginalized_names, data, linear_priors
                 )
                 log_lik = marg_dist.log_prob(y_joint)
             else:
@@ -1221,7 +1221,7 @@ class JointModel(eqx.Module):
                     log_lik = log_lik + comp.log_prob(
                         comp_nl[comp_name],
                         data[comp_name],
-                        linear_prior=per_comp_lp[comp_name],
+                        linear_priors=per_comp_lp[comp_name],
                         marginalized_names=per_comp_marginalized_names[comp_name],
                     )
             numpyro.factor("log_lik", log_lik)
@@ -1232,7 +1232,7 @@ class JointModel(eqx.Module):
         self,
         nonlinear_priors: dict[str, PriorDist],
         data: Any,
-        linear_prior: dict[str, Any] | None,
+        linear_priors: dict[str, Any] | None,
     ) -> Callable[[], None]:
         """Build a full (non-marginalized) numpyro model for the joint model.
 
@@ -1244,8 +1244,8 @@ class JointModel(eqx.Module):
         shared = self._shared_param_names()
         per_comp_nl = self._per_component_nonlinear_names()
         per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_prior)
-            if linear_prior is not None
+            self._per_component_linear_prior(linear_priors)
+            if linear_priors is not None
             else dict.fromkeys(self.component_names)
         )
 
@@ -1258,7 +1258,7 @@ class JointModel(eqx.Module):
             if lp is None:
                 msg = (
                     f"Cannot build full numpyro model: component {comp_name!r} "
-                    "has no linear_prior"
+                    "has no linear_priors"
                 )
                 raise ValueError(msg)
             gaussian: dict[str, Any] = {}

@@ -63,7 +63,7 @@ class TestJitter:
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
         jitter_ext = Jitter(param_unit="km/s")
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
         }
@@ -79,7 +79,7 @@ class TestJitter:
             "arg_peri": Q(1.0, "rad"),
             "jitter": 0.5,  # in km/s, unit-stripped
         }
-        lp = model.log_prob(nl, data, linear_prior=linear_prior)
+        lp = model.log_prob(nl, data, linear_priors=linear_priors)
         assert jnp.isfinite(lp)
 
         # Compare: jitter=0 should give same result as no jitter extension
@@ -91,9 +91,9 @@ class TestJitter:
             "arg_peri": Q(1.0, "rad"),
         }
         nl_zero = {**nl_no_jitter, "jitter": 0.0}
-        lp_zero_jitter = model.log_prob(nl_zero, data, linear_prior=linear_prior)
+        lp_zero_jitter = model.log_prob(nl_zero, data, linear_priors=linear_priors)
         lp_no_ext = model_no_jitter.log_prob(
-            nl_no_jitter, data, linear_prior=linear_prior
+            nl_no_jitter, data, linear_priors=linear_priors
         )
         assert jnp.allclose(lp_zero_jitter, lp_no_ext, atol=1e-5)
 
@@ -104,7 +104,7 @@ class TestJitter:
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
         }
@@ -120,7 +120,7 @@ class TestJitter:
         @jax.jit
         def _lp(jitter_val):
             vals = {**nl, "jitter": jitter_val}
-            return model.log_prob(vals, data, linear_prior=linear_prior)
+            return model.log_prob(vals, data, linear_priors=linear_priors)
 
         result = _lp(0.5)
         assert jnp.isfinite(result)
@@ -202,7 +202,7 @@ class TestMonomialTrend:
             rv=Q([1.0, -2.0, 0.5, 3.0, -1.0], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5, 0.5, 0.5], "km/s"),
         )
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
             "trend_1": dist.Normal(0.0, 1.0),  # dimensionless trend
@@ -219,7 +219,7 @@ class TestMonomialTrend:
             "phase_peri": jnp.float32(0.25),
             "arg_peri": Q(0.5, "rad"),
         }
-        lp = model.log_prob(nl, data, linear_prior=linear_prior)
+        lp = model.log_prob(nl, data, linear_priors=linear_priors)
         assert jnp.isfinite(lp)
 
     def test_rejection_sampler_requires_all_trend_priors(self):
@@ -323,7 +323,7 @@ class TestMultiSurveyOffset:
             "phase_peri": jnp.float32(0.25),
             "arg_peri": Q(0.5, "rad"),
         }
-        lp = model.log_prob(nl, data, linear_prior=linear_prior_mso)
+        lp = model.log_prob(nl, data, linear_priors=linear_prior_mso)
         assert jnp.isfinite(lp)
 
     def test_sample_conditional_with_offset(self):
@@ -358,7 +358,7 @@ class TestMultiSurveyOffset:
         }
         key = jax.random.PRNGKey(42)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_prior=linear_prior_off
+            nl, key, data, linear_priors=linear_prior_off
         )
         assert "espresso" in samples
         assert "rv_semiamp" in samples
@@ -402,7 +402,7 @@ class TestCombinedExtensions:
             "arg_peri": Q(0.5, "rad"),
             "jitter": 0.3,
         }
-        lp = model.log_prob(nl, data, linear_prior=linear_prior_jt)
+        lp = model.log_prob(nl, data, linear_priors=linear_prior_jt)
         assert jnp.isfinite(lp)
 
     def test_all_three_extensions(self):
@@ -443,13 +443,13 @@ class TestCombinedExtensions:
             "arg_peri": Q(0.5, "rad"),
             "jitter": 0.2,
         }
-        lp = model.log_prob(nl, data, linear_prior=linear_prior_all)
+        lp = model.log_prob(nl, data, linear_priors=linear_prior_all)
         assert jnp.isfinite(lp)
 
         # Sample conditional
         key = jax.random.PRNGKey(0)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_prior=linear_prior_all
+            nl, key, data, linear_priors=linear_prior_all
         )
         assert set(samples) == {"rv_semiamp", "v_sys", "trend_1", "other_surv"}
         assert all(jnp.isfinite(v) for v in samples.values())

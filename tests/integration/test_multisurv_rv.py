@@ -39,7 +39,7 @@ class TestMultiSurveyModel:
             reference="keck",
         )
 
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
             "espresso": QD(dist.Normal(0.0, 5.0), "km/s"),
@@ -53,7 +53,7 @@ class TestMultiSurveyModel:
             "phase_peri": 0.5,
             "arg_peri": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, stacked, linear_prior=linear_prior)
+        log_lik = model.log_prob(nl, stacked, linear_priors=linear_priors)
         assert jnp.isfinite(log_lik)
 
     def test_log_prob_higher_than_single_instrument(self):
@@ -92,10 +92,10 @@ class TestMultiSurveyModel:
             "arg_peri": Q(0.0, "rad"),
         }
         log_lik_multi = model_multi.log_prob(
-            nl, stacked, linear_prior=linear_prior_multi
+            nl, stacked, linear_priors=linear_prior_multi
         )
         log_lik_single = model_single.log_prob(
-            nl, stacked, linear_prior=linear_prior_base
+            nl, stacked, linear_priors=linear_prior_base
         )
         assert log_lik_multi > log_lik_single
 
@@ -114,7 +114,7 @@ class TestMultiSurveyModel:
             reference="keck",
         )
 
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 100.0), "km/s"),
             "hires": QD(dist.Normal(0.0, 5.0), "km/s"),
@@ -131,7 +131,9 @@ class TestMultiSurveyModel:
             "arg_peri": Q(jnp.ones(n) * 1.0, "rad"),
         }
         log_liks = jax.jit(
-            jax.vmap(lambda nl: model.log_prob(nl, stacked, linear_prior=linear_prior))
+            jax.vmap(
+                lambda nl: model.log_prob(nl, stacked, linear_priors=linear_priors)
+            )
         )(nl_batch)
 
         assert log_liks.shape == (n,)
@@ -162,11 +164,11 @@ class TestMultiSurveyRejectionSampler:
             RVData,
             reference="keck",
         )
-        # Merge extension_priors (offset priors) into linear_prior for the model.
+        # Merge extension_priors (offset priors) into linear_priors for the model.
         # For MultiSurveyOffset all extension params are linear, so merging is safe.
         # Build the model explicitly because MultiSurveyOffset requires structural
         # info (the indicator matrix) that cannot be inferred from the prior alone.
-        merged_linear = {**prior.linear_prior, **prior.extension_priors}
+        merged_linear = {**prior.linear_priors, **prior.extension_priors}
         model = RVModel(
             extensions=(MultiSurveyOffset(indicator, instrument_names, "km/s"),),
         )

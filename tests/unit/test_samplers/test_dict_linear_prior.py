@@ -65,9 +65,9 @@ class TestDictLinearPriorRV:
             nonlinear_samples,
             marginalized_names,
             data,
-            linear_prior,
+            linear_priors,
         ):
-            del self, model, key, marginalized_names, data, linear_prior
+            del self, model, key, marginalized_names, data, linear_priors
             n = len(next(iter(nonlinear_samples.values())))
             return {
                 "rv_semiamp": Q(jnp.zeros(n), "km/s"),
@@ -134,9 +134,9 @@ class TestDictLinearPriorRV:
             nonlinear_samples,
             marginalized_names,
             data,
-            linear_prior,
+            linear_priors,
         ):
-            del self, model, key, marginalized_names, data, linear_prior
+            del self, model, key, marginalized_names, data, linear_priors
             n = len(next(iter(nonlinear_samples.values())))
             return {
                 "rv_semiamp": Q(jnp.zeros(n), "km/s"),
@@ -175,7 +175,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -199,7 +199,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -227,7 +227,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -253,7 +253,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -275,7 +275,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -299,7 +299,7 @@ class TestDictLinearPriorRV:
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
                 "v_sys": QD(dist.Delta(0.0), "km/s"),
             },

@@ -203,7 +203,7 @@ class TestRVModelWithEcoswEsinw:
             "esinw": _ESINW,
             "phase_peri": 0.0,
         }
-        ll = model.log_prob(nl, data, linear_prior=_rv_prior())
+        ll = model.log_prob(nl, data, linear_priors=_rv_prior())
         assert jnp.isfinite(ll)
 
     def test_jit(self):
@@ -218,7 +218,7 @@ class TestRVModelWithEcoswEsinw:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl, data, linear_prior=_rv_prior())
+            return model.log_prob(nl, data, linear_priors=_rv_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -277,8 +277,8 @@ class TestNumericalEquivalence:
             "phase_peri": 0.0,
         }
 
-        ll_std = std_model.log_prob(nl_std, data, linear_prior=prior)
-        ll_eco = eco_model.log_prob(nl_eco, data, linear_prior=prior)
+        ll_std = std_model.log_prob(nl_std, data, linear_priors=prior)
+        ll_eco = eco_model.log_prob(nl_eco, data, linear_priors=prior)
 
         assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
             f"std={float(ll_std)}, eco={float(ll_eco)}"

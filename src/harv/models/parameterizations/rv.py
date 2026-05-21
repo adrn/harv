@@ -152,7 +152,7 @@ class StandardRV(AbstractParameterization):
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         }
-        linear_prior: dict[str, LinearPriorDist] = {
+        linear_priors: dict[str, LinearPriorDist] = {
             "rv_semiamp": _make_rv_semiamp_prior(
                 rv_semiamp=kwargs.pop("rv_semiamp", None),
                 sigma_K0=sigma_K0,
@@ -164,10 +164,10 @@ class StandardRV(AbstractParameterization):
             ),
         }
         extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
         return HarvPrior(
             nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
+            linear_priors=linear_priors,
             extension_priors=extension_priors,
         )
 
@@ -289,7 +289,7 @@ class EcoswEsinwRV(AbstractParameterization):
             "esinw": dist.Uniform(-1.0, 1.0),
             "phase_peri": dist.Uniform(0.0, 1.0),
         }
-        linear_prior: dict[str, LinearPriorDist] = {
+        linear_priors: dict[str, LinearPriorDist] = {
             "rv_semiamp": _make_rv_semiamp_prior(
                 rv_semiamp=kwargs.pop("rv_semiamp", None),
                 sigma_K0=sigma_K0,
@@ -301,9 +301,9 @@ class EcoswEsinwRV(AbstractParameterization):
             ),
         }
         extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
         return HarvPrior(
             nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
+            linear_priors=linear_priors,
             extension_priors=extension_priors,
         )

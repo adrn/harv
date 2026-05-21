@@ -64,7 +64,7 @@ class HarvPrior(eqx.Module):
         ``dist.Distribution`` for dimensionless parameters, or a
         :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
         physical units).
-    linear_prior
+    linear_priors
         Per-parameter priors for linear parameters. Each entry is classified:
 
         - ``dist.Normal`` or ``QD(Normal)`` -- Gaussian, can be analytically
@@ -82,7 +82,7 @@ class HarvPrior(eqx.Module):
     """
 
     nonlinear_priors: dict[str, PriorDist]
-    linear_prior: LinearPriorDict
+    linear_priors: LinearPriorDict
 
     # Priors for extension parameters (jitter, offsets, GP hyperparams, etc.).
     # Keys are the parameter names declared by the extension via extra_params().

@@ -92,8 +92,8 @@ class TestHarvPriorAstrometry:
         """Test linear prior is a dict with correct keys and types."""
         prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
 
-        assert isinstance(prior.linear_prior, dict)
-        assert set(prior.linear_prior.keys()) == {
+        assert isinstance(prior.linear_priors, dict)
+        assert set(prior.linear_priors.keys()) == {
             "ra0",
             "dec0",
             "pmra",
@@ -102,20 +102,20 @@ class TestHarvPriorAstrometry:
             "semi_major_axis",
         }
         # parallax should be HalfNormal (explicit)
-        assert isinstance(prior.linear_prior["parallax"], QD)
+        assert isinstance(prior.linear_priors["parallax"], QD)
         # semi_major_axis should be PeriodDependentSemiMajorAxisPrior (callable)
         assert isinstance(
-            prior.linear_prior["semi_major_axis"],
+            prior.linear_priors["semi_major_axis"],
             PeriodDependentSemiMajorAxisPrior,
         )
         # ra0/dec0 should be QuantityDistribution wrapping Normal
         for key in ("ra0", "dec0"):
-            assert isinstance(prior.linear_prior[key], QD)
-            assert isinstance(prior.linear_prior[key].distribution, dist.Normal)
+            assert isinstance(prior.linear_priors[key], QD)
+            assert isinstance(prior.linear_priors[key].distribution, dist.Normal)
         # pmra/pmdec should be ParallaxDependentProperMotionPrior (callable)
         for key in ("pmra", "pmdec"):
             assert isinstance(
-                prior.linear_prior[key],
+                prior.linear_priors[key],
                 ParallaxDependentProperMotionPrior,
             )
 
@@ -139,12 +139,12 @@ class TestHarvPriorRV:
             harps=QD(dist.Normal(0, 10.0), "km/s"),
         )
 
-        # Extension priors are stored in extension_priors, not linear_prior
+        # Extension priors are stored in extension_priors, not linear_priors
         assert "espresso" in prior.extension_priors
         assert "harps" in prior.extension_priors
-        # They are not in linear_prior (routing happens at run-time)
-        assert "espresso" not in prior.linear_prior
-        assert "harps" not in prior.linear_prior
+        # They are not in linear_priors (routing happens at run-time)
+        assert "espresso" not in prior.linear_priors
+        assert "harps" not in prior.linear_priors
 
     def test_rv_prior_sampling(self):
         """Test sampling from RV prior."""
@@ -178,7 +178,7 @@ class TestParameterOverrides:
         custom_K = QD(dist.Normal(0.0, 50.0), "km/s")
         kwargs = {k: v for k, v in _DEFAULT_RV_KWARGS.items() if k != "sigma_K0"}
         prior = hm.StandardRV().default_prior(**kwargs, rv_semiamp=custom_K)
-        assert prior.linear_prior["rv_semiamp"] is custom_K
+        assert prior.linear_priors["rv_semiamp"] is custom_K
 
     def test_rv_override_both(self):
         """Nonlinear and linear overrides can be combined."""
@@ -190,7 +190,7 @@ class TestParameterOverrides:
             **kwargs, eccentricity=custom_ecc, v_sys=custom_v0
         )
         assert prior.nonlinear_priors["eccentricity"] is custom_ecc
-        assert prior.linear_prior["v_sys"] is custom_v0
+        assert prior.linear_priors["v_sys"] is custom_v0
 
     def test_rv_unknown_kwarg_becomes_extension_prior(self):
         """Unknown kwarg is accepted and stored in extension_priors."""
@@ -217,7 +217,7 @@ class TestParameterOverrides:
         prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, parallax=custom_parallax
         )
-        assert prior.linear_prior["parallax"] is custom_parallax
+        assert prior.linear_priors["parallax"] is custom_parallax
 
     def test_astro_unknown_kwarg_becomes_extension_prior(self):
         """Unknown kwarg is accepted and stored in extension_priors."""
@@ -237,7 +237,7 @@ class TestParameterOverrides:
         prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, parallax=custom_parallax
         )
-        assert prior.linear_prior["parallax"] is custom_parallax
+        assert prior.linear_priors["parallax"] is custom_parallax
 
     def test_astro_override_pos_omits_sigma_pos(self):
         """Passing ra0= and dec0= directly lets sigma_pos be omitted."""
@@ -247,8 +247,8 @@ class TestParameterOverrides:
         prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, ra0=custom_ra0, dec0=custom_dec0
         )
-        assert prior.linear_prior["ra0"] is custom_ra0
-        assert prior.linear_prior["dec0"] is custom_dec0
+        assert prior.linear_priors["ra0"] is custom_ra0
+        assert prior.linear_priors["dec0"] is custom_dec0
 
     def test_astro_override_semi_major_axis_omits_sigma_a0(self):
         """Passing semi_major_axis= directly lets sigma_a0 be omitted."""
@@ -257,7 +257,7 @@ class TestParameterOverrides:
         prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, semi_major_axis=custom_sma
         )
-        assert prior.linear_prior["semi_major_axis"] is custom_sma
+        assert prior.linear_priors["semi_major_axis"] is custom_sma
 
     def test_astro_override_pmra_pmdec_omits_sigma_vtan(self):
         """Passing pmra= and pmdec= directly lets sigma_vtan be omitted."""
@@ -267,8 +267,8 @@ class TestParameterOverrides:
         prior = hm.StandardGaiaAstrometry().default_prior(
             **kwargs, pmra=custom_pmra, pmdec=custom_pmdec
         )
-        assert prior.linear_prior["pmra"] is custom_pmra
-        assert prior.linear_prior["pmdec"] is custom_pmdec
+        assert prior.linear_priors["pmra"] is custom_pmra
+        assert prior.linear_priors["pmdec"] is custom_pmdec
 
     def test_astro_conflict_raises_parallax(self):
         """Providing both parallax= and sigma_parallax= raises TypeError."""
@@ -313,7 +313,7 @@ class TestPriorValidation:
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0, 1),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": dist.Normal(0.0, 1000.0),
                 "v_sys": dist.Normal(0.0, 1000.0),
             },
@@ -330,7 +330,7 @@ class TestPriorValidation:
                 "arg_peri": dist.Uniform(0, 6.28),
                 "lon_asc_node": dist.Uniform(0, 6.28),
             },
-            linear_prior={
+            linear_priors={
                 "ra0": dist.Normal(0.0, 1000.0),
                 "dec0": dist.Normal(0.0, 1000.0),
                 "pmra": dist.Normal(0.0, 1000.0),
@@ -353,13 +353,13 @@ class TestDictLinearPrior:
                 "phase_peri": dist.Uniform(0, 1),
                 "arg_peri": dist.Uniform(0, 6.28),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": dist.Normal(0.0, 100.0),
                 "v_sys": dist.Normal(0.0, 50.0),
             },
         )
-        assert isinstance(prior.linear_prior, dict)
-        assert set(prior.linear_prior.keys()) == {"rv_semiamp", "v_sys"}
+        assert isinstance(prior.linear_priors, dict)
+        assert set(prior.linear_priors.keys()) == {"rv_semiamp", "v_sys"}
 
     def test_dict_with_delta(self):
         """Delta entries are accepted in dict-form linear prior."""
@@ -370,12 +370,12 @@ class TestDictLinearPrior:
                 "phase_peri": dist.Uniform(0, 1),
                 "arg_peri": dist.Uniform(0, 6.28),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": dist.Delta(10.0),
                 "v_sys": dist.Normal(0.0, 50.0),
             },
         )
-        assert isinstance(prior.linear_prior, dict)
+        assert isinstance(prior.linear_priors, dict)
 
     def test_dict_with_mixed_types(self):
         """All three categories (Gaussian, Delta, explicit) in one dict."""
@@ -388,7 +388,7 @@ class TestDictLinearPrior:
                 "arg_peri": dist.Uniform(0, 6.28),
                 "lon_asc_node": dist.Uniform(0, 6.28),
             },
-            linear_prior={
+            linear_priors={
                 "ra0": dist.Normal(0.0, 1000.0),
                 "dec0": dist.Normal(0.0, 1000.0),
                 "pmra": dist.Normal(0.0, 100.0),
@@ -397,13 +397,13 @@ class TestDictLinearPrior:
                 "semi_major_axis": dist.HalfNormal(10.0),
             },
         )
-        assert isinstance(prior.linear_prior, dict)
-        assert len(prior.linear_prior) == 6
+        assert isinstance(prior.linear_priors, dict)
+        assert len(prior.linear_priors) == 6
 
     def test_default_rv_has_dict_linear_prior(self):
-        """default_rv returns a prior with dict-form linear_prior."""
+        """default_rv returns a prior with dict-form linear_priors."""
         prior = hm.StandardRV().default_prior(**_DEFAULT_RV_KWARGS)
-        assert isinstance(prior.linear_prior, dict)
+        assert isinstance(prior.linear_priors, dict)
 
     def test_dict_with_quantity_distribution(self):
         """QuantityDistribution entries in dict are accepted."""
@@ -414,13 +414,13 @@ class TestDictLinearPrior:
                 "phase_peri": dist.Uniform(0, 1),
                 "arg_peri": dist.Uniform(0, 6.28),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
         )
-        assert isinstance(prior.linear_prior, dict)
-        assert set(prior.linear_prior.keys()) == {"rv_semiamp", "v_sys"}
+        assert isinstance(prior.linear_priors, dict)
+        assert set(prior.linear_priors.keys()) == {"rv_semiamp", "v_sys"}
 
 
 class TestPriorProperties:
@@ -433,8 +433,8 @@ class TestPriorProperties:
             inst2=QD(dist.Normal(0, 5), "km/s"),
         )
         assert "inst2" in rv_prior_offsets.extension_priors
-        # inst2 is NOT in linear_prior until routing happens at run-time
-        assert "inst2" not in rv_prior_offsets.linear_prior
+        # inst2 is NOT in linear_priors until routing happens at run-time
+        assert "inst2" not in rv_prior_offsets.linear_priors
 
     def test_reproducible_sampling(self):
         """Test that sampling is reproducible with same seed."""
@@ -464,7 +464,7 @@ class TestParameterizationDefaultPriors:
             "period",
             "phase_peri",
         ]
-        assert sorted(prior.linear_prior.keys()) == ["rv_semiamp", "v_sys"]
+        assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
     def test_ecosw_esinw_rv_keys(self):
         prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
@@ -474,7 +474,7 @@ class TestParameterizationDefaultPriors:
             "period",
             "phase_peri",
         ]
-        assert sorted(prior.linear_prior.keys()) == ["rv_semiamp", "v_sys"]
+        assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
     def test_ecosw_esinw_sampling_ranges(self):
         prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
@@ -499,7 +499,7 @@ class TestParameterizationDefaultPriors:
             "period",
             "phase_peri",
         ]
-        assert sorted(prior.linear_prior.keys()) == [
+        assert sorted(prior.linear_priors.keys()) == [
             "dec0",
             "parallax",
             "pmdec",
@@ -515,7 +515,7 @@ class TestParameterizationDefaultPriors:
             "period",
             "phase_peri",
         ]
-        assert sorted(prior.linear_prior.keys()) == [
+        assert sorted(prior.linear_priors.keys()) == [
             "dec0",
             "parallax",
             "pmdec",
@@ -532,7 +532,7 @@ class TestParameterizationDefaultPriors:
         prior = ThieleInnesGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
         for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
             assert isinstance(
-                prior.linear_prior[name], PeriodDependentSemiMajorAxisPrior
+                prior.linear_priors[name], PeriodDependentSemiMajorAxisPrior
             )
 
     def test_thiele_innes_ti_override(self):
@@ -540,7 +540,7 @@ class TestParameterizationDefaultPriors:
         prior = ThieleInnesGaiaAstrometry().default_prior(
             **_DEFAULT_ASTRO_KWARGS, ti_A=custom
         )
-        assert prior.linear_prior["ti_A"] is custom
+        assert prior.linear_priors["ti_A"] is custom
 
     def test_abstract_default_prior_raises(self):
         """The base-class stub raises NotImplementedError."""
@@ -565,7 +565,7 @@ class TestDefaultSB2Prior:
             "period",
             "phase_peri",
         ]
-        assert sorted(prior.linear_prior.keys()) == [
+        assert sorted(prior.linear_priors.keys()) == [
             "primary.rv_semiamp",
             "secondary.rv_semiamp",
             "v_sys",
@@ -574,7 +574,7 @@ class TestDefaultSB2Prior:
     def test_custom_component_names(self):
 
         prior = default_sb2_prior(**_DEFAULT_RV_KWARGS, component_names=("A", "B"))
-        assert sorted(prior.linear_prior.keys()) == [
+        assert sorted(prior.linear_priors.keys()) == [
             "A.rv_semiamp",
             "B.rv_semiamp",
             "v_sys",

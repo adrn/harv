@@ -734,7 +734,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         linear = {**astro_linear, **rv_linear}
         prior = HarvPrior(
             nonlinear_priors=nonlinear,
-            linear_prior=linear,
+            linear_priors=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},
         )
         joint_data = {"astro": astro_data, "rv": rv_data}

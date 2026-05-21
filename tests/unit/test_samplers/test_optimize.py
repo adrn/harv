@@ -113,7 +113,7 @@ class TestNumpyroSamplerOptimize:
 
         model = rv_sampler.model
         prior_nl = rv_sampler.prior.nonlinear_priors
-        eff_lp = rv_sampler.prior.linear_prior
+        eff_lp = rv_sampler.prior.linear_priors
 
         for i in range(off_mode_samples.n_samples):
             warm_nl = {
@@ -123,7 +123,7 @@ class TestNumpyroSamplerOptimize:
                 "arg_peri": off_mode_samples.nonlinear["arg_peri"][i],
             }
             warm_lik = float(
-                model.log_prob(warm_nl, rv_data_and_truth, linear_prior=eff_lp)
+                model.log_prob(warm_nl, rv_data_and_truth, linear_priors=eff_lp)
             )
             warm_prior = float(
                 _evaluate_nonlinear_log_prior(
@@ -250,7 +250,7 @@ def joint_sampler_and_data():
         "arg_peri": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
         "lon_asc_node": QD(ndist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }
-    prior = HarvPrior(nonlinear_priors=nonlinear, linear_prior=linear)
+    prior = HarvPrior(nonlinear_priors=nonlinear, linear_priors=linear)
     joint = JointModel.for_rv_and_gaia(
         components={"astro": GaiaAstrometryModel(), "rv": RVModel()}
     )
@@ -399,7 +399,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
                 "eccentricity": ndist.TruncatedNormal(0.3, 0.2, low=0.0, high=1.0),
                 "phase_peri": ndist.Uniform(0.0, 1.0),
             },
-            linear_prior={
+            linear_priors={
                 "ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
                 "dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
                 "pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),
@@ -594,7 +594,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
                 "eccentricity": ndist.TruncatedNormal(0.5, 0.4, low=0.0, high=1.0),
                 "phase_peri": ndist.Uniform(0.0, 1.0),
             },
-            linear_prior={
+            linear_priors={
                 "ra0": QD(ndist.Normal(0.0, 100.0), "mas"),
                 "dec0": QD(ndist.Normal(0.0, 100.0), "mas"),
                 "pmra": QD(ndist.Normal(0.0, 50.0), "mas/yr"),

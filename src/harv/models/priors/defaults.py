@@ -93,7 +93,7 @@ def default_sb2_prior(
     ...         period_max=Q(1000.0, "day"),
     ...         sigma_K0=Q(30.0, "km/s"),
     ...         sigma_v0=Q(50.0, "km/s"),
-    ...     ).linear_prior
+    ...     ).linear_priors
     ... )
     ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
     """
@@ -108,7 +108,7 @@ def default_sb2_prior(
         "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }
 
-    linear_prior: LinearPriorDict = {
+    linear_priors: LinearPriorDict = {
         f"{name}.rv_semiamp": _make_rv_semiamp_prior(
             rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
             sigma_K0=sigma_K0,
@@ -116,16 +116,16 @@ def default_sb2_prior(
         )
         for name in component_names
     }
-    linear_prior["v_sys"] = _make_vsys_prior(
+    linear_priors["v_sys"] = _make_vsys_prior(
         v_sys=kwargs.pop("v_sys", None),
         sigma_v0=sigma_v0,
     )
 
     extension_priors: dict[str, PriorDist] = {}
-    _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+    _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
 
     return HarvPrior(
         nonlinear_priors=nonlinear,
-        linear_prior=linear_prior,
+        linear_priors=linear_priors,
         extension_priors=extension_priors,
     )

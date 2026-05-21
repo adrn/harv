@@ -178,7 +178,7 @@ class TestMultiSurveyRVRecovery:
             reference="keck",
         )
         extensions = (MultiSurveyOffset(indicator, instrument_names, "km/s"),)
-        # Merge extension linear params (harps offset) into the model's linear_prior.
+        # Merge extension linear params (harps offset) into the model's linear_priors.
         # For from_model, we handle routing manually since _build_model is not called.
         model = RVModel(extensions=extensions)
         sampler = RejectionSampler(prior, model)
@@ -349,7 +349,7 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_prior=lp)
+        log_lik = model.log_prob(nl, data, linear_priors=lp)
         assert jnp.isfinite(log_lik), (
             f"log_prob at true params is not finite: {log_lik}"
         )
@@ -374,7 +374,7 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik_true = float(model.log_prob(nl_true, data, linear_prior=lp))
+        log_lik_true = float(model.log_prob(nl_true, data, linear_priors=lp))
 
         # Sample 1000 random nonlinear parameter sets from the prior
         prior = hm.StandardGaiaAstrometry().default_prior(
@@ -395,7 +395,7 @@ class TestAstrometryLikelihoodSanity:
             "lon_asc_node": Q(prior_nl["lon_asc_node"], "rad"),
         }
         log_liks_prior = jax.jit(
-            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_priors=lp))
         )(nl_batch)
         median_prior_log_lik = float(jnp.median(log_liks_prior))
 
@@ -427,7 +427,7 @@ class TestAstrometryLikelihoodSanity:
             "lon_asc_node": Q(jnp.ones(n_grid) * lon_asc, "rad"),
         }
         log_liks = jax.jit(
-            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_priors=lp))
         )(nl_batch)
         best_period = float(test_periods[jnp.argmax(log_liks)])
 

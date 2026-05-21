@@ -119,7 +119,7 @@ def _build_extra_numpyro_model(
 
     component = model
     all_linear_names = component._all_linear_names()
-    linear_prior = effective_linear_prior or {}
+    linear_priors = effective_linear_prior or {}
     param_units = component._linear_param_units(data)
 
     def model_fn() -> None:
@@ -153,24 +153,24 @@ def _build_extra_numpyro_model(
             name for name in free_names if name not in set(requested_marginalized_names)
         )
         explicit_direct_prior = {
-            name: linear_prior[name]
+            name: linear_priors[name]
             for name in explicit_names
-            if name in linear_prior
+            if name in linear_priors
             and (
-                not callable(linear_prior[name])
+                not callable(linear_priors[name])
                 or isinstance(
-                    linear_prior[name],
+                    linear_priors[name],
                     (dist.Distribution, QuantityDistribution),
                 )
             )
         }
         explicit_callable_prior = {
-            name: linear_prior[name]
+            name: linear_priors[name]
             for name in explicit_names
-            if name in linear_prior
-            and callable(linear_prior[name])
+            if name in linear_priors
+            and callable(linear_priors[name])
             and not isinstance(
-                linear_prior[name],
+                linear_priors[name],
                 (dist.Distribution, QuantityDistribution),
             )
         }
@@ -212,7 +212,7 @@ def _build_extra_numpyro_model(
                 component.log_prob(
                     nl_values,
                     data,
-                    linear_prior=effective_linear_prior,
+                    linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=requested_marginalized_names,
                 ),
@@ -223,7 +223,7 @@ def _build_extra_numpyro_model(
                 component.log_prob(
                     nl_values,
                     data,
-                    linear_prior=effective_linear_prior,
+                    linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=(),
                 ),
@@ -891,7 +891,7 @@ class NumpyroSampler(AbstractSampler):
             return model.log_prob(
                 wrapped,
                 data,
-                linear_prior=effective_linear_prior,
+                linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
             )
 
@@ -999,7 +999,7 @@ class NumpyroSampler(AbstractSampler):
                 wrapped,
                 key,
                 data,
-                linear_prior=effective_linear_prior,
+                linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
                 use_mean=use_mean,
             )
