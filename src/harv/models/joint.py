@@ -66,14 +66,6 @@ def _split_nl_values(
     return result
 
 
-_DEFAULT_SHARED_PARAMS: tuple[str, ...] = (
-    "period",
-    "eccentricity",
-    "phase_peri",
-    "arg_peri",
-)
-
-
 def _priors_equal(a: Any, b: Any) -> bool:
     """Return True if two prior specs are structurally equal.
 
@@ -228,7 +220,7 @@ class JointModel(eqx.Module):
             The constructed JointModel.
         """
         if shared_params is None:
-            shared_params = _DEFAULT_SHARED_PARAMS
+            shared_params = ("period", "eccentricity", "phase_peri", "arg_peri")
         if shared_linear_params is None:
             shared_linear_params = ()
         return cls(
