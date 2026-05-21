@@ -250,7 +250,7 @@ class JointModel(eqx.Module):
         """Build an SB2 JointModel from a prior.
 
         The ``prior`` is expected to follow the convention of
-        :meth:`~harv.samplers.RejectionPrior.default_sb2`: linear-prior keys
+        :func:`~harv.samplers.default_sb2_prior`: linear-prior keys
         ``name1.rv_semiamp`` and ``name2.rv_semiamp`` map to the per-component
         ``rv_semiamp`` of the components, named "name1" and "name2" in this example, but
         they can be customized. Other linear-prior keys (e.g. ``v_sys``) are
@@ -290,8 +290,8 @@ class JointModel(eqx.Module):
         --------
         >>> from unxt import Q
         >>> from harv.models.joint import JointModel
-        >>> from harv.samplers import RejectionPrior
-        >>> prior = RejectionPrior.default_sb2(
+        >>> from harv.samplers import default_sb2_prior
+        >>> prior = default_sb2_prior(
         ...     period_min=Q(10., "day"), period_max=Q(1000., "day"),
         ...     sigma_K0=Q(30., "km/s"), sigma_v0=Q(50., "km/s"),
         ... )
@@ -322,7 +322,7 @@ class JointModel(eqx.Module):
         if not all(k in prior.linear_prior for k in expected_names):
             raise ValueError(
                 "prior.linear_prior is missing SB2 keys: should contain "
-                f"{expected_names}. Use RejectionPrior.default_sb2(...) or supply a "
+                f"{expected_names}. Use default_sb2_prior(...) or supply a "
                 "compatible prior."
             )
 

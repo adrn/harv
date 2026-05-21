@@ -145,14 +145,12 @@ class TestGaiaAstrometryModelThieleInnes:
         }
 
     def test_construction(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         model = GaiaAstrometryModel(parameterization=p)
         assert isinstance(model.parameterization, ThieleInnesGaiaAstrometry)
 
     def test_param_names(self):
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         assert set(model._all_nonlinear_names()) == {
             "period",
             "eccentricity",
@@ -172,17 +170,13 @@ class TestGaiaAstrometryModelThieleInnes:
 
     def test_design_matrix_shape(self):
         data = _make_astro_data(n_obs=20)
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         X = model._base_design_matrix(self._ti_nl_values(), data=data)
         assert X.shape == (20, 9)
 
     def test_linear_param_units(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         units = model._linear_param_units(data)
         assert units["pmra"] == "mas/yr"
         assert units["ti_A"] == "mas"
@@ -193,7 +187,7 @@ class TestGaiaAstrometryModelThieleInnes:
     def test_log_prob_finite(self):
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
         ll = model.log_prob(
             self._ti_nl_values(), data=data, linear_prior=self._ti_prior()
@@ -203,7 +197,7 @@ class TestGaiaAstrometryModelThieleInnes:
     def test_log_prob_jit(self):
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
         nl = self._ti_nl_values()
 
@@ -244,7 +238,7 @@ class TestGaiaAstrometryModelThieleInnes:
 
         model_std = GaiaAstrometryModel()
         model_ti = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
 
         X_std = model_std._base_design_matrix(nl_std, data=data)

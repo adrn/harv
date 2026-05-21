@@ -38,6 +38,7 @@ __all__ = (
     "RejectionPrior",
     "RejectionSampler",
     "Samples",
+    "default_sb2_prior",
     # Modules:
     "data",
     "plot",
@@ -69,6 +70,7 @@ from harv.samplers import (
     RejectionPrior,
     RejectionSampler,
     Samples,
+    default_sb2_prior,
 )
 from harv import data
 from harv import plot

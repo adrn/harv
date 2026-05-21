@@ -6,6 +6,13 @@ import pytest
 from unxt import Q
 
 from harv.distributions import QD
+from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.gaia import (
+    StandardGaiaAstrometry,
+    ThieleInnesGaiaAstrometry,
+)
+from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.samplers import default_sb2_prior
 from harv.samplers.custom_priors import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentSemiMajorAxisPrior,
@@ -453,3 +460,173 @@ class TestPriorProperties:
         # Should be identical
         assert (samples1["period"] == samples2["period"]).all()
         assert (samples1["eccentricity"] == samples2["eccentricity"]).all()
+
+
+class TestFromParameterization:
+    """Tests for RejectionPrior.from_parameterization and per-parameterization defaults.
+
+    These exercise the new design where each concrete parameterization owns its
+    default-prior construction, and ``from_parameterization`` is a generic
+    dispatcher.
+    """
+
+    def test_standard_rv_matches_default_rv(self):
+
+        via_method = RejectionPrior.from_parameterization(
+            StandardRV(), **_DEFAULT_RV_KWARGS
+        )
+        via_classmethod = RejectionPrior.default_rv(**_DEFAULT_RV_KWARGS)
+
+        assert (
+            sorted(via_method.nonlinear_priors.keys())
+            == sorted(via_classmethod.nonlinear_priors.keys())
+            == ["arg_peri", "eccentricity", "period", "phase_peri"]
+        )
+        assert (
+            sorted(via_method.linear_prior.keys())
+            == sorted(via_classmethod.linear_prior.keys())
+            == ["rv_semiamp", "v_sys"]
+        )
+
+    def test_ecosw_esinw_rv_keys(self):
+
+        prior = RejectionPrior.from_parameterization(
+            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS
+        )
+        assert sorted(prior.nonlinear_priors.keys()) == [
+            "ecosw",
+            "esinw",
+            "period",
+            "phase_peri",
+        ]
+        assert sorted(prior.linear_prior.keys()) == ["rv_semiamp", "v_sys"]
+
+    def test_ecosw_esinw_sampling_ranges(self):
+
+        prior = RejectionPrior.from_parameterization(
+            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS
+        )
+        samples = prior.sample_nonlinear(jr.key(0), n_samples=200)
+        for key in ("ecosw", "esinw"):
+            assert samples[key].shape == (200,)
+            assert (samples[key] >= -1.0).all()
+            assert (samples[key] <= 1.0).all()
+
+    def test_ecosw_override(self):
+
+        custom = dist.Uniform(-0.5, 0.5)
+        prior = RejectionPrior.from_parameterization(
+            EcoswEsinwRV(), **_DEFAULT_RV_KWARGS, ecosw=custom
+        )
+        assert prior.nonlinear_priors["ecosw"] is custom
+
+    def test_standard_gaia_matches_default_gaia(self):
+
+        via_method = RejectionPrior.from_parameterization(
+            StandardGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
+        )
+        via_classmethod = RejectionPrior.default_gaia_astrometry(
+            **_DEFAULT_ASTRO_KWARGS
+        )
+
+        assert sorted(via_method.nonlinear_priors.keys()) == sorted(
+            via_classmethod.nonlinear_priors.keys()
+        )
+        assert sorted(via_method.linear_prior.keys()) == sorted(
+            via_classmethod.linear_prior.keys()
+        )
+
+    def test_thiele_innes_keys(self):
+
+        prior = RejectionPrior.from_parameterization(
+            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
+        )
+        assert sorted(prior.nonlinear_priors.keys()) == [
+            "eccentricity",
+            "period",
+            "phase_peri",
+        ]
+        assert sorted(prior.linear_prior.keys()) == [
+            "dec0",
+            "parallax",
+            "pmdec",
+            "pmra",
+            "ra0",
+            "ti_A",
+            "ti_B",
+            "ti_F",
+            "ti_G",
+        ]
+
+    def test_thiele_innes_ti_priors_use_period_dependent_scale(self):
+        """Each TI constant should default to PeriodDependentSemiMajorAxisPrior."""
+
+        prior = RejectionPrior.from_parameterization(
+            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS
+        )
+        for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
+            assert isinstance(
+                prior.linear_prior[name], PeriodDependentSemiMajorAxisPrior
+            )
+
+    def test_thiele_innes_ti_override(self):
+
+        custom = QD(dist.Normal(0.0, 1.0), "mas")
+        prior = RejectionPrior.from_parameterization(
+            ThieleInnesGaiaAstrometry(), **_DEFAULT_ASTRO_KWARGS, ti_A=custom
+        )
+        assert prior.linear_prior["ti_A"] is custom
+
+    def test_method_equivalence_to_from_parameterization(self):
+        """A test.
+
+        Calling parameterization.default_prior(...) directly == from_parameterization.
+        """
+
+        p = StandardRV()
+        a = p.default_prior(**_DEFAULT_RV_KWARGS)
+        b = RejectionPrior.from_parameterization(p, **_DEFAULT_RV_KWARGS)
+        assert sorted(a.nonlinear_priors) == sorted(b.nonlinear_priors)
+        assert sorted(a.linear_prior) == sorted(b.linear_prior)
+
+    def test_abstract_default_prior_raises(self):
+        """The base-class stub raises NotImplementedError."""
+
+        class Bogus(AbstractParameterization):
+            def params(self):
+                return ()
+
+        with pytest.raises(NotImplementedError, match="default_prior"):
+            Bogus().default_prior()
+
+
+class TestDefaultSB2Prior:
+    """A test.
+
+    Tests for the module-level ``default_sb2_prior`` (formerly
+    ``RejectionPrior.default_sb2``).
+    """
+
+    def test_creation_and_keys(self):
+
+        prior = default_sb2_prior(**_DEFAULT_RV_KWARGS)
+        assert sorted(prior.nonlinear_priors.keys()) == [
+            "arg_peri",
+            "eccentricity",
+            "period",
+            "phase_peri",
+        ]
+        assert sorted(prior.linear_prior.keys()) == [
+            "primary.rv_semiamp",
+            "secondary.rv_semiamp",
+            "v_sys",
+        ]
+
+    def test_custom_component_names(self):
+
+        prior = default_sb2_prior(**_DEFAULT_RV_KWARGS, component_names=("A", "B"))
+        assert sorted(prior.linear_prior.keys()) == [
+            "A.rv_semiamp",
+            "B.rv_semiamp",
+            "v_sys",
+        ]

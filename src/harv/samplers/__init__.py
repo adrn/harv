@@ -15,7 +15,7 @@ from .custom_priors import (
 )
 from .numpyro import NumpyroSampler
 from .rejection import RejectionSampler
-from .rejection_prior import RejectionPrior
+from .rejection_prior import RejectionPrior, default_sb2_prior
 from .samples import Samples
 
 
@@ -26,6 +26,7 @@ __all__ = [
     "PeriodDependentKPrior",
     "PeriodDependentSemiMajorAxisPrior",
     "convert_parameterization",
+    "default_sb2_prior",
     "QD",
     "QuantityDistribution",
     "RejectionPrior",

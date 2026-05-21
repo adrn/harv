@@ -22,7 +22,7 @@ import harv
 from harv.data import RVData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import JointModel, RVModel
-from harv.samplers import RejectionPrior, RejectionSampler
+from harv.samplers import RejectionPrior, RejectionSampler, default_sb2_prior
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -78,7 +78,7 @@ def rv_data_secondary() -> RVData:
 
 @pytest.fixture
 def sb2_prior() -> RejectionPrior:
-    return RejectionPrior.default_sb2(
+    return default_sb2_prior(
         period_min=Q(10.0, "day"),
         period_max=Q(1000.0, "day"),
         sigma_K0=Q(30.0, "km/s"),

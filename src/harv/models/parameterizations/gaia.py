@@ -11,15 +11,26 @@ from typing import TYPE_CHECKING, Any, final
 
 import equinox as eqx
 import jax
+import numpyro.distributions as dist
 import quaxed.numpy as jnp
+from unxt import Q
 from unxt.quantity import ustrip
 
+from harv.custom_types import (
+    ScalarQAngle,
+    ScalarQLength,
+    ScalarQSpeed,
+    ScalarQTime,
+)
+from harv.distributions import QuantityDistribution
 from harv.kepler.orbits import thiele_innes_ABFG
+from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
 
 if TYPE_CHECKING:
     from harv.data.datasets import GaiaAstrometryData
+    from harv.samplers.rejection_prior import RejectionPrior
 
 
 @final
@@ -145,6 +156,79 @@ class StandardGaiaAstrometry(AbstractParameterization):
                 semimaj_term,  # semi_major_axis
             ],
             axis=-1,
+        )
+
+    def default_prior(
+        self,
+        *,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_a0: ScalarQLength | None = None,
+        sigma_parallax: ScalarQAngle | None = None,
+        sigma_pos: ScalarQAngle | None = None,
+        sigma_vtan: ScalarQSpeed | None = None,
+        P0: ScalarQTime = Q(1.0, "yr"),
+        **kwargs: PriorDist | LinearPriorDist,
+    ) -> "RejectionPrior":
+        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+
+        Same defaults as :meth:`harv.samplers.RejectionPrior.default_gaia_astrometry`
+        (and ``default_gaia_astrometry`` is a thin wrapper around this method).
+        """
+        from harv.samplers.rejection_prior import (  # noqa: PLC0415
+            RejectionPrior,
+            _apply_overrides,
+            _make_parallax_prior,
+            _make_period_prior,
+            _make_pm_prior,
+            _make_pos_prior,
+            _make_semi_major_axis_prior,
+            kipping_2013_ecc_prior,
+        )
+
+        nonlinear: dict[str, PriorDist] = {
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
+            "eccentricity": kipping_2013_ecc_prior,
+            "phase_peri": dist.Uniform(0.0, 1.0),
+            "cos_i": dist.Uniform(-1.0, 1.0),
+            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+            "lon_asc_node": QuantityDistribution(
+                dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
+            ),
+        }
+        linear_prior: dict[str, LinearPriorDist] = {
+            "ra0": _make_pos_prior(
+                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
+            ),
+            "dec0": _make_pos_prior(
+                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
+            ),
+            "pmra": _make_pm_prior(
+                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+            ),
+            "pmdec": _make_pm_prior(
+                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+            ),
+            "parallax": _make_parallax_prior(
+                parallax=kwargs.pop("parallax", None),
+                sigma_parallax=sigma_parallax,
+            ),
+            "semi_major_axis": _make_semi_major_axis_prior(
+                semi_major_axis=kwargs.pop("semi_major_axis", None),
+                sigma_a0=sigma_a0,
+                P0=P0,
+            ),
+        }
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        return RejectionPrior(
+            nonlinear_priors=nonlinear,
+            linear_prior=linear_prior,
+            extension_priors=extension_priors,
         )
 
 
@@ -400,6 +484,95 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 Y * sin_psi,  # ti_G  (coefficient of G in dra projection)
             ],
             axis=-1,
+        )
+
+    def default_prior(
+        self,
+        *,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_a0: ScalarQLength | None = None,
+        sigma_parallax: ScalarQAngle | None = None,
+        sigma_pos: ScalarQAngle | None = None,
+        sigma_vtan: ScalarQSpeed | None = None,
+        P0: ScalarQTime = Q(1.0, "yr"),
+        **kwargs: PriorDist | LinearPriorDist,
+    ) -> "RejectionPrior":
+        """Build a :class:`~harv.samplers.RejectionPrior` with sensible defaults.
+
+        Nonlinear priors:
+
+        - ``period``: log-uniform on ``[period_min, period_max]``.
+        - ``eccentricity``: Kipping (2013) Beta prior.
+        - ``phase_peri``: ``Uniform(0, 1)``.
+
+        Linear priors:
+
+        - ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``: same defaults as
+          :meth:`StandardGaiaAstrometry.default_prior`.
+        - ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G``: each uses
+          :class:`~harv.samplers.custom_priors.PeriodDependentSemiMajorAxisPrior`,
+          the same scaling as ``semi_major_axis`` in
+          :class:`StandardGaiaAstrometry`.
+
+        The Jacobian correction
+        (:meth:`linear_log_prior_correction`, active when
+        ``apply_jacobian_correction=True``) restores the correct posterior
+        under a flat-Campbell-elements prior.
+        """
+        from harv.samplers.rejection_prior import (  # noqa: PLC0415
+            RejectionPrior,
+            _apply_overrides,
+            _make_parallax_prior,
+            _make_period_prior,
+            _make_pm_prior,
+            _make_pos_prior,
+            _make_semi_major_axis_prior,
+            kipping_2013_ecc_prior,
+        )
+
+        nonlinear: dict[str, PriorDist] = {
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
+            "eccentricity": kipping_2013_ecc_prior,
+            "phase_peri": dist.Uniform(0.0, 1.0),
+        }
+        linear_prior: dict[str, LinearPriorDist] = {
+            "ra0": _make_pos_prior(
+                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
+            ),
+            "dec0": _make_pos_prior(
+                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
+            ),
+            "pmra": _make_pm_prior(
+                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+            ),
+            "pmdec": _make_pm_prior(
+                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+            ),
+            "parallax": _make_parallax_prior(
+                parallax=kwargs.pop("parallax", None),
+                sigma_parallax=sigma_parallax,
+            ),
+        }
+        # All four TI constants share the same period/parallax-dependent scale.
+        # Per-constant overrides flow through kwargs ("ti_A", ...).
+        for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
+            override = kwargs.pop(name, None)
+            linear_prior[name] = _make_semi_major_axis_prior(
+                semi_major_axis=override,
+                sigma_a0=None if override is not None else sigma_a0,
+                P0=P0,
+            )
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+        return RejectionPrior(
+            nonlinear_priors=nonlinear,
+            linear_prior=linear_prior,
+            extension_priors=extension_priors,
         )
 
     def linear_log_prior_correction(

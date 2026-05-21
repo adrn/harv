@@ -7,7 +7,7 @@ The prior is agnostic to data type - it simply holds distributions for any/all
 parameters. The sampler validates which parameters are needed based on the data.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import equinox as eqx
 import jax
@@ -30,7 +30,10 @@ from harv.samplers.custom_priors import (
     PeriodDependentSemiMajorAxisPrior,
 )
 
-__all__ = ("RejectionPrior",)
+if TYPE_CHECKING:
+    from harv.models.parameterizations._base import AbstractParameterization
+
+__all__ = ("RejectionPrior", "default_sb2_prior")
 
 kipping_2013_ecc_prior = dist.Beta(0.867, 3.03)  # Kipping 2013 eccentricity prior
 
@@ -413,36 +416,15 @@ class RejectionPrior(eqx.Module):
         ... )
         ['espresso', 'jitter']
         """
-        nonlinear: dict[str, PriorDist] = {
-            "period": _make_period_prior(
-                period_min=period_min,
-                period_max=period_max,
-                period=kwargs.pop("period", None),
-            ),
-            "eccentricity": kipping_2013_ecc_prior,
-            "phase_peri": dist.Uniform(0.0, 1.0),
-            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
-        }
+        from harv.models.parameterizations.rv import StandardRV  # noqa: PLC0415
 
-        linear_prior: LinearPriorDict = {
-            "rv_semiamp": _make_rv_semiamp_prior(
-                rv_semiamp=kwargs.pop("rv_semiamp", None),
-                sigma_K0=sigma_K0,
-                P0=P0,
-            ),
-            "v_sys": _make_vsys_prior(
-                v_sys=kwargs.pop("v_sys", None),
-                sigma_v0=sigma_v0,
-            ),
-        }
-
-        extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-
-        return cls(
-            nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
-            extension_priors=extension_priors,
+        return StandardRV().default_prior(
+            period_min=period_min,
+            period_max=period_max,
+            sigma_K0=sigma_K0,
+            sigma_v0=sigma_v0,
+            P0=P0,
+            **kwargs,
         )
 
     @classmethod
@@ -534,152 +516,167 @@ class RejectionPrior(eqx.Module):
         >>> sorted(prior.nonlinear_priors.keys())
         ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
         """
-        nonlinear: dict[str, PriorDist] = {
-            "period": _make_period_prior(
-                period_min=period_min,
-                period_max=period_max,
-                period=kwargs.pop("period", None),
-            ),
-            "eccentricity": kipping_2013_ecc_prior,
-            "phase_peri": dist.Uniform(0.0, 1.0),
-            "cos_i": dist.Uniform(-1.0, 1.0),
-            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
-            "lon_asc_node": QuantityDistribution(
-                dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
-            ),
-        }
+        from harv.models.parameterizations.gaia import (  # noqa: PLC0415
+            StandardGaiaAstrometry,
+        )
 
-        linear_prior: LinearPriorDict = {
-            "ra0": _make_pos_prior(
-                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
-            ),
-            "dec0": _make_pos_prior(
-                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
-            ),
-            "pmra": _make_pm_prior(
-                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
-            ),
-            "pmdec": _make_pm_prior(
-                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
-            ),
-            "parallax": _make_parallax_prior(
-                parallax=kwargs.pop("parallax", None),
-                sigma_parallax=sigma_parallax,
-            ),
-            "semi_major_axis": _make_semi_major_axis_prior(
-                semi_major_axis=kwargs.pop("semi_major_axis", None),
-                sigma_a0=sigma_a0,
-                P0=P0,
-            ),
-        }
-
-        extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
-
-        return cls(
-            nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
-            extension_priors=extension_priors,
+        return StandardGaiaAstrometry().default_prior(
+            period_min=period_min,
+            period_max=period_max,
+            sigma_a0=sigma_a0,
+            sigma_parallax=sigma_parallax,
+            sigma_pos=sigma_pos,
+            sigma_vtan=sigma_vtan,
+            P0=P0,
+            **kwargs,
         )
 
     @classmethod
-    def default_sb2(
+    def from_parameterization(
         cls,
-        *,
-        period_min: ScalarQTime | None = None,
-        period_max: ScalarQTime | None = None,
-        sigma_K0: ScalarQSpeed | None = None,
-        sigma_v0: ScalarQSpeed | None = None,
-        P0: ScalarQTime = Q(1.0, "yr"),
-        component_names: tuple[str, str] = ("primary", "secondary"),
+        parameterization: "AbstractParameterization",
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "RejectionPrior":
-        r"""Create default prior for SB2 (double-lined) radial velocity data.
+        """Build a default prior for any supported parameterization.
 
-        Both semi-amplitudes use the same period-dependent scaling as
-        :meth:`default_rv`.  The systemic velocity prior is a fixed Gaussian.
-
-        The default names for the two components are "primary" and "secondary", which
-        means the linear priors for the semi-amplitudes must be keyed as
-        "primary.rv_semiamp" and "secondary.rv_semiamp".  You can customize the
-        component names via the ``component_names`` argument, but the linear prior keys
-        must always be ``{component_name}.rv_semiamp``
+        Delegates to ``parameterization.default_prior(**kwargs)``.  Each concrete
+        parameterization declares its own required scale arguments (e.g.
+        ``sigma_K0`` for RV, ``sigma_a0`` for astrometry).
 
         Parameters
         ----------
-        period_min
-            Lower bound for the log-uniform period prior.
-        period_max
-            Upper bound for the log-uniform period prior.
-        sigma_K0
-            RV semi-amplitude scale at the reference period ``P0``.
-        sigma_v0
-            Systemic velocity prior scale.
-        P0
-            Reference period for the K prior scaling.  Default: 1 yr.
-        component_names
-            Names of the two components.  These are used to construct the linear prior
-            keys for the semi-amplitudes (e.g. "primary.rv_semiamp" and
-            "secondary.rv_semiamp").
+        parameterization
+            A concrete parameterization (e.g. :class:`StandardRV`,
+            :class:`EcoswEsinwRV`, :class:`StandardGaiaAstrometry`,
+            :class:`ThieleInnesGaiaAstrometry`).
         **kwargs
-            Override any default nonlinear or linear prior by name.
+            Forwarded to the parameterization's ``default_prior`` method.
 
         Returns
         -------
-            Prior configured for SB2 RV data.
+        RejectionPrior
 
         Examples
         --------
         >>> from unxt import Q
+        >>> from harv.models.parameterizations.rv import EcoswEsinwRV
         >>> from harv.samplers import RejectionPrior
-        >>> sorted(
-        ...     RejectionPrior.default_sb2(
-        ...         period_min=Q(2.0, "day"),
-        ...         period_max=Q(1000.0, "day"),
-        ...         sigma_K0=Q(30.0, "km/s"),
-        ...         sigma_v0=Q(50.0, "km/s"),
-        ...     ).nonlinear_priors.keys()
+        >>> prior = RejectionPrior.from_parameterization(
+        ...     EcoswEsinwRV(),
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
         ... )
-        ['arg_peri', 'eccentricity', 'period', 'phase_peri']
-        >>> sorted(
-        ...     RejectionPrior.default_sb2(
-        ...         period_min=Q(2.0, "day"),
-        ...         period_max=Q(1000.0, "day"),
-        ...         sigma_K0=Q(30.0, "km/s"),
-        ...         sigma_v0=Q(50.0, "km/s"),
-        ...     ).linear_prior
-        ... )
-        ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
+        >>> sorted(prior.nonlinear_priors.keys())
+        ['ecosw', 'esinw', 'period', 'phase_peri']
         """
-        nonlinear: dict[str, PriorDist] = {
-            "period": _make_period_prior(
-                period_min=period_min,
-                period_max=period_max,
-                period=kwargs.pop("period", None),
-            ),
-            "eccentricity": kipping_2013_ecc_prior,
-            "phase_peri": dist.Uniform(0.0, 1.0),
-            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
-        }
+        return parameterization.default_prior(**kwargs)
 
-        linear_prior: LinearPriorDict = {
-            f"{name}.rv_semiamp": _make_rv_semiamp_prior(
-                rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
-                sigma_K0=sigma_K0,
-                P0=P0,
-            )
-            for name in component_names
-        }
-        linear_prior["v_sys"] = _make_vsys_prior(
-            v_sys=kwargs.pop("v_sys", None),
-            sigma_v0=sigma_v0,
+
+def default_sb2_prior(
+    *,
+    period_min: ScalarQTime | None = None,
+    period_max: ScalarQTime | None = None,
+    sigma_K0: ScalarQSpeed | None = None,
+    sigma_v0: ScalarQSpeed | None = None,
+    P0: ScalarQTime = Q(1.0, "yr"),
+    component_names: tuple[str, str] = ("primary", "secondary"),
+    **kwargs: PriorDist | LinearPriorDist,
+) -> "RejectionPrior":
+    r"""Create default prior for SB2 (double-lined) radial velocity data.
+
+    SB2 is a joint composition of two :class:`StandardRV` components, not a single
+    parameterization, so this lives as a module-level factory rather than a
+    classmethod on :class:`RejectionPrior`.  It pairs naturally with
+    :meth:`harv.models.JointModel.for_sb2` (``JointModel.for_sb2(prior=...)``).
+
+    Both semi-amplitudes use the same period-dependent scaling as
+    :meth:`RejectionPrior.default_rv`.  The systemic velocity prior is a fixed
+    Gaussian.
+
+    The default names for the two components are "primary" and "secondary", which
+    means the linear priors for the semi-amplitudes must be keyed as
+    "primary.rv_semiamp" and "secondary.rv_semiamp".  You can customize the
+    component names via the ``component_names`` argument, but the linear prior keys
+    must always be ``{component_name}.rv_semiamp``.
+
+    Parameters
+    ----------
+    period_min
+        Lower bound for the log-uniform period prior.
+    period_max
+        Upper bound for the log-uniform period prior.
+    sigma_K0
+        RV semi-amplitude scale at the reference period ``P0``.
+    sigma_v0
+        Systemic velocity prior scale.
+    P0
+        Reference period for the K prior scaling.  Default: 1 yr.
+    component_names
+        Names of the two components.  These are used to construct the linear prior
+        keys for the semi-amplitudes (e.g. "primary.rv_semiamp" and
+        "secondary.rv_semiamp").
+    **kwargs
+        Override any default nonlinear or linear prior by name.
+
+    Returns
+    -------
+    RejectionPrior
+        Prior configured for SB2 RV data.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers import default_sb2_prior
+    >>> sorted(
+    ...     default_sb2_prior(
+    ...         period_min=Q(2.0, "day"),
+    ...         period_max=Q(1000.0, "day"),
+    ...         sigma_K0=Q(30.0, "km/s"),
+    ...         sigma_v0=Q(50.0, "km/s"),
+    ...     ).nonlinear_priors.keys()
+    ... )
+    ['arg_peri', 'eccentricity', 'period', 'phase_peri']
+    >>> sorted(
+    ...     default_sb2_prior(
+    ...         period_min=Q(2.0, "day"),
+    ...         period_max=Q(1000.0, "day"),
+    ...         sigma_K0=Q(30.0, "km/s"),
+    ...         sigma_v0=Q(50.0, "km/s"),
+    ...     ).linear_prior
+    ... )
+    ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
+    """
+    nonlinear: dict[str, PriorDist] = {
+        "period": _make_period_prior(
+            period_min=period_min,
+            period_max=period_max,
+            period=kwargs.pop("period", None),
+        ),
+        "eccentricity": kipping_2013_ecc_prior,
+        "phase_peri": dist.Uniform(0.0, 1.0),
+        "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+    }
+
+    linear_prior: LinearPriorDict = {
+        f"{name}.rv_semiamp": _make_rv_semiamp_prior(
+            rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
+            sigma_K0=sigma_K0,
+            P0=P0,
         )
+        for name in component_names
+    }
+    linear_prior["v_sys"] = _make_vsys_prior(
+        v_sys=kwargs.pop("v_sys", None),
+        sigma_v0=sigma_v0,
+    )
 
-        extension_priors: dict[str, PriorDist] = {}
-        _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
+    extension_priors: dict[str, PriorDist] = {}
+    _apply_overrides(kwargs, nonlinear, linear_prior, extension_priors)
 
-        return cls(
-            nonlinear_priors=nonlinear,
-            linear_prior=linear_prior,
-            extension_priors=extension_priors,
-        )
+    return RejectionPrior(
+        nonlinear_priors=nonlinear,
+        linear_prior=linear_prior,
+        extension_priors=extension_priors,
+    )

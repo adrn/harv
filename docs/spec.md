@@ -526,6 +526,11 @@ build the design matrix. Subclasses implement:
   (nonlinear first, then linear).
 - `design_matrix(sin_f, cos_f, ..., nl_values)` -- build the design matrix
   from true-anomaly components and unit-stripped nonlinear values.
+- `default_prior(**kwargs) -> RejectionPrior` -- return a `RejectionPrior` with
+  sensible default distributions for the parameters this parameterization
+  declares.  The signature (which scale arguments are accepted) is
+  parameterization-specific.  The base-class definition raises
+  `NotImplementedError`; every concrete `@final` parameterization overrides it.
 
 Derived convenience methods:
 
@@ -542,6 +547,10 @@ Standard RV parameterization: `(period, eccentricity, phase_peri, arg_peri, rv_s
 
 Also provides `eccentricity(nl_values)` and `strip_nl_for_design(nl_values)`.
 
+`default_prior(*, period_min, period_max, sigma_K0, sigma_v0, P0=Q(1, "yr"), **kwargs)`
+returns the same `RejectionPrior` that [`RejectionPrior.default_rv(...)`](#default_rv)
+builds.
+
 ### `EcoswEsinwRV`
 
 Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
@@ -551,6 +560,19 @@ Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
 - Design matrix shape: `(n_obs, 2)` -- same columns, different internal derivation.
 
 This parameterization has better sampling geometry for low eccentricities.
+
+`default_prior(*, period_min, period_max, sigma_K0, sigma_v0, P0=Q(1, "yr"), **kwargs)`
+returns a `RejectionPrior` with the same period / `phase_peri` / linear (`rv_semiamp`,
+`v_sys`) priors as `StandardRV.default_prior`, plus:
+
+- `ecosw`: `Uniform(-1, 1)`
+- `esinw`: `Uniform(-1, 1)`
+
+Independent `Uniform(-1, 1)` priors on `ecosw` and `esinw` do **not** match the
+implicit prior under `e ~ Kipping(0.867, 3.03)` × `omega ~ Uniform(0, 2π)`.
+This is the simplest sensible default for this parameterization; users wanting a
+matched prior should sample with `StandardRV` and convert (or override via
+`**kwargs`).
 
 ### `StandardGaiaAstrometry`
 
@@ -564,6 +586,10 @@ The design matrix columns are
 `[sin(psi), cos(psi), sin(psi)*dt, cos(psi)*dt, H_parallax, TI_orbit]`
 where the Thiele-Innes orbital element combines the (A, B, F, G) constants
 with the X, Y orbital coordinates.
+
+`default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
+sigma_vtan, P0=Q(1, "yr"), **kwargs)` returns the same `RejectionPrior` that
+[`RejectionPrior.default_gaia_astrometry(...)`](#default_gaia_astrometry) builds.
 
 ### `ThieleInnesGaiaAstrometry`
 
@@ -615,6 +641,25 @@ or the convenience wrapper `samples.thiele_innes_to_campbell()`.
 
 **Limitation**: the RV forward model is not linear in `(A, B, F, G)`, so joint
 RV+astrometry fits must use `StandardGaiaAstrometry`.
+
+`default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
+sigma_vtan, P0=Q(1, "yr"), **kwargs)` returns a `RejectionPrior` with:
+
+- Nonlinear: `period` (log-uniform), `eccentricity` (Kipping 2013),
+  `phase_peri` (`Uniform(0, 1)`).
+- Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax` -- same defaults as
+  `StandardGaiaAstrometry.default_prior`.
+- Linear (TI constants): `ti_A`, `ti_B`, `ti_F`, `ti_G` -- each gets a
+  `PeriodDependentSemiMajorAxisPrior(sigma_a0, P0)` callable, mirroring the
+  default on `StandardGaiaAstrometry.semi_major_axis`.  The four TI constants
+  are linear projections of the angular semi-major axis onto the (RA, Dec)
+  sky plane modulated by `sin`/`cos` of the orientation angles, so each is
+  bounded by `a_0` and shares its scale.  Using a parallax-dependent prior is
+  also necessary for unit consistency (TI constants are angular; `sigma_a0`
+  is a length).
+
+The Jacobian correction (`apply_jacobian_correction=True`) restores the
+correct posterior under a flat-Campbell-elements prior.
 
 ### Parameter naming convention
 
@@ -882,7 +927,7 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 **Factory classmethods:**
 
 - `JointModel.for_sb2(prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
-  build an SB2 `JointModel` from a `RejectionPrior.default_sb2` prior. Automatically routes
+  build an SB2 `JointModel` from a `default_sb2_prior` prior. Automatically routes
   component-qualified linear-prior keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"`
   (or whatever names are in `component_names`) to the respective component models and declares all
   other linear-prior keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
@@ -1122,24 +1167,56 @@ analytically marginalized. For exoplanet searches where the catalog parallax is
 trustworthy, users can override with a `Normal` prior and set
 `marginalized_names=("parallax", ...)` on the sampler.
 
-#### `default_sb2`
+#### `from_parameterization`
 
 ```python
-RejectionPrior.default_sb2(
+RejectionPrior.from_parameterization(
+    parameterization: AbstractParameterization,
+    **kwargs,
+) -> RejectionPrior
+```
+
+Generic factory that builds a default prior for any supported parameterization.
+Delegates to `parameterization.default_prior(**kwargs)`.  Each concrete
+parameterization declares its own required scale arguments — see the
+[Parameterizations](#parameterizations-harvmodelsparameterizations) section.
+
+`default_rv(...)` and `default_gaia_astrometry(...)` are equivalent to
+`from_parameterization(StandardRV(), ...)` and
+`from_parameterization(StandardGaiaAstrometry(), ...)` respectively, and are kept
+for convenience.
+
+For parameterizations other than the standard ones (`EcoswEsinwRV`,
+`ThieleInnesGaiaAstrometry`), use `from_parameterization` (or call
+`parameterization.default_prior(...)` directly).
+
+#### `default_sb2_prior` (module-level)
+
+```python
+from harv.samplers import default_sb2_prior
+
+default_sb2_prior(
     *,
     period_min: Q["time"],     # required
     period_max: Q["time"],     # required
     sigma_K0: Q["speed"],      # required — RV amplitude scale
     sigma_v0: Q["speed"],      # required — systemic velocity scale
     P0: Q["time"] = Q(1.0, "yr"),
+    component_names: tuple[str, str] = ("primary", "secondary"),
     **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
 ) -> RejectionPrior
 ```
 
-Same defaults as `default_rv` but with three linear parameters:
+A module-level factory (not a classmethod on `RejectionPrior`) because SB2 is a
+joint composition of two `StandardRV` components rather than a single
+parameterization.  Pairs naturally with `JointModel.for_sb2(prior=...)`.
 
-- `rv_semiamp_1`, `rv_semiamp_2`: both use `PeriodDependentKPrior(sigma_K0, P0)`
-- `v_sys`: `QD(Normal(0, sigma_v0), unit)`
+Same orbital defaults as `default_rv` but with linear parameters keyed by
+component name:
+
+- `{component_names[0]}.rv_semiamp`, `{component_names[1]}.rv_semiamp`: both use
+  `PeriodDependentKPrior(sigma_K0, P0)`
+- `v_sys`: `QD(Normal(0, sigma_v0), unit)` (shared across components)
 
 ### Multi-survey RV offsets
 
