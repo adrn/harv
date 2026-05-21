@@ -223,7 +223,9 @@ class Samples(eqx.Module):
     @overload
     def __getitem__(self, key: int | slice | np.ndarray) -> "Samples": ...
 
-    def __getitem__(self, key: str | int | slice | np.ndarray) -> "Q | Samples":
+    def __getitem__(  # noqa: C901
+        self, key: str | int | slice | np.ndarray
+    ) -> "Q | Samples":
         """Get parameter samples by name, or return a sliced ``Samples``.
 
         Parameters
@@ -263,10 +265,25 @@ class Samples(eqx.Module):
         1
         >>> samples[0].n_samples
         1
+        >>> samples[-1].n_samples
+        1
+        >>> float(samples[-1]["period"].value[0])
+        101.0
         """
         if not isinstance(key, str):
             # int/slice/array index — return a sliced Samples preserving 1-d shape
-            idx = slice(key, key + 1) if isinstance(key, int) else key
+            if isinstance(key, int):
+                n = self.n_samples
+                if not -n <= key < n:
+                    msg = (
+                        f"Sample index {key} out of range for Samples with {n} samples"
+                    )
+                    raise IndexError(msg)
+                if key < 0:
+                    key += n
+                idx = slice(key, key + 1)
+            else:
+                idx = key
             sliced_nl = {k: v[idx] for k, v in self.nonlinear.items()}
             sliced_lin = {k: v[idx] for k, v in self.linear.items()}
             return Samples(

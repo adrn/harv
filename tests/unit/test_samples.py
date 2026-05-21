@@ -109,6 +109,44 @@ class TestSamplesAccess:
         with pytest.raises(KeyError, match="not found"):
             _ = astrometry_samples["invalid_param"]
 
+    def test_getitem_int_positive(self, astrometry_samples):
+        """Positive integer index returns a length-1 Samples for that row."""
+        s = astrometry_samples[0]
+        assert s.n_samples == 1
+        assert jnp.allclose(s["eccentricity"].value, jnp.array([0.1]))
+
+    def test_getitem_int_negative(self, astrometry_samples):
+        """Negative integer index returns the row counted from the end."""
+        s_last = astrometry_samples[-1]
+        assert s_last.n_samples == 1
+        assert jnp.allclose(s_last["eccentricity"].value, jnp.array([0.3]))
+
+        s_second_to_last = astrometry_samples[-2]
+        assert s_second_to_last.n_samples == 1
+        assert jnp.allclose(s_second_to_last["eccentricity"].value, jnp.array([0.2]))
+
+    def test_getitem_int_first_negative(self, astrometry_samples):
+        """``samples[-n_samples]`` is equivalent to ``samples[0]``."""
+        n = astrometry_samples.n_samples
+        assert jnp.allclose(
+            astrometry_samples[-n]["eccentricity"].value,
+            astrometry_samples[0]["eccentricity"].value,
+        )
+
+    def test_getitem_int_out_of_range_raises(self, astrometry_samples):
+        """Out-of-range int (positive or negative) raises IndexError."""
+        n = astrometry_samples.n_samples
+        with pytest.raises(IndexError, match="out of range"):
+            _ = astrometry_samples[n]
+        with pytest.raises(IndexError, match="out of range"):
+            _ = astrometry_samples[-(n + 1)]
+
+    def test_getitem_slice(self, astrometry_samples):
+        """Slice indexing returns a Samples with the sliced rows."""
+        s = astrometry_samples[:2]
+        assert s.n_samples == 2
+        assert jnp.allclose(s["eccentricity"].value, jnp.array([0.1, 0.2]))
+
     def test_keys_method(self, astrometry_samples):
         """Test keys() returns all parameter names."""
         keys = astrometry_samples.keys()
