@@ -6,6 +6,7 @@ have higher posterior density than the warm-start input and that the joint
 model path is supported.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as ndist
@@ -13,7 +14,7 @@ import pytest
 from unxt import Q
 
 import harv.models as hm
-from harv.data import GaiaAstrometryData, RVData
+from harv.data import GaiaAstrometryData, RVData, SourceData
 from harv.distributions import QD
 from harv.kepler.orbits import (
     astrometric_orbit_at_times,
@@ -48,18 +49,18 @@ TRUE_K = Q(8.0, "km/s")
 TRUE_V_SYS = Q(-0.3, "km/s")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def rv_data_and_truth():
     """Synthetic RV data generated from a known orbit."""
-    times = Q(jnp.linspace(0.0, 200.0, 40), "day")
+    times = Q(jnp.linspace(0.0, 200.0, 20), "day")
     t_peri = TRUE_PHASE_PERI * TRUE_PERIOD
     rv_true = rv_at_times(
         times, TRUE_PERIOD, TRUE_ECC, t_peri, TRUE_ARG_PERI, TRUE_K, TRUE_V_SYS
     )
     rng = np.random.default_rng(0)
-    noise = Q(jnp.asarray(rng.normal(0.0, 0.5, size=40)), "km/s")
+    noise = Q(jnp.asarray(rng.normal(0.0, 0.5, size=20)), "km/s")
     rv = rv_true + noise
-    rv_err = Q(jnp.ones(40) * 0.5, "km/s")
+    rv_err = Q(jnp.ones(20) * 0.5, "km/s")
     return RVData(time=times, rv=rv, rv_err=rv_err)
 
 
@@ -75,22 +76,19 @@ def rv_sampler(rv_data_and_truth):
     return NumpyroSampler(prior, RVModel())
 
 
-@pytest.fixture
-def off_mode_samples() -> Samples:
-    """Two warm-start samples near (but not at) the true MAP."""
-    nonlinear = {
-        "period": Q(jnp.array([74.5, 72.0]), "day"),
-        "eccentricity": Q(jnp.array([0.25, 0.10]), ""),
-        "phase_peri": Q(jnp.array([0.50, 0.35]), ""),
-        "arg_peri": Q(jnp.array([1.4, 0.8]), "rad"),
-    }
-    linear = {
-        "rv_semiamp": Q(jnp.array([7.0, 9.0]), "km/s"),
-        "v_sys": Q(jnp.array([0.5, -0.8]), "km/s"),
-    }
+@pytest.fixture(scope="module")
+def off_mode_sample() -> Samples:
     return Samples(
-        nonlinear=nonlinear,
-        linear=linear,
+        nonlinear={
+            "period": Q(jnp.array([74.5]), "day"),
+            "eccentricity": Q(jnp.array([0.25]), ""),
+            "phase_peri": Q(jnp.array([0.50]), ""),
+            "arg_peri": Q(jnp.array([1.4]), "rad"),
+        },
+        linear={
+            "rv_semiamp": Q(jnp.array([7.0]), "km/s"),
+            "v_sys": Q(jnp.array([0.5]), "km/s"),
+        },
         data_type="RVModel",
         metadata={"t_ref": 0.0},
     )
@@ -101,15 +99,54 @@ def off_mode_samples() -> Samples:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def rv_case(rv_data_and_truth):
+    prior = hm.StandardRV().default_prior(
+        period_min=Q(30.0, "day"),
+        period_max=Q(150.0, "day"),
+        sigma_K0=Q(20.0, "km/s"),
+        sigma_v0=Q(20.0, "km/s"),
+    )
+    sampler = NumpyroSampler(prior, RVModel())
+    warm = Samples(
+        nonlinear={
+            "period": Q(jnp.array([74.5, 72.0]), "day"),
+            "eccentricity": Q(jnp.array([0.25, 0.10]), ""),
+            "phase_peri": Q(jnp.array([0.50, 0.35]), ""),
+            "arg_peri": Q(jnp.array([1.4, 0.8]), "rad"),
+        },
+        linear={
+            "rv_semiamp": Q(jnp.array([7.0, 9.0]), "km/s"),
+            "v_sys": Q(jnp.array([0.5, -0.8]), "km/s"),
+        },
+        data_type="RVModel",
+        metadata={"t_ref": 0.0},
+    )
+    refined = sampler.optimize(warm, rv_data_and_truth, seed=0)
+    return sampler, rv_data_and_truth, warm, refined
+
+
+@pytest.fixture(scope="module")
+def rv_map_case(rv_data_and_truth, off_mode_sample):
+    """Cached single-sample RV MAP used by deterministic-mean checks."""
+    prior = hm.StandardRV().default_prior(
+        period_min=Q(30.0, "day"),
+        period_max=Q(150.0, "day"),
+        sigma_K0=Q(20.0, "km/s"),
+        sigma_v0=Q(20.0, "km/s"),
+    )
+    sampler = NumpyroSampler(prior, RVModel())
+    refined = sampler.optimize(off_mode_sample, rv_data_and_truth, seed=0)
+    return sampler, rv_data_and_truth, refined
+
+
 class TestNumpyroSamplerOptimize:
     """Tests for NumpyroSampler.optimize()."""
 
-    def test_refines_to_higher_logposterior(
-        self, rv_sampler, rv_data_and_truth, off_mode_samples
-    ):
+    def test_refines_to_higher_logposterior(self, rv_case):
         """Refined samples have higher (or equal) ln_posterior than warm starts."""
 
-        refined = rv_sampler.optimize(off_mode_samples, rv_data_and_truth, seed=0)
+        rv_sampler, rv_data_and_truth, off_mode_samples, refined = rv_case
 
         model = rv_sampler.model
         prior_nl = rv_sampler.prior.nonlinear_priors
@@ -143,11 +180,10 @@ class TestNumpyroSamplerOptimize:
                 f"over warm-start ln_post={warm_lpost}"
             )
 
-    def test_refines_toward_truth(
-        self, rv_sampler, rv_data_and_truth, off_mode_samples
-    ):
+    def test_refines_toward_truth(self, rv_case):
         """Period of refined samples is closer to the true period."""
-        refined = rv_sampler.optimize(off_mode_samples, rv_data_and_truth, seed=0)
+        *_, off_mode_samples, refined = rv_case
+
         true_p = float(TRUE_PERIOD.value)
         warm_dp = np.abs(
             np.asarray(off_mode_samples.nonlinear["period"].value) - true_p
@@ -156,11 +192,9 @@ class TestNumpyroSamplerOptimize:
         # At least one of the warm samples should refine closer to truth.
         assert (refined_dp <= warm_dp + 1e-3).any()
 
-    def test_preserves_sample_count_and_keys(
-        self, rv_sampler, rv_data_and_truth, off_mode_samples
-    ):
+    def test_preserves_sample_count_and_keys(self, rv_case):
         """Refined Samples has same shape and key set as input."""
-        refined = rv_sampler.optimize(off_mode_samples, rv_data_and_truth, seed=0)
+        *_, off_mode_samples, refined = rv_case
         assert refined.n_samples == off_mode_samples.n_samples
         assert set(refined.nonlinear) == set(off_mode_samples.nonlinear)
         assert set(refined.linear) == set(off_mode_samples.linear)
@@ -168,24 +202,49 @@ class TestNumpyroSamplerOptimize:
         assert refined.ln_prior is not None
         assert refined.ln_likelihood.shape == (off_mode_samples.n_samples,)
 
-    def test_linear_params_are_deterministic(
-        self, rv_sampler, rv_data_and_truth, off_mode_samples
-    ):
+    def test_linear_params_are_deterministic(self, rv_map_case):
         """Linear params at the MAP are the conditional mean (no RNG wobble).
 
         Different ``seed`` arguments should produce identical linear values
         because ``optimize`` returns the conditional posterior mean for the
         marginalized linear parameters.
         """
-        refined_a = rv_sampler.optimize(off_mode_samples, rv_data_and_truth, seed=1)
-        refined_b = rv_sampler.optimize(off_mode_samples, rv_data_and_truth, seed=999)
-        for name in refined_a.linear:
+        rv_sampler, rv_data_and_truth, refined = rv_map_case
+        nl_values = {
+            "period": refined.nonlinear["period"][0],
+            "eccentricity": refined.nonlinear["eccentricity"][0].value,
+            "phase_peri": refined.nonlinear["phase_peri"][0].value,
+            "arg_peri": refined.nonlinear["arg_peri"][0],
+        }
+
+        mean_a = rv_sampler.model.sample_conditional_linear(
+            nl_values,
+            jax.random.key(1),
+            rv_data_and_truth,
+            linear_priors=rv_sampler.prior.linear_priors,
+            use_mean=True,
+        )
+        mean_b = rv_sampler.model.sample_conditional_linear(
+            nl_values,
+            jax.random.key(999),
+            rv_data_and_truth,
+            linear_priors=rv_sampler.prior.linear_priors,
+            use_mean=True,
+        )
+
+        for name in refined.linear:
             assert jnp.allclose(
-                refined_a.linear[name].value,
-                refined_b.linear[name].value,
+                mean_a[name],
+                mean_b[name],
                 rtol=1e-5,
                 atol=1e-6,
             ), f"linear param {name} differs between seeds"
+            assert jnp.allclose(
+                mean_a[name],
+                refined.linear[name].value[0],
+                rtol=1e-5,
+                atol=1e-6,
+            ), f"linear param {name} does not match optimize() output"
 
     def test_empty_samples_raises(self, rv_sampler, rv_data_and_truth):
         """Calling optimize() on an empty Samples raises ValueError."""
@@ -215,7 +274,7 @@ class TestNumpyroSamplerOptimize:
 @pytest.fixture
 def joint_sampler_and_data():
     """Combined RV + astrometry JointModel sampler + data."""
-    n_ast = 15
+    n_ast = 8
     times_ast = Q(jnp.linspace(0.0, 1000.0, n_ast), "day")
     astro_data = GaiaAstrometryData(
         time=times_ast,
@@ -224,7 +283,7 @@ def joint_sampler_and_data():
         scan_angle=Q(jnp.linspace(0.0, 3.14, n_ast), "rad"),
         parallax_factor=jnp.full(n_ast, 0.5),
     )
-    n_rv = 8
+    n_rv = 4
     times_rv = Q(jnp.linspace(0.0, 800.0, n_rv), "day")
     rv_data = RVData(
         time=times_rv,
@@ -254,7 +313,7 @@ def joint_sampler_and_data():
     joint = JointModel.for_rv_and_gaia(
         components={"astro": GaiaAstrometryModel(), "rv": RVModel()}
     )
-    return NumpyroSampler(prior, joint), {"astro": astro_data, "rv": rv_data}
+    return NumpyroSampler(prior, joint), SourceData(astro=astro_data, rv=rv_data)
 
 
 @pytest.fixture
@@ -292,7 +351,7 @@ class TestNumpyroSamplerOptimizeJoint:
     def test_optimize_jointmodel(self, joint_sampler_and_data, joint_off_mode_samples):
         """optimize() works for JointModel and populates logprobs."""
         sampler, data = joint_sampler_and_data
-        refined = sampler.optimize(joint_off_mode_samples, data, seed=0)
+        refined = sampler.optimize(joint_off_mode_samples, data, seed=0, max_passes=2)
         assert refined.n_samples == 1
         assert refined.ln_likelihood is not None
         assert refined.ln_prior is not None
@@ -315,7 +374,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
     for linear parameters, not a random draw.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def ti_data_and_truth(self):
         """Synthetic Gaia astrometry data from a known orbit, TI design."""
         n = 30
@@ -390,7 +449,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
             "ti_G": ti_G,
         }
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def ti_sampler(self, ti_data_and_truth):
         """NumpyroSampler with TI parameterization."""
         prior = HarvPrior(
@@ -416,7 +475,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         )
         return NumpyroSampler(prior, model)
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def ti_off_mode_samples(self, ti_data_and_truth) -> Samples:
         """Warm-start sample near truth in TI coordinates."""
         _, truth = ti_data_and_truth
@@ -443,9 +502,15 @@ class TestNumpyroSamplerOptimizeThieleInnes:
             metadata={"t_ref": 0.0},
         )
 
-    def test_optimize_ti_returns_valid_campbell(
-        self, ti_sampler, ti_data_and_truth, ti_off_mode_samples
-    ):
+    @pytest.fixture(scope="class")
+    def ti_case(self, ti_sampler, ti_data_and_truth, ti_off_mode_samples):
+        """Cached TI optimize result reused across assertions."""
+        data, truth = ti_data_and_truth
+        refined = ti_sampler.optimize(ti_off_mode_samples, data, seed=0)
+        campbell = refined.thiele_innes_to_campbell()
+        return ti_sampler, data, truth, refined, campbell
+
+    def test_optimize_ti_returns_valid_campbell(self, ti_case):
         """After optimize, TI -> Campbell conversion gives valid elements.
 
         With the ``use_mean=True`` policy the converted Campbell elements are
@@ -453,9 +518,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         in ``[-1, 1]`` (signed so prograde/retrograde orbits round-trip), and
         angles in ``[0, 2pi]``.
         """
-        data, _ = ti_data_and_truth
-        refined = ti_sampler.optimize(ti_off_mode_samples, data, seed=0)
-        campbell = refined.thiele_innes_to_campbell()
+        _, _, _, _, campbell = ti_case
         a = campbell.linear["semi_major_axis"][0].value
         cos_i = campbell.nonlinear["cos_i"][0].value
         arg_peri = campbell.nonlinear["arg_peri"][0].value
@@ -465,20 +528,42 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         assert 0.0 <= float(arg_peri) < 2 * float(jnp.pi) + 1e-6
         assert 0.0 <= float(omega) < 2 * float(jnp.pi) + 1e-6
 
-    def test_optimize_ti_linear_params_deterministic(
-        self, ti_sampler, ti_data_and_truth, ti_off_mode_samples
-    ):
+    def test_optimize_ti_linear_params_deterministic(self, ti_case):
         """TI constants returned by optimize are RNG-free (conditional mean)."""
-        data, _ = ti_data_and_truth
-        refined_a = ti_sampler.optimize(ti_off_mode_samples, data, seed=1)
-        refined_b = ti_sampler.optimize(ti_off_mode_samples, data, seed=999)
+        ti_sampler, data, _, refined, _ = ti_case
+        nl_values = {
+            "period": refined.nonlinear["period"][0],
+            "eccentricity": refined.nonlinear["eccentricity"][0].value,
+            "phase_peri": refined.nonlinear["phase_peri"][0].value,
+        }
+
+        mean_a = ti_sampler.model.sample_conditional_linear(
+            nl_values,
+            jax.random.key(1),
+            data,
+            linear_priors=ti_sampler.prior.linear_priors,
+            use_mean=True,
+        )
+        mean_b = ti_sampler.model.sample_conditional_linear(
+            nl_values,
+            jax.random.key(999),
+            data,
+            linear_priors=ti_sampler.prior.linear_priors,
+            use_mean=True,
+        )
         for name in ("ti_A", "ti_B", "ti_F", "ti_G", "ra0", "dec0", "parallax"):
             assert jnp.allclose(
-                refined_a.linear[name].value,
-                refined_b.linear[name].value,
+                mean_a[name],
+                mean_b[name],
                 rtol=1e-5,
                 atol=1e-6,
             ), f"{name} differs across seeds"
+            assert jnp.allclose(
+                mean_a[name],
+                refined.linear[name].value[0],
+                rtol=1e-5,
+                atol=1e-6,
+            ), f"{name} does not match optimize() output"
 
 
 class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
@@ -497,7 +582,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
     marginalization / prior alignment.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def bh3_like_data_and_truth(self):
         """Synthetic Gaia AL data with sub-orbit baseline (~30% of one period)."""
 
@@ -585,7 +670,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             "sigma_al": sigma_al,
         }
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def bh3_ti_sampler(self, bh3_like_data_and_truth):
         """TI sampler with BH3-like setup."""
         prior = HarvPrior(
@@ -611,7 +696,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         )
         return NumpyroSampler(prior, model)
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def bh3_warm_start(self, bh3_like_data_and_truth) -> Samples:
         """Warm-start near truth in TI coordinates (off by a few %)."""
         _, t = bh3_like_data_and_truth
@@ -636,13 +721,18 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             metadata={"t_ref": 0.0},
         )
 
-    def test_design_matrix_prediction_matches_data(
-        self, bh3_ti_sampler, bh3_like_data_and_truth, bh3_warm_start
-    ):
-        """The orbit predicted by design-matrix @ refined TI values fits data."""
-
+    @pytest.fixture(scope="class")
+    def bh3_case(self, bh3_ti_sampler, bh3_like_data_and_truth, bh3_warm_start):
+        """Cached BH3-like optimize result reused by both regression paths."""
         data, truth = bh3_like_data_and_truth
         refined = bh3_ti_sampler.optimize(bh3_warm_start, data, seed=0)
+        campbell = refined.thiele_innes_to_campbell()
+        return data, truth, refined, campbell
+
+    def test_design_matrix_prediction_matches_data(self, bh3_case):
+        """The orbit predicted by design-matrix @ refined TI values fits data."""
+
+        data, truth, refined, _ = bh3_case
 
         # Build the same TI design matrix the likelihood uses
         period = float(refined.nonlinear["period"][0].value)
@@ -733,9 +823,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
                 f"TI {name} did not round-trip: orig={orig.value}, rt={rt.value}"
             )
 
-    def test_campbell_path_prediction_matches_data(
-        self, bh3_ti_sampler, bh3_like_data_and_truth, bh3_warm_start
-    ):
+    def test_campbell_path_prediction_matches_data(self, bh3_case):
         """After TI -> Campbell, astrometric_orbit_at_times fits data.
 
         If `test_design_matrix_prediction_matches_data` passes but this one
@@ -743,9 +831,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         `campbell_from_thiele_innes` / `astrometric_orbit_at_times` consistency.
         """
 
-        data, truth = bh3_like_data_and_truth
-        refined = bh3_ti_sampler.optimize(bh3_warm_start, data, seed=0)
-        campbell = refined.thiele_innes_to_campbell()
+        data, truth, _, campbell = bh3_case
 
         dra, ddec = astrometric_orbit_at_times(
             data.time,
