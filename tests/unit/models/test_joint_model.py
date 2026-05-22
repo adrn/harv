@@ -7,6 +7,7 @@ import pytest
 from numpyro import handlers
 from unxt import Q
 
+from harv.data import SystemData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import HarvPrior, JointModel, RVModel
 from harv.models.extensions import Jitter
@@ -72,7 +73,7 @@ class TestJointModelBasic:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp = joint.log_prob(nl_values, data, linear_priors=linear_priors)
         assert jnp.isfinite(lp)
 
@@ -89,7 +90,7 @@ class TestJointModelBasic:
             shared_linear_params=(),
         )
 
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp_joint = joint.log_prob(nl_values, data, linear_priors=_JOINT_LP_UNSHARED)
         lp_p = model_p.log_prob(nl_values, rv_data_primary, linear_priors=linear_priors)
         lp_s = model_s.log_prob(
@@ -122,7 +123,7 @@ class TestJointModelComponentSpecific:
             "primary.jitter": 0.5,
             "secondary.jitter": 0.3,
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp = joint.log_prob(nl_values, data, linear_priors=linear_priors)
         assert jnp.isfinite(lp)
 
@@ -144,7 +145,7 @@ class TestJointModelComponentSpecific:
             "phase_peri": jnp.float32(0.1),
             "arg_peri": Q(1.0, "rad"),
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
 
         lp1 = joint.log_prob(
             {**base_nl, "primary.jitter": 0.5, "secondary.jitter": 0.3},
@@ -173,7 +174,7 @@ class TestJointModelSampleConditional:
             shared_linear_params=("v_sys",),
         )
         key = jax.random.PRNGKey(42)
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         samples = joint.sample_conditional_linear(
             nl_values, key, data, linear_priors=_JOINT_LP_SHARED_VSYS
         )
@@ -215,7 +216,7 @@ class TestJointModelNumpyro:
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         model_fn = joint.numpyro_model(priors, data, linear_priors, marginalized=True)
 
         with handlers.seed(rng_seed=0):
@@ -249,7 +250,7 @@ class TestJointModelNumpyro:
             "primary.jitter": QD(dist.HalfNormal(1.0), "km/s"),
             "secondary.jitter": QD(dist.HalfNormal(0.5), "km/s"),
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         model_fn = joint.numpyro_model(priors, data, linear_priors, marginalized=True)
 
         with handlers.seed(rng_seed=0):
@@ -270,7 +271,7 @@ class TestJointModelNumpyro:
             shared_linear_params=("v_sys",),
         )
         priors = {"period": dist.Uniform(10.0, 500.0)}
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         model_fn = joint.numpyro_model(priors, data, linear_priors, marginalized=False)
         assert callable(model_fn)
 
@@ -299,7 +300,7 @@ class TestJointModelNumpyro:
             "phase_peri": dist.Uniform(0.0, 1.0),
             "arg_peri": QD(dist.Uniform(0.0, 6.28), "rad"),
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         model_fn = joint.numpyro_model(
             priors, data, _JOINT_LP_SHARED_VSYS, marginalized=False
         )
@@ -327,7 +328,7 @@ class TestJointModelJit:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
 
         @jax.jit
         def _lp(period, ecc, phase, arg_peri):
@@ -371,7 +372,7 @@ class TestSB2RejectionSamplerLinearKeys:
             linear_priors=linear_priors,
         )
         sampler = RejectionSampler(prior, joint)
-        joint_data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        joint_data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         samples = sampler.run(joint_data, seed=0, n_prior_samples=20)
         assert "primary.rv_semiamp" in samples.linear
         assert "secondary.rv_semiamp" in samples.linear

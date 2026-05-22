@@ -16,7 +16,7 @@ import pytest
 from unxt import Q, ustrip
 
 import harv.models as hm
-from harv.data import GaiaAstrometryData, RVData, SystemData
+from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
 from harv.distributions import QD
 from harv.kepler.orbits import (
     astrometric_orbit_at_times,
@@ -737,7 +737,7 @@ class TestNumpyroSamplerCombinedWithJitter:
             linear_priors=linear,
             extension_priors={"jitter": QD(ndist.HalfNormal(4.0), "km/s")},
         )
-        joint_data = {"astro": astro_data, "rv": rv_data}
+        joint_data = SourceData(astro=astro_data, rv=rv_data)
         return NumpyroSampler(prior, joint), joint_data
 
     @pytest.fixture

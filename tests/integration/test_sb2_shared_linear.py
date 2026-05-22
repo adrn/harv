@@ -19,7 +19,7 @@ from numpyro import handlers
 from unxt import Q
 
 import harv
-from harv.data import RVData
+from harv.data import RVData, SystemData
 from harv.distributions import QuantityDistribution as QD
 from harv.models import HarvPrior, JointModel, RVModel, default_sb2_prior
 from harv.samplers import RejectionSampler
@@ -104,7 +104,7 @@ class TestJointMargLogProb:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp = joint.log_prob(
             _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
         )
@@ -114,7 +114,7 @@ class TestJointMargLogProb:
         self, rv_data_primary, rv_data_secondary
     ):
         """Shared-v_sys joint log_prob differs from naive per-component sum."""
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         joint_shared = JointModel(
             components={"primary": RVModel(), "secondary": RVModel()},
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
@@ -147,7 +147,7 @@ class TestJointMargLogProb:
             "secondary.rv_semiamp": k_prior,
             "v_sys": v_sys_prior,  # shared
         }
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
 
         joint = JointModel(
             components={"primary": RVModel(), "secondary": RVModel()},
@@ -191,7 +191,7 @@ class TestSampleConditionalLinearShape:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
             _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
@@ -221,7 +221,7 @@ class TestSampleConditionalLinearShape:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=(),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
             _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
@@ -261,7 +261,7 @@ class TestRejectionSamplerFlattening:
             linear_priors=linear_priors,
         )
         sampler = RejectionSampler(prior, joint)
-        joint_data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        joint_data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         samples = sampler.run(
             joint_data, seed=0, n_prior_samples=1_000, max_posterior_samples=4
         )
@@ -295,7 +295,7 @@ class TestNumpyroSharedExplicitLinear:
             shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
             shared_linear_params=("v_sys",),
         )
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         nonlinear_priors = {
             "period": QD(dist.Uniform(10.0, 500.0), "day"),
             "eccentricity": dist.Uniform(0.0, 0.9),
@@ -460,14 +460,14 @@ class TestForSb2Factory:
     def test_log_prob_is_finite(self, rv_data_primary, rv_data_secondary, sb2_prior):
         """Factory-built joint model produces finite log_prob."""
         joint = JointModel.for_sb2(prior=sb2_prior)
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp = joint.log_prob(_NL_VALUES, data, linear_priors=sb2_prior.linear_priors)
         assert jnp.isfinite(lp)
 
     def test_jit_compatible(self, rv_data_primary, rv_data_secondary, sb2_prior):
         """for_sb2 model is JIT-compatible."""
         joint = JointModel.for_sb2(prior=sb2_prior)
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp_ref = sb2_prior.linear_priors
 
         @jax.jit
@@ -501,7 +501,7 @@ class TestPerComponentPathRegression:
             shared_linear_params=(),
         )
 
-        data = {"primary": rv_data_primary, "secondary": rv_data_secondary}
+        data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         lp_joint = joint.log_prob(
             _NL_VALUES, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
         )

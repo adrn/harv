@@ -8,12 +8,37 @@ different ``run()`` signatures and internal state.
 
 import equinox as eqx
 
+from harv.data.containers import AbstractDatasetContainer
+from harv.data.datasets import AbstractData
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
 
 __all__ = ("AbstractSampler",)
+
+
+def _validate_data(
+    data: object,
+    model: AbstractComponentModel | JointModel,
+) -> None:
+    """Validate that ``data`` matches the type expected by ``model``.
+
+    JointModel requires a multi-component container; single-component models
+    require a bare AbstractData subclass.  Raises a clear ``TypeError`` at the
+    sampler entry point instead of failing deep inside duck-typed access.
+    """
+    if isinstance(model, JointModel):
+        if not isinstance(data, AbstractDatasetContainer):
+            raise TypeError(
+                f"JointModel requires an AbstractDatasetContainer "
+                f"(e.g. SystemData, SourceData); got {type(data).__name__}."
+            )
+    elif not isinstance(data, AbstractData):
+        raise TypeError(
+            f"Single-component models require an AbstractData "
+            f"(e.g. RVData, GaiaAstrometryData); got {type(data).__name__}."
+        )
 
 
 class AbstractSampler(eqx.Module):

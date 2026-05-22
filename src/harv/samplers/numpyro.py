@@ -24,6 +24,7 @@ from numpyro.infer.initialization import init_to_value
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
+from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
@@ -39,7 +40,7 @@ from harv.models.component import (
 )
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
-from harv.samplers.base import AbstractSampler
+from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
@@ -104,7 +105,7 @@ def _build_extra_numpyro_model(
     extra_model_fn: Callable[[dict[str, Any]], dict[str, Any]],
     marginalized: bool,
     marginalized_names: tuple[str, ...] | None,
-    data: Any,
+    data: Any,  # polymorphic over model; not statically narrowable
     effective_linear_prior: dict[str, Any] | None,
 ) -> Callable[[], None]:
     """Build a numpyro model with an ``extra_model`` reparameterization.
@@ -272,7 +273,7 @@ class NumpyroSampler(AbstractSampler):
 
     def run(
         self,
-        data: Any,
+        data: InputData,
         *,
         init_samples: "Samples | None" = None,
         seed: int | None = None,
@@ -333,6 +334,8 @@ class NumpyroSampler(AbstractSampler):
         -------
             Posterior samples container with nonlinear and linear parameters.
         """
+        _validate_data(data, self.model)
+
         samples = init_samples
         if samples is None:
             msg = (
@@ -389,7 +392,8 @@ class NumpyroSampler(AbstractSampler):
         else:
             numpyro_model = model.numpyro_model(
                 all_priors,
-                data,
+                # data validated at entry; correlated with the polymorphic model.
+                cast("Any", data),
                 effective_linear_prior,
                 marginalized=marginalized,
                 marginalized_names=(
@@ -448,7 +452,7 @@ class NumpyroSampler(AbstractSampler):
     def optimize(
         self,
         samples: "Samples",
-        data: Any,
+        data: InputData,
         *,
         seed: int | None = None,
         max_passes: int = 10,
@@ -503,6 +507,8 @@ class NumpyroSampler(AbstractSampler):
         ``max_passes`` BFGS restarts; the returned point for such a sample may
         not be the local MAP.
         """
+        _validate_data(data, self.model)
+
         if samples.n_samples == 0:
             msg = "Cannot optimize: no samples provided."
             raise ValueError(msg)
@@ -519,7 +525,8 @@ class NumpyroSampler(AbstractSampler):
         all_priors = _build_all_priors(self.prior, nonlinear_extension_priors)
         numpyro_model = model_obj.numpyro_model(
             all_priors,
-            data,
+            # data validated at entry; correlated with the polymorphic model.
+            cast("Any", data),
             effective_linear_prior,
             marginalized=True,
             marginalized_names=effective_marginalized_names,
@@ -734,7 +741,7 @@ class NumpyroSampler(AbstractSampler):
         posterior: dict[str, Any],
         rng_key: jax.Array,
         *,
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
         marginalized: bool,
         nonlinear_extension_priors: dict[str, Any],
@@ -776,23 +783,16 @@ class NumpyroSampler(AbstractSampler):
             # deterministic sites.
             linear_q = self._extract_linear_from_posterior(model, posterior, data)
 
-        # Build metadata from the passed-in data
-        t_ref: Any = None
-        if isinstance(model, JointModel):
-            first_comp_data = data[next(iter(model.components))]
-            if hasattr(first_comp_data, "t_ref"):
-                t_ref = first_comp_data.t_ref
-        elif hasattr(data, "t_ref"):
-            t_ref = data.t_ref
+        # Build metadata from the passed-in data.  t_ref is uniformly exposed by
+        # both AbstractData and AbstractDatasetContainer.
+        t_ref = data.t_ref
 
         metadata: dict[str, Any] = {"num_chains": num_chains}
         if t_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit) if hasattr(t_ref, "unit") else ""
-            metadata["t_ref"] = (
-                float(ustrip(_t_unit, t_ref)) if _t_unit else float(t_ref)
-            )
+            _t_unit = str(t_ref.unit)
+            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
 
         # Optional per-sample log-probabilities.
@@ -823,7 +823,7 @@ class NumpyroSampler(AbstractSampler):
         self,
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
         effective_marginalized_names: tuple[str, ...] | None,
         nonlinear_extension_priors: dict[str, Any],
@@ -904,7 +904,7 @@ class NumpyroSampler(AbstractSampler):
         rng_key: jax.Array,
         nonlinear_extension_priors: dict[str, Any],
         effective_marginalized_names: tuple[str, ...] | None,
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
         *,
         use_mean: bool = False,
@@ -1043,7 +1043,7 @@ class NumpyroSampler(AbstractSampler):
         self,
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
     ) -> dict[str, AbstractQuantity]:
         """Extract linear params from a non-marginalized posterior.
 

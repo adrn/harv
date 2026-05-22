@@ -15,6 +15,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.data.datasets import AbstractData
 from harv.kepler import masses
 from harv.models.parameterizations._base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
@@ -738,7 +739,7 @@ class Samples(eqx.Module):
             )
             raise NotImplementedError(msg)
 
-    def _phases(self, data: Any) -> np.ndarray:
+    def _phases(self, data: AbstractData) -> np.ndarray:
         """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
 
         Phase is ``((time - t_ref) / period) mod 1`` evaluated at each sample's
@@ -747,7 +748,7 @@ class Samples(eqx.Module):
         period = self.nonlinear["period"]
         t_unit = str(period.unit)
         time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = float(ustrip(t_unit, data.t_ref))
+        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
         period_val = np.asarray(ustrip(t_unit, period))
         return ((time[None, :] - t_ref) / period_val[:, None]) % 1.0
 
@@ -780,7 +781,7 @@ class Samples(eqx.Module):
             return map_sample, idx
         return map_sample
 
-    def period_unimodal(self, data: Any) -> bool:
+    def period_unimodal(self, data: AbstractData) -> bool:
         """Whether the period samples lie within a single mode.
 
         Uses the criterion ``ptp(P) < 4 * P_min**2 / (2*pi*T)``, where ``T`` is
@@ -803,7 +804,7 @@ class Samples(eqx.Module):
         return bool(np.ptp(period_val) < delta)
 
     def period_modes(
-        self, data: Any, n_clusters: int = 2
+        self, data: AbstractData, n_clusters: int = 2
     ) -> tuple[bool, Q, np.ndarray]:
         """Cluster the period samples and test each mode for unimodality.
 
@@ -849,7 +850,7 @@ class Samples(eqx.Module):
 
         return all(unimodal), Q(np.array(mode_periods), t_unit), np.array(n_per_mode)
 
-    def max_phase_gap(self, data: Any) -> np.ndarray:
+    def max_phase_gap(self, data: AbstractData) -> np.ndarray:
         """Largest gap in orbital-phase coverage, per sample.
 
         The maximum gap between consecutive observations on the (circular)
@@ -872,7 +873,7 @@ class Samples(eqx.Module):
         wrap = 1.0 - (phases[:, -1] - phases[:, 0])
         return np.maximum(gaps.max(axis=1), wrap)
 
-    def phase_coverage(self, data: Any, n_bins: int = 10) -> np.ndarray:
+    def phase_coverage(self, data: AbstractData, n_bins: int = 10) -> np.ndarray:
         """Fraction of phase bins containing at least one observation.
 
         The ESA Gaia "phase coverage" statistic, per sample.
@@ -899,7 +900,7 @@ class Samples(eqx.Module):
         )
         return occupied / n_bins
 
-    def periods_spanned(self, data: Any) -> np.ndarray:
+    def periods_spanned(self, data: AbstractData) -> np.ndarray:
         """Number of orbital periods spanned by the data, per sample.
 
         Parameters
@@ -918,7 +919,7 @@ class Samples(eqx.Module):
         period_val = np.asarray(ustrip(t_unit, period))
         return float(np.ptp(time)) / period_val
 
-    def phase_coverage_per_period(self, data: Any) -> np.ndarray:
+    def phase_coverage_per_period(self, data: AbstractData) -> np.ndarray:
         """Maximum number of observations within any single period, per sample.
 
         Parameters
@@ -934,7 +935,7 @@ class Samples(eqx.Module):
         period = self.nonlinear["period"]
         t_unit = str(period.unit)
         time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = float(ustrip(t_unit, data.t_ref))
+        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
         period_val = np.asarray(ustrip(t_unit, period))
         n_per = (time - t_ref) / period_val[:, None]  # (n_samples, n_obs)
 
@@ -947,7 +948,7 @@ class Samples(eqx.Module):
             out[s] = max(int(base.max()), int(offset.max()))
         return out
 
-    def chi2(self, data: Any, model: Any) -> jax.Array:
+    def chi2(self, data: AbstractData, model: Any) -> jax.Array:
         r"""Per-sample goodness-of-fit :math:`\chi^2` against the data.
 
         For each posterior sample, evaluates the model prediction at the stored
@@ -997,7 +998,7 @@ class Samples(eqx.Module):
         return jax.vmap(_one)(nl_for_model, linear_stripped)
 
     def reduced_chi2(
-        self, data: Any, model: Any, *, dof: int | None = None
+        self, data: AbstractData, model: Any, *, dof: int | None = None
     ) -> jax.Array:
         r"""Per-sample reduced :math:`\chi^2` (:math:`\chi^2 / \mathrm{dof}`).
 

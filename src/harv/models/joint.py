@@ -24,6 +24,7 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Q
 from unxt.quantity import ustrip
 
+from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
 from harv.models.component import (
@@ -679,7 +680,7 @@ class JointModel(eqx.Module):
         self,
         comp_nl: dict[str, dict[str, Any]],
         per_comp_marg: dict[str, tuple[str, ...]],
-        data: Any,
+        data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
     ) -> tuple[
         MarginalizedLinear,
@@ -848,7 +849,7 @@ class JointModel(eqx.Module):
     def log_prob(
         self,
         nl_values: dict[str, Any],
-        data: Any,
+        data: AbstractDatasetContainer,
         *,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
@@ -924,7 +925,7 @@ class JointModel(eqx.Module):
         self,
         nl_values: dict[str, Any],
         key: jax.Array,
-        data: Any,
+        data: AbstractDatasetContainer,
         *,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
@@ -1028,7 +1029,7 @@ class JointModel(eqx.Module):
     def numpyro_model(
         self,
         nonlinear_priors: dict[str, PriorDist],
-        data: Any,
+        data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
         *,
         marginalized: bool = True,
@@ -1073,7 +1074,7 @@ class JointModel(eqx.Module):
     def _build_marginalized_numpyro(  # noqa: C901
         self,
         nonlinear_priors: dict[str, PriorDist],
-        data: Any,
+        data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
         *,
         marginalized_names: tuple[str, ...] | None = None,
@@ -1223,7 +1224,7 @@ class JointModel(eqx.Module):
     def _build_full_numpyro(  # noqa: C901
         self,
         nonlinear_priors: dict[str, PriorDist],
-        data: Any,
+        data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
     ) -> Callable[[], None]:
         """Build a full (non-marginalized) numpyro model for the joint model.

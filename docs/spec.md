@@ -1345,7 +1345,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 
 ```python
 sampler.run(
-    data,
+    data: AbstractData | AbstractDatasetContainer,
     *,
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
@@ -1356,8 +1356,11 @@ sampler.run(
 ```
 
 `data` is the first positional argument and is passed through to `model.log_prob`
-at each evaluation. For a `JointModel`, pass `data` as a dict keyed by component
-name (e.g. `{"rv": rv_data, "astro": astro_data}`).
+at each evaluation. It is validated at the entry point: a single-component model
+requires an `AbstractData` subclass (`RVData`, `GaiaAstrometryData`); a `JointModel`
+requires an `AbstractDatasetContainer` (`SystemData`, `SourceData`) keyed by
+component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
+`dict` or any other object raises `TypeError`.
 
 - `ignore_non_finite` -- when `True`, any `NaN` or infinite log-likelihoods
   are treated as rejected samples by replacing them with `-inf` before the
@@ -1913,7 +1916,9 @@ joint = JointModel.for_rv_and_gaia(
     },
 )
 sampler = RejectionSampler(joint_prior, joint)
-samples = sampler.run({"rv": rv_data, "astro": gaia_data}, n_prior_samples=1_000_000)
+samples = sampler.run(
+    SourceData(rv=rv_data, astro=gaia_data), n_prior_samples=1_000_000
+)
 
 # --- MCMC continuation ---
 mcmc_sampler = NumpyroSampler(prior, RVModel())

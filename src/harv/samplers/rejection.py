@@ -12,6 +12,7 @@ import jax.random as jr
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
+from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     _evaluate_nonlinear_log_prior,
@@ -21,7 +22,7 @@ from harv.models._helpers import (
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
-from harv.samplers.base import AbstractSampler
+from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.samples import Samples
 
 __all__ = ("RejectionSampler",)
@@ -350,9 +351,9 @@ class RejectionSampler(AbstractSampler):
 
     batch_size: int = eqx.field(static=True, default=100_000)
 
-    def run(  # noqa: C901
+    def run(
         self,
-        data: Any,
+        data: InputData,
         *,
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
@@ -365,9 +366,12 @@ class RejectionSampler(AbstractSampler):
         Parameters
         ----------
         data
-            Observed data (:class:`~harv.data.RVData`,
-            :class:`~harv.data.GaiaAstrometryData`, or
-            :class:`~harv.data.SystemData` for joint models).
+            Observed data: an :class:`~harv.data.AbstractData` subclass
+            (e.g. :class:`~harv.data.RVData`,
+            :class:`~harv.data.GaiaAstrometryData`) for single-component
+            models, or an :class:`~harv.data.AbstractDatasetContainer`
+            (e.g. :class:`~harv.data.SystemData`,
+            :class:`~harv.data.SourceData`) for :class:`~harv.JointModel`.
         n_prior_samples
             Number of samples to draw from the prior.
         max_posterior_samples
@@ -392,6 +396,8 @@ class RejectionSampler(AbstractSampler):
         -------
             Posterior samples container.
         """
+        _validate_data(data, self.model)
+
         prepared = _prepare_sampler_model(
             self.prior,
             self.model,
@@ -472,23 +478,16 @@ class RejectionSampler(AbstractSampler):
             unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
             nonlinear_q[k] = Q(v, unit)
 
-        # Get t_ref from the passed-in data
-        t_ref: Any = None
-        if isinstance(model, JointModel):
-            first_comp_data = data[next(iter(model.components))]
-            if hasattr(first_comp_data, "t_ref"):
-                t_ref = first_comp_data.t_ref
-        elif hasattr(data, "t_ref"):
-            t_ref = data.t_ref
+        # t_ref is uniformly exposed by both AbstractData and
+        # AbstractDatasetContainer; no branching needed.
+        t_ref = data.t_ref
 
         metadata: dict[str, Any] = {}
         if t_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit) if hasattr(t_ref, "unit") else ""
-            metadata["t_ref"] = (
-                float(ustrip(_t_unit, t_ref)) if _t_unit else float(t_ref)
-            )
+            _t_unit = str(t_ref.unit)
+            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
 
         ln_likelihood_arr: jax.Array | None = None
@@ -518,6 +517,8 @@ class RejectionSampler(AbstractSampler):
         ext_nl_priors: dict[str, Any],
         eff_linear: dict[str, Any],
         marginalize_names: "tuple[str, ...] | None",
+        # data is correlated with the (polymorphic) model and is dispatched
+        # through model.log_prob; the static type cannot be narrowed here.
         data: Any,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Sample prior and evaluate likelihoods in batches.
@@ -614,6 +615,8 @@ class RejectionSampler(AbstractSampler):
         key: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
         marginalized_names: tuple[str, ...] | None,
+        # data is correlated with the (polymorphic) model and is dispatched
+        # through model.sample_conditional_linear; cannot be narrowed here.
         data: Any,
         linear_priors: dict[str, Any] | None,
     ) -> dict[str, AbstractQuantity]:

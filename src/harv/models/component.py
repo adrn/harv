@@ -21,6 +21,7 @@ from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Q
 from unxt.quantity import ustrip
 
+from harv.data.datasets import AbstractData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorCallable,
@@ -89,6 +90,11 @@ class AbstractComponentModel(eqx.Module):
     def _param_infos(self) -> tuple[ParamInfo, ...]:
         """All parameter descriptors (base + extensions, nonlinear first)."""
 
+    # NOTE: these abstract hooks take ``data: Any`` rather than ``AbstractData``
+    # because concrete subclasses narrow it to their own dataset type (e.g.
+    # ``RVModel._strip_obs(data: RVData)``) and access type-specific fields.
+    # A narrowed override of an ``AbstractData`` param would be an LSP violation;
+    # ``Any`` lets each model declare its concrete data contract.
     @abstractmethod
     def _base_design_matrix(self, nl_values: dict[str, Any], data: Any) -> jax.Array:
         """Build the base design matrix from data and nonlinear values.
@@ -201,7 +207,7 @@ class AbstractComponentModel(eqx.Module):
     def _full_design_matrix(
         self,
         nl_values: dict[str, Any],
-        data: Any,
+        data: AbstractData,
     ) -> jax.Array:
         """Base design matrix + extension columns."""
         X = self._base_design_matrix(nl_values, data)
@@ -213,7 +219,7 @@ class AbstractComponentModel(eqx.Module):
         self,
         obs_err: jax.Array,
         nl_values: dict[str, Any],
-        data: Any,
+        data: AbstractData,
     ) -> jax.Array:
         """Observation errors modified by extensions (jitter, GP, ...).
 
@@ -249,7 +255,7 @@ class AbstractComponentModel(eqx.Module):
         self,
         marg_names: tuple[str, ...],
         _: dict[str, Any],
-        data: Any,
+        data: AbstractData,
         linear_priors: dict[str, Any] | None,
     ) -> tuple[dict[str, PriorDist | LinearPriorCallable], dict[str, str]]:
         """Gather priors and units for marginalized columns.
@@ -320,7 +326,7 @@ class AbstractComponentModel(eqx.Module):
         nl_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
-        data: Any,
+        data: AbstractData,
         linear_priors: dict[str, Any] | None,
     ) -> _MargBuildingBlocks:
         """Extract the building blocks needed to construct a MarginalizedLinear.
@@ -420,7 +426,7 @@ class AbstractComponentModel(eqx.Module):
         nl_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
-        data: Any,
+        data: AbstractData,
         linear_priors: dict[str, Any] | None,
     ) -> _MargComponents:
         """Assemble the MarginalizedLinear distribution.
@@ -477,7 +483,7 @@ class AbstractComponentModel(eqx.Module):
     def log_prob(
         self,
         nl_values: dict[str, Any],
-        data: Any,
+        data: AbstractData,
         *,
         linear_priors: dict[str, Any] | None = None,
         linear_values: dict[str, jax.Array] | None = None,
@@ -558,7 +564,7 @@ class AbstractComponentModel(eqx.Module):
         nl_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
-        data: Any,
+        data: AbstractData,
         linear_priors: dict[str, Any] | None,
     ) -> jax.Array:
         c = self._build_marginalized_linear(
@@ -585,7 +591,7 @@ class AbstractComponentModel(eqx.Module):
         self,
         nl_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
-        data: Any,
+        data: AbstractData,
     ) -> jax.Array:
         """Explicit Gaussian log-likelihood (no marginalization)."""
         X = self._full_design_matrix(nl_values, data)
@@ -608,7 +614,7 @@ class AbstractComponentModel(eqx.Module):
         self,
         nl_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
-        data: Any,
+        data: AbstractData,
     ) -> jax.Array:
         r"""Goodness-of-fit :math:`\chi^2` for one fully-specified parameter set.
 
@@ -657,7 +663,7 @@ class AbstractComponentModel(eqx.Module):
         self,
         nl_values: dict[str, Any],
         key: jax.Array,
-        data: Any,
+        data: AbstractData,
         *,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
@@ -718,7 +724,7 @@ class AbstractComponentModel(eqx.Module):
     def numpyro_model(
         self,
         nonlinear_priors: dict[str, PriorDist],
-        data: Any,
+        data: AbstractData,
         linear_priors: dict[str, Any] | None,
         *,
         marginalized: bool = True,
@@ -813,7 +819,7 @@ def _apply_unit_conversions(
 def _build_marginalized_component_model(
     component: AbstractComponentModel,
     nonlinear_priors: dict[str, PriorDist],
-    data: Any,
+    data: AbstractData,
     linear_priors: dict[str, Any] | None,
     *,
     marginalized_names: tuple[str, ...] | None = None,
@@ -895,7 +901,7 @@ def _build_marginalized_component_model(
 def _build_full_component_model(  # noqa: C901
     component: AbstractComponentModel,
     nonlinear_priors: dict[str, PriorDist],
-    data: Any,
+    data: AbstractData,
     linear_priors: dict[str, Any] | None,
 ) -> Callable[[], None]:
     """Build an explicit (non-marginalized) numpyro model.

@@ -14,7 +14,7 @@ from typing import Any, TypeVar, cast
 import equinox as eqx
 import jax
 
-from harv.custom_types import NTime
+from harv.custom_types import ScalarQTime
 from harv.data.datasets import (
     AbstractAstrometryData,
     AbstractData,
@@ -38,6 +38,16 @@ class AbstractDatasetContainer(eqx.Module):
     """
 
     _datasets: dict[str, DatasetType]
+
+    @property
+    def t_ref(self) -> ScalarQTime | None:
+        """Reference epoch shared by all contained datasets.
+
+        Guaranteed to be consistent across components because every concrete
+        subclass calls :func:`~harv.data.helpers._synchronize_t_refs` in its
+        ``__init__``.
+        """
+        return next(iter(self._datasets.values())).t_ref
 
     def __getitem__(self, name: str) -> DatasetType:
         return self._datasets[name]
@@ -268,12 +278,6 @@ class SystemData(AbstractDatasetContainer):
         """Concrete dataset class shared by all components."""
         return self._dataset_type
 
-    @property
-    def t_ref(self) -> NTime | None:
-        """Reference epoch from the first component."""
-        # TODO: this shouldn't exist!
-        return next(iter(self._datasets.values())).t_ref
-
     def stacked(self) -> DatasetType:
         """Stack all component datasets."""
         return stack_datasets(self._datasets)
@@ -344,4 +348,4 @@ class SourceData(AbstractDatasetContainer):
 
 # Type alias for any top-level input accepted by the sampler and likelihoods.
 # Use this instead of AbstractData in signatures that also accept SourceData.
-InputData = AbstractData | SourceData | SystemData
+InputData = AbstractData | AbstractDatasetContainer
