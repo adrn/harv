@@ -108,6 +108,62 @@ def _overlay_corner_truths(  # noqa: C901
                 ax.scatter([x_truth], [y_truth], **point_kwargs)
 
 
+def _assemble_sample_params(
+    samples: "Samples",
+    model: Any,
+    data: AbstractData,
+    *,
+    i: int | None = None,
+) -> tuple[dict[str, Any], dict[str, jax.Array]]:
+    """Build ``(nl_values, linear_values)`` from ``samples`` in the form models expect.
+
+    Matches the convention used by the sampler's ``log_prob`` calls:
+    dimensioned base nonlinear parameters stay as Quantities, dimensionless
+    base parameters and all extension parameters are unit-stripped, and every
+    linear parameter is unit-stripped to the model's linear-parameter units
+    (see :meth:`~harv.models.component.AbstractComponentModel._linear_param_units`).
+
+    Parameters
+    ----------
+    samples
+        Single-component :class:`Samples`.
+    model
+        The component model whose ``parameterization`` and ``_linear_param_units``
+        define the expected param form.
+    data
+        Data instance — used to resolve linear-parameter units.
+    i
+        If ``None`` (default), returns batched dicts (one array per parameter,
+        shape ``(n_samples,)``) — suitable for use under ``jax.vmap`` (e.g.
+        :meth:`Samples.chi2`).  If an integer, extracts sample ``i`` so each
+        dict value is a scalar — suitable for the plot functions, which always
+        plot one sample at a time.
+    """
+    base_nl_units = {
+        p.name: p.unit for p in model.parameterization.params() if not p.linear
+    }
+    nonlinear_names = set(model._all_nonlinear_names())
+    linear_units = model._linear_param_units(data)
+    linear_names = set(linear_units)
+
+    def _pick(value: Any) -> Any:
+        return value if i is None else value[i]
+
+    nl_for_model: dict[str, Any] = {
+        name: _pick(value)
+        if base_nl_units.get(name, "")
+        else ustrip(str(value.unit), _pick(value))
+        for name, value in samples.nonlinear.items()
+        if name in nonlinear_names
+    }
+    linear_stripped: dict[str, jax.Array] = {
+        name: ustrip(linear_units[name], _pick(value))
+        for name, value in samples.linear.items()
+        if name in linear_names
+    }
+    return nl_for_model, linear_stripped
+
+
 class Samples(eqx.Module):
     """Container for posterior samples.
 
@@ -971,26 +1027,12 @@ class Samples(eqx.Module):
         """
         self._require_single_component("chi2")
 
-        # Match the parameter form the model's design-matrix machinery expects
-        # (the same convention the samplers' ``log_prob`` calls use): dimensioned
-        # *base* orbital parameters stay as Quantities; dimensionless base
-        # parameters and all extension parameters (e.g. jitter) are unit-stripped.
-        base_nl_units = {
-            p.name: p.unit for p in model.parameterization.params() if not p.linear
-        }
-        nl_for_model = {
-            name: value
-            if base_nl_units.get(name, "")
-            else ustrip(str(value.unit), value)
-            for name, value in self.nonlinear.items()
-        }
-
-        # Linear parameters are unit-stripped to the model's linear-param units.
-        linear_units = model._linear_param_units(data)
-        linear_stripped = {
-            name: ustrip(linear_units.get(name, ""), value)
-            for name, value in self.linear.items()
-        }
+        nl_for_model, linear_stripped = _assemble_sample_params(
+            self,
+            model,
+            data,
+            i=None,
+        )
 
         def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
             return model.chi_squared(nl_i, lin_i, data)

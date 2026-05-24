@@ -14,7 +14,7 @@ import jax
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
 from unxt import Q
-from unxt.quantity import ustrip
+from unxt.quantity import AllowValue, ustrip
 
 from harv.custom_types import (
     ScalarQAngle,
@@ -23,7 +23,11 @@ from harv.custom_types import (
     ScalarQTime,
 )
 from harv.distributions import QuantityDistribution
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.kepler.orbits import (
+    mean_anomaly,
+    thiele_innes_ABFG,
+    true_anomaly_from_mean,
+)
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
@@ -166,6 +170,50 @@ class StandardGaiaAstrometry(AbstractParameterization):
             ],
             axis=-1,
         )
+
+    def sky_orbit(
+        self,
+        times: Any,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+    ) -> tuple[jax.Array, jax.Array]:
+        """Sky-plane orbital offsets ``(dRA, dDec)`` from the photocentre orbit.
+
+        Computes ``(dRA, dDec) = a_0 * (B*X + G*Y, A*X + F*Y)`` using the same
+        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_ABFG`,
+        :func:`~harv.kepler.orbits.mean_anomaly`,
+        :func:`~harv.kepler.orbits.true_anomaly_from_mean`) that the design
+        matrix uses.  Returns bare JAX arrays in the same unit as the scalar
+        ``linear_values["semi_major_axis"]`` (unit-agnostic by construction).
+        """
+        period = nl_values["period"]
+        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
+        arg_peri = ustrip("rad", nl_values["arg_peri"])
+        lon_asc_node = ustrip("rad", nl_values["lon_asc_node"])
+        cos_i = ustrip(AllowValue, "", nl_values["cos_i"])
+        a0 = linear_values["semi_major_axis"]
+
+        t_peri = phase_peri * period
+        dt = times - t_peri
+        M = mean_anomaly(dt, period)
+        sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
+        sin_f = ustrip(AllowValue, "", sin_f_q)
+        cos_f = ustrip(AllowValue, "", cos_f_q)
+
+        A, B, F, G = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        r_over_a = (1 - eccentricity**2) / (1 + eccentricity * cos_f)
+        X = r_over_a * cos_f
+        Y = r_over_a * sin_f
+        dra = (B * X + G * Y) * a0
+        ddec = (A * X + F * Y) * a0
+        return jnp.asarray(dra), jnp.asarray(ddec)
 
     def default_prior(
         self,
@@ -483,6 +531,42 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             ],
             axis=-1,
         )
+
+    def sky_orbit(
+        self,
+        times: Any,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+    ) -> tuple[jax.Array, jax.Array]:
+        r"""Sky-plane orbital offsets ``(dRA, dDec)`` from the TI constants.
+
+        Mirrors the design-matrix construction
+        (``dRA = ti_B * X + ti_G * Y``, ``dDec = ti_A * X + ti_F * Y``) at
+        arbitrary times.  Returns bare JAX arrays in the same unit as the
+        scalar TI constants in ``linear_values``.
+        """
+        period = nl_values["period"]
+        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
+
+        t_peri = phase_peri * period
+        dt = times - t_peri
+        M = mean_anomaly(dt, period)
+        sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
+        sin_f = ustrip(AllowValue, "", sin_f_q)
+        cos_f = ustrip(AllowValue, "", cos_f_q)
+
+        r_over_a = (1 - eccentricity**2) / (1 + eccentricity * cos_f)
+        X = r_over_a * cos_f
+        Y = r_over_a * sin_f
+
+        ti_A = linear_values["ti_A"]
+        ti_B = linear_values["ti_B"]
+        ti_F = linear_values["ti_F"]
+        ti_G = linear_values["ti_G"]
+        dra = ti_B * X + ti_G * Y
+        ddec = ti_A * X + ti_F * Y
+        return jnp.asarray(dra), jnp.asarray(ddec)
 
     def default_prior(
         self,

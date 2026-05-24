@@ -587,6 +587,26 @@ class AbstractComponentModel(eqx.Module):
                 return base_lp + correction
         return base_lp
 
+    def predict(
+        self,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+        data: AbstractData,
+    ) -> jax.Array:
+        """Full predicted observable ``y_pred = X @ y`` at the data times.
+
+        ``X`` is the extension-augmented design matrix
+        (:meth:`_full_design_matrix`) and ``y`` is the ordered linear-parameter
+        vector built from ``linear_values`` (missing entries default to ``0``).
+        Used by :meth:`_log_prob_explicit`, :meth:`chi_squared`, and the plot
+        functions so that every prediction path shares the same construction.
+        """
+        X = self._full_design_matrix(nl_values, data)
+        y = jnp.array(
+            [linear_values.get(name, 0.0) for name in self._all_linear_names()]
+        )
+        return X @ y
+
     def _log_prob_explicit(
         self,
         nl_values: dict[str, Any],
@@ -594,15 +614,9 @@ class AbstractComponentModel(eqx.Module):
         data: AbstractData,
     ) -> jax.Array:
         """Explicit Gaussian log-likelihood (no marginalization)."""
-        X = self._full_design_matrix(nl_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
-
-        # Apply extension covariance modifications
         cov = self._full_obs_err(arr_obs_err, nl_values, data)
-
-        all_cols = self._all_linear_names()
-        y = jnp.array([linear_values.get(name, 0.0) for name in all_cols])
-        y_pred = X @ y
+        y_pred = self.predict(nl_values, linear_values, data)
 
         if cov.ndim == 1:
             return dist.Normal(y_pred, jnp.sqrt(cov)).log_prob(arr_obs).sum()
@@ -646,14 +660,9 @@ class AbstractComponentModel(eqx.Module):
         -------
             Scalar :math:`\chi^2`.
         """
-        X = self._full_design_matrix(nl_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
         cov = self._full_obs_err(arr_obs_err, nl_values, data)
-
-        y = jnp.array(
-            [linear_values.get(name, 0.0) for name in self._all_linear_names()]
-        )
-        resid = arr_obs - X @ y
+        resid = arr_obs - self.predict(nl_values, linear_values, data)
 
         if cov.ndim == 1:
             return jnp.sum(resid**2 / cov)

@@ -10,13 +10,15 @@ __all__ = (
 import warnings
 from typing import Any
 
+import equinox as eqx
+import jax
 import numpy as np
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
+from unxt.quantity import AllowValue
 
 from harv.custom_types import BatchQTime, NQAny, NTime, ScalarQTime
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
-from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
 from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.samplers import Samples
 
@@ -25,11 +27,6 @@ try:
     import matplotlib.pyplot as plt
 except ImportError:
     plt: Any = None
-
-try:
-    import tinygp
-except ImportError:
-    tinygp: Any = None
 
 
 # Default styles:
@@ -254,108 +251,6 @@ def _get_extension_sample_values(
     }
 
 
-def _gp_plot_signal(
-    ext: Any,
-    hp: dict[str, float],
-    residuals: Any,
-    data_err: Any,
-    t_grid: Any,
-    data_times: Any,
-) -> Any:
-    """Return the GP conditional mean used to overlay time-domain RV curves."""
-    if tinygp is None:
-        msg = "tinygp is required for GP plotting support"
-        raise ImportError(msg)
-
-    # Quasisep kernels require sorted training coordinates. Keep the prediction
-    # grid order unchanged and reorder the observed residuals/errors to match.
-    sort_idx = jnp.argsort(data_times)
-    data_times = data_times[sort_idx]
-    residuals = residuals[sort_idx]
-    data_err = data_err[sort_idx]
-
-    kernel = ext.kernel_builder(hp)
-    gp = tinygp.GaussianProcess(kernel, data_times, diag=data_err**2)
-
-    # Quasisep training is scalable, but conditioning on a large prediction grid
-    # can still fall back to dense test-time covariance matrices. Predict in
-    # chunks to keep notebook plotting from exhausting memory.
-    t_grid = jnp.asarray(t_grid)
-    chunk_size = 2048
-    if t_grid.shape[0] <= chunk_size:
-        _, cond = gp.condition(residuals, t_grid)
-        return cond.loc
-
-    pred_chunks = []
-    for start in range(0, int(t_grid.shape[0]), chunk_size):
-        stop = start + chunk_size
-        _, cond = gp.condition(residuals, t_grid[start:stop])
-        pred_chunks.append(cond.loc)
-    return jnp.concatenate(pred_chunks)
-
-
-def _trend_plot_signal(
-    ext: Any,
-    hp: dict[str, float],
-    t_grid: Any,
-    data_t_ref: Any,
-) -> Any:
-    """Return a polynomial trend contribution on the plotting grid."""
-    time_unit = ext.time_unit or str(t_grid.unit)
-    dt = jnp.asarray(ustrip(time_unit, t_grid - data_t_ref))
-    trend = jnp.zeros_like(dt)
-    for k in range(1, ext.order + 1):
-        trend = trend + jnp.asarray(hp[f"trend_{k}"]) * dt**k
-    return trend
-
-
-def _plot_extension_extra_noise(
-    ext: Any,
-    hp: dict[str, float],
-    data_err: Any,
-) -> Any | None:
-    """Private plotting adapter for extension-driven error-bar widening.
-
-    Keep plot-specific behavior out of ``AbstractExtension``. If more
-    extensions need custom plotting behavior later, replace this type-dispatch
-    block with an optional plotting capability/protocol instead of adding plot
-    hooks back onto the base extension API.
-    """
-    from harv.models.extensions.jitter import Jitter  # noqa: PLC0415
-
-    if isinstance(ext, Jitter):
-        return jnp.asarray(hp["jitter"])
-    return None
-
-
-def _plot_extension_rv_signal(
-    ext: Any,
-    hp: dict[str, float],
-    residuals: Any,
-    data_err: Any,
-    t_grid: Any,
-    data_times: Any,
-    data_t_ref: Any,
-) -> Any | None:
-    """Private plotting adapter for extension-driven RV curve adjustments."""
-    from harv.models.extensions.gp import GP  # noqa: PLC0415
-    from harv.models.extensions.trend import MonomialTrend  # noqa: PLC0415
-
-    if isinstance(ext, GP):
-        time_unit = ext.time_unit or str(t_grid.unit)
-        return _gp_plot_signal(
-            ext,
-            hp,
-            residuals,
-            data_err,
-            jnp.asarray(ustrip(time_unit, t_grid)),
-            data_times,
-        )
-    if isinstance(ext, MonomialTrend) and not ext.astrometry:
-        return _trend_plot_signal(ext, hp, t_grid, data_t_ref)
-    return None
-
-
 def _component_linear_param(samples: Any, comp_name: str, param: str, i: int) -> Any:
     """Return sample *i* of a linear parameter, preferring the namespaced key.
 
@@ -369,7 +264,69 @@ def _component_linear_param(samples: Any, comp_name: str, param: str, i: int) ->
     return samples[key][i]
 
 
-# --- end of hacky extension-specific plotting helpers ---
+def _component_sample_params(
+    samples: "Samples",
+    comp_model: Any,
+    data: Any,
+    namespace: str,
+    i: int,
+) -> tuple[dict[str, Any], dict[str, jax.Array]]:
+    """Like _assemble_sample_params, but resolves namespaced keys for joint models.
+
+    For each param ``X`` declared by ``comp_model``, looks up
+    ``f"{namespace}.{X}"`` in ``samples`` first, then falls back to the bare
+    name ``X``.  Used to pull per-component values from a joint posterior
+    (e.g. SB2 ``"primary.rv_semiamp"`` → ``"rv_semiamp"`` for the primary
+    component).  Returns sample ``i`` (scalars), in the form ``comp_model.predict``
+    / ``comp_model.predict_at_times`` expects.
+    """
+    base_nl_units = {
+        p.name: p.unit for p in comp_model.parameterization.params() if not p.linear
+    }
+    linear_units = comp_model._linear_param_units(data)
+
+    def _lookup(samples_dict: dict[str, Any], name: str) -> Any:
+        qualified = f"{namespace}.{name}"
+        return (
+            samples_dict[qualified] if qualified in samples_dict else samples_dict[name]
+        )
+
+    nl_for_model: dict[str, Any] = {}
+    for name in comp_model._all_nonlinear_names():
+        if (
+            name not in samples.nonlinear
+            and f"{namespace}.{name}" not in samples.nonlinear
+        ):
+            continue
+        value = _lookup(samples.nonlinear, name)[i]
+        nl_for_model[name] = (
+            value if base_nl_units.get(name, "") else ustrip(str(value.unit), value)
+        )
+
+    linear_stripped: dict[str, jax.Array] = {}
+    for name in linear_units:
+        if name not in samples.linear and f"{namespace}.{name}" not in samples.linear:
+            continue
+        value = _lookup(samples.linear, name)[i]
+        linear_stripped[name] = jnp.asarray(ustrip(linear_units[name], value))
+
+    return nl_for_model, linear_stripped
+
+
+def _strip_multisurvey_offsets(model: Any) -> Any:
+    """Return a copy of *model* with any MultiSurveyOffset extension removed.
+
+    The offset extension's ``indicator_matrix`` is fixed to the original
+    data's row count, so it cannot be evaluated on an arbitrary plotting time
+    grid.  The smooth-curve overlay uses this stripped model;
+    per-instrument median offsets are applied to data points separately.
+    """
+    new_exts = tuple(
+        e for e in model.extensions if not isinstance(e, MultiSurveyOffset)
+    )
+    if len(new_exts) == len(model.extensions):
+        return model
+    return eqx.tree_at(lambda m: m.extensions, model, new_exts)
 
 
 # These are the main public API plotting functions:
@@ -378,7 +335,7 @@ def _component_linear_param(samples: Any, comp_name: str, param: str, i: int) ->
 def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     samples: Samples,
     data: RVData | SourceData | SystemData | None = None,
-    extensions: tuple[Any, ...] = (),
+    model: Any = None,
     *,
     n_samples: int | None = 128,
     time_grid: BatchQTime | None = None,
@@ -396,10 +353,24 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 ) -> Any:
     """Plot RV curves computed from (posterior) samples over data.
 
-    Draws ``n_samples`` posterior Keplerian RV curves sampled from *samples*. When
-    *extensions* are provided, each curve is augmented by the extension contributions
-    (e.g. GP conditional mean) and error bars are widened by any extra noise terms (e.g.
-    jitter).
+    Draws ``n_samples`` posterior RV curves sampled from *samples*.  The
+    predicted curve and error model are obtained by delegating to the *model*:
+
+    - The smooth curve at the plotting grid uses
+      :meth:`~harv.models.RVModel.predict_at_times`, which folds in every
+      design-matrix extension (e.g.
+      :class:`~harv.models.extensions.MonomialTrend`).
+    - Error bars are widened using
+      :meth:`~harv.models.component.AbstractComponentModel._full_obs_err`
+      (jitter, GP diagonal).
+    - GP structured noise is overlaid via
+      :meth:`~harv.models.extensions.GP.conditional_mean`.
+
+    :class:`~harv.models.extensions.MultiSurveyOffset` is subsetted out for
+    the smooth-curve overlay (its ``indicator_matrix`` is bound to the
+    original data's row count and cannot be evaluated on a plotting grid);
+    per-instrument median offsets are still applied to data points so that
+    instruments land in the reference frame.
 
     Parameters
     ----------
@@ -409,10 +380,11 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     data
         Observed RV data to overplot.  When ``None``, only orbit model curves are
         drawn (no data points, no instrument-colour cycling).
-    extensions
-        Extensions used during sampling. Plotting has private built-in support
-        for GP conditional-mean overlays and jitter-driven error-bar widening.
-        Default: no extensions.
+    model
+        The RV component model (or :class:`~harv.models.JointModel` for SB2)
+        whose extensions and parameterization define the prediction.  When
+        ``None`` (default), a bare ``RVModel()`` is used — the previous
+        no-extension behavior.
     n_samples
         Number of posterior curves to draw.  Set to None to draw all samples.  Default:
         128.
@@ -475,12 +447,25 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     Examples
     --------
     >>> ax = plot_rv(samples, rv_data)  # doctest: +SKIP
-    >>> ax = plot_rv(samples, rv_data, extensions=(jitter, gp))  # doctest: +SKIP
+    >>> ax = plot_rv(samples, rv_data, model=sampler.model)  # doctest: +SKIP
     >>> ax = plot_rv(samples, rv_data, phase_fold_median=True)  # doctest: +SKIP
     """
     if plt is None:
         msg = "matplotlib is required for plot_rv."
         raise ImportError(msg)
+
+    if model is None:
+        from harv.models.rv import RVModel as _RVModel  # noqa: PLC0415
+
+        model = _RVModel()
+
+    # JointModel?  Build a per-instrument component-model resolver.
+    from harv.models.joint import JointModel as _JointModel  # noqa: PLC0415
+
+    def _component_model_for(instr_name: str) -> Any:
+        if isinstance(model, _JointModel) and instr_name in model.components:
+            return model.components[instr_name]
+        return model
 
     if show_signal_components and phase_fold_median:
         warnings.warn(
@@ -562,12 +547,14 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         samples.metadata.get("t_ref_unit", time_unit),
     )
 
-    # Per-instrument median offsets sourced directly from MultiSurveyOffset extensions
-    # so that only genuine instrument offsets are applied, not trend or GP params.
+    # Per-instrument median offsets sourced directly from any MultiSurveyOffset
+    # extension on the model so that only genuine instrument offsets are
+    # applied to data points, not trend or GP params.
     offset_names: set[str] = set()
-    for ext in extensions:
-        if isinstance(ext, MultiSurveyOffset):
-            offset_names.update(ext.instrument_names)
+    for ds_name in rv_datasets:
+        for ext in _component_model_for(ds_name).extensions:
+            if isinstance(ext, MultiSurveyOffset):
+                offset_names.update(ext.instrument_names)
 
     median_offsets: dict[str, Q] = {
         name: Q(float(np.median(np.asarray(samples.linear[name].value))), rv_unit)
@@ -575,26 +562,32 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         if name in samples.linear
     }
 
-    # Per-dataset median extra noise (e.g. jitter). Computed separately for each
-    # dataset so that instruments with different n_times are handled correctly.
+    # Per-dataset median effective error: delegate to the component model's
+    # extension-modified covariance (jitter adds quadrature, GP adds full
+    # off-diagonal structure — we take its diagonal for display).  Computed
+    # across draw_indices and the median sigma per data point is used to draw
+    # the widened error bars.
     extra_err_per_dataset: dict[str, Any] = {}
-    if extensions and rv_datasets:
+    if rv_datasets:
         for ds_name, ds in rv_datasets.items():
-            ds_err = ds.rv_err
-            per_sample = []
+            comp_model = _component_model_for(ds_name)
+            if not comp_model.extensions:
+                continue
+            ds_err = jnp.asarray(ustrip(rv_unit, ds.rv_err))
+            per_sample_eff_err: list[Any] = []
             for i in draw_indices:
-                hp_i = _get_extension_sample_values(samples, extensions, i)
-                extra_var_i = Q(jnp.zeros(ds.n_times), rv_unit) ** 2
-                for ext in extensions:
-                    val = _plot_extension_extra_noise(ext, hp_i, ds_err)
-                    if val is not None:
-                        extra_q = Q(jnp.broadcast_to(val, ds.n_times), rv_unit)
-                        extra_var_i = extra_var_i + extra_q**2
-                per_sample.append(jnp.sqrt(extra_var_i))
-            if per_sample:
-                extra_err_per_dataset[ds_name] = jnp.median(
-                    jnp.stack(per_sample), axis=0
+                nl_i, _lin_i = _component_sample_params(
+                    samples, comp_model, ds, ds_name, i
                 )
+                cov = comp_model._full_obs_err(ds_err, nl_i, ds)
+                eff = jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov))
+                per_sample_eff_err.append(eff)
+            if per_sample_eff_err:
+                # Only show the *extra* over the raw obs error (in quadrature)
+                # so the widened bars are visually distinct from the originals.
+                median_eff = jnp.median(jnp.stack(per_sample_eff_err), axis=0)
+                extra_var = jnp.clip(median_eff**2 - ds_err**2, 0.0)
+                extra_err_per_dataset[ds_name] = Q(jnp.sqrt(extra_var), rv_unit)
 
     # If a user specified, a global shift:
     median_v0 = (
@@ -618,49 +611,65 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         if apply_median_offsets and instr_name in median_offsets:
             rv_obs = rv_obs - median_offsets[instr_name]
 
-        if phase_fold_median and extensions:
-            ref_sample_data: dict[str, Any] = {
-                "period": samples["period"][ref_idx],
-                "eccentricity": samples["eccentricity"][ref_idx],
-                "t_peri": samples["t_peri"][ref_idx],
-                "arg_peri": samples["arg_peri"][ref_idx],
-                "rv_semiamp": _component_linear_param(
-                    samples, instr_name, "rv_semiamp", ref_idx
-                ),
-                "v_sys": _component_linear_param(samples, instr_name, "v_sys", ref_idx),
-            }
-            rv_at_data = rv_at_times(
+        comp_model_for_instr = _component_model_for(instr_name)
+        if phase_fold_median and comp_model_for_instr.extensions:
+            # Subtract the reference sample's structured extension contribution
+            # (trend at data times + GP conditional mean at data times) so the
+            # observed RV folds cleanly onto the Keplerian orbit overlay.
+            nl_ref, lin_ref = _component_sample_params(
+                samples, comp_model_for_instr, rv_data, instr_name, ref_idx
+            )
+            curve_model = _strip_multisurvey_offsets(comp_model_for_instr)
+            # Keplerian + trend contribution at data times (no offsets,
+            # no zero-point — those are part of the *model* prediction, not the
+            # noise we want to subtract).
+            from harv.models.extensions.gp import GP  # noqa: PLC0415
+
+            # Build a "trend-only" model (drop GP and offsets, keep e.g.
+            # MonomialTrend) so its predict_at_times yields the deterministic
+            # extension contribution.
+            trend_only_exts = tuple(
+                e for e in curve_model.extensions if not isinstance(e, GP)
+            )
+            trend_only_model = eqx.tree_at(
+                lambda m: m.extensions, curve_model, trend_only_exts
+            )
+            # Baseline Keplerian-only prediction (no extensions at all).
+            kepler_only_model = eqx.tree_at(lambda m: m.extensions, curve_model, ())
+            y_full = trend_only_model.predict_at_times(
                 rv_data.time,
-                ref_sample_data["period"],
-                ref_sample_data["eccentricity"],
-                ref_sample_data["t_peri"],
-                ref_sample_data["arg_peri"],
-                ref_sample_data["rv_semiamp"],
-                ref_sample_data["v_sys"],
+                nl_ref,
+                lin_ref,
+                t_ref=rv_data.t_ref,
             )
-            residuals = jnp.asarray(
-                ustrip(rv_unit, rv_obs) - ustrip(rv_unit, rv_at_data)
+            y_kepler = kepler_only_model.predict_at_times(
+                rv_data.time,
+                nl_ref,
+                lin_ref,
+                t_ref=rv_data.t_ref,
             )
-            err_data_raw = ustrip(rv_unit, rv_err)
-            t_data_raw = ustrip(time_unit, rv_data.time)
-            hp_ref = _get_extension_sample_values(samples, extensions, ref_idx)
-            phase_fold_signal = Q(jnp.zeros(rv_data.n_times), rv_unit)
-            has_phase_fold_signal = False
-            for ext in extensions:
-                contrib = _plot_extension_rv_signal(
-                    ext,
-                    hp_ref,
-                    residuals,
-                    err_data_raw,
-                    rv_data.time,
-                    t_data_raw,
-                    rv_data.t_ref,
-                )
-                if contrib is not None:
-                    phase_fold_signal = phase_fold_signal + Q(contrib, rv_unit)
-                    has_phase_fold_signal = True
-            if has_phase_fold_signal:
-                rv_obs = rv_obs - phase_fold_signal
+            trend_contrib = y_full - y_kepler  # bare jax array in rv_unit
+
+            # GP conditional mean (if a GP extension is present), conditioned
+            # on the full Keplerian + trend residuals.
+            gp_contrib = jnp.zeros_like(trend_contrib)
+            residuals_full = jnp.asarray(ustrip(rv_unit, rv_obs) - jnp.asarray(y_full))
+            err_data_arr = jnp.asarray(ustrip(rv_unit, rv_err))
+            for ext in comp_model_for_instr.extensions:
+                if isinstance(ext, GP):
+                    hp = _get_extension_sample_values(samples, (ext,), ref_idx)
+                    t_unit_ext = ext.time_unit or time_unit
+                    gp_contrib = gp_contrib + jnp.asarray(
+                        ext.conditional_mean(
+                            residuals_full,
+                            jnp.asarray(ustrip(t_unit_ext, rv_data.time)),
+                            jnp.asarray(ustrip(t_unit_ext, rv_data.time)),
+                            err_data_arr,
+                            hp,
+                        )
+                    )
+            phase_fold_signal = Q(trend_contrib + gp_contrib, rv_unit)
+            rv_obs = rv_obs - phase_fold_signal
 
         instr_style = data_style.copy()
         if "color" not in instr_style:
@@ -753,15 +762,80 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             "title": "Radial velocity data and posterior orbits",
         }
 
-    # When data is present, draw one set of orbit curves per instrument/component so
-    # that SB2 secondaries (with their own rv_semiamp) are rendered correctly and GP
-    # residuals are computed against the matching dataset.
+    # Build the orbit-curve overlays via model.predict_at_times so trend
+    # contributions and any other design-matrix extension fold in automatically.
+    # MultiSurveyOffset is subsetted out: its indicator_matrix is bound to the
+    # original data's row count, and the per-instrument offsets are already
+    # being applied to data points via `median_offsets` above.
+    from harv.models.extensions.gp import GP  # noqa: PLC0415
+
+    def _curve_for_sample(
+        comp_model: Any,
+        rv_data_ref: RVData,
+        instr_name: str,
+        i: int,
+    ) -> tuple[jax.Array, jax.Array, bool]:
+        """Return (kepler_rv_array, extension_rv_array, has_extension_signal).
+
+        Both arrays are in rv_unit, bare jax arrays of shape len(t_grid).
+        """
+        nl_i, lin_i = _component_sample_params(
+            samples, comp_model, rv_data_ref, instr_name, i
+        )
+        curve_model = _strip_multisurvey_offsets(comp_model)
+        # Keplerian-only baseline (no design-matrix extensions).
+        kepler_only = eqx.tree_at(lambda m: m.extensions, curve_model, ())
+        y_kepler = kepler_only.predict_at_times(
+            t_grid,
+            nl_i,
+            lin_i,
+            t_ref=rv_data_ref.t_ref,
+            obs_unit=rv_unit,
+        )
+        # Full design-matrix prediction (Keplerian + trend + any other
+        # design-matrix extension).
+        y_full = curve_model.predict_at_times(
+            t_grid,
+            nl_i,
+            lin_i,
+            t_ref=rv_data_ref.t_ref,
+            obs_unit=rv_unit,
+        )
+        ext_curve = y_full - y_kepler
+
+        # GP conditional-mean overlay (covariance extension, not design-matrix
+        # — predicted on the grid by conditioning on data residuals).
+        has_signal = bool(ext_curve.any())
+        if not phase_fold_median:
+            err_data_arr = jnp.asarray(ustrip(rv_unit, rv_data_ref.rv_err))
+            for ext in comp_model.extensions:
+                if isinstance(ext, GP):
+                    # Residuals against the *full* deterministic prediction at
+                    # the data times.
+                    y_at_data = curve_model.predict(nl_i, lin_i, rv_data_ref)
+                    residuals = jnp.asarray(
+                        ustrip(rv_unit, rv_data_ref.rv) - jnp.asarray(y_at_data)
+                    )
+                    t_unit_ext = ext.time_unit or time_unit
+                    hp = _get_extension_sample_values(samples, (ext,), i)
+                    gp_grid = ext.conditional_mean(
+                        residuals,
+                        jnp.asarray(ustrip(t_unit_ext, rv_data_ref.time)),
+                        jnp.asarray(ustrip(t_unit_ext, t_grid)),
+                        err_data_arr,
+                        hp,
+                    )
+                    ext_curve = ext_curve + jnp.asarray(gp_grid)
+                    has_signal = True
+        return jnp.asarray(y_kepler), jnp.asarray(ext_curve), has_signal
+
     if rv_datasets:
-        # Orbit color is offset by 1 from the data color (so the C0 data
-        # points pair with a C1 orbit overlay) and cycles modulo the palette
-        # length so that more instruments than available colors does not turn
-        # a plotting call into a hard ValueError.
+        # When data is present, draw one set of curves per instrument/component
+        # so SB2 secondaries (with their own rv_semiamp) and per-component GP
+        # extensions are rendered correctly.  Orbit color is offset by 1 from
+        # the data color (so C0 data pairs with a C1 orbit overlay).
         for color_idx, (instr_name, _rv_data) in enumerate(rv_datasets.items()):
+            comp_model_curve = _component_model_for(instr_name)
             total_style = orbit_style.copy()
             total_style["color"] = colors[(color_idx + 1) % len(colors)]
             kepler_style = orbit_style.copy()
@@ -771,52 +845,12 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             extension_style.setdefault("linestyle", "--")
 
             for draw_idx, i in enumerate(draw_indices):
-                sample_data: dict[str, Any] = {
-                    "period": samples["period"][i],
-                    "eccentricity": samples["eccentricity"][i],
-                    "t_peri": samples["t_peri"][i],
-                    "arg_peri": samples["arg_peri"][i],
-                    "rv_semiamp": _component_linear_param(
-                        samples, instr_name, "rv_semiamp", i
-                    ),
-                    "v_sys": _component_linear_param(samples, instr_name, "v_sys", i),
-                }
-                kepler_rv = rv_at_times(t_grid, **sample_data)
-                extension_rv = Q(jnp.zeros_like(ustrip(time_unit, t_grid)), rv_unit)
-                has_extension_signal = False
-
-                # Extension contributions (e.g. GP conditional mean) computed
-                # against this component's data, not the first dataset.
-                if extensions and not phase_fold_median:
-                    rv_at_data = rv_at_times(
-                        _rv_data.time,
-                        sample_data["period"],
-                        sample_data["eccentricity"],
-                        sample_data["t_peri"],
-                        sample_data["arg_peri"],
-                        sample_data["rv_semiamp"],
-                        sample_data["v_sys"],
-                    )
-                    residuals = jnp.asarray(
-                        ustrip(rv_unit, _rv_data.rv) - ustrip(rv_unit, rv_at_data)
-                    )
-                    err_data_raw = ustrip(rv_unit, _rv_data.rv_err)
-                    t_data_raw = ustrip(time_unit, _rv_data.time)
-                    hp_i = _get_extension_sample_values(samples, extensions, i)
-                    for ext in extensions:
-                        contrib = _plot_extension_rv_signal(
-                            ext,
-                            hp_i,
-                            residuals,
-                            err_data_raw,
-                            t_grid,
-                            t_data_raw,
-                            _rv_data.t_ref,
-                        )
-                        if contrib is not None:
-                            extension_rv = extension_rv + Q(contrib, rv_unit)
-                            has_extension_signal = True
-
+                y_kepler, y_ext, has_signal = _curve_for_sample(
+                    comp_model_curve,
+                    _rv_data,
+                    instr_name,
+                    i,
+                )
                 if show_signal_components:
                     kepler_plot_style = kepler_style.copy()
                     extension_plot_style = extension_style.copy()
@@ -826,35 +860,57 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
                     ax.plot(
                         x_plot,
-                        ustrip(rv_unit, kepler_rv - median_v0),
+                        np.asarray(y_kepler)
+                        - float(ustrip(AllowValue, rv_unit, median_v0)),
                         **kepler_plot_style,
                     )
-                    if has_extension_signal:
+                    if has_signal:
                         ax.plot(
                             x_plot,
-                            ustrip(rv_unit, extension_rv),
+                            np.asarray(y_ext),
                             **extension_plot_style,
                         )
                 else:
-                    rv_model = kepler_rv + extension_rv
+                    y_model = y_kepler + y_ext
                     ax.plot(
                         x_plot,
-                        ustrip(rv_unit, rv_model - median_v0),
+                        np.asarray(y_model)
+                        - float(ustrip(AllowValue, rv_unit, median_v0)),
                         **total_style,
                     )
     else:
-        # data=None: draw orbit curves using bare parameter keys (no component context)
+        # data=None: no per-instrument context — use the model directly with
+        # bare keys from samples, via a synthetic single-instrument RVData
+        # required by predict_at_times.  No GP overlay (no data residuals to
+        # condition on).
+        from harv.models.rv import RVModel as _RVModel  # noqa: PLC0415
+
+        # Build a synthetic single-instrument data shim to satisfy
+        # _linear_param_units(data) when assembling lin values.
+        dummy_data = RVData(
+            time=Q(jnp.zeros(1), time_unit),
+            rv=Q(jnp.zeros(1), rv_unit),
+            rv_err=Q(jnp.ones(1), rv_unit),
+            t_ref=t_ref,
+        )
+        comp_model_for_curve = model if isinstance(model, _RVModel) else _RVModel()
+        curve_model = _strip_multisurvey_offsets(comp_model_for_curve)
         for i in draw_indices:
-            sample_data: dict[str, Any] = {
-                "period": samples["period"][i],
-                "eccentricity": samples["eccentricity"][i],
-                "t_peri": samples["t_peri"][i],
-                "arg_peri": samples["arg_peri"][i],
-                "rv_semiamp": samples["rv_semiamp"][i],
-                "v_sys": samples["v_sys"][i],
-            }
-            rv_model = rv_at_times(t_grid, **sample_data)
-            ax.plot(x_plot, ustrip(rv_unit, rv_model - median_v0), **orbit_style)
+            nl_i, lin_i = _component_sample_params(
+                samples, curve_model, dummy_data, "data", i
+            )
+            y_model = curve_model.predict_at_times(
+                t_grid,
+                nl_i,
+                lin_i,
+                t_ref=t_ref,
+                obs_unit=rv_unit,
+            )
+            ax.plot(
+                x_plot,
+                np.asarray(y_model) - float(ustrip(AllowValue, rv_unit, median_v0)),
+                **orbit_style,
+            )
 
     ax.legend(loc="best")
     ax.set(**ax_set_info)
@@ -862,10 +918,11 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     return ax
 
 
-def plot_gaia_sky_orbit(
-    orbit_params: dict[str, Any],
-    data: GaiaAstrometryData | None = None,
+def plot_gaia_sky_orbit(  # noqa: C901 -- plotting code is inherently complex
+    model: Any,
+    samples: Samples,
     *,
+    data: GaiaAstrometryData | None = None,
     n_grid: int = 500,
     errorbar_scale: float = 1.0,
     plot_kwargs: dict[str, Any] | None = None,
@@ -876,35 +933,38 @@ def plot_gaia_sky_orbit(
     """Plot a single astrometric orbit ellipse on the sky.
 
     Draws the photocentre orbit projected onto the sky-plane (``ΔRA`` vs ``ΔDec``)
-    for one set of orbital parameters.  When *data* is provided, each Gaia epoch
-    is rendered as a short line segment in the scan direction at the model-predicted
-    photocentre offset, with half-length equal to the along-scan measurement
-    uncertainty (scaled by *errorbar_scale*).  This shows the 1-D constraint each
-    epoch contributes.
+    for one posterior sample.  When *data* is provided, each Gaia epoch is
+    rendered as a short line segment in the scan direction at the model-
+    predicted photocentre offset, with half-length equal to the along-scan
+    measurement uncertainty (scaled by *errorbar_scale*).
+
+    The orbit-only sky path (no PM, no parallax) is constructed by delegating
+    to :meth:`~harv.models.GaiaAstrometryModel.predict_orbit_sky`, so this
+    function automatically supports both Standard and Thiele-Innes
+    parameterizations.
 
     Parameters
     ----------
-    orbit_params
-        Orbital parameters for a single sample.  Required keys: ``"period"``,
-        ``"eccentricity"``, ``"t_peri"``, ``"arg_peri"``, ``"cos_i"``,
-        ``"lon_asc_node"``, ``"semi_major_axis"``.  ``"t_peri"`` should be the
-        absolute periastron time (i.e. ``t_ref + phase_peri * period``).
+    model
+        The :class:`~harv.models.GaiaAstrometryModel` whose parameterization
+        defines the orbit.
+    samples
+        Posterior samples containing exactly one sample.  Select beforehand
+        with ``samples[i]`` or :meth:`Samples.map_sample`.
     data
-        Gaia epoch astrometry data.  When ``None``, only the model ellipse is
-        drawn.
+        Gaia epoch astrometry data.  When ``None``, only the orbit ellipse is
+        drawn (no per-epoch markers).
     n_grid
-        Number of phase points used to draw the smooth orbit curve.  Default: 500.
+        Number of phase points used to draw the smooth orbit curve.  Default 500.
     errorbar_scale
-        Scale factor applied to the half-length of each scan-direction line
-        segment (default 1.0 = 1-sigma).
+        Scale factor on the half-length of each scan-direction line segment
+        (default ``1.0`` = 1-sigma).
     plot_kwargs
         Style overrides for the orbit curve (forwarded to ``ax.plot``).
     data_plot_kwargs
-        Style overrides for the per-epoch scan-direction segments (forwarded to
-        ``ax.plot``).
+        Style overrides for the per-epoch scan-direction segments.
     ax
-        Axes to draw into.  If ``None`` (default), a new figure is created and
-        returned.
+        Axes to draw into.  ``None`` (default) creates a new figure.
     **kwargs
         Forwarded to ``matplotlib.pyplot.subplots`` when *ax* is ``None``.
 
@@ -916,14 +976,20 @@ def plot_gaia_sky_orbit(
     ------
     ImportError
         If matplotlib is not installed.
-
-    Examples
-    --------
-    >>> fig = plot_gaia_sky_orbit(orbit_params, data=gaia_data)  # doctest: +SKIP
+    ValueError
+        If *samples* does not contain exactly one posterior sample.
     """
     if plt is None:
         msg = "matplotlib is required for plot_gaia_sky_orbit."
         raise ImportError(msg)
+
+    if len(samples) != 1:
+        msg = (
+            f"plot_gaia_sky_orbit expects exactly one posterior sample, but "
+            f"got {len(samples)}. Select a single sample first, e.g. "
+            "`samples[i]` or `samples.map_sample()`."
+        )
+        raise ValueError(msg)
 
     return_fig = ax is None
     if ax is None:
@@ -934,52 +1000,61 @@ def plot_gaia_sky_orbit(
     if data_plot_kwargs is None:
         data_plot_kwargs = {}
 
-    period = orbit_params["period"]
-    eccentricity = orbit_params["eccentricity"]
-    t_peri = orbit_params["t_peri"]
-    arg_peri = orbit_params["arg_peri"]
-    cos_i = orbit_params["cos_i"]
-    lon_asc_node = orbit_params["lon_asc_node"]
-    sma = orbit_params["semi_major_axis"]
+    # Assemble (nl, lin) from the single sample.  Strip dimensioned nl to the
+    # form the parameterization expects (period stays as Q[time]).  Linear
+    # values: strip each to its own stored unit so the resulting (dRA, dDec)
+    # land in that same unit.
+    base_nl_units = {
+        p.name: p.unit for p in model.parameterization.params() if not p.linear
+    }
+    nl = {
+        name: samples[name][0]
+        if base_nl_units.get(name, "")
+        else jnp.asarray(ustrip(str(samples[name][0].unit), samples[name][0]))
+        for name in samples.nonlinear
+    }
+    linear_unit_map: dict[str, str] = {
+        name: str(samples[name][0].unit) for name in samples.linear
+    }
+    lin = {
+        name: jnp.asarray(ustrip(linear_unit_map[name], samples[name][0]))
+        for name in samples.linear
+    }
 
-    sma_unit = str(sma.unit)
+    # Display unit: take from the orbit-amplitude linear param if present.
+    if "semi_major_axis" in linear_unit_map:
+        sma_unit = linear_unit_map["semi_major_axis"]
+    elif "ti_A" in linear_unit_map:
+        sma_unit = linear_unit_map["ti_A"]
+    else:
+        msg = (
+            "plot_gaia_sky_orbit: samples must contain either 'semi_major_axis' "
+            "(Standard) or 'ti_A' (Thiele-Innes) linear params."
+        )
+        raise ValueError(msg)
+
+    period_q = nl["period"]  # Q[time]
+    phase_peri_v = float(ustrip(AllowValue, "", samples["phase_peri"][0]))
+    t_peri_q = phase_peri_v * period_q
 
     # Smooth orbit curve over one full period, anchored at periastron.
     phi_grid = np.linspace(0.0, 1.0, n_grid)
-    times_grid = t_peri + Q(phi_grid, "") * period
-    delta_ra_grid, delta_dec_grid = astrometric_orbit_at_times(
-        times_grid,
-        period,
-        eccentricity,
-        t_peri,
-        arg_peri,
-        cos_i,
-        lon_asc_node,
-        sma,
-    )
+    times_grid = t_peri_q + Q(phi_grid, "") * period_q
+    delta_ra_grid, delta_dec_grid = model.predict_orbit_sky(nl, lin, times_grid)
 
     orbit_style = {**_DEFAULT_LINE_STYLE, "color": "#555555", **plot_kwargs}
     orbit_style.setdefault("rasterized", True)
     ax.plot(
-        np.asarray(ustrip(sma_unit, delta_ra_grid)),
-        np.asarray(ustrip(sma_unit, delta_dec_grid)),
+        np.asarray(delta_ra_grid),
+        np.asarray(delta_dec_grid),
         **orbit_style,
     )
 
     if data is not None:
         # Model-predicted photocentre offsets at each observation epoch
-        delta_ra_e, delta_dec_e = astrometric_orbit_at_times(
-            data.time,
-            period,
-            eccentricity,
-            t_peri,
-            arg_peri,
-            cos_i,
-            lon_asc_node,
-            sma,
-        )
-        delta_ra_e_v = np.asarray(ustrip(sma_unit, delta_ra_e))
-        delta_dec_e_v = np.asarray(ustrip(sma_unit, delta_dec_e))
+        delta_ra_e, delta_dec_e = model.predict_orbit_sky(nl, lin, data.time)
+        delta_ra_e_v = np.asarray(delta_ra_e)
+        delta_dec_e_v = np.asarray(delta_dec_e)
 
         # Scan direction unit vector in (ΔRA, ΔDec) plane: (sin ψ, cos ψ).
         # This matches the LPC convention used in the model design matrix.
@@ -1026,7 +1101,7 @@ def plot_gaia_sky_orbit(
 def plot_gaia_astrometry(
     samples: Samples,
     data: GaiaAstrometryData,
-    extensions: tuple[Any, ...] = (),  # reserved for parity with plot_rv
+    model: Any = None,
     *,
     data_plot_kwargs: dict[str, Any] | None = None,
     sky_orbit_kwargs: dict[str, Any] | None = None,
@@ -1042,13 +1117,19 @@ def plot_gaia_astrometry(
       :func:`plot_gaia_sky_orbit`), with each Gaia epoch shown as a
       scan-direction segment at the model-predicted photocentre offset.
     - **Panel 2 (right)**: along-scan position residual vs time — the observed
-      ``al_position`` minus the *full* predicted model for the sample (orbital
-      wobble + parallax + proper motion + zero-point).  Residuals scatter about
-      zero, drawn with measurement error bars; a dashed line marks zero.
+      ``al_position`` minus the *full* predicted model for the sample.  The
+      prediction is built by delegating to the model
+      (:meth:`~harv.models.GaiaAstrometryModel.predict`), which folds in every
+      design-matrix extension (e.g.
+      :class:`~harv.models.extensions.MonomialTrend` (astrometry=True),
+      :class:`~harv.models.extensions.MultiSurveyOffset`).  Covariance-only
+      extensions (jitter, GP) widen the residual error bars via
+      :meth:`~harv.models.component.AbstractComponentModel._full_obs_err`;
+      GP conditional-mean structured noise is additionally subtracted from the
+      residual so only true noise remains.
 
     *samples* must contain exactly one posterior sample.  Select one beforehand
-    with ``samples[i]`` (pick by index) or
-    :meth:`~harv.samplers.Samples.map_sample` (the maximum a posteriori sample).
+    with ``samples[i]`` or :meth:`~harv.samplers.Samples.map_sample`.
 
     Parameters
     ----------
@@ -1056,20 +1137,21 @@ def plot_gaia_astrometry(
         Posterior samples from a Gaia astrometry or joint model.  Must contain
         exactly one sample; otherwise a :class:`ValueError` is raised.
     data
-        The data conditioned on by the model.  Required (the residual needs the
-        scan angles and parallax factors).
-    extensions
-        Currently unused; reserved for parity with :func:`plot_rv`.
+        The data conditioned on by the model.  Required.
+    model
+        The :class:`~harv.models.GaiaAstrometryModel` whose extensions and
+        parameterization define the prediction.  When ``None`` (default), a
+        bare ``GaiaAstrometryModel()`` is used — equivalent to the previous
+        no-extension behavior.
     data_plot_kwargs
         Style overrides for the panel-2 residual error bars.
     sky_orbit_kwargs
-        Forwarded to :func:`plot_gaia_sky_orbit` for panel 1.  Orbit-curve
-        styling is reachable via ``sky_orbit_kwargs={"plot_kwargs": {...}}``.
+        Forwarded to :func:`plot_gaia_sky_orbit` for panel 1.
     figsize
-        Figure size when *axes* is ``None``.  Default: ``(10, 5)``.
+        Figure size when *axes* is ``None``.  Default ``(10, 5)``.
     axes
-        Two axes to draw into, ``(sky, residual)``.  If ``None`` (default), a
-        new 1x2 figure is created and returned.
+        Two axes to draw into, ``(sky, residual)``.  ``None`` (default) creates
+        a new figure.
     **kwargs
         Forwarded to ``matplotlib.pyplot.subplots`` when *axes* is ``None``.
 
@@ -1086,10 +1168,10 @@ def plot_gaia_astrometry(
 
     Examples
     --------
-    >>> fig = plot_gaia_astrometry(  # doctest: +SKIP
-    ...     samples.map_sample(), data=gaia_data
-    ... )
     >>> fig = plot_gaia_astrometry(samples[0], data=gaia_data)  # doctest: +SKIP
+    >>> fig = plot_gaia_astrometry(  # doctest: +SKIP
+    ...     samples.map_sample(), data=gaia_data, model=sampler.model
+    ... )
     """
     if plt is None:
         msg = "matplotlib is required for plot_gaia_astrometry."
@@ -1104,6 +1186,13 @@ def plot_gaia_astrometry(
         )
         raise ValueError(msg)
 
+    if model is None:
+        from harv.models.astrometry import (  # noqa: PLC0415
+            GaiaAstrometryModel as _GaiaAstrometryModel,
+        )
+
+        model = _GaiaAstrometryModel()
+
     return_fig = axes is None
     if axes is None:
         fig, axes = plt.subplots(1, 2, figsize=figsize, **kwargs)
@@ -1116,56 +1205,48 @@ def plot_gaia_astrometry(
 
     obs_unit = str(data.al_position.unit)
 
-    # Scalar value of a single-sample parameter, returned in the requested unit.
-    def _param_in(name: str, unit: str) -> float:
-        return float(ustrip(unit, samples[name][0]))
-
     # --- Panel 2: along-scan residual vs time ---
-    # Full predicted along-scan model: zero-point + proper motion + parallax +
-    # orbital wobble, following the Gaia LPC convention (see docs/spec.md
-    # "GaiaAstrometryData").
-    ra0_v = _param_in("ra0", obs_unit)
-    dec0_v = _param_in("dec0", obs_unit)
-    pmra_v = _param_in("pmra", f"{obs_unit}/yr")
-    pmdec_v = _param_in("pmdec", f"{obs_unit}/yr")
-    parallax_v = _param_in("parallax", obs_unit)
+    # Full prediction (orbital + PM + parallax + zero-point + every
+    # design-matrix extension) is computed by the model's likelihood-path
+    # primitives — single source of truth shared with `log_prob` / `chi_squared`.
+    from harv.samplers.samples import _assemble_sample_params  # noqa: PLC0415
 
-    psi = ustrip("rad", data.scan_angle)
-    sin_psi = np.asarray(jnp.sin(psi))
-    cos_psi = np.asarray(jnp.cos(psi))
-    parallax_factor = np.asarray(data.parallax_factor)
-    dt_yr = np.asarray(ustrip("yr", data.time - data.t_ref))
+    nl, lin = _assemble_sample_params(samples, model, data, i=0)
+    y_pred = np.asarray(model.predict(nl, lin, data))
+    residual = np.asarray(ustrip(obs_unit, data.al_position)) - y_pred
 
-    # Orbital photocentre offsets at each epoch, projected onto the scan direction.
-    delta_ra, delta_dec = astrometric_orbit_at_times(
-        data.time,
-        samples["period"][0],
-        samples["eccentricity"][0],
-        samples["t_peri"][0],
-        samples["arg_peri"][0],
-        samples["cos_i"][0],
-        samples["lon_asc_node"][0],
-        samples["semi_major_axis"][0],
-    )
-    al_orbit = (
-        np.asarray(ustrip(obs_unit, delta_ra)) * sin_psi
-        + np.asarray(ustrip(obs_unit, delta_dec)) * cos_psi
-    )
+    # GP conditional-mean overlay: structured noise from any GP extension is
+    # predicted at the data times (conditioned on the current residual) and
+    # subtracted, so the displayed residual reflects only the genuine
+    # uncorrelated noise.
+    from harv.models.extensions.gp import GP  # noqa: PLC0415
 
-    al_model = (
-        ra0_v * sin_psi
-        + dec0_v * cos_psi
-        + (pmra_v * dt_yr) * sin_psi
-        + (pmdec_v * dt_yr) * cos_psi
-        + parallax_v * parallax_factor
-        + al_orbit
-    )
-    residual = np.asarray(ustrip(obs_unit, data.al_position)) - al_model
+    err_obs = np.asarray(ustrip(obs_unit, data.al_position_err))
+    for ext in model.extensions:
+        if isinstance(ext, GP):
+            t_unit = ext.time_unit or str(data.time.unit)
+            t_data = jnp.asarray(ustrip(t_unit, data.time))
+            hp = _get_extension_sample_values(samples, (ext,), 0)
+            gp_mean = np.asarray(
+                ext.conditional_mean(
+                    jnp.asarray(residual),
+                    t_data,
+                    t_data,
+                    jnp.asarray(err_obs),
+                    hp,
+                )
+            )
+            residual = residual - gp_mean
+
+    # Extension-modified error bars (jitter + GP diagonal) via the same
+    # covariance path the likelihood uses.
+    cov = model._full_obs_err(jnp.asarray(err_obs), nl, data)
+    err_eff = np.asarray(jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov)))
 
     plot_timeseries_errorbar(
         data.time,
         Q(residual, obs_unit),
-        data.al_position_err,
+        Q(err_eff, obs_unit),
         obs_unit=obs_unit,
         ylabel=f"AL position residual [{obs_unit}]",
         ax=ax_resid,
@@ -1175,16 +1256,7 @@ def plot_gaia_astrometry(
     ax_resid.set_title("Along-scan residual vs time")
 
     # --- Panel 1: sky-projected orbit (delegated) ---
-    orbit_params = {
-        "period": samples["period"][0],
-        "eccentricity": samples["eccentricity"][0],
-        "t_peri": samples["t_peri"][0],
-        "arg_peri": samples["arg_peri"][0],
-        "cos_i": samples["cos_i"][0],
-        "lon_asc_node": samples["lon_asc_node"][0],
-        "semi_major_axis": samples["semi_major_axis"][0],
-    }
-    plot_gaia_sky_orbit(orbit_params, data=data, ax=ax_sky, **sky_orbit_kwargs)
+    plot_gaia_sky_orbit(model, samples, data=data, ax=ax_sky, **sky_orbit_kwargs)
     ax_sky.set_title("Sky-projected orbit")
 
     if return_fig:

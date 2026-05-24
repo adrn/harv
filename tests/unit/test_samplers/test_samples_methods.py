@@ -963,7 +963,7 @@ class TestPlotRV:
         ax_jitter = plot_rv(
             jitter_samples,
             rv_data,
-            extensions=(Jitter(param_unit="km/s"),),
+            model=RVModel(extensions=(Jitter(param_unit="km/s"),)),
             n_samples=1,
         )
 
@@ -1036,7 +1036,9 @@ class TestPlotRV:
         )
 
         ax_plain = plot_rv(rv_samples, rv_data, n_samples=1)
-        ax_gp = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+        ax_gp = plot_rv(
+            gp_samples, rv_data, model=RVModel(extensions=(gp,)), n_samples=1
+        )
 
         expected_alpha = get_alpha(1)
         plain_line = next(
@@ -1077,7 +1079,7 @@ class TestPlotRV:
         ax_trend = plot_rv(
             trend_samples,
             rv_data,
-            extensions=(trend,),
+            model=RVModel(extensions=(trend,)),
             n_samples=1,
             time_grid=time_grid,
         )
@@ -1120,7 +1122,7 @@ class TestPlotRV:
         ax = plot_rv(
             trend_samples,
             rv_data,
-            extensions=(trend,),
+            model=RVModel(extensions=(trend,)),
             n_samples=1,
             time_grid=time_grid,
             show_signal_components=True,
@@ -1166,7 +1168,7 @@ class TestPlotRV:
         ax_trend = plot_rv(
             trend_samples,
             rv_data,
-            extensions=(trend,),
+            model=RVModel(extensions=(trend,)),
             n_samples=1,
             phase_fold_median=True,
         )
@@ -1209,7 +1211,7 @@ class TestPlotRV:
         ax = plot_rv(
             gp_samples,
             rv_data,
-            extensions=(gp,),
+            model=RVModel(extensions=(gp,)),
             n_samples=1,
             show_signal_components=True,
         )
@@ -1266,7 +1268,7 @@ class TestPlotRV:
             time_unit="day",
         )
 
-        ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+        ax = plot_rv(gp_samples, rv_data, model=RVModel(extensions=(gp,)), n_samples=1)
 
         expected_alpha = get_alpha(1)
         gp_line = next(
@@ -1321,10 +1323,14 @@ class TestPlotRV:
             data_type=rv_samples.data_type,
             metadata=rv_samples.metadata,
         )
+
+        def _fake_kernel_builder(hp):
+            amp2 = hp["gp_amp"] ** 2 * jnp.exp(-0.5 * hp["gp_scale"])
+            # Return a callable so GP.modify_covariance can do kernel(t, t).
+            return lambda x, y: amp2 * jnp.zeros((len(x), len(y)))
+
         gp = GP(
-            kernel_builder=lambda hp: (
-                hp["gp_amp"] ** 2 * jnp.exp(-0.5 * hp["gp_scale"])
-            ),
+            kernel_builder=_fake_kernel_builder,
             hyperparams=(
                 ParamInfo("gp_amp", "km/s"),
                 ParamInfo("gp_scale", "day"),
@@ -1343,14 +1349,18 @@ class TestPlotRV:
                 chunk_lengths.append(len(X_test))
                 return None, SimpleNamespace(loc=jnp.zeros(len(X_test)))
 
+        # GP.conditional_mean (now on the extension itself) imports tinygp
+        # lazily, so patch its tinygp reference rather than plot.tinygp.
         with (
-            patch("harv.plot.tinygp.GaussianProcess", FakeGaussianProcess),
+            patch("tinygp.GaussianProcess", FakeGaussianProcess),
             patch(
                 "harv.plot.get_t_grid",
                 return_value=Q(jnp.linspace(-10.0, 110.0, 5000), "day"),
             ),
         ):
-            ax = plot_rv(gp_samples, rv_data, extensions=(gp,), n_samples=1)
+            ax = plot_rv(
+                gp_samples, rv_data, model=RVModel(extensions=(gp,)), n_samples=1
+            )
 
         expected_alpha = get_alpha(1)
         gp_line = next(
@@ -1478,37 +1488,102 @@ class TestPlotGaiaAstrometry:
         assert has_zero_line
         plt.close("all")
 
+    def _resid_yerr(self, fig) -> np.ndarray:
+        """Pull error-bar magnitudes off the residual panel of the fig."""
+        ax_resid = fig.axes[1]
+        # The errorbar collection's segments record (lower, upper) endpoints.
+        segs = ax_resid.collections[0].get_segments()
+        return np.array([abs(s[1, 1] - s[0, 1]) / 2.0 for s in segs])
+
+    def _resid_y(self, fig) -> np.ndarray:
+        """Pull residual y-values (data points) off the plot."""
+        ax_resid = fig.axes[1]
+        # The data points are the only Line2D with markers on the residual axis.
+        for line in ax_resid.get_lines():
+            if line.get_marker() not in (None, "None", ""):
+                return np.array(line.get_ydata())
+        msg = "no marker-bearing line found on residual axis"
+        raise AssertionError(msg)
+
+    def test_astrometry_trend_extension_changes_residual(
+        self, astro_samples, gaia_data
+    ):
+        """A MonomialTrend(astrometry=True) extension folds into al_model."""
+        trend = MonomialTrend(
+            order=1,
+            time_unit="yr",
+            obs_unit="mas",
+            astrometry=True,
+        )
+        # Add matching trend_ra_1 / trend_dec_1 so the prediction is non-trivial.
+        sample = astro_samples[0]
+        sample_with_trend = Samples(
+            nonlinear=sample.nonlinear,
+            linear={
+                **sample.linear,
+                "trend_ra_1": Q(jnp.array([0.5]), "mas"),
+                "trend_dec_1": Q(jnp.array([-0.3]), "mas"),
+            },
+            data_type=sample.data_type,
+            metadata=sample.metadata,
+        )
+        fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
+        fig_trend = plot_gaia_astrometry(
+            sample_with_trend,
+            data=gaia_data,
+            model=GaiaAstrometryModel(extensions=(trend,)),
+        )
+        y_plain = self._resid_y(fig_plain)
+        y_trend = self._resid_y(fig_trend)
+        # Residual should differ — the trend has been subtracted.
+        assert not np.allclose(y_plain, y_trend)
+        plt.close("all")
+
+    def test_astrometry_jitter_widens_error_bars(self, astro_samples, gaia_data):
+        """Jitter on the astrometry model widens the residual-panel error bars."""
+        jitter = Jitter(param_unit="mas")
+        sample = astro_samples[0]
+        sample_with_jitter = Samples(
+            nonlinear={**sample.nonlinear, "jitter": Q(jnp.array([0.5]), "mas")},
+            linear=sample.linear,
+            data_type=sample.data_type,
+            metadata=sample.metadata,
+        )
+        fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
+        fig_jitter = plot_gaia_astrometry(
+            sample_with_jitter,
+            data=gaia_data,
+            model=GaiaAstrometryModel(extensions=(jitter,)),
+        )
+        yerr_plain = self._resid_yerr(fig_plain)
+        yerr_jitter = self._resid_yerr(fig_jitter)
+        # Jitter adds in quadrature → strictly larger error bars.
+        assert (yerr_jitter > yerr_plain).all()
+        plt.close("all")
+
 
 @pytest.mark.skipif(not HAS_MPL, reason="matplotlib is required for plotting")
 class TestPlotGaiaSkyOrbit:
     """Tests for harv.plot.plot_gaia_sky_orbit."""
 
-    def _orbit_params(self, astro_samples) -> dict:
-        return {
-            "period": astro_samples["period"][0],
-            "eccentricity": astro_samples["eccentricity"][0],
-            "t_peri": astro_samples["t_peri"][0],
-            "arg_peri": astro_samples["arg_peri"][0],
-            "cos_i": astro_samples["cos_i"][0],
-            "lon_asc_node": astro_samples["lon_asc_node"][0],
-            "semi_major_axis": astro_samples["semi_major_axis"][0],
-        }
+    def _model(self):
+        return GaiaAstrometryModel()
 
     def test_returns_figure_no_data(self, astro_samples):
         """Without data, only the orbit ellipse is drawn."""
-        fig = plot_gaia_sky_orbit(self._orbit_params(astro_samples), data=None)
+        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=None)
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_returns_figure_with_data(self, astro_samples, gaia_data):
         """With data, scan-direction segments are drawn at each epoch."""
-        fig = plot_gaia_sky_orbit(self._orbit_params(astro_samples), data=gaia_data)
+        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=gaia_data)
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_equal_aspect(self, astro_samples):
         """The sky-orbit axes use equal aspect ratio."""
-        fig = plot_gaia_sky_orbit(self._orbit_params(astro_samples))
+        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0])
         assert fig.axes[0].get_aspect() != "auto"
         plt.close("all")
 
