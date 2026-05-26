@@ -5,6 +5,7 @@ rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
 import warnings
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, overload
 
@@ -164,6 +165,68 @@ def _assemble_sample_params(
     return nl_for_model, linear_stripped
 
 
+class _MetadataView(Mapping[str, Any]):
+    """Q-aware read-only view over :attr:`Samples.metadata`.
+
+    The underlying ``metadata`` dict holds the *split* form for quantity-valued
+    entries: a value (``float`` / ``int`` / ``str`` / ``bool``) under ``name``
+    and a unit string under ``f"{name}_unit"`` (e.g. ``{"t_ref": 0.0,
+    "t_ref_unit": "day"}``).  This split keeps the static field free of JAX
+    arrays so equinox doesn't warn about JAX arrays being marked static.
+
+    The view papers over that split: ``view[name]`` returns a :class:`~unxt.Q`
+    whenever a ``f"{name}_unit"`` companion exists, and the bare value
+    otherwise.  Iteration yields *logical* names — ``_unit`` companions of an
+    existing base key are hidden.  ``get``, ``keys``, ``items``, ``values``,
+    and ``__eq__`` come from :class:`collections.abc.Mapping` for free.
+
+    Examples
+    --------
+    >>> view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+    >>> view["t_ref"]  # doctest: +ELLIPSIS
+    Quantity(..., unit='d')
+    >>> view["num_chains"]
+    2
+    >>> sorted(view)
+    ['num_chains', 't_ref']
+    >>> "t_ref" in view
+    True
+    >>> "t_ref_unit" in view  # the _unit companion is hidden
+    False
+    >>> view.get("missing", 5)
+    5
+    """
+
+    __slots__ = ("_d",)
+
+    def __init__(self, d: dict[str, Any]) -> None:
+        self._d = d
+
+    def __getitem__(self, name: str) -> Any:
+        if name not in self._d or self._is_hidden(name):
+            raise KeyError(name)
+        value = self._d[name]
+        unit_key = f"{name}_unit"
+        if unit_key in self._d:
+            return Q(value, self._d[unit_key])
+        return value
+
+    def __iter__(self) -> Iterator[str]:
+        for k in self._d:
+            if not self._is_hidden(k):
+                yield k
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def _is_hidden(self, key: str) -> bool:
+        """True for ``_unit`` companion keys of an existing base."""
+        return key.endswith("_unit") and key[: -len("_unit")] in self._d
+
+    def __repr__(self) -> str:
+        return f"_MetadataView({dict(self.items())!r})"
+
+
 class Samples(eqx.Module):
     """Container for posterior samples.
 
@@ -212,7 +275,7 @@ class Samples(eqx.Module):
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
     ...     data_type="rv",
-    ...     metadata={"t_ref": Q(0.0, "day")},
+    ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     ... )
     >>> samples.n_samples
     3
@@ -242,6 +305,19 @@ class Samples(eqx.Module):
     def n_samples(self) -> int:
         """Number of posterior samples."""
         return int(next(iter(self.nonlinear.values())).shape[0])
+
+    @property
+    def meta(self) -> _MetadataView:
+        """Q-aware read-only view over :attr:`metadata`.
+
+        ``metadata`` itself stores quantity-valued entries in split form
+        (``<name>`` value + ``<name>_unit`` string) so the static field never
+        holds a JAX array.  Use ``samples.meta[name]`` to read those entries
+        back as :class:`~unxt.Q` instances without manually reassembling the
+        two halves; plain scalar entries (e.g. ``num_chains``) round-trip
+        unchanged.  See :class:`_MetadataView` for the full read API.
+        """
+        return _MetadataView(self.metadata)
 
     @property
     def ln_posterior(self) -> jax.Array:
@@ -312,7 +388,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> samples["period"].unit
         Unit("d")
@@ -374,12 +450,13 @@ class Samples(eqx.Module):
             # adding t_ref converts it to the same absolute coordinate as data.time.
             period = self.nonlinear["period"]
             time_unit = str(period.unit)
-            t_ref_raw = self.metadata.get("t_ref", 0.0)
-            t_ref_val = (
-                float(ustrip(time_unit, t_ref_raw))
-                if isinstance(t_ref_raw, Q)
-                else (float(t_ref_raw) if t_ref_raw is not None else 0.0)
-            )
+            t_ref = self.meta.get("t_ref")
+            if t_ref is None:
+                t_ref_val = 0.0
+            elif isinstance(t_ref, AbstractQuantity):
+                t_ref_val = float(ustrip(time_unit, t_ref))
+            else:
+                t_ref_val = float(t_ref)
             phase_peri = ustrip("", self.nonlinear["phase_peri"])
             period_val = ustrip(time_unit, period)
             return Q(t_ref_val + phase_peri * period_val, time_unit)
@@ -469,7 +546,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
         ...             "v_sys": Q([0.0, 0.0], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> wrapped = samples.wrap_angles()
         >>> bool((wrapped["rv_semiamp"].value >= 0).all())
@@ -666,7 +743,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> med = samples.median("period")
         >>> med.unit
@@ -715,7 +792,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
         >>> len(samples.percentile("period", [5, 50, 95]))
@@ -754,7 +831,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
         >>> sorted(summary.keys())
@@ -1226,13 +1303,13 @@ class Samples(eqx.Module):
             )
             meta_group.attrs["n_samples"] = self.n_samples
 
-            # Store custom metadata
+            # Store custom metadata.  The Samples invariant says metadata
+            # holds only JSON-friendly scalars (Q-valued entries live in
+            # split form: ``<name>`` value + ``<name>_unit`` string), so a
+            # single branch covers everything.
             for key, value in self.metadata.items():
                 if isinstance(value, int | float | str):
                     meta_group.attrs[key] = value
-                elif hasattr(value, "value"):  # Q
-                    meta_group.attrs[f"{key}_value"] = float(value.value)
-                    meta_group.attrs[f"{key}_unit"] = str(value.unit)
 
     @classmethod
     def from_hdf5(cls, filename: str | Path) -> "Samples":
@@ -1269,7 +1346,10 @@ class Samples(eqx.Module):
                 tuple(raw_extra.split(",")) if raw_extra else ()
             )
 
-            # Load custom metadata
+            # Load custom metadata.  HDF5 attrs and the in-memory metadata
+            # dict share one convention -- bare ``<name>`` value plus
+            # ``<name>_unit`` string for Q-valued entries -- so attrs load
+            # one-for-one with no reassembly.
             metadata: dict[str, Any] = {}
             for key in meta.attrs:
                 if key in [
@@ -1279,18 +1359,7 @@ class Samples(eqx.Module):
                     "data_type",
                 ]:
                     continue
-                if key.endswith("_value"):
-                    continue
-                # A "<base>_unit" attr is half of a stored Q only when the
-                # matching "<base>_value" attr exists; otherwise it is just a
-                # plain string-valued metadata entry (e.g. "t_ref_unit").
-                if key.endswith("_unit") and f"{key[:-5]}_value" in meta.attrs:
-                    base_key = key[:-5]
-                    value = meta.attrs[f"{base_key}_value"]
-                    unit = meta.attrs[key]
-                    metadata[base_key] = Q(value, unit)
-                else:
-                    metadata[key] = meta.attrs[key]
+                metadata[key] = meta.attrs[key]
 
             nonlinear: dict[str, Q] = {}
             for key in f["nonlinear"]:

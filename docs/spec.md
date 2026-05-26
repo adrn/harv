@@ -1455,7 +1455,7 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 | ------------------------ | -------------------------- | ------------------------------------------------------------ |
 | `nonlinear`              | `dict[str, Q]`             | Nonlinear parameter samples with units                       |
 | `linear`                 | `dict[str, Q]`             | Linear parameter samples with units                          |
-| `metadata`               | `dict[str, Any]` (static)  | Contains `t_ref` and extra info                              |
+| `metadata`               | `dict[str, Any]` (static)  | JSON-friendly scalars only — see invariant below             |
 | `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)         |
 | `data_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
 | `ln_likelihood`          | `jax.Array \| None`        | Per-sample marginal log-likelihood (see `return_logprobs`)   |
@@ -1465,6 +1465,38 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 unless the sampler was run with `return_logprobs=True`. They are carried
 through slicing, `wrap_angles`, and `convert_parameterization`, and persisted
 by `to_hdf5` / `from_hdf5`.
+
+#### `metadata` invariant
+
+`metadata` is an `eqx.field(static=True)` dict, so its contents are *not*
+pytree leaves -- they participate in JIT-cache identity. To keep this
+well-defined, the dict must contain only JSON-friendly scalars
+(`int` / `float` / `str` / `bool`); a JAX array (including a `unxt.Q`, which
+wraps one) placed in a static field triggers equinox's
+"A JAX array is being set as static!" warning and breaks the invariant.
+
+Quantity-valued entries are stored in **split form**: the value goes under
+`<name>` (as a `float` / `int`) and the unit string under `<name>_unit`.
+One convention applies in-memory and on disk -- the samplers produce this
+shape, `to_hdf5` writes the dict entries one-for-one as HDF5 attrs, and
+`from_hdf5` loads them back the same way. Keys harv writes itself:
+
+- `t_ref` (`float`) + `t_ref_unit` (`str`) -- the reference epoch in the
+  source data's time unit.
+- `num_chains` (`int`) -- written by `NumpyroSampler.run()`.
+
+For Q-aware reads, use `samples.meta` -- a `collections.abc.Mapping` view
+that reassembles `<name>` + `<name>_unit` pairs into `Q` instances on the
+fly and hides the `_unit` companions from iteration:
+
+```python
+samples.meta["t_ref"]      # Q(0.0, "day")
+samples.meta["num_chains"] # 1 (no _unit companion -> bare value)
+list(samples.meta)         # ["t_ref", "num_chains"] (no "t_ref_unit")
+```
+
+Drop down to `samples.metadata` for raw dict access (e.g. when you need
+to construct a new `Samples` with the same metadata).
 
 ### Dict-style and index access
 

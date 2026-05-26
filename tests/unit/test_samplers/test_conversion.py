@@ -401,7 +401,7 @@ class TestSamplesWrapper:
             nonlinear=_rv_nonlinear(),
             linear={**_rv_linear(), "jitter": Q(jnp.array([0.2, 0.3]), "km/s")},
             data_type="RVModel",
-            metadata={"t_ref": Q(0.0, "day"), "num_chains": 2},
+            metadata={"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2},
             linear_extension_names=("jitter",),
         )
         converted = samples.convert_parameterization(

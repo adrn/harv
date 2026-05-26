@@ -10,7 +10,7 @@ from harv.kepler.orbits import (
     rv_at_times,
     thiele_innes_ABFG,
 )
-from harv.samplers.samples import Samples
+from harv.samplers.samples import Samples, _MetadataView
 
 
 def _make_astro_samples() -> Samples:
@@ -186,6 +186,78 @@ class TestSamplesAccess:
         assert str(arg_peri.unit) == "rad"
 
 
+class TestMetadataView:
+    """Tests for the Q-aware ``samples.meta`` read view."""
+
+    def test_q_reassembly(self):
+        view = _MetadataView({"t_ref": 100.0, "t_ref_unit": "day"})
+        v = view["t_ref"]
+        assert isinstance(v, Q)
+        assert float(ustrip("day", v)) == 100.0
+        assert str(v.unit) == "d"
+
+    def test_plain_scalar_passthrough(self):
+        view = _MetadataView({"num_chains": 4, "name": "rv_run"})
+        assert view["num_chains"] == 4
+        assert view["name"] == "rv_run"
+
+    def test_missing_key_raises(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        with pytest.raises(KeyError):
+            _ = view["missing"]
+
+    def test_get_default(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        assert view.get("missing", 7) == 7
+        # ``get`` should still reassemble the Q for present keys.
+        assert isinstance(view.get("t_ref"), Q)
+
+    def test_iter_hides_unit_companions(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+        assert sorted(view) == ["num_chains", "t_ref"]
+        assert list(view.keys()) == ["t_ref", "num_chains"]
+        assert len(view) == 2
+
+    def test_contains_hides_unit_companions(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        assert "t_ref" in view
+        assert "t_ref_unit" not in view  # companion is hidden
+        assert "missing" not in view
+
+    def test_unit_without_base_is_visible(self):
+        # A "_unit"-suffixed key with no matching base is a normal entry.
+        view = _MetadataView({"orphan_unit": "day"})
+        assert "orphan_unit" in view
+        assert view["orphan_unit"] == "day"
+        assert list(view) == ["orphan_unit"]
+
+    def test_items_reassembles(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+        items = dict(view.items())
+        assert isinstance(items["t_ref"], Q)
+        assert items["num_chains"] == 2
+
+    def test_samples_meta_property(self):
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0]), "day"),
+                "eccentricity": Q(jnp.array([0.1]), ""),
+                "phase_peri": Q(jnp.array([0.0]), ""),
+                "arg_peri": Q(jnp.array([1.0]), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([1.0]), "km/s"),
+                "v_sys": Q(jnp.array([2.0]), "km/s"),
+            },
+            data_type="rv",
+            metadata={"t_ref": 50.0, "t_ref_unit": "day", "num_chains": 1},
+        )
+        t_ref = samples.meta["t_ref"]
+        assert isinstance(t_ref, Q)
+        assert float(ustrip("day", t_ref)) == 50.0
+        assert samples.meta["num_chains"] == 1
+
+
 class TestSamplesRepr:
     """Tests for Samples string representation."""
 
@@ -313,7 +385,7 @@ def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
             "v_sys": Q(jnp.full(n, 5.0), "km/s"),
         },
         data_type="rv",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
@@ -338,7 +410,7 @@ def _make_astro_samples_with_signs(a_values: list[float]) -> Samples:
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="gaia_astro",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
@@ -368,7 +440,7 @@ def _make_joint_samples_with_signs(
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="joint",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
