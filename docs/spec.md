@@ -196,7 +196,7 @@ src/harv/
 │   └── gp.py                # GP (Gaussian Process covariance)
 ├── samplers/
 │   ├── base.py              # AbstractSampler (shared base)
-│   ├── rejection_prior.py   # RejectionPrior
+│   ├── rejection_prior.py   # HarvPrior
 │   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
 │   ├── rejection.py         # RejectionSampler
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
@@ -526,6 +526,11 @@ build the design matrix. Subclasses implement:
   (nonlinear first, then linear).
 - `design_matrix(sin_f, cos_f, ..., nl_values)` -- build the design matrix
   from true-anomaly components and unit-stripped nonlinear values.
+- `default_prior(**kwargs) -> HarvPrior` -- return a `HarvPrior` with
+  sensible default distributions for the parameters this parameterization
+  declares.  The signature (which scale arguments are accepted) is
+  parameterization-specific.  The base-class definition raises
+  `NotImplementedError`; every concrete `@final` parameterization overrides it.
 
 Derived convenience methods:
 
@@ -542,6 +547,19 @@ Standard RV parameterization: `(period, eccentricity, phase_peri, arg_peri, rv_s
 
 Also provides `eccentricity(nl_values)` and `strip_nl_for_design(nl_values)`.
 
+`default_prior(*, period_min, period_max, sigma_K0, sigma_v0, P0=Q(1, "yr"), **kwargs)`
+returns a `HarvPrior` with:
+
+- `period`: `LogUniform(period_min, period_max)` wrapped in `QD`
+- `eccentricity`: `Beta(0.867, 3.03)` (Kipping 2013)
+- `phase_peri`: `Uniform(0, 1)`
+- `arg_peri`: `Uniform(0, 2π)`
+- `rv_semiamp` linear prior: `PeriodDependentKPrior(sigma_K0, P0)` — a callable
+  that scales the K prior with period and eccentricity
+- `v_sys` linear prior: `QD(Normal(0, sigma_v0), unit)`
+
+Any nonlinear or linear prior can be overridden by name via `**kwargs`.
+
 ### `EcoswEsinwRV`
 
 Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
@@ -551,6 +569,19 @@ Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
 - Design matrix shape: `(n_obs, 2)` -- same columns, different internal derivation.
 
 This parameterization has better sampling geometry for low eccentricities.
+
+`default_prior(*, period_min, period_max, sigma_K0, sigma_v0, P0=Q(1, "yr"), **kwargs)`
+returns a `HarvPrior` with the same period / `phase_peri` / linear (`rv_semiamp`,
+`v_sys`) priors as `StandardRV.default_prior`, plus:
+
+- `ecosw`: `Uniform(-1, 1)`
+- `esinw`: `Uniform(-1, 1)`
+
+Independent `Uniform(-1, 1)` priors on `ecosw` and `esinw` do **not** match the
+implicit prior under `e ~ Kipping(0.867, 3.03)` × `omega ~ Uniform(0, 2π)`.
+This is the simplest sensible default for this parameterization; users wanting a
+matched prior should sample with `StandardRV` and convert (or override via
+`**kwargs`).
 
 ### `StandardGaiaAstrometry`
 
@@ -564,6 +595,28 @@ The design matrix columns are
 `[sin(psi), cos(psi), sin(psi)*dt, cos(psi)*dt, H_parallax, TI_orbit]`
 where the Thiele-Innes orbital element combines the (A, B, F, G) constants
 with the X, Y orbital coordinates.
+
+`default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
+sigma_vtan, P0=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
+
+- `period`, `eccentricity`, `phase_peri`, `arg_peri`: same defaults as
+  `StandardRV.default_prior`
+- `cos_i`: `Uniform(-1, 1)`
+- `lon_asc_node`: `Uniform(0, 2π)`
+- `semi_major_axis`: `PeriodDependentSemiMajorAxisPrior(sigma_a0, P0)` — a
+  callable that scales the semi-major axis prior with period and parallax
+- `parallax`: `QD(HalfNormal(sigma_parallax), "mas")` — explicitly sampled
+  (not marginalized) by default, because the Gaia catalog parallax is derived
+  from the same epoch data
+- `ra0`, `dec0`: `QD(Normal(0, sigma_pos), "mas")`
+- `pmra`, `pmdec`: `ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)` —
+  a callable that scales the proper-motion prior with parallax, keeping the
+  prior fixed in velocity space
+
+Any nonlinear or linear prior can be overridden by name via `**kwargs`. When a
+linear prior is supplied directly (e.g. `parallax=QD(...)`), the corresponding
+scale argument (`sigma_parallax`, etc.) must be omitted — passing both raises
+`TypeError`.
 
 ### `ThieleInnesGaiaAstrometry`
 
@@ -615,6 +668,25 @@ or the convenience wrapper `samples.thiele_innes_to_campbell()`.
 
 **Limitation**: the RV forward model is not linear in `(A, B, F, G)`, so joint
 RV+astrometry fits must use `StandardGaiaAstrometry`.
+
+`default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
+sigma_vtan, P0=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
+
+- Nonlinear: `period` (log-uniform), `eccentricity` (Kipping 2013),
+  `phase_peri` (`Uniform(0, 1)`).
+- Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax` -- same defaults as
+  `StandardGaiaAstrometry.default_prior`.
+- Linear (TI constants): `ti_A`, `ti_B`, `ti_F`, `ti_G` -- each gets a
+  `PeriodDependentSemiMajorAxisPrior(sigma_a0, P0)` callable, mirroring the
+  default on `StandardGaiaAstrometry.semi_major_axis`.  The four TI constants
+  are linear projections of the angular semi-major axis onto the (RA, Dec)
+  sky plane modulated by `sin`/`cos` of the orientation angles, so each is
+  bounded by `a_0` and shares its scale.  Using a parallax-dependent prior is
+  also necessary for unit consistency (TI constants are angular; `sigma_a0`
+  is a length).
+
+The Jacobian correction (`apply_jacobian_correction=True`) restores the
+correct posterior under a flat-Campbell-elements prior.
 
 ### Parameter naming convention
 
@@ -882,7 +954,7 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 **Factory classmethods:**
 
 - `JointModel.for_sb2(prior, *, extensions=(), shared_params=None, shared_linear_params=None)` --
-  build an SB2 `JointModel` from a `RejectionPrior.default_sb2` prior. Automatically routes
+  build an SB2 `JointModel` from a `default_sb2_prior` prior. Automatically routes
   component-qualified linear-prior keys such as `"primary.rv_semiamp"` / `"secondary.rv_semiamp"`
   (or whatever names are in `component_names`) to the respective component models and declares all
   other linear-prior keys (e.g. `v_sys`) as shared. Defaults `shared_params` to
@@ -950,7 +1022,7 @@ qd = QD(
 
 ### `PeriodDependentKPrior`
 
-`PeriodDependentKPrior` (in `harv.samplers.custom_priors`) implements `LinearPriorCallable`.
+`PeriodDependentKPrior` (in `harv.models.priors.custom_priors`) implements `LinearPriorCallable`.
 It computes a period- and eccentricity-dependent scale for the RV semi-amplitude
 prior, following the Joker's default:
 
@@ -968,7 +1040,7 @@ Fields:
 
 ### `PeriodDependentSemiMajorAxisPrior`
 
-`PeriodDependentSemiMajorAxisPrior` (in `harv.samplers.custom_priors`) implements
+`PeriodDependentSemiMajorAxisPrior` (in `harv.models.priors.custom_priors`) implements
 `LinearPriorCallable`. It computes a period- and parallax-dependent scale for the
 astrometric semi-major axis prior:
 
@@ -995,7 +1067,7 @@ Fields:
 
 ### `ParallaxDependentProperMotionPrior`
 
-`ParallaxDependentProperMotionPrior` (in `harv.samplers.custom_priors`) implements
+`ParallaxDependentProperMotionPrior` (in `harv.models.priors.custom_priors`) implements
 `LinearPriorCallable`. It computes a parallax-dependent scale for the proper motion
 prior, keeping the prior fixed in velocity space:
 
@@ -1021,9 +1093,9 @@ Fields:
 
 ______________________________________________________________________
 
-## Prior (`harv.samplers.RejectionPrior`)
+## Prior (`harv.samplers.HarvPrior`)
 
-`RejectionPrior` holds numpyro distributions over all nonlinear parameters and a
+`HarvPrior` holds numpyro distributions over all nonlinear parameters and a
 per-parameter linear prior. It is an `eqx.Module`.
 
 ### Fields
@@ -1037,132 +1109,104 @@ per-parameter linear prior. It is an `eqx.Module`.
 
 ### Constructing a prior
 
-The `default_*` class methods simplify construction of priors for common cases. They
-are convenience wrappers around `__init__` that set up standard nonlinear priors and
-linear prior structures. They do **not** provide parameter-less defaults — the user
-must supply at minimum the period bounds and (for RV) the amplitude scale, since
-these depend on the science case (binary stars, compact objects, exoplanets all have
-different characteristic scales and timescales).
-
-Direct `__init__` construction is always supported for fully custom configurations.
-
-#### `default_rv`
+To build a default prior, call `default_prior(...)` on a concrete parameterization
+instance.  Each parameterization owns its required scale-argument signature; see
+the [Parameterizations](#parameterizations-harvmodelsparameterizations) section
+for the per-parameterization defaults and signatures.
 
 ```python
-RejectionPrior.default_rv(
-    *,
-    period_min: Q["time"],     # required
-    period_max: Q["time"],     # required
-    sigma_K0: Q["speed"],      # required — RV amplitude scale
-    sigma_v0: Q["speed"],      # required — systemic velocity scale
-    P0: Q["time"] = Q(1.0, "yr"),
-    offsets: dict[str, QD | None] | None = None,
-    **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
-) -> RejectionPrior
-```
+import harv.models as hm
 
-Constructs a prior with:
-
-- `period`: `LogUniform(period_min, period_max)` wrapped in `QD`
-- `eccentricity`: `Beta(0.867, 3.03)` (Kipping 2013)
-- `phase_peri`: `Uniform(0, 1)`
-- `arg_peri`: `Uniform(0, 2π)`
-- `rv_semiamp` linear prior: `PeriodDependentKPrior(sigma_K0, P0)` — a callable that scales
-  the K prior with period and eccentricity
-- `v_sys` linear prior: `QD(Normal(0, sigma_v0), unit)`
-
-Any nonlinear or linear prior can be overridden by passing the corresponding
-parameter name as a keyword argument. Valid names are the nonlinear and linear
-parameter names from `StandardRV`: `period`, `eccentricity`, `phase_peri`,
-`arg_peri`, `rv_semiamp`, `v_sys`.
-
-#### `default_gaia_astrometry`
-
-```python
-RejectionPrior.default_gaia_astrometry(
-    *,
-    period_min: Q["time"] | None = None,
-    period_max: Q["time"] | None = None,
-    sigma_a0: Q["length"] | None = None,        # required unless semi_major_axis= given
-    sigma_parallax: Q["angle"] | None = None,   # required unless parallax= given
-    sigma_pos: Q["angle"] | None = None,        # required unless ra0= and dec0= given
-    sigma_vtan: Q["speed"] | None = None,       # required unless pmra= and pmdec= given
-    P0: Q["time"] = Q(1.0, "yr"),
-    **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
-) -> RejectionPrior
-```
-
-Constructs a prior with:
-
-- `period`, `eccentricity`, `phase_peri`, `arg_peri`: same defaults as RV
-- `cos_i`: `Uniform(-1, 1)`
-- `lon_asc_node`: `Uniform(0, 2π)`
-- `semi_major_axis`: `PeriodDependentSemiMajorAxisPrior(sigma_a0, P0)` — a
-  callable that scales the semi-major axis prior with period and parallax
-- `parallax`: `QD(HalfNormal(sigma_parallax), "mas")` — explicitly
-  sampled (not marginalized) by default, because the Gaia catalog parallax is
-  derived from the same epoch data
-- `ra0`, `dec0`: `QD(Normal(0, sigma_pos), "mas")`
-- `pmra`, `pmdec`: `ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)` — a
-  callable that scales the proper motion prior with parallax, keeping the prior
-  fixed in velocity space
-
-Any nonlinear or linear prior can be overridden by passing the corresponding
-parameter name as a keyword argument. Valid names are the nonlinear and linear
-parameter names from `StandardGaiaAstrometry`: `period`, `eccentricity`,
-`phase_peri`, `arg_peri`, `cos_i`, `lon_asc_node`, `ra0`, `dec0`, `pmra`, `pmdec`,
-`parallax`, `semi_major_axis`.
-
-When a linear prior is supplied directly via `**kwargs`, the corresponding scale
-argument (`sigma_parallax`, `sigma_pos`, `sigma_a0`, or `sigma_vtan`) must be
-omitted — passing both raises `TypeError`.
-
-Parallax is classified as explicit automatically because `HalfNormal` cannot be
-analytically marginalized. For exoplanet searches where the catalog parallax is
-trustworthy, users can override with a `Normal` prior and set
-`marginalized_names=("parallax", ...)` on the sampler.
-
-#### `default_sb2`
-
-```python
-RejectionPrior.default_sb2(
-    *,
-    period_min: Q["time"],     # required
-    period_max: Q["time"],     # required
-    sigma_K0: Q["speed"],      # required — RV amplitude scale
-    sigma_v0: Q["speed"],      # required — systemic velocity scale
-    P0: Q["time"] = Q(1.0, "yr"),
-    **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
-) -> RejectionPrior
-```
-
-Same defaults as `default_rv` but with three linear parameters:
-
-- `rv_semiamp_1`, `rv_semiamp_2`: both use `PeriodDependentKPrior(sigma_K0, P0)`
-- `v_sys`: `QD(Normal(0, sigma_v0), unit)`
-
-### Multi-survey RV offsets
-
-When multiple instruments observe the same star, their zero-points may differ by an
-additive offset. Pass `offsets` to `default_rv()`: keys are instrument names,
-`None` marks the reference, non-`None` entries are `QD` priors that get merged
-into `linear_prior` automatically. The `linear_extension_names` field records which
-`linear_prior` entries are linear extension parameters (offsets, trends, etc.)
-used to populate `Samples.linear_extension_names`.
-
-```python
-prior = RejectionPrior.default_rv(
+# RV
+prior = hm.StandardRV().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
-    offsets={
-        "keck": None,                              # reference instrument
-        "espresso": QD(dist.Normal(0, 5.0), "km/s"),
-    },
 )
-assert "espresso" in prior.linear_prior
-assert prior.linear_extension_names == ("espresso",)
+
+# Alternative RV parameterization
+prior = hm.EcoswEsinwRV().default_prior(
+    period_min=Q(50, "day"),
+    period_max=Q(1000, "day"),
+    sigma_K0=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
+)
+
+# Gaia astrometry
+prior = hm.StandardGaiaAstrometry().default_prior(
+    period_min=Q(100, "day"),
+    period_max=Q(3000, "day"),
+    sigma_a0=Q(5.0, "AU"),
+    sigma_parallax=Q(10.0, "mas"),
+    sigma_pos=Q(100.0, "mas"),
+    sigma_vtan=Q(50.0, "km/s"),
+)
+```
+
+These factories do **not** provide parameter-less defaults — the user must supply
+at minimum the period bounds and the relevant amplitude scale, since those depend
+on the science case (binary stars, compact objects, and exoplanets have very
+different characteristic scales and timescales).
+
+Direct `__init__` construction is always supported for fully custom configurations.
+
+Per-parameter overrides flow through `**kwargs` (e.g.
+`hm.StandardRV().default_prior(..., eccentricity=dist.Uniform(0, 0.5))`).  Names not
+declared by the parameterization land in `extension_priors` for resolution at
+sampling time against the model's declared extension parameters.
+
+Parallax is classified as explicit automatically (because `HalfNormal` cannot be
+analytically marginalized).  For exoplanet searches where the catalog parallax
+is trustworthy, override with a `Normal` prior and set
+`marginalized_names=("parallax", ...)` on the sampler.
+
+#### `default_sb2_prior` (module-level)
+
+```python
+from harv.samplers import default_sb2_prior
+
+default_sb2_prior(
+    *,
+    period_min: Q["time"],     # required
+    period_max: Q["time"],     # required
+    sigma_K0: Q["speed"],      # required — RV amplitude scale
+    sigma_v0: Q["speed"],      # required — systemic velocity scale
+    P0: Q["time"] = Q(1.0, "yr"),
+    component_names: tuple[str, str] = ("primary", "secondary"),
+    **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
+) -> HarvPrior
+```
+
+A module-level factory (not a classmethod on `HarvPrior`) because SB2 is a
+joint composition of two `StandardRV` components rather than a single
+parameterization.  Pairs naturally with `JointModel.for_sb2(prior=...)`.
+
+Same orbital defaults as `default_rv` but with linear parameters keyed by
+component name:
+
+- `{component_names[0]}.rv_semiamp`, `{component_names[1]}.rv_semiamp`: both use
+  `PeriodDependentKPrior(sigma_K0, P0)`
+- `v_sys`: `QD(Normal(0, sigma_v0), unit)` (shared across components)
+
+### Multi-survey RV offsets
+
+When multiple instruments observe the same star, their zero-points may differ by an
+additive offset.  Pass non-reference offset priors as `**kwargs` keyed by instrument
+name to `StandardRV().default_prior(...)`; the reference instrument's offset is
+absorbed by `v_sys`.
+
+```python
+import harv.models as hm
+
+prior = hm.StandardRV().default_prior(
+    period_min=Q(50, "day"),
+    period_max=Q(1000, "day"),
+    sigma_K0=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
+    espresso=QD(dist.Normal(0, 5.0), "km/s"),  # offset for non-reference inst.
+)
+assert "espresso" in prior.extension_priors
 ```
 
 The offsets are additional linear parameters appended to the design matrix by a
@@ -1180,19 +1224,21 @@ where $s$ is the jitter value sampled from its prior.
 Jitter requires **two** things:
 
 1. A prior — supplied as `jitter=QD(...)` in `**kwargs` to any `default_*` method, or
-   directly in `extension_priors` when constructing `RejectionPrior` manually.
+   directly in `extension_priors` when constructing `HarvPrior` manually.
 1. A `Jitter` extension — passed as `extensions=(Jitter(param_unit=...), ...)` to the
    sampler. The sampler validates at run time that every declared extension parameter
    has a matching entry in `prior.extension_priors`.
 
 ```python
 from harv.models.extensions import Jitter
-from harv.samplers import RejectionSampler, RejectionPrior
+from harv.samplers import RejectionSampler, HarvPrior
 from harv.distributions import QD
 import numpyro.distributions as dist
 
-# Via default_rv **kwargs:
-prior = RejectionPrior.default_rv(
+# Via default_prior **kwargs:
+import harv.models as hm
+
+prior = hm.StandardRV().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),
@@ -1201,8 +1247,8 @@ prior = RejectionPrior.default_rv(
 )
 sampler = RejectionSampler(prior, extensions=(Jitter(param_unit="km/s"),))
 
-# Or with explicit RejectionPrior construction:
-prior = RejectionPrior(
+# Or with explicit HarvPrior construction:
+prior = HarvPrior(
     nonlinear_priors=...,
     linear_prior=...,
     extension_priors={"jitter": QD(dist.HalfNormal(1.0), "km/s")},
@@ -1213,7 +1259,7 @@ sampler = RejectionSampler(prior, extensions=(Jitter(param_unit="km/s"),))
 For a `JointModel`, use the component-qualified key in `extension_priors`:
 
 ```python
-prior = RejectionPrior(
+prior = HarvPrior(
     nonlinear_priors=...,
     linear_prior=...,
     extension_priors={"rv.jitter": QD(dist.HalfNormal(1.0), "km/s")},
@@ -1261,7 +1307,7 @@ sampling efficient.
 
 | Field                | Type                                   | Description                                                  |
 | -------------------- | -------------------------------------- | ------------------------------------------------------------ |
-| `prior`              | `RejectionPrior`                       | Prior distributions for sampling                             |
+| `prior`              | `HarvPrior`                       | Prior distributions for sampling                             |
 | `model`              | `AbstractComponentModel \| JointModel` | Model template (no data or linear prior stored)              |
 | `marginalized_names` | `tuple[str, ...] \| None`              | Optional subset of linear params to analytically marginalize |
 | `batch_size`         | `int` (static)                         | Samples vmapped at once (default: 100,000)                   |
@@ -1274,7 +1320,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 ### Algorithm
 
 1. **Prior sampling.** Draw `n_prior_samples` from the nonlinear priors in
-   `RejectionPrior`. Also samples any non-Gaussian explicit linear params and
+   `HarvPrior`. Also samples any non-Gaussian explicit linear params and
    jitter parameters from their priors.
 
 1. **Likelihood evaluation** (batched). For each batch of `batch_size` samples,
@@ -1299,7 +1345,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 
 ```python
 sampler.run(
-    data,
+    data: AbstractData | AbstractDatasetContainer,
     *,
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
@@ -1310,8 +1356,11 @@ sampler.run(
 ```
 
 `data` is the first positional argument and is passed through to `model.log_prob`
-at each evaluation. For a `JointModel`, pass `data` as a dict keyed by component
-name (e.g. `{"rv": rv_data, "astro": astro_data}`).
+at each evaluation. It is validated at the entry point: a single-component model
+requires an `AbstractData` subclass (`RVData`, `GaiaAstrometryData`); a `JointModel`
+requires an `AbstractDatasetContainer` (`SystemData`, `SourceData`) keyed by
+component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
+`dict` or any other object raises `TypeError`.
 
 - `ignore_non_finite` -- when `True`, any `NaN` or infinite log-likelihoods
   are treated as rejected samples by replacing them with `-inf` before the
@@ -1357,8 +1406,8 @@ priors are still sampled explicitly even if they appear in that tuple.
 `True` the returned `Samples` carries `ln_likelihood` (the marginal
 log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
 `ln_prior` (the summed nonlinear-prior log-density). This requires
-`marginalized=True`, a single-component model, and no `extra_model`; other
-configurations raise `NotImplementedError`.
+`marginalized=True` and no `extra_model`; other configurations raise
+`NotImplementedError`.
 
 Two model variants are supported via `marginalized`:
 
@@ -1366,6 +1415,32 @@ Two model variants are supported via `marginalized`:
   linear params are analytically marginalized inside the likelihood, then
   conditionally sampled afterward to populate the returned `Samples`.
 - `marginalized=False`: MCMC samples all parameters jointly (nonlinear + linear).
+
+### `NumpyroSampler.optimize(samples, data, *, seed=None, max_passes=10, tol=1e-4) -> Samples`
+
+Refines each input sample to the local posterior MAP using BFGS via
+`numpyro.optim.Minimize` (which wraps `jax.scipy.optimize.minimize`) with an
+`AutoDelta` guide. Each sample in *samples* is used as a warm start for an
+independent BFGS run that maximises `log_prior + marginal_log_likelihood`.
+Because `jax.scipy.optimize.minimize` BFGS often quits early when its line
+search fails, `optimize` restarts BFGS up to `max_passes` times from the
+previous result, breaking when the loss change falls below `tol` and emitting
+`UserWarning` if it never does.
+
+Linear parameters at the returned MAP are taken as the conditional posterior
+**mean** (equal to the conditional MAP since the conditional is Gaussian), not
+a random draw. This matters when the conditional posterior is highly correlated
+(e.g. Thiele-Innes constants with sub-orbit data coverage), where a draw can be
+many sigma from the mean along degenerate directions and the nonlinear
+TI→Campbell conversion would amplify that noise.
+
+The returned `Samples` carries `ln_likelihood` and `ln_prior` re-evaluated at
+the optimised points. Particularly useful when `RejectionSampler.run` returns a
+single sample inside a posterior mode -- this moves it from a random acceptance
+point to the mode peak.
+
+Only the marginalized path is supported (matches `run(marginalized=True)`).
+`extra_model` is not supported.
 
 ______________________________________________________________________
 
@@ -1380,7 +1455,7 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 | ------------------------ | -------------------------- | ------------------------------------------------------------ |
 | `nonlinear`              | `dict[str, Q]`             | Nonlinear parameter samples with units                       |
 | `linear`                 | `dict[str, Q]`             | Linear parameter samples with units                          |
-| `metadata`               | `dict[str, Any]` (static)  | Contains `t_ref` and extra info                              |
+| `metadata`               | `dict[str, Any]` (static)  | JSON-friendly scalars only — see invariant below             |
 | `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)         |
 | `data_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
 | `ln_likelihood`          | `jax.Array \| None`        | Per-sample marginal log-likelihood (see `return_logprobs`)   |
@@ -1390,6 +1465,38 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 unless the sampler was run with `return_logprobs=True`. They are carried
 through slicing, `wrap_angles`, and `convert_parameterization`, and persisted
 by `to_hdf5` / `from_hdf5`.
+
+#### `metadata` invariant
+
+`metadata` is an `eqx.field(static=True)` dict, so its contents are *not*
+pytree leaves -- they participate in JIT-cache identity. To keep this
+well-defined, the dict must contain only JSON-friendly scalars
+(`int` / `float` / `str` / `bool`); a JAX array (including a `unxt.Q`, which
+wraps one) placed in a static field triggers equinox's
+"A JAX array is being set as static!" warning and breaks the invariant.
+
+Quantity-valued entries are stored in **split form**: the value goes under
+`<name>` (as a `float` / `int`) and the unit string under `<name>_unit`.
+One convention applies in-memory and on disk -- the samplers produce this
+shape, `to_hdf5` writes the dict entries one-for-one as HDF5 attrs, and
+`from_hdf5` loads them back the same way. Keys harv writes itself:
+
+- `t_ref` (`float`) + `t_ref_unit` (`str`) -- the reference epoch in the
+  source data's time unit.
+- `num_chains` (`int`) -- written by `NumpyroSampler.run()`.
+
+For Q-aware reads, use `samples.meta` -- a `collections.abc.Mapping` view
+that reassembles `<name>` + `<name>_unit` pairs into `Q` instances on the
+fly and hides the `_unit` companions from iteration:
+
+```python
+samples.meta["t_ref"]      # Q(0.0, "day")
+samples.meta["num_chains"] # 1 (no _unit companion -> bare value)
+list(samples.meta)         # ["t_ref", "num_chains"] (no "t_ref_unit")
+```
+
+Drop down to `samples.metadata` for raw dict access (e.g. when you need
+to construct a new `Samples` with the same metadata).
 
 ### Dict-style and index access
 
@@ -1425,12 +1532,16 @@ fields (`data_type`, `metadata`, `linear_extension_names`) are passed through un
 - `median(key=None)` — median of one key or all keys
 - `percentile(key, percentiles=(16, 50, 84))` — compute percentiles
 - `summary(params=None)` — dict of statistics (median, mean, std, p16, p84)
-- `wrap_angles() -> Samples` — return a new `Samples` where any negative
-  `rv_semiamp` and/or `semi_major_axis` entries are flipped to positive and the
-  corresponding `arg_peri` values are shifted by `pi` (mod `2*pi`). The orbit
-  predicted by the wrapped sample is identical to the original; the convention
-  it enforces is `K >= 0`, `a >= 0`, `arg_peri in [0, 2*pi)`. No-op when
-  `arg_peri` is missing or no entries are negative.
+- `wrap_angles() -> Samples` — return a new `Samples` enforcing the convention
+  `K >= 0`, `a >= 0`. Applied in two steps: (1) negative `rv_semiamp` is flipped
+  by shifting `arg_peri` by `pi`, which flips *both* `rv_semiamp` and
+  `semi_major_axis`; (2) any `semi_major_axis` still negative afterward is
+  flipped by shifting `lon_asc_node` by `pi`, which flips `semi_major_axis`
+  alone (`lon_asc_node` does not enter the RV model). Both shifted angles are
+  wrapped to `[0, 2*pi)`. A single `arg_peri` shift cannot make both `K` and `a`
+  positive when their signs disagree, so the `lon_asc_node` shift is required.
+  The orbit predicted by the wrapped sample is identical to the original. No-op
+  when `arg_peri` is missing or no entries are negative.
 - `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
   parameter values between supported single-component RV or Gaia parameterizations.
   Extra non-base parameters are preserved unchanged; unsupported families or
@@ -1556,9 +1667,6 @@ plot_gaia_astrometry(
     data,
     extensions=(),
     *,
-    n_samples=128,
-    phase_fold_median=False,
-    plot_kwargs=None,
     data_plot_kwargs=None,
     sky_orbit_kwargs=None,
     figsize=(10, 5),
@@ -1567,19 +1675,22 @@ plot_gaia_astrometry(
 )
 ```
 
-Draw a two-panel figure for Gaia epoch astrometry posteriors:
+Draw a two-panel goodness-of-fit figure for a **single** Gaia epoch-astrometry
+posterior sample. `samples` must contain exactly one sample — select one
+beforehand with `samples[i]` (by index) or `samples.map_sample()` (the maximum
+a posteriori sample); a `Samples` with any other number of samples raises
+`ValueError`.
 
-1. **Along-scan position vs time (or phase)** with multi-sample posterior orbit
-   overlays. The median proper-motion and zero-point offsets are subtracted from
-   the data so the parallax + orbital signal is visible. When `phase_fold_median`
-   is true, the median parallax contribution is also subtracted (parallax has
-   annual period and would smear when folded at the orbital period), and only
-   the reference orbit is drawn.
-1. **Sky-projected orbital ellipse** for the median-period sample (delegates to
-   `plot_gaia_sky_orbit`).
+1. **Sky-projected orbital ellipse** for the sample (delegates to
+   `plot_gaia_sky_orbit`), with each Gaia epoch shown as a scan-direction
+   segment at the model-predicted photocenter offset.
+1. **Along-scan position residual vs time** — the observed `al_position` minus
+   the full predicted model for the sample (orbital wobble + parallax + proper
+   motion + zero-point), drawn with measurement error bars and a dashed line at
+   zero.
 
 When `axes=None`, a new 1x2 figure is created and returned; otherwise draws into
-the two given axes and returns `None`.
+the two given axes `(sky, residual)` and returns `None`.
 
 ### `plot_gaia_sky_orbit`
 
@@ -1790,11 +1901,13 @@ from harv.data import RVData
 from harv.distributions import QD
 from harv.models import RVModel, GaiaAstrometryModel, JointModel
 from harv.models.extensions import Jitter, MultiSurveyOffset
-from harv.samplers import NumpyroSampler, RejectionPrior, RejectionSampler
+from harv.samplers import NumpyroSampler, HarvPrior, RejectionSampler
 
 # --- Minimal RV-only case ---
+import harv.models as hm
+
 data = RVData(time, rv, rv_err)
-prior = RejectionPrior.default_rv(
+prior = hm.StandardRV().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),
@@ -1815,7 +1928,7 @@ sampler = RejectionSampler(
 samples = sampler.run(data, n_prior_samples=500_000)
 
 # --- Gaia astrometry only ---
-prior = RejectionPrior.default_gaia_astrometry(
+prior = hm.StandardGaiaAstrometry().default_prior(
     period_min=Q(0.3, "yr"),
     period_max=Q(10, "yr"),
     sigma_a0=Q(1e3, "AU"),
@@ -1835,7 +1948,9 @@ joint = JointModel.for_rv_and_gaia(
     },
 )
 sampler = RejectionSampler(joint_prior, joint)
-samples = sampler.run({"rv": rv_data, "astro": gaia_data}, n_prior_samples=1_000_000)
+samples = sampler.run(
+    SourceData(rv=rv_data, astro=gaia_data), n_prior_samples=1_000_000
+)
 
 # --- MCMC continuation ---
 mcmc_sampler = NumpyroSampler(prior, RVModel())
@@ -1850,7 +1965,7 @@ mcmc_samples.median("rv_semiamp")        # median semi-amplitude
 mcmc_samples.summary()          # dict of all statistics
 mcmc_samples.plot_corner()                  # arviz corner plot
 harv.plot_rv(mcmc_samples, data)                       # RV curve with data overlay
-harv.plot_gaia_astrometry(mcmc_samples, data=gaia_data)  # two-panel astrometry plot
+harv.plot_gaia_astrometry(mcmc_samples.map_sample(), data=gaia_data)  # single-sample plot
 harv.save_sampler("sampler.pkl", sampler)   # persist sampler
 mcmc_samples.to_hdf5("out.h5")             # persistence
 ```

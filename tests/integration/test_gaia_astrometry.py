@@ -12,10 +12,10 @@ import pytest
 from unxt import Q
 from unxt import ustrip as _ustrip
 
+import harv.models as hm
 from harv.distributions import QD
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 
 
@@ -58,7 +58,7 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.5,
             "lon_asc_node": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_prior=_linear_prior())
+        log_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
         assert jnp.isfinite(log_lik)
 
     def test_vmap_batch(self, astro_data):
@@ -76,7 +76,7 @@ class TestGaiaAstrometryModel:
             "lon_asc_node": Q(jnp.ones(n) * 1.0, "rad"),
         }
         log_liks = jax.jit(
-            jax.vmap(lambda nl: model.log_prob(nl, data, linear_prior=lp))
+            jax.vmap(lambda nl: model.log_prob(nl, data, linear_priors=lp))
         )(nl_batch)
 
         assert log_liks.shape == (n,)
@@ -109,8 +109,8 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.0,
             "lon_asc_node": Q(0.0, "rad"),
         }
-        ll_true = model.log_prob(nl_true, data, linear_prior=lp)
-        ll_rng = model.log_prob(nl_rng, data, linear_prior=lp)
+        ll_true = model.log_prob(nl_true, data, linear_priors=lp)
+        ll_rng = model.log_prob(nl_rng, data, linear_priors=lp)
         assert ll_true > ll_rng
 
 
@@ -131,7 +131,7 @@ class TestGaiaAstrometryRejectionSampler:
         return data, true
 
     def _make_sampler(self, data):
-        prior = RejectionPrior.default_gaia_astrometry(
+        prior = hm.StandardGaiaAstrometry().default_prior(
             period_min=Q(0.3, "yr"),
             period_max=Q(3.0, "yr"),
             sigma_a0=Q(1e3, "AU"),

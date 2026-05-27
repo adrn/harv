@@ -6,6 +6,7 @@ builds the numpyro model closure directly.
 """
 
 import uuid
+import warnings
 from collections.abc import Callable
 from typing import Any, cast, final
 
@@ -17,9 +18,13 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
 from numpyro.distributions import biject_to
+from numpyro.infer import SVI, Trace_ELBO
+from numpyro.infer.autoguide import AutoDelta
+from numpyro.infer.initialization import init_to_value
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
+from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
@@ -34,19 +39,19 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
-from harv.samplers.base import AbstractSampler
+from harv.models.priors import HarvPrior
+from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
 )
-from harv.samplers.rejection_prior import RejectionPrior
 from harv.samplers.samples import Samples
 
 __all__ = ("NumpyroSampler",)
 
 
 def _build_all_priors(
-    prior: RejectionPrior,
+    prior: HarvPrior,
     nonlinear_extension_priors: dict[str, Any],
 ) -> dict[str, PriorDist]:
     """Merge base nonlinear_priors and extension nonlinear priors.
@@ -60,7 +65,7 @@ def _build_all_priors(
 
 def _unconstrain_init_params(
     init_params: dict[str, Any],
-    prior: RejectionPrior,
+    prior: HarvPrior,
     effective_linear_prior: dict[str, Any] | None = None,
     nonlinear_extension_priors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -100,7 +105,7 @@ def _build_extra_numpyro_model(
     extra_model_fn: Callable[[dict[str, Any]], dict[str, Any]],
     marginalized: bool,
     marginalized_names: tuple[str, ...] | None,
-    data: Any,
+    data: Any,  # polymorphic over model; not statically narrowable
     effective_linear_prior: dict[str, Any] | None,
 ) -> Callable[[], None]:
     """Build a numpyro model with an ``extra_model`` reparameterization.
@@ -115,7 +120,7 @@ def _build_extra_numpyro_model(
 
     component = model
     all_linear_names = component._all_linear_names()
-    linear_prior = effective_linear_prior or {}
+    linear_priors = effective_linear_prior or {}
     param_units = component._linear_param_units(data)
 
     def model_fn() -> None:
@@ -149,24 +154,24 @@ def _build_extra_numpyro_model(
             name for name in free_names if name not in set(requested_marginalized_names)
         )
         explicit_direct_prior = {
-            name: linear_prior[name]
+            name: linear_priors[name]
             for name in explicit_names
-            if name in linear_prior
+            if name in linear_priors
             and (
-                not callable(linear_prior[name])
+                not callable(linear_priors[name])
                 or isinstance(
-                    linear_prior[name],
+                    linear_priors[name],
                     (dist.Distribution, QuantityDistribution),
                 )
             )
         }
         explicit_callable_prior = {
-            name: linear_prior[name]
+            name: linear_priors[name]
             for name in explicit_names
-            if name in linear_prior
-            and callable(linear_prior[name])
+            if name in linear_priors
+            and callable(linear_priors[name])
             and not isinstance(
-                linear_prior[name],
+                linear_priors[name],
                 (dist.Distribution, QuantityDistribution),
             )
         }
@@ -208,7 +213,7 @@ def _build_extra_numpyro_model(
                 component.log_prob(
                     nl_values,
                     data,
-                    linear_prior=effective_linear_prior,
+                    linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=requested_marginalized_names,
                 ),
@@ -219,7 +224,7 @@ def _build_extra_numpyro_model(
                 component.log_prob(
                     nl_values,
                     data,
-                    linear_prior=effective_linear_prior,
+                    linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
                     marginalized_names=(),
                 ),
@@ -252,8 +257,9 @@ class NumpyroSampler(AbstractSampler):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.samplers import RejectionPrior, NumpyroSampler
-    >>> prior = RejectionPrior.default_rv(
+    >>> from harv.models import StandardRV
+    >>> from harv.samplers import NumpyroSampler
+    >>> prior = StandardRV().default_prior(
     ...     period_min=Q(2.0, "day"),
     ...     period_max=Q(1000.0, "day"),
     ...     sigma_K0=Q(30.0, "km/s"),
@@ -265,9 +271,9 @@ class NumpyroSampler(AbstractSampler):
     ... )  # doctest: +SKIP
     """
 
-    def run(  # noqa: C901
+    def run(
         self,
-        data: Any,
+        data: InputData,
         *,
         init_samples: "Samples | None" = None,
         seed: int | None = None,
@@ -321,13 +327,15 @@ class NumpyroSampler(AbstractSampler):
             marginal log-likelihood, re-evaluated via ``model.log_prob``) and
             ``ln_prior`` (the summed nonlinear-prior log-density). Enables
             :meth:`Samples.map_sample` and :attr:`Samples.ln_posterior`.
-            Requires ``marginalized=True``, a single-component model, and no
-            ``extra_model``. Default ``False``.
+            Requires ``marginalized=True`` and no ``extra_model``. Default
+            ``False``.
 
         Returns
         -------
             Posterior samples container with nonlinear and linear parameters.
         """
+        _validate_data(data, self.model)
+
         samples = init_samples
         if samples is None:
             msg = (
@@ -350,9 +358,6 @@ class NumpyroSampler(AbstractSampler):
                 raise NotImplementedError(msg)
             if extra_model is not None:
                 msg = "return_logprobs is not supported together with extra_model."
-                raise NotImplementedError(msg)
-            if isinstance(self.model, JointModel):
-                msg = "return_logprobs is not yet supported for JointModel."
                 raise NotImplementedError(msg)
 
         if kernel is None:
@@ -387,7 +392,8 @@ class NumpyroSampler(AbstractSampler):
         else:
             numpyro_model = model.numpyro_model(
                 all_priors,
-                data,
+                # data validated at entry; correlated with the polymorphic model.
+                cast("Any", data),
                 effective_linear_prior,
                 marginalized=marginalized,
                 marginalized_names=(
@@ -441,6 +447,161 @@ class NumpyroSampler(AbstractSampler):
             linear_extension_names=linear_extension_names,
             num_chains=num_chains,
             return_logprobs=return_logprobs,
+        )
+
+    def optimize(
+        self,
+        samples: "Samples",
+        data: InputData,
+        *,
+        seed: int | None = None,
+        max_passes: int = 10,
+        tol: float = 1e-4,
+    ) -> "Samples":
+        """Refine each input sample to the local posterior MAP via BFGS.
+
+        Uses :func:`numpyro.optim.Minimize` (BFGS via
+        :func:`jax.scipy.optimize.minimize`) with an
+        :class:`~numpyro.infer.autoguide.AutoDelta` guide to find the local mode of
+        ``log_prior + marginal_log_likelihood`` starting from each sample in
+        *samples*. The returned :class:`~harv.samplers.samples.Samples` has the
+        refined nonlinear values, linear values set to the conditional posterior
+        **mean** (equal to the conditional MAP since the conditional is Gaussian)
+        at the refined nonlinear point, and populated ``ln_likelihood`` /
+        ``ln_prior``.
+
+        Particularly useful when rejection sampling returns a single sample inside
+        a posterior mode -- this moves it from a random acceptance point to the
+        mode peak.
+
+        Parameters
+        ----------
+        samples
+            Posterior samples (e.g. from :meth:`RejectionSampler.run`) used as
+            warm starts. Each sample seeds an independent BFGS run.
+        data
+            Observed data (same shape/type as :meth:`run`).
+        seed
+            Random number seed. If not specified, picks a seed based on the
+            current time.
+        max_passes
+            Maximum number of BFGS restarts per sample. The wrapped
+            ``jax.scipy.optimize.minimize`` BFGS often quits early when its line
+            search fails; restarting from the previous result frequently
+            recovers further progress. Default 10.
+        tol
+            Loss-change tolerance for the BFGS-restart loop. If the loss
+            decreases by less than ``tol`` on a pass, optimization is
+            considered converged. Default ``1e-4``.
+
+        Returns
+        -------
+            Refined samples with ``ln_likelihood`` and ``ln_prior`` populated.
+
+        Notes
+        -----
+        Only the marginalized path is supported (matches
+        ``run(marginalized=True)``). ``extra_model`` is not supported.
+
+        Emits :class:`UserWarning` for any sample that does not converge within
+        ``max_passes`` BFGS restarts; the returned point for such a sample may
+        not be the local MAP.
+        """
+        _validate_data(data, self.model)
+
+        if samples.n_samples == 0:
+            msg = "Cannot optimize: no samples provided."
+            raise ValueError(msg)
+
+        prepared = _prepare_sampler_model(
+            self.prior, self.model, self.marginalized_names
+        )
+        model_obj = prepared.model
+        nonlinear_extension_priors = prepared.nonlinear_extension_priors
+        effective_linear_prior = prepared.effective_linear_prior
+        effective_marginalized_names = prepared.effective_marginalized_names
+        linear_extension_names = prepared.linear_extension_names
+
+        all_priors = _build_all_priors(self.prior, nonlinear_extension_priors)
+        numpyro_model = model_obj.numpyro_model(
+            all_priors,
+            # data validated at entry; correlated with the polymorphic model.
+            cast("Any", data),
+            effective_linear_prior,
+            marginalized=True,
+            marginalized_names=effective_marginalized_names,
+        )
+
+        seed_int = uuid.uuid4().int >> 96 if seed is None else seed
+        rng_key = jr.key(seed_int)
+
+        per_sample_maps: list[dict[str, jax.Array]] = []
+        for i in range(samples.n_samples):
+            init = self._build_init_params(
+                model_obj,
+                samples[i],
+                effective_linear_prior=effective_linear_prior,
+                effective_marginalized_names=effective_marginalized_names,
+                marginalized=True,
+                num_chains=1,
+            )
+            guide = AutoDelta(numpyro_model, init_loc_fn=init_to_value(values=init))
+            svi = SVI(
+                numpyro_model,
+                guide,
+                numpyro.optim.Minimize(),
+                loss=Trace_ELBO(),
+            )
+            state = svi.init(rng_key)
+            # ``numpyro.optim.Minimize`` wraps ``jax.scipy.optimize.minimize``
+            # BFGS, whose line search frequently aborts early with
+            # ``success=False``. Restarting from the last point recovers further
+            # progress; loop until the loss change falls below ``tol`` or we hit
+            # ``max_passes``. Track the best (lowest-loss) state seen so the
+            # final point is robust to occasional BFGS uphill steps near the
+            # minimum.
+            best_state = state
+            best_loss = jnp.inf
+            prev_loss = jnp.inf
+            last_change = jnp.inf
+            converged = False
+            for _ in range(max_passes):
+                state, loss = svi.update(state)
+                if loss < best_loss:
+                    best_state = state
+                    best_loss = loss
+                last_change = jnp.abs(prev_loss - loss)
+                if last_change < tol:
+                    converged = True
+                    break
+                prev_loss = loss
+            if not converged:
+                warnings.warn(
+                    f"BFGS did not converge for sample {i} after "
+                    f"{max_passes} restarts (last loss change={float(last_change):.3e},"
+                    f" tol={tol:.1e}). Returned point may not be the local MAP.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            per_sample_maps.append(guide.median(svi.get_params(best_state)))
+
+        posterior = {
+            k: jnp.stack([d[k] for d in per_sample_maps]) for k in per_sample_maps[0]
+        }
+
+        return self._posterior_to_samples(
+            model_obj,
+            posterior,
+            rng_key,
+            data=data,
+            effective_linear_prior=effective_linear_prior,
+            marginalized=True,
+            nonlinear_extension_priors=nonlinear_extension_priors,
+            effective_marginalized_names=effective_marginalized_names,
+            linear_extension_names=linear_extension_names,
+            num_chains=1,
+            return_logprobs=True,
+            use_mean=True,
         )
 
     def _build_init_params(  # noqa: C901
@@ -580,7 +741,7 @@ class NumpyroSampler(AbstractSampler):
         posterior: dict[str, Any],
         rng_key: jax.Array,
         *,
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
         marginalized: bool,
         nonlinear_extension_priors: dict[str, Any],
@@ -588,6 +749,7 @@ class NumpyroSampler(AbstractSampler):
         linear_extension_names: tuple[str, ...],
         num_chains: int = 1,
         return_logprobs: bool = False,
+        use_mean: bool = False,
     ) -> Samples:
         """Convert a numpyro posterior dict into a :class:`Samples` container."""
         prior = self.prior
@@ -614,40 +776,32 @@ class NumpyroSampler(AbstractSampler):
                 effective_marginalized_names,
                 data,
                 effective_linear_prior,
+                use_mean=use_mean,
             )
         else:
             # Non-marginalized: linear params are in the posterior as named
             # deterministic sites.
             linear_q = self._extract_linear_from_posterior(model, posterior, data)
 
-        # Build metadata from the passed-in data
-        t_ref: Any = None
-        if isinstance(model, JointModel):
-            first_comp_data = data[next(iter(model.components))]
-            if hasattr(first_comp_data, "t_ref"):
-                t_ref = first_comp_data.t_ref
-        elif hasattr(data, "t_ref"):
-            t_ref = data.t_ref
+        # Build metadata from the passed-in data.  t_ref is uniformly exposed by
+        # both AbstractData and AbstractDatasetContainer.
+        t_ref = data.t_ref
 
         metadata: dict[str, Any] = {"num_chains": num_chains}
         if t_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit) if hasattr(t_ref, "unit") else ""
-            metadata["t_ref"] = (
-                float(ustrip(_t_unit, t_ref)) if _t_unit else float(t_ref)
-            )
+            _t_unit = str(t_ref.unit)
+            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
 
         # Optional per-sample log-probabilities.
         ln_likelihood_arr: jax.Array | None = None
         ln_prior_arr: jax.Array | None = None
         if return_logprobs:
-            # ``run`` rejects JointModel when return_logprobs=True, so ``model``
-            # is always a single-component model on this path.
             ln_prior_arr = _evaluate_nonlinear_log_prior(_all_nl_priors, posterior)
             ln_likelihood_arr = self._marginal_log_likelihood(
-                cast("AbstractComponentModel", model),
+                model,
                 posterior,
                 data,
                 effective_linear_prior,
@@ -667,9 +821,9 @@ class NumpyroSampler(AbstractSampler):
 
     def _marginal_log_likelihood(
         self,
-        model: AbstractComponentModel,
+        model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
         effective_marginalized_names: tuple[str, ...] | None,
         nonlinear_extension_priors: dict[str, Any],
@@ -677,23 +831,49 @@ class NumpyroSampler(AbstractSampler):
         """Per-sample marginal log-likelihood for the MCMC posterior.
 
         Re-evaluates ``model.log_prob`` over the posterior draws, yielding the
-        same marginal log-likelihood that ``RejectionSampler`` stores. Only
-        single-component models reach here (``run`` rejects joint models when
-        ``return_logprobs=True``).
+        same marginal log-likelihood that ``RejectionSampler`` stores. Supports
+        both single-component models and :class:`~harv.models.joint.JointModel`.
         """
         prior = self.prior
         base_names = model._base_nonlinear_names()
-        linear_units = model._linear_param_units(data)
-        marg_names = (
-            model._auto_marginalized_names(effective_linear_prior)
-            if effective_marginalized_names is None
-            else effective_marginalized_names
-        )
-        explicit_keys = [
-            name
-            for name in set(model._all_linear_names()) - set(marg_names)
-            if name in posterior
-        ]
+
+        if isinstance(model, JointModel):
+            # Build flat linear_units from all components.
+            linear_units: dict[str, str] = {}
+            for comp_name, comp in model.components.items():
+                linear_units.update(comp._linear_param_units(data[comp_name]))
+
+            # Resolve per-component marginalized names.
+            per_comp_marg, _ = model._resolve_marginalization(
+                effective_marginalized_names, effective_linear_prior
+            )
+
+            # Build explicit posterior keys: qualified for per-component params
+            # (e.g. "rv.jitter"), bare for shared params (e.g. "v_sys").
+            shared_lin = set(model.shared_linear_params)
+            seen: set[str] = set()
+            explicit_keys: list[str] = []
+            for comp_name, comp in model.components.items():
+                marg_set = set(per_comp_marg[comp_name])
+                for name in comp._all_linear_names():
+                    if name in marg_set:
+                        continue
+                    pkey = name if name in shared_lin else f"{comp_name}.{name}"
+                    if pkey in posterior and pkey not in seen:
+                        seen.add(pkey)
+                        explicit_keys.append(pkey)
+        else:
+            linear_units = model._linear_param_units(data)
+            marg_names = (
+                model._auto_marginalized_names(effective_linear_prior)
+                if effective_marginalized_names is None
+                else effective_marginalized_names
+            )
+            explicit_keys = [
+                name
+                for name in set(model._all_linear_names()) - set(marg_names)
+                if name in posterior
+            ]
 
         nl_keys = [k for k in prior.nonlinear_priors if k in posterior]
         nl_keys += [
@@ -705,12 +885,13 @@ class NumpyroSampler(AbstractSampler):
             wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
             for pkey in explicit_keys:
                 if pkey not in wrapped:
-                    unit = linear_units.get(pkey, "")
+                    bare = pkey.split(".", 1)[-1] if "." in pkey else pkey
+                    unit = linear_units.get(bare, "")
                     wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
             return model.log_prob(
                 wrapped,
                 data,
-                linear_prior=effective_linear_prior,
+                linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
             )
 
@@ -723,10 +904,16 @@ class NumpyroSampler(AbstractSampler):
         rng_key: jax.Array,
         nonlinear_extension_priors: dict[str, Any],
         effective_marginalized_names: tuple[str, ...] | None,
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
         effective_linear_prior: dict[str, Any] | None,
+        *,
+        use_mean: bool = False,
     ) -> dict[str, AbstractQuantity]:
-        """Conditionally sample linear params given MCMC nonlinear posterior."""
+        """Conditionally sample linear params given MCMC nonlinear posterior.
+
+        When ``use_mean=True``, the conditional posterior mean is returned for
+        each marginalized linear parameter instead of a random draw.
+        """
         prior = self.prior
         base_names = model._base_nonlinear_names()
         if isinstance(model, JointModel):
@@ -812,8 +999,9 @@ class NumpyroSampler(AbstractSampler):
                 wrapped,
                 key,
                 data,
-                linear_prior=effective_linear_prior,
+                linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
+                use_mean=use_mean,
             )
 
         result = jax.vmap(_sample_one)(keys, filtered)
@@ -855,7 +1043,7 @@ class NumpyroSampler(AbstractSampler):
         self,
         model: AbstractComponentModel | JointModel,
         posterior: dict[str, Any],
-        data: Any,
+        data: Any,  # polymorphic over model; not statically narrowable
     ) -> dict[str, AbstractQuantity]:
         """Extract linear params from a non-marginalized posterior.
 

@@ -6,6 +6,7 @@ Covers the standalone :func:`harv.samplers.convert_parameterization` and the
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from unxt import Q
 
@@ -13,6 +14,7 @@ from harv.kepler.orbits import (
     campbell_from_thiele_innes,
     ecc_omega_from_ecosw_esinw,
     ecosw_esinw_from_ecc_omega,
+    thiele_innes_ABFG,
     thiele_innes_from_campbell,
 )
 from harv.models.parameterizations.gaia import (
@@ -169,7 +171,7 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         assert list(out_nl) == ["period", "eccentricity", "phase_peri"]
         assert list(out_lin) == [
@@ -201,12 +203,12 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         out_nl, out_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         assert "semi_major_axis" in out_lin
@@ -228,12 +230,12 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         back_nl, back_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         assert jnp.allclose(
@@ -253,13 +255,13 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         _out_nl, out_lin = convert_parameterization(
             ti_nl,
             ti_lin,
-            source=ThieleInnesGaiaAstrometry(a_floor=0.01),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.05),
+            source=ThieleInnesGaiaAstrometry(),
+            target=ThieleInnesGaiaAstrometry(),
         )
         for key in ("ti_A", "ti_B", "ti_F", "ti_G"):
             assert jnp.array_equal(out_lin[key].value, ti_lin[key].value)
@@ -271,7 +273,7 @@ class TestConvertGaia:
             nl,
             lin,
             source=StandardGaiaAstrometry(),
-            target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            target=ThieleInnesGaiaAstrometry(),
         )
         assert jnp.allclose(out_lin["excess_noise"].value, lin["excess_noise"].value)
 
@@ -282,12 +284,95 @@ class TestConvertGaia:
                 n,
                 ln,
                 source=StandardGaiaAstrometry(),
-                target=ThieleInnesGaiaAstrometry(a_floor=0.01),
+                target=ThieleInnesGaiaAstrometry(),
             )
         )
         _, out_lin = fn(nl, lin)
         assert "ti_A" in out_lin
         assert out_lin["ti_A"].shape == (2,)
+
+    def test_ti_vs_standard_design_matrix_agree(self):
+        """Standard and TI design matrices must produce the same AL signal.
+
+        Smoking-gun test for a TI structural bug. For a fixed orbit (Campbell
+        elements and equivalent TI constants), the predicted along-scan
+        position must be **identical** between the two parameterizations,
+        regardless of marginalization, priors, or MCMC. If this fails, the TI
+        design matrix has a column/sign bug.
+        """
+        # Pick a fixed orbit
+        a = jnp.array(2.5)  # mas
+        arg_peri = jnp.array(0.8)  # rad
+        lon_asc_node = jnp.array(1.7)  # rad
+        cos_i = jnp.array(0.55)
+        ecc = jnp.array(0.42)
+        ra0 = jnp.array(0.3)  # mas
+        dec0 = jnp.array(-0.4)  # mas
+        pmra = jnp.array(2.0)  # mas/yr
+        pmdec = jnp.array(-1.5)  # mas/yr
+        parallax = jnp.array(1.7)  # mas
+
+        # Arbitrary observation geometry
+        n = 25
+        rng = np.random.default_rng(7)
+        sin_psi = jnp.asarray(jnp.sin(jnp.linspace(0.0, 5.0 * jnp.pi, n)))
+        cos_psi = jnp.asarray(jnp.cos(jnp.linspace(0.0, 5.0 * jnp.pi, n)))
+        dt = jnp.linspace(-0.5, 0.5, n)  # years
+        parallax_factor = jnp.asarray(rng.uniform(-1.0, 1.0, n))
+
+        # True anomaly geometry (independent of parameterization)
+        sin_f = jnp.asarray(rng.uniform(-1.0, 1.0, n))
+        cos_f = jnp.sqrt(jnp.maximum(1.0 - sin_f**2, 0.0)) * jnp.where(
+            jnp.asarray(rng.integers(0, 2, n)) == 0, 1.0, -1.0
+        )
+
+        # Standard design matrix: (n, 6); rightmost column is semi_major_axis
+        std_X = StandardGaiaAstrometry().design_matrix(
+            sin_f,
+            cos_f,
+            dt,
+            sin_psi,
+            cos_psi,
+            parallax_factor,
+            {
+                "eccentricity": ecc,
+                "arg_peri": arg_peri,
+                "lon_asc_node": lon_asc_node,
+                "cos_i": cos_i,
+            },
+        )
+        std_lin = jnp.array([ra0, dec0, pmra, pmdec, parallax, a])
+        al_std = std_X @ std_lin
+
+        # TI design matrix: (n, 9); TI columns at the end
+        # Compute equivalent ti_A..G = a * unit_TI_constants
+        A_u, B_u, F_u, G_u = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        ti_A = a * A_u
+        ti_B = a * B_u
+        ti_F = a * F_u
+        ti_G = a * G_u
+        ti_X = ThieleInnesGaiaAstrometry(apply_jacobian_correction=False).design_matrix(
+            sin_f,
+            cos_f,
+            dt,
+            sin_psi,
+            cos_psi,
+            parallax_factor,
+            {"eccentricity": ecc},
+        )
+        ti_lin = jnp.array([ra0, dec0, pmra, pmdec, parallax, ti_A, ti_B, ti_F, ti_G])
+        al_ti = ti_X @ ti_lin
+
+        assert jnp.allclose(al_std, al_ti, atol=1e-8), (
+            f"Standard AL prediction does not match TI prediction. "
+            f"max abs diff = {float(jnp.max(jnp.abs(al_std - al_ti)))}"
+        )
 
 
 class TestConvertErrors:
@@ -316,7 +401,7 @@ class TestSamplesWrapper:
             nonlinear=_rv_nonlinear(),
             linear={**_rv_linear(), "jitter": Q(jnp.array([0.2, 0.3]), "km/s")},
             data_type="RVModel",
-            metadata={"t_ref": Q(0.0, "day"), "num_chains": 2},
+            metadata={"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2},
             linear_extension_names=("jitter",),
         )
         converted = samples.convert_parameterization(
@@ -372,7 +457,7 @@ class TestSamplesWrapper:
             metadata={},
         )
         converted = samples.convert_parameterization(
-            source=ThieleInnesGaiaAstrometry(a_floor=0.0),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
         convenience = samples.thiele_innes_to_campbell()

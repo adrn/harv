@@ -17,16 +17,24 @@ from harv.models.parameterizations import (
     StandardGaiaAstrometry,
     StandardRV,
 )
+from harv.models.extensions import GP, Jitter, MultiSurveyOffset, MonomialTrend
 from harv.models.rv import RVModel
+from harv.models.priors import HarvPrior, default_sb2_prior
 
 __all__ = (
     "AbstractComponentModel",
     "AbstractParameterization",
     "EcoswEsinwRV",
     "GaiaAstrometryModel",
+    "GP",
+    "Jitter",
+    "MonomialTrend",
+    "MultiSurveyOffset",
+    "HarvPrior",
     "JointModel",
     "RVModel",
     "StandardGaiaAstrometry",
     "StandardRV",
+    "default_sb2_prior",
     "parameterizations",
 )

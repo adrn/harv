@@ -6,11 +6,12 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
+from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.rejection_prior import RejectionPrior
 
 
 def _make_rv_data(n_obs: int = 30, seed: int = 42) -> RVData:
@@ -28,7 +29,7 @@ class TestDictLinearPriorRV:
     def test_run_ignore_non_finite_keeps_finite_samples(self, monkeypatch):
         """ignore_non_finite=True should reject only the bad log-likelihoods."""
         data = _make_rv_data()
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(10.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -64,9 +65,9 @@ class TestDictLinearPriorRV:
             nonlinear_samples,
             marginalized_names,
             data,
-            linear_prior,
+            linear_priors,
         ):
-            del self, model, key, marginalized_names, data, linear_prior
+            del self, model, key, marginalized_names, data, linear_priors
             n = len(next(iter(nonlinear_samples.values())))
             return {
                 "rv_semiamp": Q(jnp.zeros(n), "km/s"),
@@ -97,7 +98,7 @@ class TestDictLinearPriorRV:
     def test_run_default_does_not_ignore_non_finite(self, monkeypatch):
         """Without ignore_non_finite, non-finite values poison the rejection step."""
         data = _make_rv_data()
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(10.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -133,9 +134,9 @@ class TestDictLinearPriorRV:
             nonlinear_samples,
             marginalized_names,
             data,
-            linear_prior,
+            linear_priors,
         ):
-            del self, model, key, marginalized_names, data, linear_prior
+            del self, model, key, marginalized_names, data, linear_priors
             n = len(next(iter(nonlinear_samples.values())))
             return {
                 "rv_semiamp": Q(jnp.zeros(n), "km/s"),
@@ -167,14 +168,14 @@ class TestDictLinearPriorRV:
         n_prior = 10_000
 
         # Dict prior with all Gaussian entries
-        dict_prior = RejectionPrior(
+        dict_prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -191,14 +192,14 @@ class TestDictLinearPriorRV:
         """HalfNormal rv_semiamp (explicit) + Normal v_sys (marginalized)."""
         data = _make_rv_data()
 
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -219,14 +220,14 @@ class TestDictLinearPriorRV:
         """Delta rv_semiamp (fixed) + Normal v_sys (marginalized)."""
         data = _make_rv_data()
 
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -245,14 +246,14 @@ class TestDictLinearPriorRV:
         """QuantityDistribution entries in dict-form linear prior."""
         data = _make_rv_data()
 
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.HalfNormal(100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -267,14 +268,14 @@ class TestDictLinearPriorRV:
         """Sampler-owned marginalized_names can force a Gaussian subset."""
         data = _make_rv_data()
 
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Normal(0.0, 100.0), "km/s"),
                 "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
             },
@@ -291,14 +292,14 @@ class TestDictLinearPriorRV:
         """Both rv_semiamp and v_sys as Delta (fully fixed linear params)."""
         data = _make_rv_data()
 
-        prior = RejectionPrior(
+        prior = HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(50.0, 200.0), "day"),
                 "eccentricity": dist.Beta(0.867, 3.03),
                 "phase_peri": dist.Uniform(0.0, 1.0),
                 "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             },
-            linear_prior={
+            linear_priors={
                 "rv_semiamp": QD(dist.Delta(10.0), "km/s"),
                 "v_sys": QD(dist.Delta(0.0), "km/s"),
             },

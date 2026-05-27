@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from unxt import Q, ustrip
 
-from harv import RVData, RejectionPrior, RejectionSampler
+import harv.models as hm
+from harv import RVData, RejectionSampler
 from harv.kepler.orbits import rv_at_times
 from harv.models.extensions import Jitter
 from harv.models.rv import RVModel
@@ -284,7 +285,7 @@ class TestDerivedQuantities:
 
 class TestRejectionSamplerLogProbs:
     def test_return_logprobs_populates_fields(self, rv_data):
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(10.0, "day"),
             period_max=Q(400.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -299,7 +300,7 @@ class TestRejectionSamplerLogProbs:
         assert jnp.all(jnp.isfinite(s.ln_posterior))
 
     def test_default_run_has_no_logprobs(self, rv_data):
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(10.0, "day"),
             period_max=Q(400.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

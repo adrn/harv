@@ -83,7 +83,7 @@ class TestGaiaAstrometryModelMarginalized:
     def test_marginalized_is_finite(self):
         data = _make_astro_data()
         model = GaiaAstrometryModel()
-        ll = model.log_prob(_nl_values(), data, linear_prior=_astro_prior())
+        ll = model.log_prob(_nl_values(), data, linear_priors=_astro_prior())
         assert jnp.isfinite(ll)
 
     def test_marginalized_jit(self):
@@ -93,7 +93,7 @@ class TestGaiaAstrometryModelMarginalized:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl, data, linear_prior=_astro_prior())
+            return model.log_prob(nl, data, linear_priors=_astro_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -105,7 +105,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(42)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_prior=_astro_prior()
+            _nl_values(), key, data, linear_priors=_astro_prior()
         )
         expected = {"ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis"}
         assert set(samples.keys()) == expected
@@ -115,7 +115,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(0)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_prior=_astro_prior()
+            _nl_values(), key, data, linear_priors=_astro_prior()
         )
         for name, val in samples.items():
             assert jnp.isfinite(val), f"{name} is not finite"
@@ -145,14 +145,12 @@ class TestGaiaAstrometryModelThieleInnes:
         }
 
     def test_construction(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         model = GaiaAstrometryModel(parameterization=p)
         assert isinstance(model.parameterization, ThieleInnesGaiaAstrometry)
 
     def test_param_names(self):
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         assert set(model._all_nonlinear_names()) == {
             "period",
             "eccentricity",
@@ -172,17 +170,13 @@ class TestGaiaAstrometryModelThieleInnes:
 
     def test_design_matrix_shape(self):
         data = _make_astro_data(n_obs=20)
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         X = model._base_design_matrix(self._ti_nl_values(), data=data)
         assert X.shape == (20, 9)
 
     def test_linear_param_units(self):
         data = _make_astro_data()
-        model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01)
-        )
+        model = GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry())
         units = model._linear_param_units(data)
         assert units["pmra"] == "mas/yr"
         assert units["ti_A"] == "mas"
@@ -193,23 +187,23 @@ class TestGaiaAstrometryModelThieleInnes:
     def test_log_prob_finite(self):
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
         ll = model.log_prob(
-            self._ti_nl_values(), data=data, linear_prior=self._ti_prior()
+            self._ti_nl_values(), data=data, linear_priors=self._ti_prior()
         )
         assert jnp.isfinite(ll)
 
     def test_log_prob_jit(self):
         data = _make_astro_data()
         model = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
         nl = self._ti_nl_values()
 
         @jax.jit
         def fn():
-            return model.log_prob(nl, data=data, linear_prior=self._ti_prior())
+            return model.log_prob(nl, data=data, linear_priors=self._ti_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -244,7 +238,7 @@ class TestGaiaAstrometryModelThieleInnes:
 
         model_std = GaiaAstrometryModel()
         model_ti = GaiaAstrometryModel(
-            parameterization=ThieleInnesGaiaAstrometry(a_floor=0.01),
+            parameterization=ThieleInnesGaiaAstrometry(),
         )
 
         X_std = model_std._base_design_matrix(nl_std, data=data)

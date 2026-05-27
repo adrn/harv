@@ -66,6 +66,7 @@ TODO: move to a quickstart page in documentation and link here.
 ```python
 from unxt import Q
 import harv
+import harv.models as hm
 
 # Load or create RV data with explicit units - some sample RV data:
 data = harv.RVData(
@@ -75,7 +76,7 @@ data = harv.RVData(
 )
 
 # Set up a prior with default structure (log-uniform in period, etc.)
-prior = harv.RejectionPrior.default_rv(
+prior = hm.StandardRV().default_prior(
     period_min=Q(10, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),   # RV semi-amplitude scale
@@ -108,7 +109,7 @@ astro_data = harv.GaiaAstrometryData(
     parallax_factor=jnp.array([0.70828, -0.46657, -0.45946, 0.19659, -0.21379])
 )
 
-prior = harv.RejectionPrior.default_gaia_astrometry(
+prior = hm.StandardGaiaAstrometry().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(3000, "day"),
     sigma_a0=Q(1, "au"),   # astrometric semi-major axis prior scale

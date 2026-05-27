@@ -163,7 +163,7 @@ class TestStandardGaiaAstrometry:
 
 class TestThieleInnesGaiaAstrometry:
     def test_params_names(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         names = [pi.name for pi in p.params()]
         assert names == [
             "period",
@@ -181,7 +181,7 @@ class TestThieleInnesGaiaAstrometry:
         ]
 
     def test_nonlinear_linear_split(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         nl = p.nonlinear_params()
         lin = p.linear_params()
         assert len(nl) == 3
@@ -190,7 +190,7 @@ class TestThieleInnesGaiaAstrometry:
         assert all(pi.linear for pi in lin)
 
     def test_design_matrix_shape(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         n_obs = 15
         key = jax.random.key(0)
         sin_f = jax.random.normal(key, (n_obs,))
@@ -206,7 +206,7 @@ class TestThieleInnesGaiaAstrometry:
         assert X.shape == (n_obs, 9)
 
     def test_design_matrix_jit(self):
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry()
         n = 5
         key = jax.random.key(1)
         sin_f = jax.random.normal(key, (n,))
@@ -259,7 +259,7 @@ class TestThieleInnesGaiaAstrometry:
         X_std = std.design_matrix(sin_f, cos_f, dt, sin_psi, cos_psi, pf, nl_std)
         orbit_std = X_std[:, 5] * a0  # Standard: 6th col scaled by a0
 
-        ti = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        ti = ThieleInnesGaiaAstrometry()
         nl_ti = {"eccentricity": ecc}
         X_ti = ti.design_matrix(sin_f, cos_f, dt, sin_psi, cos_psi, pf, nl_ti)
         # Orbit contribution from TI: X_ti columns 5-8 @ [A, B, F, G]
@@ -274,7 +274,9 @@ class TestThieleInnesGaiaAstrometry:
 
     def test_jacobian_correction_known_value(self):
         """Verify correction at hand-crafted (a0, sin²i) = (2.0, 0.75)."""
-        p = ThieleInnesGaiaAstrometry(a_floor=0.0, sin2i_floor=0.0)
+        p = ThieleInnesGaiaAstrometry(
+            a_floor=0.0, sin2i_floor=0.0, apply_jacobian_correction=True
+        )
         # Choose simple TI constants: a_perp=0, circular face-on-ish orbit
         # A = a0, B=0, F=0, G=a0*cos_i with cos_i = sqrt(1 - sin2i)
         a0 = 2.0
@@ -306,7 +308,9 @@ class TestThieleInnesGaiaAstrometry:
         2. Face-on orbit (cos_i = 1 ↔ sin²i = 0): floor on sin²i triggers.
         """
         # Case 1: all-zero TI
-        p = ThieleInnesGaiaAstrometry(a_floor=0.05, sin2i_floor=0.01)
+        p = ThieleInnesGaiaAstrometry(
+            a_floor=0.05, sin2i_floor=0.01, apply_jacobian_correction=True
+        )
         linear_map_zero = {
             "ti_A": jnp.array(0.0),
             "ti_B": jnp.array(0.0),
@@ -333,9 +337,14 @@ class TestThieleInnesGaiaAstrometry:
         """log_uniform_in_a=True should use m=4 instead of m=3."""
         a_floor = 0.0
         sin2i_floor = 0.0
-        p3 = ThieleInnesGaiaAstrometry(a_floor=a_floor, sin2i_floor=sin2i_floor)
+        p3 = ThieleInnesGaiaAstrometry(
+            a_floor=a_floor, sin2i_floor=sin2i_floor, apply_jacobian_correction=True
+        )
         p4 = ThieleInnesGaiaAstrometry(
-            a_floor=a_floor, sin2i_floor=sin2i_floor, log_uniform_in_a=True
+            a_floor=a_floor,
+            sin2i_floor=sin2i_floor,
+            log_uniform_in_a=True,
+            apply_jacobian_correction=True,
         )
         # Use A=2, B=F=G=0 → a0=2 (edge-on orbit), log(a0)=log(2)>0 so c4 < c3
         linear_map = {
@@ -374,7 +383,10 @@ class TestThieleInnesGaiaAstrometry:
     @pytest.mark.parametrize("log_uniform", [False, True])
     def test_jit_compatible(self, log_uniform):
         p = ThieleInnesGaiaAstrometry(
-            a_floor=0.01, sin2i_floor=0.01, log_uniform_in_a=log_uniform
+            a_floor=0.01,
+            sin2i_floor=0.01,
+            log_uniform_in_a=log_uniform,
+            apply_jacobian_correction=True,
         )
         linear_map = {
             "ti_A": jnp.array(1.5),
@@ -406,7 +418,7 @@ class TestThieleInnesGaiaAstrometry:
 
     def test_correction_enabled_by_default(self):
         """apply_jacobian_correction defaults to True (current behavior)."""
-        p = ThieleInnesGaiaAstrometry(a_floor=0.01)
+        p = ThieleInnesGaiaAstrometry(a_floor=0.01, apply_jacobian_correction=True)
         assert p.apply_jacobian_correction is True
         linear_map = {
             "ti_A": jnp.array(1.5),
@@ -419,7 +431,7 @@ class TestThieleInnesGaiaAstrometry:
     def test_requires_a_floor_when_correction_enabled(self):
         """a_floor is mandatory when the correction is on (the default)."""
         with pytest.raises(ValueError, match="a_floor is required"):
-            ThieleInnesGaiaAstrometry()
+            ThieleInnesGaiaAstrometry(apply_jacobian_correction=True)
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -443,8 +455,12 @@ class TestThieleInnesGaiaAstrometry:
             "ti_F": jnp.array(-0.4),
             "ti_G": jnp.array(1.0),
         }
-        p_default = ThieleInnesGaiaAstrometry(a_floor=0.05)
-        p_explicit = ThieleInnesGaiaAstrometry(a_floor=0.05, sin2i_floor=0.01)
+        p_default = ThieleInnesGaiaAstrometry(
+            a_floor=0.05, apply_jacobian_correction=True
+        )
+        p_explicit = ThieleInnesGaiaAstrometry(
+            a_floor=0.05, sin2i_floor=0.01, apply_jacobian_correction=True
+        )
         assert jnp.allclose(
             p_default.linear_log_prior_correction(linear_map),
             p_explicit.linear_log_prior_correction(linear_map),

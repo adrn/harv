@@ -64,7 +64,7 @@ usually need two pieces:
 1. A matching prior entry for every extra parameter introduced by that extension.
 
 For example, adding `Jitter(param_unit="km/s")` to the model is not enough on its own;
-you also need a `jitter=...` prior in the corresponding `RejectionPrior`.
+you also need a `jitter=...` prior in the corresponding `HarvPrior`.
 
 For joint models, extension-parameter names are component-qualified, such as
 `"rv.jitter"`.

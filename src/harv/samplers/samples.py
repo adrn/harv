@@ -5,6 +5,7 @@ rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
 import warnings
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, overload
 
@@ -15,6 +16,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv.data.datasets import AbstractData
 from harv.kepler import masses
 from harv.models.parameterizations._base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
@@ -107,6 +109,124 @@ def _overlay_corner_truths(  # noqa: C901
                 ax.scatter([x_truth], [y_truth], **point_kwargs)
 
 
+def _assemble_sample_params(
+    samples: "Samples",
+    model: Any,
+    data: AbstractData,
+    *,
+    i: int | None = None,
+) -> tuple[dict[str, Any], dict[str, jax.Array]]:
+    """Build ``(nl_values, linear_values)`` from ``samples`` in the form models expect.
+
+    Matches the convention used by the sampler's ``log_prob`` calls:
+    dimensioned base nonlinear parameters stay as Quantities, dimensionless
+    base parameters and all extension parameters are unit-stripped, and every
+    linear parameter is unit-stripped to the model's linear-parameter units
+    (see :meth:`~harv.models.component.AbstractComponentModel._linear_param_units`).
+
+    Parameters
+    ----------
+    samples
+        Single-component :class:`Samples`.
+    model
+        The component model whose ``parameterization`` and ``_linear_param_units``
+        define the expected param form.
+    data
+        Data instance — used to resolve linear-parameter units.
+    i
+        If ``None`` (default), returns batched dicts (one array per parameter,
+        shape ``(n_samples,)``) — suitable for use under ``jax.vmap`` (e.g.
+        :meth:`Samples.chi2`).  If an integer, extracts sample ``i`` so each
+        dict value is a scalar — suitable for the plot functions, which always
+        plot one sample at a time.
+    """
+    base_nl_units = {
+        p.name: p.unit for p in model.parameterization.params() if not p.linear
+    }
+    nonlinear_names = set(model._all_nonlinear_names())
+    linear_units = model._linear_param_units(data)
+    linear_names = set(linear_units)
+
+    def _pick(value: Any) -> Any:
+        return value if i is None else value[i]
+
+    nl_for_model: dict[str, Any] = {
+        name: _pick(value)
+        if base_nl_units.get(name, "")
+        else ustrip(str(value.unit), _pick(value))
+        for name, value in samples.nonlinear.items()
+        if name in nonlinear_names
+    }
+    linear_stripped: dict[str, jax.Array] = {
+        name: ustrip(linear_units[name], _pick(value))
+        for name, value in samples.linear.items()
+        if name in linear_names
+    }
+    return nl_for_model, linear_stripped
+
+
+class _MetadataView(Mapping[str, Any]):
+    """Q-aware read-only view over :attr:`Samples.metadata`.
+
+    The underlying ``metadata`` dict holds the *split* form for quantity-valued
+    entries: a value (``float`` / ``int`` / ``str`` / ``bool``) under ``name``
+    and a unit string under ``f"{name}_unit"`` (e.g. ``{"t_ref": 0.0,
+    "t_ref_unit": "day"}``).  This split keeps the static field free of JAX
+    arrays so equinox doesn't warn about JAX arrays being marked static.
+
+    The view papers over that split: ``view[name]`` returns a :class:`~unxt.Q`
+    whenever a ``f"{name}_unit"`` companion exists, and the bare value
+    otherwise.  Iteration yields *logical* names — ``_unit`` companions of an
+    existing base key are hidden.  ``get``, ``keys``, ``items``, ``values``,
+    and ``__eq__`` come from :class:`collections.abc.Mapping` for free.
+
+    Examples
+    --------
+    >>> view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+    >>> view["t_ref"]  # doctest: +ELLIPSIS
+    Quantity(..., unit='d')
+    >>> view["num_chains"]
+    2
+    >>> sorted(view)
+    ['num_chains', 't_ref']
+    >>> "t_ref" in view
+    True
+    >>> "t_ref_unit" in view  # the _unit companion is hidden
+    False
+    >>> view.get("missing", 5)
+    5
+    """
+
+    __slots__ = ("_d",)
+
+    def __init__(self, d: dict[str, Any]) -> None:
+        self._d = d
+
+    def __getitem__(self, name: str) -> Any:
+        if name not in self._d or self._is_hidden(name):
+            raise KeyError(name)
+        value = self._d[name]
+        unit_key = f"{name}_unit"
+        if unit_key in self._d:
+            return Q(value, self._d[unit_key])
+        return value
+
+    def __iter__(self) -> Iterator[str]:
+        for k in self._d:
+            if not self._is_hidden(k):
+                yield k
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def _is_hidden(self, key: str) -> bool:
+        """True for ``_unit`` companion keys of an existing base."""
+        return key.endswith("_unit") and key[: -len("_unit")] in self._d
+
+    def __repr__(self) -> str:
+        return f"_MetadataView({dict(self.items())!r})"
+
+
 class Samples(eqx.Module):
     """Container for posterior samples.
 
@@ -155,7 +275,7 @@ class Samples(eqx.Module):
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
     ...     data_type="rv",
-    ...     metadata={"t_ref": Q(0.0, "day")},
+    ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     ... )
     >>> samples.n_samples
     3
@@ -185,6 +305,19 @@ class Samples(eqx.Module):
     def n_samples(self) -> int:
         """Number of posterior samples."""
         return int(next(iter(self.nonlinear.values())).shape[0])
+
+    @property
+    def meta(self) -> _MetadataView:
+        """Q-aware read-only view over :attr:`metadata`.
+
+        ``metadata`` itself stores quantity-valued entries in split form
+        (``<name>`` value + ``<name>_unit`` string) so the static field never
+        holds a JAX array.  Use ``samples.meta[name]`` to read those entries
+        back as :class:`~unxt.Q` instances without manually reassembling the
+        two halves; plain scalar entries (e.g. ``num_chains``) round-trip
+        unchanged.  See :class:`_MetadataView` for the full read API.
+        """
+        return _MetadataView(self.metadata)
 
     @property
     def ln_posterior(self) -> jax.Array:
@@ -223,7 +356,9 @@ class Samples(eqx.Module):
     @overload
     def __getitem__(self, key: int | slice | np.ndarray) -> "Samples": ...
 
-    def __getitem__(self, key: str | int | slice | np.ndarray) -> "Q | Samples":
+    def __getitem__(  # noqa: C901
+        self, key: str | int | slice | np.ndarray
+    ) -> "Q | Samples":
         """Get parameter samples by name, or return a sliced ``Samples``.
 
         Parameters
@@ -253,7 +388,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> samples["period"].unit
         Unit("d")
@@ -263,10 +398,25 @@ class Samples(eqx.Module):
         1
         >>> samples[0].n_samples
         1
+        >>> samples[-1].n_samples
+        1
+        >>> float(samples[-1]["period"].value[0])
+        101.0
         """
         if not isinstance(key, str):
             # int/slice/array index — return a sliced Samples preserving 1-d shape
-            idx = slice(key, key + 1) if isinstance(key, int) else key
+            if isinstance(key, int):
+                n = self.n_samples
+                if not -n <= key < n:
+                    msg = (
+                        f"Sample index {key} out of range for Samples with {n} samples"
+                    )
+                    raise IndexError(msg)
+                if key < 0:
+                    key += n
+                idx = slice(key, key + 1)
+            else:
+                idx = key
             sliced_nl = {k: v[idx] for k, v in self.nonlinear.items()}
             sliced_lin = {k: v[idx] for k, v in self.linear.items()}
             return Samples(
@@ -300,12 +450,13 @@ class Samples(eqx.Module):
             # adding t_ref converts it to the same absolute coordinate as data.time.
             period = self.nonlinear["period"]
             time_unit = str(period.unit)
-            t_ref_raw = self.metadata.get("t_ref", 0.0)
-            t_ref_val = (
-                float(ustrip(time_unit, t_ref_raw))
-                if isinstance(t_ref_raw, Q)
-                else (float(t_ref_raw) if t_ref_raw is not None else 0.0)
-            )
+            t_ref = self.meta.get("t_ref")
+            if t_ref is None:
+                t_ref_val = 0.0
+            elif isinstance(t_ref, AbstractQuantity):
+                t_ref_val = float(ustrip(time_unit, t_ref))
+            else:
+                t_ref_val = float(t_ref)
             phase_peri = ustrip("", self.nonlinear["phase_peri"])
             period_val = ustrip(time_unit, period)
             return Q(t_ref_val + phase_peri * period_val, time_unit)
@@ -338,39 +489,50 @@ class Samples(eqx.Module):
             f"parameters={len(self.keys())})"
         )
 
-    def wrap_angles(self) -> "Samples":
+    def wrap_angles(self) -> "Samples":  # noqa: C901 -- two-step angle wrapping
         """Wrap negative ``rv_semiamp`` / ``semi_major_axis`` to positive.
 
-        For samples with negative ``rv_semiamp`` (or, in astrometry fits, negative
-        ``semi_major_axis``) the orbit is physically equivalent to the positive case
-        with ``arg_peri -> arg_peri + pi``. This method returns a new :class:`Samples`
-        where:
+        Negative ``rv_semiamp`` (``K``) or ``semi_major_axis`` (``a``) describes
+        an orbit that is physically identical to the all-positive case under two
+        symmetries of the model:
 
-        * negative ``rv_semiamp`` and ``semi_major_axis`` entries are flipped to
-          positive,
-        * the corresponding ``arg_peri`` values are shifted by ``pi`` and wrapped to
-          ``[0, 2*pi)``.
+        * ``arg_peri -> arg_peri + pi`` flips the sign of *both* ``K`` and ``a``
+          (the ``(omega, K, a) -> (omega + pi, -K, -a)`` symmetry);
+        * ``lon_asc_node -> lon_asc_node + pi`` flips the sign of ``a`` *alone*
+          (the astrometric ``(Omega, a) -> (Omega + pi, -a)`` symmetry;
+          ``lon_asc_node`` does not enter the RV model).
+
+        This method returns a new :class:`Samples` enforcing ``K >= 0`` and
+        ``a >= 0`` in two steps:
+
+        1. shift ``arg_peri`` by ``pi`` (flipping every ``rv_semiamp`` and
+           ``semi_major_axis``) on the samples where the trigger amplitude is
+           negative — enforcing ``K >= 0``;
+        2. shift ``lon_asc_node`` by ``pi`` (flipping every ``semi_major_axis``)
+           on the samples where ``a`` is *still* negative — enforcing ``a >= 0``.
+
+        Both shifted angles are wrapped to ``[0, 2*pi)``.  A single ``arg_peri``
+        shift cannot make both ``K`` and ``a`` positive when their signs disagree
+        (which routinely happens in joint RV + astrometry posteriors), so the
+        second ``lon_asc_node`` shift is required.
 
         Joint models (e.g. SB2) namespace per-component linear parameters as
-        ``"component.param_name"``; this method discovers every
-        ``rv_semiamp``- and ``semi_major_axis``-suffixed key and flips them
-        together, since they all share the same ``arg_peri``.  A single
-        ω-shift flips an arbitrary number of K's and a's in lockstep.  The
-        first ``rv_semiamp``-suffixed key (insertion order) determines the
-        flip mask; ``semi_major_axis`` is used as the trigger only if no
-        ``rv_semiamp`` is present (astrometry-only fits).
+        ``"component.param_name"``; this method discovers every ``rv_semiamp``-
+        and ``semi_major_axis``-suffixed key.  The first ``rv_semiamp``-suffixed
+        key (insertion order) triggers step 1; ``semi_major_axis`` triggers
+        step 1 only when no ``rv_semiamp`` is present (astrometry-only fits).
 
         No-op when ``arg_peri`` is absent from ``nonlinear``, when neither
-        ``rv_semiamp`` nor ``semi_major_axis`` is in ``linear``, or when no entries are
-        negative.
+        ``rv_semiamp`` nor ``semi_major_axis`` is in ``linear``, or when no
+        entries are negative.
 
         Raises
         ------
         NotImplementedError
-            If the model has multiple per-component ``arg_peri`` keys
-            (e.g. ``"primary.arg_peri"`` and ``"secondary.arg_peri"``).
-            All current harv joint factories share ``arg_peri``, so this is
-            not expected to arise in practice.
+            If the model has multiple per-component ``arg_peri`` or
+            ``lon_asc_node`` keys (e.g. ``"primary.arg_peri"`` and
+            ``"secondary.arg_peri"``).  All current harv joint factories share
+            both, so this is not expected to arise in practice.
 
         Examples
         --------
@@ -384,7 +546,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
         ...             "v_sys": Q([0.0, 0.0], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> wrapped = samples.wrap_angles()
         >>> bool((wrapped["rv_semiamp"].value >= 0).all())
@@ -412,37 +574,81 @@ class Samples(eqx.Module):
         K_keys = _find_namespaced_keys(self.linear, "rv_semiamp")
         a_keys = _find_namespaced_keys(self.linear, "semi_major_axis")
 
-        # Trigger: prefer rv_semiamp (RV is more discriminating for the sign
-        # convention).  In a joint model with shared `arg_peri`, every K
-        # flips together with the same ω-shift, so the choice of trigger
-        # doesn't affect the math — we just need *one* deterministic pick.
+        # Trigger for the `arg_peri` shift: prefer `rv_semiamp` (RV pins the
+        # sign convention).  For astrometry-only fits there is no `rv_semiamp`,
+        # so `semi_major_axis` triggers the shift instead.
         if K_keys:
-            trigger = self.linear[K_keys[0]]
+            omega_trigger = self.linear[K_keys[0]]
         elif a_keys:
-            trigger = self.linear[a_keys[0]]
+            omega_trigger = self.linear[a_keys[0]]
         else:
             return self
 
-        flip = ustrip(str(trigger.unit), trigger) < 0
-        if not jnp.any(flip):
+        # Step 1 — `arg_peri` shift.  `arg_peri -> arg_peri + pi` flips the
+        # sign of *both* `rv_semiamp` and `semi_major_axis` (the
+        # `(omega, K, a) -> (omega + pi, -K, -a)` model symmetry), enforcing
+        # `K >= 0`.
+        omega_flip = ustrip(str(omega_trigger.unit), omega_trigger) < 0
+
+        # Step 2 — `lon_asc_node` shift.  `lon_asc_node -> lon_asc_node + pi`
+        # flips `semi_major_axis` *alone* (the astrometric
+        # `(Omega, a) -> (Omega + pi, -a)` symmetry; `Omega` does not enter the
+        # RV model).  A single `arg_peri` shift cannot make both `K` and `a`
+        # positive when their signs disagree, so this second shift fixes any
+        # `semi_major_axis` still negative after step 1.
+        node_flip = None
+        node_key = None
+        if a_keys:
+            node_keys = _find_namespaced_keys(self.nonlinear, "lon_asc_node")
+            if len(node_keys) > 1:
+                msg = (
+                    "wrap_angles does not yet support multiple per-component "
+                    f"lon_asc_node keys; got {node_keys!r}.  All current harv "
+                    "joint models share lon_asc_node, so this should not arise "
+                    "in practice."
+                )
+                raise NotImplementedError(msg)
+            if node_keys:
+                node_key = node_keys[0]
+                # `semi_major_axis` sign *after* the `arg_peri` shift.
+                a0 = self.linear[a_keys[0]]
+                a0_val = ustrip(str(a0.unit), a0)
+                node_flip = jnp.where(omega_flip, -a0_val, a0_val) < 0
+
+        if not jnp.any(omega_flip) and (node_flip is None or not jnp.any(node_flip)):
             return self
 
-        # Flip every K and every a together: in a joint model they all share
-        # `arg_peri`, so a single ω-shift flips their signs in lockstep.
         new_lin = dict(self.linear)
+        new_nl = dict(self.nonlinear)
+
+        # Apply step 1: flip every K and every a, and shift `arg_peri`.
         for k in (*K_keys, *a_keys):
             v = new_lin[k]
             v_val = ustrip(str(v.unit), v)
-            new_lin[k] = Q(jnp.where(flip, -v_val, v_val), v.unit)
+            new_lin[k] = Q(jnp.where(omega_flip, -v_val, v_val), v.unit)
 
         arg_peri = self.nonlinear[omega_key]
         arg_val = ustrip(str(arg_peri.unit), arg_peri)
-
-        new_nl = dict(self.nonlinear)
         new_nl[omega_key] = Q(
-            jnp.where(flip, jnp.mod(arg_val + jnp.pi, 2.0 * jnp.pi), arg_val),
+            jnp.where(omega_flip, jnp.mod(arg_val + jnp.pi, 2.0 * jnp.pi), arg_val),
             arg_peri.unit,
         )
+
+        # Apply step 2: flip every still-negative a, and shift `lon_asc_node`.
+        if node_flip is not None and node_key is not None:
+            for k in a_keys:
+                v = new_lin[k]
+                v_val = ustrip(str(v.unit), v)
+                new_lin[k] = Q(jnp.where(node_flip, -v_val, v_val), v.unit)
+
+            node = self.nonlinear[node_key]
+            node_val = ustrip(str(node.unit), node)
+            new_nl[node_key] = Q(
+                jnp.where(
+                    node_flip, jnp.mod(node_val + jnp.pi, 2.0 * jnp.pi), node_val
+                ),
+                node.unit,
+            )
 
         return Samples(
             nonlinear=new_nl,
@@ -477,7 +683,7 @@ class Samples(eqx.Module):
             raise RuntimeError(msg)
 
         return self.convert_parameterization(
-            source=ThieleInnesGaiaAstrometry(a_floor=0.0),
+            source=ThieleInnesGaiaAstrometry(),
             target=StandardGaiaAstrometry(),
         )
 
@@ -537,7 +743,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> med = samples.median("period")
         >>> med.unit
@@ -586,7 +792,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
         >>> len(samples.percentile("period", [5, 50, 95]))
@@ -625,7 +831,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": Q(0.0, "day")},
+        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
         >>> sorted(summary.keys())
@@ -666,7 +872,7 @@ class Samples(eqx.Module):
             )
             raise NotImplementedError(msg)
 
-    def _phases(self, data: Any) -> np.ndarray:
+    def _phases(self, data: AbstractData) -> np.ndarray:
         """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
 
         Phase is ``((time - t_ref) / period) mod 1`` evaluated at each sample's
@@ -675,7 +881,7 @@ class Samples(eqx.Module):
         period = self.nonlinear["period"]
         t_unit = str(period.unit)
         time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = float(ustrip(t_unit, data.t_ref))
+        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
         period_val = np.asarray(ustrip(t_unit, period))
         return ((time[None, :] - t_ref) / period_val[:, None]) % 1.0
 
@@ -708,7 +914,7 @@ class Samples(eqx.Module):
             return map_sample, idx
         return map_sample
 
-    def period_unimodal(self, data: Any) -> bool:
+    def period_unimodal(self, data: AbstractData) -> bool:
         """Whether the period samples lie within a single mode.
 
         Uses the criterion ``ptp(P) < 4 * P_min**2 / (2*pi*T)``, where ``T`` is
@@ -731,7 +937,7 @@ class Samples(eqx.Module):
         return bool(np.ptp(period_val) < delta)
 
     def period_modes(
-        self, data: Any, n_clusters: int = 2
+        self, data: AbstractData, n_clusters: int = 2
     ) -> tuple[bool, Q, np.ndarray]:
         """Cluster the period samples and test each mode for unimodality.
 
@@ -777,7 +983,7 @@ class Samples(eqx.Module):
 
         return all(unimodal), Q(np.array(mode_periods), t_unit), np.array(n_per_mode)
 
-    def max_phase_gap(self, data: Any) -> np.ndarray:
+    def max_phase_gap(self, data: AbstractData) -> np.ndarray:
         """Largest gap in orbital-phase coverage, per sample.
 
         The maximum gap between consecutive observations on the (circular)
@@ -800,7 +1006,7 @@ class Samples(eqx.Module):
         wrap = 1.0 - (phases[:, -1] - phases[:, 0])
         return np.maximum(gaps.max(axis=1), wrap)
 
-    def phase_coverage(self, data: Any, n_bins: int = 10) -> np.ndarray:
+    def phase_coverage(self, data: AbstractData, n_bins: int = 10) -> np.ndarray:
         """Fraction of phase bins containing at least one observation.
 
         The ESA Gaia "phase coverage" statistic, per sample.
@@ -827,7 +1033,7 @@ class Samples(eqx.Module):
         )
         return occupied / n_bins
 
-    def periods_spanned(self, data: Any) -> np.ndarray:
+    def periods_spanned(self, data: AbstractData) -> np.ndarray:
         """Number of orbital periods spanned by the data, per sample.
 
         Parameters
@@ -846,7 +1052,7 @@ class Samples(eqx.Module):
         period_val = np.asarray(ustrip(t_unit, period))
         return float(np.ptp(time)) / period_val
 
-    def phase_coverage_per_period(self, data: Any) -> np.ndarray:
+    def phase_coverage_per_period(self, data: AbstractData) -> np.ndarray:
         """Maximum number of observations within any single period, per sample.
 
         Parameters
@@ -862,7 +1068,7 @@ class Samples(eqx.Module):
         period = self.nonlinear["period"]
         t_unit = str(period.unit)
         time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = float(ustrip(t_unit, data.t_ref))
+        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
         period_val = np.asarray(ustrip(t_unit, period))
         n_per = (time - t_ref) / period_val[:, None]  # (n_samples, n_obs)
 
@@ -875,7 +1081,7 @@ class Samples(eqx.Module):
             out[s] = max(int(base.max()), int(offset.max()))
         return out
 
-    def chi2(self, data: Any, model: Any) -> jax.Array:
+    def chi2(self, data: AbstractData, model: Any) -> jax.Array:
         r"""Per-sample goodness-of-fit :math:`\chi^2` against the data.
 
         For each posterior sample, evaluates the model prediction at the stored
@@ -898,26 +1104,12 @@ class Samples(eqx.Module):
         """
         self._require_single_component("chi2")
 
-        # Match the parameter form the model's design-matrix machinery expects
-        # (the same convention the samplers' ``log_prob`` calls use): dimensioned
-        # *base* orbital parameters stay as Quantities; dimensionless base
-        # parameters and all extension parameters (e.g. jitter) are unit-stripped.
-        base_nl_units = {
-            p.name: p.unit for p in model.parameterization.params() if not p.linear
-        }
-        nl_for_model = {
-            name: value
-            if base_nl_units.get(name, "")
-            else ustrip(str(value.unit), value)
-            for name, value in self.nonlinear.items()
-        }
-
-        # Linear parameters are unit-stripped to the model's linear-param units.
-        linear_units = model._linear_param_units(data)
-        linear_stripped = {
-            name: ustrip(linear_units.get(name, ""), value)
-            for name, value in self.linear.items()
-        }
+        nl_for_model, linear_stripped = _assemble_sample_params(
+            self,
+            model,
+            data,
+            i=None,
+        )
 
         def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
             return model.chi_squared(nl_i, lin_i, data)
@@ -925,7 +1117,7 @@ class Samples(eqx.Module):
         return jax.vmap(_one)(nl_for_model, linear_stripped)
 
     def reduced_chi2(
-        self, data: Any, model: Any, *, dof: int | None = None
+        self, data: AbstractData, model: Any, *, dof: int | None = None
     ) -> jax.Array:
         r"""Per-sample reduced :math:`\chi^2` (:math:`\chi^2 / \mathrm{dof}`).
 
@@ -1111,13 +1303,13 @@ class Samples(eqx.Module):
             )
             meta_group.attrs["n_samples"] = self.n_samples
 
-            # Store custom metadata
+            # Store custom metadata.  The Samples invariant says metadata
+            # holds only JSON-friendly scalars (Q-valued entries live in
+            # split form: ``<name>`` value + ``<name>_unit`` string), so a
+            # single branch covers everything.
             for key, value in self.metadata.items():
                 if isinstance(value, int | float | str):
                     meta_group.attrs[key] = value
-                elif hasattr(value, "value"):  # Q
-                    meta_group.attrs[f"{key}_value"] = float(value.value)
-                    meta_group.attrs[f"{key}_unit"] = str(value.unit)
 
     @classmethod
     def from_hdf5(cls, filename: str | Path) -> "Samples":
@@ -1154,7 +1346,10 @@ class Samples(eqx.Module):
                 tuple(raw_extra.split(",")) if raw_extra else ()
             )
 
-            # Load custom metadata
+            # Load custom metadata.  HDF5 attrs and the in-memory metadata
+            # dict share one convention -- bare ``<name>`` value plus
+            # ``<name>_unit`` string for Q-valued entries -- so attrs load
+            # one-for-one with no reassembly.
             metadata: dict[str, Any] = {}
             for key in meta.attrs:
                 if key in [
@@ -1164,18 +1359,7 @@ class Samples(eqx.Module):
                     "data_type",
                 ]:
                     continue
-                if key.endswith("_value"):
-                    continue
-                # A "<base>_unit" attr is half of a stored Q only when the
-                # matching "<base>_value" attr exists; otherwise it is just a
-                # plain string-valued metadata entry (e.g. "t_ref_unit").
-                if key.endswith("_unit") and f"{key[:-5]}_value" in meta.attrs:
-                    base_key = key[:-5]
-                    value = meta.attrs[f"{base_key}_value"]
-                    unit = meta.attrs[key]
-                    metadata[base_key] = Q(value, unit)
-                else:
-                    metadata[key] = meta.attrs[key]
+                metadata[key] = meta.attrs[key]
 
             nonlinear: dict[str, Q] = {}
             for key in f["nonlinear"]:

@@ -41,7 +41,7 @@ class PeriodDependentKPrior(eqx.Module):
     -----
     This class implements the ``LinearPriorCallable`` protocol and is the default
     ``linear_prior`` returned by
-    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.
+    :meth:`~harv.models.priors.HarvPrior.default_rv`.
 
     References
     ----------
@@ -51,13 +51,13 @@ class PeriodDependentKPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.samplers.custom_priors import PeriodDependentKPrior
+    >>> from harv.models.priors.custom_priors import PeriodDependentKPrior
     >>> prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
     >>> prior.sigma_K0.unit
     Unit("km / s")
 
     Used as the default ``linear_prior`` for ``rv_semiamp`` in
-    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_rv`.  Called with a
+    :meth:`~harv.models.priors.HarvPrior.default_rv`.  Called with a
     param struct to condition on nonlinear parameters:
 
     >>> qd = prior(params)  # doctest: +SKIP
@@ -122,7 +122,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     -----
     This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``semi_major_axis`` returned by
-    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have ``.period``, ``.eccentricity``, and
     ``.parallax`` fields.  ``parallax`` is available because it is classified
@@ -131,7 +131,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.samplers.custom_priors import PeriodDependentSemiMajorAxisPrior
+    >>> from harv.models.priors.custom_priors import PeriodDependentSemiMajorAxisPrior
     >>> prior = PeriodDependentSemiMajorAxisPrior(
     ...     sigma_a0=Q(5.0, "AU"), P0=Q(1.0, "yr"),
     ... )
@@ -204,7 +204,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     -----
     This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
-    :meth:`~harv.samplers.rejection_prior.RejectionPrior.default_gaia_astrometry`.
+    :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` struct must have a ``.parallax`` field (``Quantity`` with
     angular units).  ``parallax`` is available because it is classified as an
@@ -213,7 +213,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.samplers.custom_priors import ParallaxDependentProperMotionPrior
+    >>> from harv.models.priors.custom_priors import ParallaxDependentProperMotionPrior
     >>> prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
     >>> prior.sigma_v0.unit
     Unit("km / s")

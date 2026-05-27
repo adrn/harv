@@ -140,3 +140,23 @@ class GaiaAstrometryModel(AbstractComponentModel):
         )
         # Ensure plain JAX array (quax dispatch may return Quantity)
         return jnp.asarray(ustrip(AllowValue, "", X))
+
+    def predict_orbit_sky(
+        self,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+        times: Any,
+    ) -> tuple[jax.Array, jax.Array]:
+        """Predicted sky-plane orbital offsets ``(dRA, dDec)`` at *times*.
+
+        Delegates to ``self.parameterization.sky_orbit(...)``.  Returns the
+        orbital contribution only — proper motion, parallax, and zero-point are
+        *not* included.  This is what the on-sky orbit ellipse panel of
+        :func:`~harv.plot.plot_gaia_sky_orbit` plots.
+
+        The returned arrays are in the same unit as the scalar semi-major-axis
+        linear param (``"semi_major_axis"`` for
+        :class:`StandardGaiaAstrometry`, or the TI constants for
+        :class:`ThieleInnesGaiaAstrometry`).
+        """
+        return self.parameterization.sky_orbit(times, nl_values, linear_values)

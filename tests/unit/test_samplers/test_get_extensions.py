@@ -13,15 +13,16 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 from unxt import Q
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models.extensions import Jitter, MultiSurveyOffset
 from harv.models.joint import JointModel
+from harv.models.priors import HarvPrior, default_sb2_prior
 from harv.models.rv import RVModel
 from harv.samplers.base import AbstractSampler
 from harv.samplers.numpyro import NumpyroSampler
 from harv.samplers.rejection import RejectionSampler
-from harv.samplers.rejection_prior import RejectionPrior
 
 
 def _rv_data(start: float = 0.0, n: int = 6) -> RVData:
@@ -33,8 +34,8 @@ def _rv_data(start: float = 0.0, n: int = 6) -> RVData:
     )
 
 
-def _basic_prior() -> RejectionPrior:
-    return RejectionPrior.default_rv(
+def _basic_prior() -> HarvPrior:
+    return hm.StandardRV().default_prior(
         period_min=Q(2.0, "day"),
         period_max=Q(1000.0, "day"),
         sigma_K0=Q(30.0, "km/s"),
@@ -42,8 +43,8 @@ def _basic_prior() -> RejectionPrior:
     )
 
 
-def _jitter_prior() -> RejectionPrior:
-    return RejectionPrior.default_rv(
+def _jitter_prior() -> HarvPrior:
+    return hm.StandardRV().default_prior(
         period_min=Q(2.0, "day"),
         period_max=Q(1000.0, "day"),
         sigma_K0=Q(30.0, "km/s"),
@@ -92,7 +93,7 @@ class TestRejectionSamplerGetExtensions:
         _, indicator, names = source_data.indicator_data_by_type(
             RVData, reference="keck"
         )
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(40.0, "day"),
             period_max=Q(60.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
@@ -111,7 +112,7 @@ class TestRejectionSamplerGetExtensions:
         primary_ext = Jitter(param_unit="km/s")
         secondary_ext = Jitter(param_unit="km/s")
 
-        prior = RejectionPrior.default_sb2(
+        prior = default_sb2_prior(
             period_min=Q(2.0, "day"),
             period_max=Q(1000.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

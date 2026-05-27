@@ -93,7 +93,7 @@ class TestRVModelMarginalized:
             "phase_peri": 0.0,
             "arg_peri": Q(1.0, "rad"),
         }
-        ll = model.log_prob(nl, data, linear_prior=_rv_prior())
+        ll = model.log_prob(nl, data, linear_priors=_rv_prior())
         assert jnp.isfinite(ll)
 
     def test_marginalized_jit(self):
@@ -108,7 +108,7 @@ class TestRVModelMarginalized:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl, data, linear_prior=_rv_prior())
+            return model.log_prob(nl, data, linear_priors=_rv_prior())
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -128,7 +128,7 @@ class TestRVModelSampleConditional:
         }
         key = jax.random.key(42)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_prior=_rv_prior()
+            nl, key, data, linear_priors=_rv_prior()
         )
         assert "rv_semiamp" in samples
         assert "v_sys" in samples
@@ -144,7 +144,7 @@ class TestRVModelSampleConditional:
         }
         key = jax.random.key(0)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_prior=_rv_prior()
+            nl, key, data, linear_priors=_rv_prior()
         )
         assert jnp.isfinite(samples["rv_semiamp"])
         assert jnp.isfinite(samples["v_sys"])
@@ -166,7 +166,7 @@ class TestRVModelSampleConditional:
             rv_err=Q(jnp.ones(n_obs) * 0.01, "km/s"),  # very tight errors
         )
         # Tight prior on v_sys centred on the true value; wide prior on K
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": dist.Normal(0.0, 0.01),  # near-zero K
             "v_sys": dist.Normal(v_sys_true, 10.0),  # non-zero mean
         }
@@ -183,7 +183,7 @@ class TestRVModelSampleConditional:
         )
         samples = jax.vmap(
             lambda k: model.sample_conditional_linear(
-                nl, k, data, linear_prior=linear_prior
+                nl, k, data, linear_priors=linear_priors
             )
         )(keys)
         mean_v_sys = jnp.mean(samples["v_sys"])

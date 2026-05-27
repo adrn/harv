@@ -185,6 +185,15 @@ class TestCampbellFromThieleInnes:
             (0.0, 0.0, 1.0, 1.0),  # face-on, aligned
             (1.2, 2.3, 0.3, 5.0),
             (3.1, 0.7, 0.9, 0.5),
+            # Retrograde orbits (cos_i < 0). Astrometric fits can converge to
+            # either prograde or retrograde solutions; the conversion must
+            # preserve the sign so the resulting Campbell elements round-trip
+            # back to the same TI constants. Without this, a fitted TI with
+            # cos_i < 0 maps to a Campbell orbit that traces a *different*
+            # sky-projected ellipse (180° flip).
+            (1.2, 2.3, -0.3, 5.0),
+            (0.5, 1.0, -0.6, 3.0),
+            (3.1, 0.7, -0.9, 0.5),
         ],
     )
     def test_round_trip(

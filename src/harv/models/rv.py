@@ -12,12 +12,15 @@ from typing import Any, final
 
 import jax
 import quaxed.numpy as jnp
+from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
+from harv.custom_types import BatchQTime, ScalarQTime
 from harv.data import RVData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 
 # Type alias for any RV parameterization
@@ -90,3 +93,43 @@ class RVModel(AbstractComponentModel):
         # Ensure the design matrix is a plain JAX array (rv_shape may return
         # dimensionless Quantity via quax dispatch)
         return jnp.asarray(ustrip(AllowValue, "", X))
+
+    def predict_at_times(
+        self,
+        times: BatchQTime,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+        *,
+        t_ref: ScalarQTime,
+        obs_unit: str = "km/s",
+    ) -> jax.Array:
+        """Predicted RV at arbitrary *times*, no observed-data object required.
+
+        Internally constructs an :class:`~harv.data.RVData` shim at ``times``
+        with dummy ``rv`` / ``rv_err`` (zeros / ones) and delegates to
+        :meth:`predict`.  The dummy obs are never read by the prediction path
+        (``_full_design_matrix`` only consumes ``data.time`` and ``data.t_ref``;
+        extensions read at most those fields too).  The returned array is in
+        the same units the model's linear parameters are expressed in.
+
+        Raises ``TypeError`` if any :class:`MultiSurveyOffset` is in
+        ``self.extensions`` — its ``indicator_matrix`` is fixed to the original
+        data's row count and cannot apply on an arbitrary time grid.  Callers
+        building a smooth-curve overlay should filter it out before calling.
+        """
+        for ext in self.extensions:
+            if isinstance(ext, MultiSurveyOffset):
+                msg = (
+                    "predict_at_times cannot evaluate a MultiSurveyOffset on an "
+                    "arbitrary time grid (its indicator_matrix is data-row-bound). "
+                    "Filter it out of model.extensions before calling."
+                )
+                raise TypeError(msg)
+        n = times.shape[0]
+        dummy = RVData(
+            time=times,
+            rv=Q(jnp.zeros(n), obs_unit),
+            rv_err=Q(jnp.ones(n), obs_unit),
+            t_ref=t_ref,
+        )
+        return self.predict(nl_values, linear_values, dummy)

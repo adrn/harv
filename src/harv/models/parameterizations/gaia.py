@@ -11,12 +11,36 @@ from typing import TYPE_CHECKING, Any, final
 
 import equinox as eqx
 import jax
+import numpyro.distributions as dist
 import quaxed.numpy as jnp
-from unxt.quantity import ustrip
+from unxt import Q
+from unxt.quantity import AllowValue, ustrip
 
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.custom_types import (
+    ScalarQAngle,
+    ScalarQLength,
+    ScalarQSpeed,
+    ScalarQTime,
+)
+from harv.distributions import QuantityDistribution
+from harv.kepler.orbits import (
+    mean_anomaly,
+    thiele_innes_ABFG,
+    true_anomaly_from_mean,
+)
+from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.priors import HarvPrior
+from harv.models.priors.helpers import (
+    _apply_overrides,
+    _make_parallax_prior,
+    _make_period_prior,
+    _make_pm_prior,
+    _make_pos_prior,
+    _make_semi_major_axis_prior,
+    kipping_2013_ecc_prior,
+)
 
 if TYPE_CHECKING:
     from harv.data.datasets import GaiaAstrometryData
@@ -147,6 +171,112 @@ class StandardGaiaAstrometry(AbstractParameterization):
             axis=-1,
         )
 
+    def sky_orbit(
+        self,
+        times: Any,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+    ) -> tuple[jax.Array, jax.Array]:
+        """Sky-plane orbital offsets ``(dRA, dDec)`` from the photocentre orbit.
+
+        Computes ``(dRA, dDec) = a_0 * (B*X + G*Y, A*X + F*Y)`` using the same
+        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_ABFG`,
+        :func:`~harv.kepler.orbits.mean_anomaly`,
+        :func:`~harv.kepler.orbits.true_anomaly_from_mean`) that the design
+        matrix uses.  Returns bare JAX arrays in the same unit as the scalar
+        ``linear_values["semi_major_axis"]`` (unit-agnostic by construction).
+        """
+        period = nl_values["period"]
+        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
+        arg_peri = ustrip("rad", nl_values["arg_peri"])
+        lon_asc_node = ustrip("rad", nl_values["lon_asc_node"])
+        cos_i = ustrip(AllowValue, "", nl_values["cos_i"])
+        a0 = linear_values["semi_major_axis"]
+
+        t_peri = phase_peri * period
+        dt = times - t_peri
+        M = mean_anomaly(dt, period)
+        sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
+        sin_f = ustrip(AllowValue, "", sin_f_q)
+        cos_f = ustrip(AllowValue, "", cos_f_q)
+
+        A, B, F, G = thiele_innes_ABFG(
+            jnp.cos(arg_peri),
+            jnp.sin(arg_peri),
+            jnp.cos(lon_asc_node),
+            jnp.sin(lon_asc_node),
+            cos_i,
+        )
+        r_over_a = (1 - eccentricity**2) / (1 + eccentricity * cos_f)
+        X = r_over_a * cos_f
+        Y = r_over_a * sin_f
+        dra = (B * X + G * Y) * a0
+        ddec = (A * X + F * Y) * a0
+        return jnp.asarray(dra), jnp.asarray(ddec)
+
+    def default_prior(
+        self,
+        *,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_a0: ScalarQLength | None = None,
+        sigma_parallax: ScalarQAngle | None = None,
+        sigma_pos: ScalarQAngle | None = None,
+        sigma_vtan: ScalarQSpeed | None = None,
+        P0: ScalarQTime = Q(1.0, "yr"),
+        **kwargs: PriorDist | LinearPriorDist,
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+
+        Same defaults as :meth:`harv.samplers.HarvPrior.default_gaia_astrometry`
+        (and ``default_gaia_astrometry`` is a thin wrapper around this method).
+        """
+        nonlinear: dict[str, PriorDist] = {
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
+            "eccentricity": kipping_2013_ecc_prior,
+            "phase_peri": dist.Uniform(0.0, 1.0),
+            "cos_i": dist.Uniform(-1.0, 1.0),
+            "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
+            "lon_asc_node": QuantityDistribution(
+                dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
+            ),
+        }
+        linear_priors: dict[str, LinearPriorDist] = {
+            "ra0": _make_pos_prior(
+                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
+            ),
+            "dec0": _make_pos_prior(
+                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
+            ),
+            "pmra": _make_pm_prior(
+                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+            ),
+            "pmdec": _make_pm_prior(
+                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+            ),
+            "parallax": _make_parallax_prior(
+                parallax=kwargs.pop("parallax", None),
+                sigma_parallax=sigma_parallax,
+            ),
+            "semi_major_axis": _make_semi_major_axis_prior(
+                semi_major_axis=kwargs.pop("semi_major_axis", None),
+                sigma_a0=sigma_a0,
+                P0=P0,
+            ),
+        }
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
+        return HarvPrior(
+            nonlinear_priors=nonlinear,
+            linear_priors=linear_priors,
+            extension_priors=extension_priors,
+        )
+
 
 @final
 class ThieleInnesGaiaAstrometry(AbstractParameterization):
@@ -171,21 +301,26 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     - Linear: ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``,
       ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G`` (9 params)
 
-    By default a Jacobian correction is applied: a flat prior on the Thiele-Innes
-    constants is not the same as a flat prior on the physical Campbell elements
-    :math:`(a_0, \omega, \Omega, \cos i)`.  The zeroth-order correction (evaluated at
-    the conditional-mean TI constants) multiplies the marginal likelihood by :math:`(a_0
-    + \delta_a)^{-m}(\sin^2 i + \delta_{s})^{-1}`, where :math:`m = 3` (uniform prior in
-    :math:`a_0`) or :math:`m = 4` (log-uniform), and :math:`\delta_a`, :math:`\delta_s`
-    are numerical floors that prevent singularities near face-on orbits or zero
+    A flat prior on the Thiele-Innes constants is not the same as a flat prior on
+    the physical Campbell elements :math:`(a_0, \omega, \Omega, \cos i)`, so a
+    Jacobian correction is needed to recover the correct posterior. The
+    zeroth-order correction (evaluated at the conditional-mean TI constants)
+    multiplies the marginal likelihood by :math:`(a_0 + \delta_a)^{-m}(\sin^2 i +
+    \delta_{s})^{-1}`, where :math:`m = 3` (uniform prior in :math:`a_0`) or
+    :math:`m = 4` (log-uniform), and :math:`\delta_a`, :math:`\delta_s` are
+    numerical floors that prevent singularities near face-on orbits or zero
     semi-major axis.
 
-    The correction can be disabled with ``apply_jacobian_correction=False``, which
-    makes :meth:`linear_log_prior_correction` return ``None`` -- appropriate when the
-    priors are genuinely intended to be flat in the Thiele-Innes constants.
-
-    The recommended way to construct this class is via :meth:`from_data`,
-    which sets ``a_floor = med(sigma_AL) / sqrt(N)`` automatically.
+    **The default is ``apply_jacobian_correction=False``** because the floors
+    require sensible data-driven values that the bare constructor cannot infer.
+    The recommended way to construct this class with the correction enabled is via
+    :meth:`from_data`, which sets ``a_floor = med(sigma_AL) / sqrt(N)``
+    automatically. Without the correction, the marginal likelihood can be
+    dominated by spurious long-period configurations where the orbital signal is
+    absorbed into proper motion -- this is especially severe when the data
+    baseline is shorter than the orbital period. **For sub-orbit data baselines,
+    prefer ``ThieleInnesGaiaAstrometry.from_data(data)`` (or the Standard
+    parameterization).**
 
     Parameters
     ----------
@@ -204,7 +339,8 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         :math:`m = 3`) when ``None``.  Must be ``None`` when
         ``apply_jacobian_correction=False``.
     apply_jacobian_correction : bool, optional
-        Whether to apply the Jacobian correction.  Default ``True``.
+        Whether to apply the Jacobian correction.  Default ``False``. To enable
+        with sensible floors, use :meth:`from_data`.
 
     Raises
     ------
@@ -232,7 +368,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     a_floor: float | None = None
     sin2i_floor: float | None = None
     log_uniform_in_a: bool | None = eqx.field(static=True, default=None)
-    apply_jacobian_correction: bool = eqx.field(static=True, default=True)
+    apply_jacobian_correction: bool = eqx.field(static=True, default=False)
 
     def __check_init__(self) -> None:
         """Validate that floor parameters match ``apply_jacobian_correction``."""
@@ -394,6 +530,120 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 Y * sin_psi,  # ti_G  (coefficient of G in dra projection)
             ],
             axis=-1,
+        )
+
+    def sky_orbit(
+        self,
+        times: Any,
+        nl_values: dict[str, Any],
+        linear_values: dict[str, jax.Array],
+    ) -> tuple[jax.Array, jax.Array]:
+        r"""Sky-plane orbital offsets ``(dRA, dDec)`` from the TI constants.
+
+        Mirrors the design-matrix construction
+        (``dRA = ti_B * X + ti_G * Y``, ``dDec = ti_A * X + ti_F * Y``) at
+        arbitrary times.  Returns bare JAX arrays in the same unit as the
+        scalar TI constants in ``linear_values``.
+        """
+        period = nl_values["period"]
+        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
+
+        t_peri = phase_peri * period
+        dt = times - t_peri
+        M = mean_anomaly(dt, period)
+        sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
+        sin_f = ustrip(AllowValue, "", sin_f_q)
+        cos_f = ustrip(AllowValue, "", cos_f_q)
+
+        r_over_a = (1 - eccentricity**2) / (1 + eccentricity * cos_f)
+        X = r_over_a * cos_f
+        Y = r_over_a * sin_f
+
+        ti_A = linear_values["ti_A"]
+        ti_B = linear_values["ti_B"]
+        ti_F = linear_values["ti_F"]
+        ti_G = linear_values["ti_G"]
+        dra = ti_B * X + ti_G * Y
+        ddec = ti_A * X + ti_F * Y
+        return jnp.asarray(dra), jnp.asarray(ddec)
+
+    def default_prior(
+        self,
+        *,
+        period_min: ScalarQTime | None = None,
+        period_max: ScalarQTime | None = None,
+        sigma_a0: ScalarQLength | None = None,
+        sigma_parallax: ScalarQAngle | None = None,
+        sigma_pos: ScalarQAngle | None = None,
+        sigma_vtan: ScalarQSpeed | None = None,
+        P0: ScalarQTime = Q(1.0, "yr"),
+        **kwargs: PriorDist | LinearPriorDist,
+    ) -> "HarvPrior":
+        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+
+        Nonlinear priors:
+
+        - ``period``: log-uniform on ``[period_min, period_max]``.
+        - ``eccentricity``: Kipping (2013) Beta prior.
+        - ``phase_peri``: ``Uniform(0, 1)``.
+
+        Linear priors:
+
+        - ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``: same defaults as
+          :meth:`StandardGaiaAstrometry.default_prior`.
+        - ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G``: each uses
+          :class:`~harv.models.priors.custom_priors.PeriodDependentSemiMajorAxisPrior`,
+          the same scaling as ``semi_major_axis`` in
+          :class:`StandardGaiaAstrometry`.
+
+        The Jacobian correction
+        (:meth:`linear_log_prior_correction`, active when
+        ``apply_jacobian_correction=True``) restores the correct posterior
+        under a flat-Campbell-elements prior.
+        """
+        nonlinear: dict[str, PriorDist] = {
+            "period": _make_period_prior(
+                period_min=period_min,
+                period_max=period_max,
+                period=kwargs.pop("period", None),
+            ),
+            "eccentricity": kipping_2013_ecc_prior,
+            "phase_peri": dist.Uniform(0.0, 1.0),
+        }
+        linear_priors: dict[str, LinearPriorDist] = {
+            "ra0": _make_pos_prior(
+                pos=kwargs.pop("ra0", None), sigma_pos=sigma_pos, name="ra0"
+            ),
+            "dec0": _make_pos_prior(
+                pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
+            ),
+            "pmra": _make_pm_prior(
+                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+            ),
+            "pmdec": _make_pm_prior(
+                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+            ),
+            "parallax": _make_parallax_prior(
+                parallax=kwargs.pop("parallax", None),
+                sigma_parallax=sigma_parallax,
+            ),
+        }
+        # All four TI constants share the same period/parallax-dependent scale.
+        # Per-constant overrides flow through kwargs ("ti_A", ...).
+        for name in ("ti_A", "ti_B", "ti_F", "ti_G"):
+            override = kwargs.pop(name, None)
+            linear_priors[name] = _make_semi_major_axis_prior(
+                semi_major_axis=override,
+                sigma_a0=None if override is not None else sigma_a0,
+                P0=P0,
+            )
+        extension_priors: dict[str, PriorDist] = {}
+        _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
+        return HarvPrior(
+            nonlinear_priors=nonlinear,
+            linear_priors=linear_priors,
+            extension_priors=extension_priors,
         )
 
     def linear_log_prior_correction(

@@ -39,7 +39,7 @@ def _evaluate_nonlinear_log_prior(
     """Sum nonlinear-prior log-densities over all sampled parameters.
 
     ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
-    space the prior distributions sample in (see ``RejectionPrior``). Used by
+    space the prior distributions sample in (see ``HarvPrior``). Used by
     the samplers' ``return_logprobs`` path to record per-sample ``ln_prior``.
     """
     total: jax.Array | None = None

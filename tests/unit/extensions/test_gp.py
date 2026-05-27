@@ -8,6 +8,7 @@ import numpyro.distributions as dist
 import pytest
 from unxt import Q
 
+import harv.models as hm
 from harv.data import RVData
 from harv.distributions import QD
 from harv.models.extensions.base import AbstractExtension, ParamInfo
@@ -15,7 +16,6 @@ from harv.models.extensions.gp import GP
 from harv.models.extensions.jitter import Jitter
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler, _prepare_sampler_model
-from harv.samplers.rejection_prior import RejectionPrior
 
 # ---------------------------------------------------------------------------
 # Mock kernel (avoids tinygp dependency in tests)
@@ -181,7 +181,7 @@ class TestGPWithRVModel:
     def test_rv_model_log_prob_is_finite(self):
         data = _make_rv_data()
         gp = _make_gp()
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": dist.Normal(0.0, 100.0),
             "v_sys": dist.Normal(0.0, 100.0),
         }
@@ -193,13 +193,13 @@ class TestGPWithRVModel:
             "arg_peri": Q(1.0, "rad"),
             "gp_amp": 1.0,
         }
-        ll = model.log_prob(nl, data, linear_prior=linear_prior)
+        ll = model.log_prob(nl, data, linear_priors=linear_priors)
         assert jnp.isfinite(ll)
 
     def test_rv_model_with_gp_jit(self):
         data = _make_rv_data()
         gp = _make_gp()
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": dist.Normal(0.0, 100.0),
             "v_sys": dist.Normal(0.0, 100.0),
         }
@@ -214,7 +214,7 @@ class TestGPWithRVModel:
 
         @jax.jit
         def fn():
-            return model.log_prob(nl, data, linear_prior=linear_prior)
+            return model.log_prob(nl, data, linear_priors=linear_priors)
 
         ll = fn()
         assert jnp.isfinite(ll)
@@ -238,8 +238,8 @@ class TestGPWithRVModel:
         }
         nl_gp = {**nl_base, "gp_amp": 2.0}
 
-        ll_no_gp = model_no_gp.log_prob(nl_base, data, linear_prior=prior)
-        ll_gp = model_gp.log_prob(nl_gp, data, linear_prior=prior)
+        ll_no_gp = model_no_gp.log_prob(nl_base, data, linear_priors=prior)
+        ll_gp = model_gp.log_prob(nl_gp, data, linear_priors=prior)
 
         assert not jnp.allclose(ll_no_gp, ll_gp)
         assert jnp.isfinite(ll_gp)
@@ -249,7 +249,7 @@ class TestGPWithRVModel:
         data = _make_rv_data()
         gp = _make_gp()
         jitter = Jitter("km/s")
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": dist.Normal(0.0, 100.0),
             "v_sys": dist.Normal(0.0, 100.0),
         }
@@ -267,14 +267,14 @@ class TestGPWithRVModel:
             "jitter": 0.5,
             "gp_amp": 1.0,
         }
-        ll = model.log_prob(nl, data, linear_prior=linear_prior)
+        ll = model.log_prob(nl, data, linear_priors=linear_priors)
         assert jnp.isfinite(ll)
 
     def test_tinygp_sho_log_prob_is_finite(self):
         """Real tinygp SHO kernels should give a finite marginalized log-prob."""
         data = _make_rv_data(n_obs=8)
         gp = _make_tinygp_sho()
-        linear_prior = {
+        linear_priors = {
             "rv_semiamp": dist.Normal(0.0, 100.0),
             "v_sys": dist.Normal(0.0, 100.0),
         }
@@ -289,14 +289,14 @@ class TestGPWithRVModel:
             "gp_sigma": 1.0,
         }
 
-        ll = model.log_prob(nl, data, linear_prior=linear_prior)
+        ll = model.log_prob(nl, data, linear_priors=linear_priors)
         assert jnp.isfinite(ll)
 
     def test_tinygp_sho_sampler_produces_finite_log_likelihoods(self):
         """The sampler GP path should produce at least some finite log-likelihoods."""
         data = _make_rv_data(n_obs=8)
         model = RVModel(extensions=(_make_tinygp_sho(),))
-        prior = RejectionPrior.default_rv(
+        prior = hm.StandardRV().default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(300.0, "day"),
             sigma_K0=Q(30.0, "km/s"),

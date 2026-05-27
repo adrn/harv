@@ -10,7 +10,7 @@ from harv.kepler.orbits import (
     rv_at_times,
     thiele_innes_ABFG,
 )
-from harv.samplers.samples import Samples
+from harv.samplers.samples import Samples, _MetadataView
 
 
 def _make_astro_samples() -> Samples:
@@ -109,6 +109,44 @@ class TestSamplesAccess:
         with pytest.raises(KeyError, match="not found"):
             _ = astrometry_samples["invalid_param"]
 
+    def test_getitem_int_positive(self, astrometry_samples):
+        """Positive integer index returns a length-1 Samples for that row."""
+        s = astrometry_samples[0]
+        assert s.n_samples == 1
+        assert jnp.allclose(s["eccentricity"].value, jnp.array([0.1]))
+
+    def test_getitem_int_negative(self, astrometry_samples):
+        """Negative integer index returns the row counted from the end."""
+        s_last = astrometry_samples[-1]
+        assert s_last.n_samples == 1
+        assert jnp.allclose(s_last["eccentricity"].value, jnp.array([0.3]))
+
+        s_second_to_last = astrometry_samples[-2]
+        assert s_second_to_last.n_samples == 1
+        assert jnp.allclose(s_second_to_last["eccentricity"].value, jnp.array([0.2]))
+
+    def test_getitem_int_first_negative(self, astrometry_samples):
+        """``samples[-n_samples]`` is equivalent to ``samples[0]``."""
+        n = astrometry_samples.n_samples
+        assert jnp.allclose(
+            astrometry_samples[-n]["eccentricity"].value,
+            astrometry_samples[0]["eccentricity"].value,
+        )
+
+    def test_getitem_int_out_of_range_raises(self, astrometry_samples):
+        """Out-of-range int (positive or negative) raises IndexError."""
+        n = astrometry_samples.n_samples
+        with pytest.raises(IndexError, match="out of range"):
+            _ = astrometry_samples[n]
+        with pytest.raises(IndexError, match="out of range"):
+            _ = astrometry_samples[-(n + 1)]
+
+    def test_getitem_slice(self, astrometry_samples):
+        """Slice indexing returns a Samples with the sliced rows."""
+        s = astrometry_samples[:2]
+        assert s.n_samples == 2
+        assert jnp.allclose(s["eccentricity"].value, jnp.array([0.1, 0.2]))
+
     def test_keys_method(self, astrometry_samples):
         """Test keys() returns all parameter names."""
         keys = astrometry_samples.keys()
@@ -146,6 +184,78 @@ class TestSamplesAccess:
         arg_peri = samples["arg_peri"]
         assert isinstance(arg_peri, Q)
         assert str(arg_peri.unit) == "rad"
+
+
+class TestMetadataView:
+    """Tests for the Q-aware ``samples.meta`` read view."""
+
+    def test_q_reassembly(self):
+        view = _MetadataView({"t_ref": 100.0, "t_ref_unit": "day"})
+        v = view["t_ref"]
+        assert isinstance(v, Q)
+        assert float(ustrip("day", v)) == 100.0
+        assert str(v.unit) == "d"
+
+    def test_plain_scalar_passthrough(self):
+        view = _MetadataView({"num_chains": 4, "name": "rv_run"})
+        assert view["num_chains"] == 4
+        assert view["name"] == "rv_run"
+
+    def test_missing_key_raises(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        with pytest.raises(KeyError):
+            _ = view["missing"]
+
+    def test_get_default(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        assert view.get("missing", 7) == 7
+        # ``get`` should still reassemble the Q for present keys.
+        assert isinstance(view.get("t_ref"), Q)
+
+    def test_iter_hides_unit_companions(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+        assert sorted(view) == ["num_chains", "t_ref"]
+        assert list(view.keys()) == ["t_ref", "num_chains"]
+        assert len(view) == 2
+
+    def test_contains_hides_unit_companions(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        assert "t_ref" in view
+        assert "t_ref_unit" not in view  # companion is hidden
+        assert "missing" not in view
+
+    def test_unit_without_base_is_visible(self):
+        # A "_unit"-suffixed key with no matching base is a normal entry.
+        view = _MetadataView({"orphan_unit": "day"})
+        assert "orphan_unit" in view
+        assert view["orphan_unit"] == "day"
+        assert list(view) == ["orphan_unit"]
+
+    def test_items_reassembles(self):
+        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+        items = dict(view.items())
+        assert isinstance(items["t_ref"], Q)
+        assert items["num_chains"] == 2
+
+    def test_samples_meta_property(self):
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0]), "day"),
+                "eccentricity": Q(jnp.array([0.1]), ""),
+                "phase_peri": Q(jnp.array([0.0]), ""),
+                "arg_peri": Q(jnp.array([1.0]), "rad"),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([1.0]), "km/s"),
+                "v_sys": Q(jnp.array([2.0]), "km/s"),
+            },
+            data_type="rv",
+            metadata={"t_ref": 50.0, "t_ref_unit": "day", "num_chains": 1},
+        )
+        t_ref = samples.meta["t_ref"]
+        assert isinstance(t_ref, Q)
+        assert float(ustrip("day", t_ref)) == 50.0
+        assert samples.meta["num_chains"] == 1
 
 
 class TestSamplesRepr:
@@ -275,7 +385,7 @@ def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
             "v_sys": Q(jnp.full(n, 5.0), "km/s"),
         },
         data_type="rv",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
@@ -300,7 +410,7 @@ def _make_astro_samples_with_signs(a_values: list[float]) -> Samples:
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="gaia_astro",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
@@ -330,7 +440,7 @@ def _make_joint_samples_with_signs(
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="joint",
-        metadata={"t_ref": Q(0.0, "day")},
+        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
     )
 
 
@@ -535,7 +645,7 @@ class TestSamplesWrapAngles:
         assert jnp.allclose(wrapped["v_sys"].value, jnp.zeros(4))
 
     def test_joint_sb2_with_semi_major_axis(self):
-        """Hypothetical SB2 + astrometry: K's and a all flip together."""
+        """SB2 + astrometry: arg_peri shift then lon_asc_node shift."""
         samples = Samples(
             nonlinear={
                 "period": Q(jnp.full(3, 300.0), "day"),
@@ -556,19 +666,86 @@ class TestSamplesWrapAngles:
         )
         wrapped = samples.wrap_angles()
 
-        # Trigger is primary.rv_semiamp -> negative at indices 0 and 2.
-        # Both K's AND semi_major_axis flip on those indices regardless of
-        # whether semi_major_axis was already positive (it shares the same
-        # arg_peri as the K's).
+        # Step 1 (arg_peri shift) is triggered by primary.rv_semiamp, negative
+        # at indices 0 and 2; it flips both rv_semiamp keys and semi_major_axis
+        # on those samples.
         assert jnp.allclose(
             wrapped["primary.rv_semiamp"].value, jnp.array([10.0, 8.0, 6.0])
         )
         assert jnp.allclose(
             wrapped["secondary.rv_semiamp"].value, jnp.array([-4.0, -3.0, -2.0])
         )
+        # Step 2 (lon_asc_node shift) then flips every still-negative
+        # semi_major_axis, so a >= 0 holds on all samples.
         assert jnp.allclose(
-            wrapped["semi_major_axis"].value, jnp.array([-1.5, -2.0, -0.5])
+            wrapped["semi_major_axis"].value, jnp.array([1.5, 2.0, 0.5])
         )
+        assert bool((wrapped["semi_major_axis"].value >= 0).all())
+
+    def test_joint_mixed_signs_makes_K_and_a_positive(self):
+        """All four (K, a) sign combinations wrap to K >= 0 and a >= 0."""
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        wrapped = samples.wrap_angles()
+        assert bool((wrapped["rv_semiamp"].value >= 0).all())
+        assert bool((wrapped["semi_major_axis"].value >= 0).all())
+
+    def test_joint_mixed_signs_orbit_invariance(self):
+        """Joint wrap with mixed K/a signs leaves RV and astrometric orbits intact."""
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        wrapped = samples.wrap_angles()
+        rv_times = Q(jnp.linspace(0.0, 300.0, 25), "day")
+        astro_times = Q(jnp.linspace(0.0, 600.0, 25), "day")
+        # atol is loose enough to absorb float32 roundoff from the angle
+        # arithmetic; a genuine sign error would be an O(1) discrepancy.
+        for i in range(samples.n_samples):
+            rv_orig = rv_at_times(
+                rv_times,
+                samples["period"][i],
+                samples["eccentricity"][i],
+                samples["t_peri"][i],
+                samples["arg_peri"][i],
+                samples["rv_semiamp"][i],
+                samples["v_sys"][i],
+            )
+            rv_wrap = rv_at_times(
+                rv_times,
+                wrapped["period"][i],
+                wrapped["eccentricity"][i],
+                wrapped["t_peri"][i],
+                wrapped["arg_peri"][i],
+                wrapped["rv_semiamp"][i],
+                wrapped["v_sys"][i],
+            )
+            assert jnp.allclose(rv_orig.value, rv_wrap.value, atol=1e-4)
+
+            dra_orig, ddec_orig = astrometric_orbit_at_times(
+                astro_times,
+                samples["period"][i],
+                samples["eccentricity"][i],
+                samples["t_peri"][i],
+                samples["arg_peri"][i],
+                samples["cos_i"][i],
+                samples["lon_asc_node"][i],
+                samples["semi_major_axis"][i],
+            )
+            dra_wrap, ddec_wrap = astrometric_orbit_at_times(
+                astro_times,
+                wrapped["period"][i],
+                wrapped["eccentricity"][i],
+                wrapped["t_peri"][i],
+                wrapped["arg_peri"][i],
+                wrapped["cos_i"][i],
+                wrapped["lon_asc_node"][i],
+                wrapped["semi_major_axis"][i],
+            )
+            assert jnp.allclose(dra_orig.value, dra_wrap.value, atol=1e-4)
+            assert jnp.allclose(ddec_orig.value, ddec_wrap.value, atol=1e-4)
 
     def test_per_component_arg_peri_raises(self):
         """Multiple per-component arg_peri keys aren't supported (yet)."""
