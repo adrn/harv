@@ -932,10 +932,10 @@ def plot_gaia_sky_orbit(  # noqa: C901 -- plotting code is inherently complex
 ) -> Any:
     """Plot a single astrometric orbit ellipse on the sky.
 
-    Draws the photocentre orbit projected onto the sky-plane (``ΔRA`` vs ``ΔDec``)
+    Draws the photocenter orbit projected onto the sky-plane (``ΔRA`` vs ``ΔDec``)
     for one posterior sample.  When *data* is provided, each Gaia epoch is
     rendered as a short line segment in the scan direction at the model-
-    predicted photocentre offset, with half-length equal to the along-scan
+    predicted photocenter offset, with half-length equal to the along-scan
     measurement uncertainty (scaled by *errorbar_scale*).
 
     The orbit-only sky path (no PM, no parallax) is constructed by delegating
