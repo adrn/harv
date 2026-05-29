@@ -1364,8 +1364,15 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 1. **Rejection.** Normalize weights to `max` and accept samples where
    `Uniform() < weight`.
 
-1. **Linear parameter sampling.** For each accepted nonlinear sample, call
-   `model.sample_conditional_linear(values, key)` to draw the marginalized
+1. **Cap.** If `max_posterior_samples` is set and more than that many samples
+   were accepted, randomly subsample to `max_posterior_samples` via
+   `jax.random.choice(..., replace=False)`. This happens *before* linear-
+   parameter sampling so the `jax.vmap` shape in step 5 is stable across
+   calls — important for population-scale loops where the same sampler is
+   reused over many datasets.
+
+1. **Linear parameter sampling.** For each (kept) accepted nonlinear sample,
+   call `model.sample_conditional_linear(values, key)` to draw the marginalized
    linear parameters from their conditional posterior, honoring the sampler's
    `marginalized_names` override when present.
 

@@ -261,17 +261,12 @@ class RejectionSampler(AbstractSampler):
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
         accepted_log_likelihood = log_likelihoods[accepted_mask]
 
-        linear_key = jr.fold_in(key, 2)
-        # TODO: support oversampling of linear parameters?
-        linear_samples = self._sample_linear_parameters(
-            model,
-            linear_key,
-            accepted_nonlinear,
-            effective_marginalized_names,
-            data,
-            effective_linear_prior,
-        )
-
+        # Trim to ``max_posterior_samples`` *before* the linear-parameter
+        # sampling step so the ``jax.vmap`` inside ``_sample_linear_parameters``
+        # sees a stable leading-axis shape across calls.  Without this, every
+        # distinct ``accepted_mask.sum()`` value triggers a fresh trace+compile
+        # in the per-sample conditional Gaussian solve, which becomes the
+        # bottleneck for population-scale loops (one ``run`` per star).
         if max_posterior_samples is not None:
             n_accepted = len(next(iter(accepted_nonlinear.values())))
             if n_accepted > max_posterior_samples:
@@ -283,8 +278,18 @@ class RejectionSampler(AbstractSampler):
                     replace=False,
                 )
                 accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
-                linear_samples = {k: v[idx] for k, v in linear_samples.items()}
                 accepted_log_likelihood = accepted_log_likelihood[idx]
+
+        linear_key = jr.fold_in(key, 2)
+        # TODO: support oversampling of linear parameters?
+        linear_samples = self._sample_linear_parameters(
+            model,
+            linear_key,
+            accepted_nonlinear,
+            effective_marginalized_names,
+            data,
+            effective_linear_prior,
+        )
 
         # Build nonlinear dict as Quantities with units from the prior.
         # Base orbital params come from prior.nonlinear_priors.
