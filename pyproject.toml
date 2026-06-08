@@ -35,7 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 extra = [
-    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
+    "gaiaunlimited>=0.3.2",
     "setuptools",  # needed for gaiaunlimited for pkg_resources...
     "arviz>=1.0.0",
     "matplotlib>=3.10.7",
@@ -50,7 +50,8 @@ override-dependencies = [
     # "unxt @ file:///Users/aprice-whelan/projects/unxt",
     # "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
     "unxt @ git+https://github.com/adrn/unxt.git@a78e1965f5033c31e8ab519848b3ff0a01e9e9ab",
-    "numpyro-ext @ git+https://github.com/adrn/numpyro-ext.git"
+    "numpyro-ext @ git+https://github.com/adrn/numpyro-ext.git",
+    "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git"
 ]
 
 [dependency-groups]

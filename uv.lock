@@ -15,6 +15,7 @@ resolution-markers = [
 
 [manifest]
 overrides = [
+    { name = "gaiaunlimited", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
     { name = "numpyro-ext", git = "https://github.com/adrn/numpyro-ext.git" },
     { name = "unxt", git = "https://github.com/adrn/unxt.git?rev=a78e1965f5033c31e8ab519848b3ff0a01e9e9ab" },
 ]
@@ -1190,7 +1191,7 @@ test = [
 requires-dist = [
     { name = "arviz", marker = "extra == 'extra'", specifier = ">=1.0.0" },
     { name = "equinox", specifier = ">=0.13.2" },
-    { name = "gaiaunlimited", marker = "extra == 'extra'", git = "https://github.com/gaia-unlimited/gaiaunlimited.git" },
+    { name = "gaiaunlimited", marker = "extra == 'extra'", specifier = ">=0.3.2" },
     { name = "h5py", specifier = ">=3.15.1" },
     { name = "healpy", marker = "extra == 'extra'", specifier = ">=1.18.1" },
     { name = "jax", specifier = "==0.8.1" },
