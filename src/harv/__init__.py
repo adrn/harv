@@ -62,3 +62,4 @@ from harv.samplers import (
 )
 from harv import data
 from harv import plot
+from harv._version import __version__
