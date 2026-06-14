@@ -20,7 +20,6 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Q
 from unxt.quantity import ustrip
 
@@ -34,6 +33,7 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.extensions.base import ParamInfo
+from harv.stats import MarginalizedLinear
 
 
 def _split_nl_values(
@@ -857,9 +857,9 @@ class JointModel(eqx.Module):
         """Compute the joint log-likelihood.
 
         When ``shared_linear_params`` contains names that are being analytically
-        marginalized, a single joint ``numpyro_ext.distributions.MarginalizedLinear`` is
-        built spanning all components (the *joint path*).  Otherwise the per-component
-        log-likelihoods are summed as before.
+        marginalized, a single joint ``MarginalizedLinear`` is built spanning all
+        components (the *joint path*).  Otherwise the per-component log-likelihoods are
+        summed as before.
 
         Parameters
         ----------

@@ -28,7 +28,6 @@ dependencies = [
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
     "numpyro>=0.15.0",
-    "numpyro-ext>=0.0.4",
     "quaxed>=0.10.4",
     "unxt>=1.7.2",
 ]
@@ -50,7 +49,6 @@ override-dependencies = [
     # "unxt @ file:///Users/aprice-whelan/projects/unxt",
     # "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
     "unxt @ git+https://github.com/adrn/unxt.git@a78e1965f5033c31e8ab519848b3ff0a01e9e9ab",
-    "numpyro-ext @ git+https://github.com/adrn/numpyro-ext.git",
     "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git"
 ]
 
@@ -224,7 +222,6 @@ precision = 2
 #       "jaxtyping.*",
 #       "numpy.*",
 #       "numpyro.*",
-#       "numpyro_ext.*",
 #       "pandas.*",
 #       "plum.*",
 #       "pooch.*",
@@ -314,6 +311,9 @@ target-version = "py312"
         "RUF002",  # ambiguous unicode
         "RUF003",  # ambiguous unicode
     ]
+    "src/harv/stats/numpyro_ext.py" = [
+        "ALL",
+    ]
     "docs/**/*" = [
         "E402",  # module-import-not-at-top-of-file
         "T201",  # print
@@ -344,6 +344,10 @@ target-version = "py312"
     [[tool.ty.overrides]]
     include = ["src/harv/kepler/constants.py"]
     rules = { unresolved-import = "ignore" }
+
+    [[tool.ty.overrides]]
+    include = ["src/harv/stats/numpyro_ext.py"]
+    rules = { all = "ignore" }
 
 
 [tool.pydoclint]

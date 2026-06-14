@@ -17,7 +17,6 @@ import jax
 import numpyro
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
-from numpyro_ext.distributions import MarginalizedLinear
 from unxt import Q
 from unxt.quantity import ustrip
 
@@ -31,6 +30,7 @@ from harv.models._helpers import (
     _unwrap_dist,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.stats import MarginalizedLinear
 
 
 class _MargComponents(NamedTuple):
