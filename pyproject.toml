@@ -311,7 +311,7 @@ target-version = "py312"
         "RUF002",  # ambiguous unicode
         "RUF003",  # ambiguous unicode
     ]
-    "src/harv/stats/numpyro_ext.py" = [
+    "src/harv/stats/*.py" = [
         "ALL",
     ]
     "docs/**/*" = [
@@ -346,7 +346,7 @@ target-version = "py312"
     rules = { unresolved-import = "ignore" }
 
     [[tool.ty.overrides]]
-    include = ["src/harv/stats/numpyro_ext.py"]
+    include = ["src/harv/stats/numpyro_ext.py", "src/harv/stats/linear_op.py"]
     rules = { all = "ignore" }
 
 
