@@ -400,6 +400,8 @@ class RejectionSampler(AbstractSampler):
         rej_key = jr.fold_in(key, 1)
 
         if isinstance(prior_samples, Samples):
+            if prior_samples.n_samples <= 0:
+                raise ValueError("prior_samples must contain at least one sample.")
             flat_samples, log_likelihoods = self._evaluate_in_memory(
                 prepared, prior_samples, data
             )
