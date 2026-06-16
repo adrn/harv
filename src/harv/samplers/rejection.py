@@ -568,6 +568,8 @@ class RejectionSampler(AbstractSampler):
             first_key = next(iter(expected_keys))
             src_group = nl_group if first_key in available_nl else lin_group
             n_prior_samples = int(src_group[first_key].shape[0])
+            if n_prior_samples <= 0:
+                raise ValueError(f"Prior cache at {path} contains zero samples.")
 
             n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
 
