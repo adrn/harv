@@ -20,7 +20,6 @@ from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
     _unwrap_dist,
 )
 
@@ -149,6 +148,7 @@ class HarvPrior(eqx.Module):
         *,
         model: "AbstractComponentModel | JointModel",
         return_logprobs: bool = False,
+        marginalized_names: tuple[str, ...] | None = None,
     ) -> "Samples":
         """Draw a complete prior sample for a given model.
 
@@ -158,8 +158,11 @@ class HarvPrior(eqx.Module):
         - base nonlinear params from :attr:`nonlinear_priors`
         - extension nonlinear params (e.g. ``jitter``, GP hypers) discovered by
           walking ``model.extensions``
-        - any non-Gaussian linear params from :attr:`linear_priors` that cannot
-          be analytically marginalized (e.g. ``HalfNormal``-prior parallax)
+        - any linear params from :attr:`linear_priors` that are sampled
+          explicitly rather than analytically marginalized.  With the default
+          ``marginalized_names=None`` this is just the non-Gaussian linear priors
+          (e.g. ``HalfNormal``-prior parallax); when ``marginalized_names`` is
+          given it is every linear param not in that set (see below).
 
         The returned :class:`~harv.samplers.Samples` is the same container the
         rejection sampler produces for posteriors, with units restored from each
@@ -185,6 +188,13 @@ class HarvPrior(eqx.Module):
         return_logprobs
             If ``True``, populate ``Samples.ln_prior`` with the per-sample
             nonlinear-prior log-density.
+        marginalized_names
+            Which linear params are analytically marginalized (and therefore
+            *not* drawn here), mirroring
+            :attr:`RejectionSampler.marginalized_names`.  Must match the consuming
+            sampler so the explicit-linear keys agree.  ``None`` (default)
+            marginalizes every linear param that can be (the Gaussian ones),
+            leaving only non-Gaussian priors explicit.
 
         Returns
         -------
@@ -214,7 +224,9 @@ class HarvPrior(eqx.Module):
         # ``HarvPrior`` from this module.
         from harv.samplers._prior_resolution import (  # noqa: PLC0415
             effective_linear_prior_from_prior,
+            explicit_linear_names,
             nonlinear_extension_priors_from_model,
+            resolve_effective_marginalized_names,
             validate_extension_priors,
         )
         from harv.samplers.samples import Samples  # noqa: PLC0415
@@ -224,6 +236,9 @@ class HarvPrior(eqx.Module):
         )
         effective_linear_prior = effective_linear_prior_from_prior(self, model) or {}
         validate_extension_priors(self, model, effective_linear_prior)
+        effective_marginalized_names = resolve_effective_marginalized_names(
+            effective_linear_prior, marginalized_names
+        )
 
         # 1. Base nonlinear orbital params (bare arrays).
         key, nl_key = jr.split(key)
@@ -235,14 +250,18 @@ class HarvPrior(eqx.Module):
             key, k = jr.split(key)
             extension_nonlinear[name] = _unwrap_dist(d).sample(k, (n_samples,))
 
-        # 3. Explicit (non-Gaussian) linear params -- those that cannot be
-        # analytically marginalized.  In the common Gaussian-linear case this
-        # is empty.
+        # 3. Explicit linear params -- those not analytically marginalized.
+        # ``explicit_linear_names`` honors ``marginalized_names`` exactly as the
+        # rejection sampler does, so the drawn set matches what
+        # ``RejectionSampler.run_with_samples`` expects.  In the common
+        # Gaussian-linear case (no override) this is empty.
         explicit_linear: dict[str, jax.Array] = {}
-        for name, d in effective_linear_prior.items():
-            if _needs_explicit_sampling(d):
-                key, k = jr.split(key)
-                explicit_linear[name] = _unwrap_dist(d).sample(k, (n_samples,))
+        for name in explicit_linear_names(
+            effective_linear_prior, effective_marginalized_names
+        ):
+            d = effective_linear_prior[name]
+            key, k = jr.split(key)
+            explicit_linear[name] = _unwrap_dist(d).sample(k, (n_samples,))
 
         # Restore units onto nonlinear (base + extension) entries.
         all_nonlinear_priors: dict[str, PriorDist] = {

@@ -38,6 +38,7 @@ def make_prior_cache(
     key: jax.Array,
     batch_size: int = 100_000,
     return_logprobs: bool = False,
+    marginalized_names: tuple[str, ...] | None = None,
 ) -> None:
     """Write ``n_samples`` prior draws to an HDF5 cache, in batches.
 
@@ -65,6 +66,12 @@ def make_prior_cache(
     return_logprobs
         If ``True``, write ``ln_prior`` to the cache so it can be reused by
         downstream tools without recomputation.
+    marginalized_names
+        Forwarded to :meth:`HarvPrior.sample`.  Must match the
+        ``marginalized_names`` of the :class:`~harv.samplers.RejectionSampler`
+        that will consume the cache, so the explicit-linear keys written here
+        match those :meth:`RejectionSampler.run_with_samples` expects.  Leave as
+        ``None`` (default) for the default marginalization.
 
     Examples
     --------
@@ -94,14 +101,30 @@ def make_prior_cache(
 
     n_batches = (n_samples + batch_size - 1) // batch_size
 
-    # Probe the prior for keys / units / linear_extension_names / ln_prior
-    # presence by drawing a single 1-sample batch.  This avoids hand-tracking
-    # the same prior-resolution logic that lives in HarvPrior.sample.
-    probe = prior.sample(key, 1, model=model, return_logprobs=return_logprobs)
+    # Probe the prior for keys / units / dtypes / linear_extension_names /
+    # ln_prior presence by drawing a single 1-sample batch.  This avoids
+    # hand-tracking the same prior-resolution logic that lives in
+    # HarvPrior.sample.
+    probe = prior.sample(
+        key,
+        1,
+        model=model,
+        return_logprobs=return_logprobs,
+        marginalized_names=marginalized_names,
+    )
     nonlinear_keys = list(probe.nonlinear)
     linear_keys = list(probe.linear)
     nonlinear_units = {k: str(probe.nonlinear[k].unit) for k in nonlinear_keys}
     linear_units = {k: str(probe.linear[k].unit) for k in linear_keys}
+    # Mirror ``Samples.to_hdf5``: preserve each parameter's dtype rather than
+    # forcing float32 (which would silently downcast under JAX x64).
+    nonlinear_dtypes = {
+        k: np.asarray(probe.nonlinear[k].value).dtype for k in nonlinear_keys
+    }
+    linear_dtypes = {k: np.asarray(probe.linear[k].value).dtype for k in linear_keys}
+    ln_prior_dtype = (
+        np.asarray(probe.ln_prior).dtype if probe.ln_prior is not None else None
+    )
 
     with h5py.File(path, "w") as f:
         nl_group = f.create_group("nonlinear")
@@ -115,20 +138,24 @@ def make_prior_cache(
 
         nl_datasets: dict[str, h5py.Dataset] = {}
         for name in nonlinear_keys:
-            ds = nl_group.create_dataset(name, shape=(n_samples,), dtype="float32")
+            ds = nl_group.create_dataset(
+                name, shape=(n_samples,), dtype=nonlinear_dtypes[name]
+            )
             ds.attrs["unit"] = nonlinear_units[name]
             nl_datasets[name] = ds
 
         lin_datasets: dict[str, h5py.Dataset] = {}
         for name in linear_keys:
-            ds = lin_group.create_dataset(name, shape=(n_samples,), dtype="float32")
+            ds = lin_group.create_dataset(
+                name, shape=(n_samples,), dtype=linear_dtypes[name]
+            )
             ds.attrs["unit"] = linear_units[name]
             lin_datasets[name] = ds
 
         lp_dataset: h5py.Dataset | None = None
         if return_logprobs:
             lp_dataset = f.create_dataset(
-                "ln_prior", shape=(n_samples,), dtype="float32"
+                "ln_prior", shape=(n_samples,), dtype=ln_prior_dtype
             )
 
         for i in range(n_batches):
@@ -138,7 +165,11 @@ def make_prior_cache(
 
             sub_key = jr.fold_in(key, i)
             batch: Samples = prior.sample(
-                sub_key, n_this, model=model, return_logprobs=return_logprobs
+                sub_key,
+                n_this,
+                model=model,
+                return_logprobs=return_logprobs,
+                marginalized_names=marginalized_names,
             )
 
             for name in nonlinear_keys:

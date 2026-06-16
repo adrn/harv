@@ -18,7 +18,6 @@ from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
     _unwrap_dist,
 )
 from harv.models.component import AbstractComponentModel
@@ -26,6 +25,9 @@ from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior as _effective_linear_prior_from_prior,
+)
+from harv.samplers._prior_resolution import (
+    explicit_linear_names as _explicit_linear_names,
 )
 from harv.samplers._prior_resolution import (
     nonlinear_extension_priors_from_model as _nonlinear_extension_priors_from_model,
@@ -428,24 +430,22 @@ class RejectionSampler(AbstractSampler):
         """Return ``(expected_nonlinear_keys, expected_explicit_linear_keys)``.
 
         The flat sample dict the sampler consumes contains base nonlinear +
-        extension nonlinear under the first set, plus any non-Gaussian
-        explicit-linear params under the second set.
+        extension nonlinear under the first set, plus the linear params sampled
+        explicitly under the second set.  The explicit-linear set depends on the
+        effective marginalization: when a ``marginalized_names`` override is in
+        effect, it is every linear param *not* marginalized (even Gaussian ones);
+        otherwise it is only the non-Gaussian linear params (those that cannot be
+        analytically marginalized).
         """
         nonlinear_keys = set(self.prior.nonlinear_priors) | set(
             prepared.nonlinear_extension_priors
         )
-        explicit_linear_keys: set[str] = set()
-        eff_linear = prepared.effective_linear_prior or {}
-        marg = prepared.effective_marginalized_names
-        if marg is not None:
-            marg_set = set(marg)
-            for name in eff_linear:
-                if name not in marg_set:
-                    explicit_linear_keys.add(name)
-        else:
-            for name, d in eff_linear.items():
-                if _needs_explicit_sampling(d):
-                    explicit_linear_keys.add(name)
+        explicit_linear_keys = set(
+            _explicit_linear_names(
+                prepared.effective_linear_prior or {},
+                prepared.effective_marginalized_names,
+            )
+        )
         return nonlinear_keys, explicit_linear_keys
 
     def _flatten_prior_samples(
@@ -455,29 +455,32 @@ class RejectionSampler(AbstractSampler):
     ) -> dict[str, jax.Array]:
         """Unit-strip a :class:`Samples` container into the flat sampler dict.
 
-        Validates that the prior-samples key set matches what ``prepared``
-        expects (base nonlinear + extension nonlinear in ``nonlinear``, any
-        explicit-linear params in ``linear``).  Raises ``ValueError`` with the
-        diff on mismatch.
+        Validates that every key ``prepared`` expects (base nonlinear + extension
+        nonlinear in ``nonlinear``, any explicit-linear params in ``linear``) is
+        present, raising ``ValueError`` listing any that are missing.  Extra keys
+        are ignored — a superset cache (e.g. a jitter cache fed to a non-jitter
+        sampler) is reused safely.  This matches the disk-streaming branch
+        (:meth:`_evaluate_from_hdf5`), which also reads only the expected keys.
         """
         expected_nl, expected_lin = self._expected_prior_keys(prepared)
         got_nl = set(prior_samples.nonlinear)
         got_lin = set(prior_samples.linear)
 
         missing = (expected_nl - got_nl) | (expected_lin - got_lin)
-        extra = (got_nl - expected_nl) | (got_lin - expected_lin)
-        if missing or extra:
+        if missing:
             msg = (
                 "Prior samples key mismatch for this (prior, model) setup. "
-                f"Missing: {sorted(missing)}; unexpected: {sorted(extra)}."
+                f"Missing: {sorted(missing)}."
             )
             raise ValueError(msg)
 
         flat: dict[str, jax.Array] = {}
-        for name, qty in prior_samples.nonlinear.items():
+        for name in expected_nl:
+            qty = prior_samples.nonlinear[name]
             unit = str(qty.unit) or ""
             flat[name] = jnp.asarray(ustrip(unit, qty) if unit else qty.value)
-        for name, qty in prior_samples.linear.items():
+        for name in expected_lin:
+            qty = prior_samples.linear[name]
             unit = str(qty.unit) or ""
             flat[name] = jnp.asarray(ustrip(unit, qty) if unit else qty.value)
         return flat
@@ -632,22 +635,15 @@ class RejectionSampler(AbstractSampler):
         key, nl_key = jr.split(key)
         prior_samples = prior.sample_nonlinear(nl_key, n_total)
 
-        # Sample explicit linear params (non-Gaussian, not analytically marginalized).
-        # Use the effective marginalize_names computed by _resolve_extension_priors
-        # (which auto-classified non-Gaussian entries at run-time).
+        # Sample explicit linear params (those not analytically marginalized).
+        # ``_explicit_linear_names`` honors the effective marginalize_names computed
+        # by _resolve_extension_priors (which auto-classified non-Gaussian entries
+        # at run-time) and matches the set HarvPrior.sample / run_with_samples use.
         if isinstance(eff_linear, dict):
-            if marginalize_names is not None:
-                marg_set = set(marginalize_names)
-                for name, d in eff_linear.items():
-                    if name not in marg_set:
-                        key, k = jr.split(key)
-                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
-            else:
-                # marginalize_names is None => auto-marginalize Gaussians, sample rest
-                for name, d in eff_linear.items():
-                    if _needs_explicit_sampling(d):
-                        key, k = jr.split(key)
-                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
+            for name in _explicit_linear_names(eff_linear, marginalize_names):
+                key, k = jr.split(key)
+                d = eff_linear[name]
+                prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
 
         # Sample extension nonlinear parameters (jitter, GP hypers, etc.).
         if ext_nl_priors:

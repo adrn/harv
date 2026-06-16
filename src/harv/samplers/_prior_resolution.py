@@ -19,6 +19,7 @@ from harv.models.priors import HarvPrior
 
 __all__ = (
     "effective_linear_prior_from_prior",
+    "explicit_linear_names",
     "extension_model_key",
     "iter_component_extensions",
     "lookup_extension_prior",
@@ -26,6 +27,31 @@ __all__ = (
     "resolve_effective_marginalized_names",
     "validate_extension_priors",
 )
+
+
+def explicit_linear_names(
+    effective_linear_prior: Mapping[str, Any],
+    effective_marginalized_names: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    """Linear params the sampler draws explicitly (not analytically marginalized).
+
+    When ``effective_marginalized_names`` is ``None`` only non-Gaussian priors are
+    explicit (decided by :func:`~harv.models._helpers._needs_explicit_sampling`).
+    When it is set, every linear param not in that set is explicit (even Gaussian
+    ones the user chose to sample rather than marginalize).
+
+    Both :meth:`RejectionSampler._expected_prior_keys` and :meth:`HarvPrior.sample`
+    call this so the explicit-linear key set stays consistent between the cache
+    producer and consumer.
+    """
+    if effective_marginalized_names is None:
+        return tuple(
+            name
+            for name, d in effective_linear_prior.items()
+            if _needs_explicit_sampling(d)
+        )
+    marg = set(effective_marginalized_names)
+    return tuple(name for name in effective_linear_prior if name not in marg)
 
 
 def lookup_extension_prior(

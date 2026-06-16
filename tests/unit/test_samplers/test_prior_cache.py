@@ -13,6 +13,8 @@ Covers:
 
 from pathlib import Path
 
+import h5py
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
@@ -188,6 +190,50 @@ class TestMakePriorCache:
         assert "jitter" in loaded.nonlinear
         assert loaded.nonlinear["jitter"].shape == (256,)
 
+    def test_preserves_x64_dtype(self, tmp_path: Path):
+        """Datasets keep the sample dtype (float64 under x64), not silent float32."""
+        path = tmp_path / "cache.h5"
+        with jax.enable_x64(new_val=True):
+            prior = _rv_prior()
+            make_prior_cache(
+                prior,
+                RVModel(),
+                n_samples=200,
+                filename=path,
+                key=jr.key(0),
+                batch_size=100,
+                return_logprobs=True,
+            )
+
+        with h5py.File(path, "r") as f:
+            assert f["nonlinear"]["period"].dtype == np.float64
+            assert f["ln_prior"].dtype == np.float64
+
+    def test_marginalized_names_cache_includes_explicit_linear(self, tmp_path: Path):
+        """A cache built with a marginalized_names subset writes the explicit linear."""
+        path = tmp_path / "cache.h5"
+        prior = _rv_prior()
+        make_prior_cache(
+            prior,
+            RVModel(),
+            n_samples=400,
+            filename=path,
+            key=jr.key(0),
+            batch_size=200,
+            marginalized_names=("rv_semiamp",),
+        )
+        loaded = Samples.from_hdf5(path)
+        # v_sys is not marginalized -> sampled explicitly -> written to disk.
+        assert "v_sys" in loaded.linear
+
+        sampler = RejectionSampler(
+            prior, RVModel(), batch_size=200, marginalized_names=("rv_semiamp",)
+        )
+        out = sampler.run_with_samples(
+            _rv_data(), path, seed=0, randomize_prior_order=False
+        )
+        assert out.n_samples > 0
+
     def test_rejects_zero_or_negative(self, tmp_path: Path):
         path = tmp_path / "cache.h5"
         with pytest.raises(ValueError, match="n_samples"):
@@ -258,6 +304,42 @@ class TestRunWithSamplesInMemory:
         pri = prior.sample(jr.key(0), 1000, model=model)
         out = sampler.run_with_samples(_rv_data(), pri, seed=42)
         assert "jitter" in out.nonlinear
+
+    def test_superset_samples_extra_keys_ignored(self):
+        """A superset in-memory Samples (extra unused keys) is accepted.
+
+        Mirrors the disk-path behaviour: a jitter cache fed to a non-jitter
+        sampler ignores the extra ``jitter`` key rather than raising.
+        """
+        prior_j = _rv_prior_with_jitter()
+        model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        pri = prior_j.sample(jr.key(0), 1000, model=model_j)
+        assert "jitter" in pri.nonlinear  # the extra key
+
+        prior_nj = _rv_prior()
+        sampler = RejectionSampler(prior_nj, RVModel(), batch_size=200)
+        out = sampler.run_with_samples(_rv_data(), pri, seed=0)
+        assert out.n_samples > 0
+        assert "jitter" not in out.nonlinear
+
+    def test_marginalized_names_subset_round_trips(self):
+        """A cache built for a custom marginalized_names subset is consumable.
+
+        With ``marginalized_names=("rv_semiamp",)`` only ``rv_semiamp`` is
+        analytically marginalized; the (Gaussian) ``v_sys`` must be sampled
+        explicitly and appear in ``Samples.linear`` so the sampler can consume
+        it.
+        """
+        prior = _rv_prior()
+        marg = ("rv_semiamp",)
+        pri = prior.sample(jr.key(0), 1000, model=RVModel(), marginalized_names=marg)
+        assert "v_sys" in pri.linear
+
+        sampler = RejectionSampler(
+            prior, RVModel(), batch_size=200, marginalized_names=marg
+        )
+        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        assert out.n_samples > 0
 
 
 class TestRunWithSamplesFromHdf5:
@@ -342,8 +424,13 @@ class TestRunWithSamplesFromHdf5:
         )
         assert out_str.n_samples == out_path.n_samples
 
-    def test_disk_missing_keys_raises(self, tmp_path: Path):
-        """A cache built for a model with jitter is invalid for one without."""
+    def test_disk_extra_keys_allowed(self, tmp_path: Path):
+        """A superset cache (extra unused keys) is accepted, not rejected.
+
+        A cache built for a jitter model carries an extra ``jitter`` key. A
+        sampler with no jitter prior expects a subset of those keys, so the
+        extra key is ignored and consumption succeeds.
+        """
         prior_j = _rv_prior_with_jitter()
         model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
         path = tmp_path / "cache.h5"

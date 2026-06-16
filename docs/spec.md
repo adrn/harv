@@ -1286,14 +1286,24 @@ prior.sample(
     *,
     model: AbstractComponentModel | JointModel,
     return_logprobs: bool = False,
+    marginalized_names: tuple[str, ...] | None = None,
 ) -> Samples
 ```
 
 Draws a *complete* prior sample for ``model`` — base nonlinear params, any
 nonlinear extension params declared by ``model.extensions`` (jitter, GP hypers,
-…), and any non-Gaussian linear params from ``linear_priors`` that cannot be
-analytically marginalized. ``model`` is required because the set of extension
-and explicit-linear params is determined by the model template.
+…), and any linear params from ``linear_priors`` that are sampled explicitly
+rather than analytically marginalized. ``model`` is required because the set of
+extension and explicit-linear params is determined by the model template.
+
+`marginalized_names` mirrors `RejectionSampler.marginalized_names` and controls
+which linear params are marginalized (and so *not* drawn here). With the default
+`None`, every linear param that can be marginalized is (the Gaussian ones),
+leaving only the non-Gaussian linear priors explicit. When set, every linear
+param not in the set is sampled explicitly — even Gaussian ones. To build a
+prior library (in memory or via `make_prior_cache`) for a sampler with a custom
+`marginalized_names`, pass the **same** value here so the explicit-linear keys
+match what `run_with_samples` expects.
 
 Returns a `Samples` container (the same one produced by the rejection sampler
 for posteriors), with units restored from each `QuantityDistribution`. The
@@ -1435,12 +1445,14 @@ sampler.run_with_samples(
 
 `prior_samples` dispatches on type:
 
-- `Samples` — in-memory cache returned by `prior.sample(...)`. Validates that
-  the contained key set matches the (prior, model) bundle on the sampler; key
-  mismatches raise `ValueError` with the diff.
+- `Samples` — in-memory cache returned by `prior.sample(...)`. Requires every
+  key the (prior, model) bundle expects to be present; any missing keys raise
+  `ValueError` listing them. Extra keys are ignored, so a superset cache (e.g. a
+  jitter cache reused by a non-jitter sampler) is reused safely.
 - `str | os.PathLike` — path to an HDF5 cache (see `make_prior_cache`). The
   file is streamed `batch_size` rows at a time via contiguous h5py slices, so
-  the file may be much larger than RAM.
+  the file may be much larger than RAM. Same key handling as the in-memory
+  branch: missing keys raise, extra keys are ignored.
 
 `randomize_prior_order` (HDF5 path only): when `True` (default), batch *order*
 is permuted via `np.random.default_rng(seed).permutation(n_batches)`. Each
@@ -1464,6 +1476,7 @@ make_prior_cache(
     key: jax.Array,
     batch_size: int = 100_000,
     return_logprobs: bool = False,
+    marginalized_names: tuple[str, ...] | None = None,
 ) -> None
 ```
 
@@ -1471,11 +1484,15 @@ Writes `n_samples` prior draws to an HDF5 file without materializing more than
 `batch_size` rows in memory. Each batch is drawn from an independent subkey
 via `jax.random.fold_in(key, i)`, so on-disk row order is i.i.d.
 
+`marginalized_names` is forwarded to `HarvPrior.sample` and must match the
+consuming sampler's `marginalized_names` (see above).
+
 The on-disk layout is identical to `Samples.to_hdf5` (see "`to_hdf5` /
 `from_hdf5`" below): nonlinear and linear datasets under `nonlinear/` and
-`linear/` groups (with `@unit` attrs), metadata under `metadata/`, and
-`ln_prior` as a top-level dataset when `return_logprobs=True`. A prior cache
-is therefore loadable directly via `Samples.from_hdf5(path)` for inspection.
+`linear/` groups (with `@unit` attrs, each dataset keeping its parameter's
+dtype), metadata under `metadata/`, and `ln_prior` as a top-level dataset when
+`return_logprobs=True`. A prior cache is therefore loadable directly via
+`Samples.from_hdf5(path)` for inspection.
 
 ### MCMC sampling (`NumpyroSampler`)
 
