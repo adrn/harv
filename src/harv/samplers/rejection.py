@@ -1,14 +1,16 @@
 """Rejection sampler for orbital parameter inference."""
 
+import os
 import uuid
-import warnings
-from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, NamedTuple, cast, final
 
 import equinox as eqx
+import h5py
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
@@ -16,12 +18,26 @@ from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
     _unwrap_dist,
 )
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
+from harv.samplers._prior_resolution import (
+    effective_linear_prior_from_prior as _effective_linear_prior_from_prior,
+)
+from harv.samplers._prior_resolution import (
+    explicit_linear_names as _explicit_linear_names,
+)
+from harv.samplers._prior_resolution import (
+    nonlinear_extension_priors_from_model as _nonlinear_extension_priors_from_model,
+)
+from harv.samplers._prior_resolution import (
+    resolve_effective_marginalized_names as _resolve_effective_marginalized_names,
+)
+from harv.samplers._prior_resolution import (
+    validate_extension_priors as _validate_extension_priors,
+)
 from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.samples import Samples
 
@@ -36,230 +52,6 @@ class _PreparedSamplerModel(NamedTuple):
     effective_linear_prior: dict[str, Any] | None
     effective_marginalized_names: tuple[str, ...] | None
     linear_extension_names: tuple[str, ...]
-
-
-def _lookup_extension_prior(
-    extension_priors: Mapping[str, Any],
-    param_name: str,
-    *,
-    component_name: str = "",
-) -> Any | None:
-    """Get an extension prior by component-qualified or bare parameter name."""
-    if component_name:
-        qualified_name = f"{component_name}.{param_name}"
-        if qualified_name in extension_priors:
-            return extension_priors[qualified_name]
-    return extension_priors.get(param_name)
-
-
-def _iter_component_extensions(
-    model: AbstractComponentModel | JointModel,
-) -> list[tuple[str, Any]]:
-    """Return ``(component_name, extension)`` pairs for a sampler model."""
-    if isinstance(model, JointModel):
-        return [
-            (comp_name, ext)
-            for comp_name, comp in model.components.items()
-            for ext in comp.extensions
-        ]
-    return [("", ext) for ext in model.extensions]
-
-
-def _extension_model_key(component_name: str, param_name: str) -> str:
-    """Return the flattened sampler/model key for an extension parameter."""
-    return f"{component_name}.{param_name}" if component_name else param_name
-
-
-def _resolve_effective_marginalized_names(
-    effective_linear_prior: dict[str, Any] | None,
-    marginalized_names: tuple[str, ...] | None,
-) -> tuple[str, ...] | None:
-    """Resolve and validate the effective marginalized linear parameter subset."""
-    if effective_linear_prior is None:
-        return marginalized_names
-
-    if marginalized_names is not None:
-        unknown = set(marginalized_names) - set(effective_linear_prior)
-        if unknown:
-            msg = (
-                "marginalized_names contains unknown linear parameter(s): "
-                f"{unknown}. Valid names: {tuple(effective_linear_prior.keys())}"
-            )
-            raise ValueError(msg)
-
-    # Only check names the user actually wants to marginalize
-    names_to_check = (
-        set(effective_linear_prior)
-        if marginalized_names is None
-        else set(marginalized_names)
-    )
-
-    explicit = {
-        name
-        for name in names_to_check
-        if _needs_explicit_sampling(effective_linear_prior[name])
-    }
-    if not explicit:
-        return marginalized_names
-
-    if marginalized_names is None:
-        resolved_names = tuple(
-            name for name in effective_linear_prior if name not in explicit
-        )
-    else:
-        resolved_names = tuple(
-            name for name in marginalized_names if name not in explicit
-        )
-
-    warnings.warn(
-        f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
-        f"marginalized and will be sampled explicitly. Marginalized parameters: "
-        f"{resolved_names}",
-        stacklevel=3,
-    )
-    return resolved_names
-
-
-def _effective_linear_prior_from_prior(
-    prior: HarvPrior,
-    model: AbstractComponentModel | JointModel,
-) -> dict[str, Any] | None:
-    """Build the effective linear prior from prior.linear_priors + extensions.
-
-    Models are now templates and carry no ``linear_prior`` themselves.  The
-    sampler computes it at run-time by merging ``prior.linear_prior`` with any
-    linear-extension parameters declared on the model's extensions.
-    """
-    effective: dict[str, Any] | None = (
-        dict(prior.linear_priors)
-        if isinstance(prior.linear_priors, dict)
-        else prior.linear_priors
-    )
-    if effective is None:
-        return None
-    # Merge linear extension params from the model.
-    for comp_name, ext in _iter_component_extensions(model):
-        for p in ext.extra_params():
-            if not p.linear:
-                continue
-            extension_prior = _lookup_extension_prior(
-                prior.extension_priors,
-                p.name,
-                component_name=comp_name,
-            )
-            if extension_prior is not None:
-                effective[_extension_model_key(comp_name, p.name)] = extension_prior
-    return effective
-
-
-def _validate_extension_priors(
-    prior: HarvPrior,
-    model: AbstractComponentModel | JointModel,
-    effective_linear_prior: dict[str, Any] | None,
-) -> None:
-    """Ensure every extension-declared parameter has a prior before sampling."""
-    linear_names = (
-        set(effective_linear_prior)
-        if isinstance(effective_linear_prior, dict)
-        else set()
-    )
-    missing: list[str] = []
-
-    for comp_name, ext in _iter_component_extensions(model):
-        for p in ext.extra_params():
-            model_key = _extension_model_key(comp_name, p.name)
-            if p.linear:
-                if model_key not in linear_names:
-                    missing.append(model_key)
-                continue
-
-            extension_prior = _lookup_extension_prior(
-                prior.extension_priors,
-                p.name,
-                component_name=comp_name,
-            )
-            if extension_prior is None:
-                missing.append(model_key)
-
-    if missing:
-        msg = (
-            "Missing required prior(s) for extension parameter(s): "
-            f"{tuple(missing)}. Add priors for every parameter declared by "
-            "model.extensions."
-        )
-        raise ValueError(msg)
-
-
-def _nonlinear_extension_priors_from_model(
-    prior: HarvPrior,
-    model: AbstractComponentModel | JointModel,
-) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Derive nonlinear extension priors and linear extension names from a model.
-
-    Walks the model's extensions, looks up matching priors in
-    ``prior.extension_priors``, and routes them by the ``linear`` flag on
-    each param. Component-qualified names (for example ``"rv.jitter"``)
-    are preferred when the model is a :class:`JointModel`, but bare names are
-    accepted as a fallback for backward compatibility.
-
-    Used for the ``from_model`` expert path, where ``_resolve_extension_priors``
-    is not called.
-
-    Returns
-    -------
-    nonlinear_extension_priors : dict[str, PriorDist]
-        Extension nonlinear params, keyed by model-key convention.
-    linear_extension_names : tuple[str, ...]
-        Names of extension linear (offset) params.
-    """
-    nonlinear_extension_priors: dict[str, Any] = {}
-    linear_extension_names: list[str] = []
-
-    for comp_name, ext in _iter_component_extensions(model):
-        for p in ext.extra_params():
-            extension_prior = _lookup_extension_prior(
-                prior.extension_priors,
-                p.name,
-                component_name=comp_name,
-            )
-            if extension_prior is None:
-                continue
-            model_key = _extension_model_key(comp_name, p.name)
-            if p.linear:
-                linear_extension_names.append(model_key)
-            else:
-                nonlinear_extension_priors[model_key] = extension_prior
-
-    return nonlinear_extension_priors, tuple(linear_extension_names)
-
-
-def _ext_nonlinear_from_model(
-    prior: HarvPrior,
-    model: AbstractComponentModel | JointModel,
-) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """Backward-compatible alias for nonlinear extension prior extraction."""
-    return _nonlinear_extension_priors_from_model(prior, model)
-
-
-def _ext_nonlinear_model_keys(
-    nonlinear_extension_priors: dict[str, Any],
-    model: AbstractComponentModel | JointModel,
-) -> dict[str, str]:
-    """Map bare nonlinear extension names to the keys used in model.log_prob."""
-    if not isinstance(model, JointModel):
-        return {name: name for name in nonlinear_extension_priors}
-
-    per_component_names = model._per_component_nonlinear_names()
-    name_to_model_key: dict[str, str] = {}
-    for component_name, nonlinear_names in per_component_names.items():
-        for param_name in nonlinear_names:
-            if param_name in nonlinear_extension_priors:
-                name_to_model_key[param_name] = f"{component_name}.{param_name}"
-
-    for name in nonlinear_extension_priors:
-        if name not in name_to_model_key:
-            name_to_model_key[name] = name
-    return name_to_model_key
 
 
 def _prepare_sampler_model(
@@ -404,12 +196,6 @@ class RejectionSampler(AbstractSampler):
             self.marginalized_names,
         )
 
-        model = prepared.model
-        nonlinear_extension_priors = prepared.nonlinear_extension_priors
-        effective_linear_prior = prepared.effective_linear_prior or {}
-        effective_marginalized_names = prepared.effective_marginalized_names
-        linear_extension_names = prepared.linear_extension_names
-
         # if not specified, pick a different random seed each run:
         _seed: int = uuid.uuid4().int >> 96 if seed is None else seed
 
@@ -420,14 +206,53 @@ class RejectionSampler(AbstractSampler):
         # TODO: only return accepted samples and acceptance rate to conserve memory?
 
         prior_samples, log_likelihoods = self._sample_prior_and_evaluate_batched(
-            model,
+            prepared.model,
             sample_key,
             n_prior_samples,
-            nonlinear_extension_priors,
-            effective_linear_prior,
-            effective_marginalized_names,
+            prepared.nonlinear_extension_priors,
+            prepared.effective_linear_prior or {},
+            prepared.effective_marginalized_names,
             data,
         )
+
+        return self._finalize_posterior(
+            data=data,
+            prepared=prepared,
+            prior_samples=prior_samples,
+            log_likelihoods=log_likelihoods,
+            rej_key=rej_key,
+            key=key,
+            ignore_non_finite=ignore_non_finite,
+            max_posterior_samples=max_posterior_samples,
+            return_logprobs=return_logprobs,
+        )
+
+    def _finalize_posterior(
+        self,
+        *,
+        data: Any,
+        prepared: _PreparedSamplerModel,
+        prior_samples: dict[str, jax.Array],
+        log_likelihoods: jax.Array,
+        rej_key: jax.Array,
+        key: jax.Array,
+        ignore_non_finite: bool,
+        max_posterior_samples: int | None,
+        return_logprobs: bool,
+    ) -> Samples:
+        """Shared downstream: rejection -> linear -> trim -> Samples assembly.
+
+        Both :meth:`run` and :meth:`run_with_samples` call this once the
+        flat ``prior_samples`` dict and matching ``log_likelihoods`` array
+        have been produced.  ``key`` seeds the linear-sampling and
+        max-posterior-samples subsamples (via :func:`jax.random.fold_in`);
+        ``rej_key`` seeds the per-sample uniform draws.
+        """
+        model = prepared.model
+        nonlinear_extension_priors = prepared.nonlinear_extension_priors
+        effective_linear_prior = prepared.effective_linear_prior or {}
+        effective_marginalized_names = prepared.effective_marginalized_names
+        linear_extension_names = prepared.linear_extension_names
 
         if ignore_non_finite:
             log_likelihoods = jnp.where(
@@ -437,6 +262,25 @@ class RejectionSampler(AbstractSampler):
         accepted_mask = self._rejection_step(rej_key, log_likelihoods)
         accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
         accepted_log_likelihood = log_likelihoods[accepted_mask]
+
+        # Trim to ``max_posterior_samples`` *before* the linear-parameter
+        # sampling step so the ``jax.vmap`` inside ``_sample_linear_parameters``
+        # sees a stable leading-axis shape across calls.  Without this, every
+        # distinct ``accepted_mask.sum()`` value triggers a fresh trace+compile
+        # in the per-sample conditional Gaussian solve, which becomes the
+        # bottleneck for population-scale loops (one ``run`` per star).
+        if max_posterior_samples is not None:
+            n_accepted = len(next(iter(accepted_nonlinear.values())))
+            if n_accepted > max_posterior_samples:
+                idx_key = jr.fold_in(key, 3)
+                idx = jr.choice(
+                    idx_key,
+                    n_accepted,
+                    shape=(max_posterior_samples,),
+                    replace=False,
+                )
+                accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
+                accepted_log_likelihood = accepted_log_likelihood[idx]
 
         linear_key = jr.fold_in(key, 2)
         # TODO: support oversampling of linear parameters?
@@ -449,24 +293,9 @@ class RejectionSampler(AbstractSampler):
             effective_linear_prior,
         )
 
-        if max_posterior_samples is not None:
-            n_accepted = len(next(iter(accepted_nonlinear.values())))
-            if n_accepted > max_posterior_samples:
-                idx_key = jr.fold_in(key, 3)
-                idx = jr.choice(
-                    idx_key,
-                    n_accepted,
-                    shape=(max_posterior_samples,),
-                    replace=False,
-                )
-                accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
-                linear_samples = {k: v[idx] for k, v in linear_samples.items()}
-                accepted_log_likelihood = accepted_log_likelihood[idx]
-
         # Build nonlinear dict as Quantities with units from the prior.
         # Base orbital params come from prior.nonlinear_priors.
         # Extension nonlinear params (e.g. jitter) come from the prepared model-key map.
-        _nl_keys = set(self.prior.nonlinear_priors)
         _all_nl_priors: dict[str, Any] = dict(self.prior.nonlinear_priors)
         _all_nl_priors.update(nonlinear_extension_priors)
 
@@ -508,8 +337,284 @@ class RejectionSampler(AbstractSampler):
             ln_prior=ln_prior_arr,
         )
 
+    def run_with_samples(
+        self,
+        data: InputData,
+        prior_samples: "Samples | str | os.PathLike[str]",
+        *,
+        max_posterior_samples: int | None = None,
+        seed: int | None = None,
+        ignore_non_finite: bool = False,
+        return_logprobs: bool = False,
+        randomize_prior_order: bool = True,
+    ) -> Samples:
+        """Run rejection against pre-computed prior samples.
+
+        Parallel to :meth:`run` but skips the prior-sampling step: the caller
+        supplies the prior draws either in memory (a :class:`Samples` returned
+        by :meth:`HarvPrior.sample`) or as a path to an HDF5 file produced by
+        :func:`~harv.samplers.make_prior_cache`. Useful when the same prior
+        library is reused across many datasets — generate once, evaluate many
+        times.
+
+        Parameters
+        ----------
+        data
+            Observed data; same conventions as :meth:`run`.
+        prior_samples
+            Either a :class:`Samples` instance (in-memory cache, e.g. from
+            ``prior.sample(...)``) or an ``str`` / ``os.PathLike`` path to an
+            HDF5 file. The HDF5 path is streamed batch by batch, so the file
+            may be much larger than RAM.
+        max_posterior_samples
+            See :meth:`run`.
+        seed
+            See :meth:`run`.
+        ignore_non_finite
+            See :meth:`run`.
+        return_logprobs
+            See :meth:`run`.
+        randomize_prior_order
+            Disk-streaming branch only: when ``True`` (default), batches are
+            read from the HDF5 file in a random order (drawn from ``seed``).
+            Each batch is still a single contiguous h5py slice, so disk I/O
+            is unchanged. Set to ``False`` for strictly sequential reads
+            (reproducibility / debugging). Ignored for the in-memory branch.
+
+        Returns
+        -------
+        Samples
+            Posterior samples, equivalent in shape and contents to
+            :meth:`run`'s return.
+        """
+        _validate_data(data, self.model)
+
+        prepared = _prepare_sampler_model(
+            self.prior,
+            self.model,
+            self.marginalized_names,
+        )
+
+        _seed: int = uuid.uuid4().int >> 96 if seed is None else seed
+        key = jr.key(_seed)
+        rej_key = jr.fold_in(key, 1)
+
+        if isinstance(prior_samples, Samples):
+            if prior_samples.n_samples <= 0:
+                raise ValueError("prior_samples must contain at least one sample.")
+            flat_samples, log_likelihoods = self._evaluate_in_memory(
+                prepared, prior_samples, data
+            )
+        else:
+            flat_samples, log_likelihoods = self._evaluate_from_hdf5(
+                prepared,
+                Path(os.fspath(prior_samples)),
+                data,
+                seed=_seed,
+                randomize_prior_order=randomize_prior_order,
+            )
+
+        return self._finalize_posterior(
+            data=data,
+            prepared=prepared,
+            prior_samples=flat_samples,
+            log_likelihoods=log_likelihoods,
+            rej_key=rej_key,
+            key=key,
+            ignore_non_finite=ignore_non_finite,
+            max_posterior_samples=max_posterior_samples,
+            return_logprobs=return_logprobs,
+        )
+
+    def _expected_prior_keys(
+        self, prepared: _PreparedSamplerModel
+    ) -> tuple[set[str], set[str]]:
+        """Return ``(expected_nonlinear_keys, expected_explicit_linear_keys)``.
+
+        The flat sample dict the sampler consumes contains base nonlinear +
+        extension nonlinear under the first set, plus the linear params sampled
+        explicitly under the second set.  The explicit-linear set depends on the
+        effective marginalization: when a ``marginalized_names`` override is in
+        effect, it is every linear param *not* marginalized (even Gaussian ones);
+        otherwise it is only the non-Gaussian linear params (those that cannot be
+        analytically marginalized).
+        """
+        nonlinear_keys = set(self.prior.nonlinear_priors) | set(
+            prepared.nonlinear_extension_priors
+        )
+        explicit_linear_keys = set(
+            _explicit_linear_names(
+                prepared.effective_linear_prior or {},
+                prepared.effective_marginalized_names,
+            )
+        )
+        return nonlinear_keys, explicit_linear_keys
+
+    def _flatten_prior_samples(
+        self,
+        prior_samples: Samples,
+        prepared: _PreparedSamplerModel,
+    ) -> dict[str, jax.Array]:
+        """Unit-strip a :class:`Samples` container into the flat sampler dict.
+
+        Validates that every key ``prepared`` expects (base nonlinear + extension
+        nonlinear in ``nonlinear``, any explicit-linear params in ``linear``) is
+        present, raising ``ValueError`` listing any that are missing.  Extra keys
+        are ignored — a superset cache (e.g. a jitter cache fed to a non-jitter
+        sampler) is reused safely.  This matches the disk-streaming branch
+        (:meth:`_evaluate_from_hdf5`), which also reads only the expected keys.
+        """
+        expected_nl, expected_lin = self._expected_prior_keys(prepared)
+        got_nl = set(prior_samples.nonlinear)
+        got_lin = set(prior_samples.linear)
+
+        missing = (expected_nl - got_nl) | (expected_lin - got_lin)
+        if missing:
+            msg = (
+                "Prior samples key mismatch for this (prior, model) setup. "
+                f"Missing: {sorted(missing)}."
+            )
+            raise ValueError(msg)
+
+        flat: dict[str, jax.Array] = {}
+        for name in expected_nl:
+            qty = prior_samples.nonlinear[name]
+            unit = str(qty.unit) or ""
+            flat[name] = jnp.asarray(ustrip(unit, qty) if unit else qty.value)
+        for name in expected_lin:
+            qty = prior_samples.linear[name]
+            unit = str(qty.unit) or ""
+            flat[name] = jnp.asarray(ustrip(unit, qty) if unit else qty.value)
+        return flat
+
+    def _pad_to_batch_multiple(
+        self, flat: dict[str, jax.Array], n_prior_samples: int
+    ) -> tuple[dict[str, jax.Array], int]:
+        """Pad each array in ``flat`` so its length is a multiple of ``batch_size``.
+
+        ``_evaluate_log_likelihoods_batched`` assumes ``n_total = n_batches *
+        batch_size``.  Pad with repeats of the last element; the trailing
+        evaluations are discarded by the caller.
+        """
+        n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
+        n_total = n_batches * self.batch_size
+        if n_total == n_prior_samples:
+            return flat, n_total
+        padded: dict[str, jax.Array] = {}
+        pad = n_total - n_prior_samples
+        for k, v in flat.items():
+            padded[k] = jnp.concatenate([v, jnp.broadcast_to(v[-1:], (pad,))])
+        return padded, n_total
+
+    def _evaluate_in_memory(
+        self,
+        prepared: _PreparedSamplerModel,
+        prior_samples: Samples,
+        data: Any,
+    ) -> tuple[dict[str, jax.Array], jax.Array]:
+        """In-memory branch of :meth:`run_with_samples`."""
+        flat = self._flatten_prior_samples(prior_samples, prepared)
+        n_prior_samples = prior_samples.n_samples
+        padded, _ = self._pad_to_batch_multiple(flat, n_prior_samples)
+
+        log_likelihoods = self._evaluate_log_likelihoods_batched(
+            prepared.model,
+            padded,
+            prepared.effective_linear_prior or {},
+            prepared.effective_marginalized_names,
+            data,
+        )
+        trimmed = {k: v[:n_prior_samples] for k, v in padded.items()}
+        return trimmed, log_likelihoods[:n_prior_samples]
+
+    def _evaluate_from_hdf5(
+        self,
+        prepared: _PreparedSamplerModel,
+        path: Path,
+        data: Any,
+        *,
+        seed: int,
+        randomize_prior_order: bool,
+    ) -> tuple[dict[str, jax.Array], jax.Array]:
+        """Disk-streaming branch of :meth:`run_with_samples`.
+
+        Reads the prior cache in ``batch_size``-row contiguous slices and
+        evaluates ``model.log_prob`` per batch via
+        :meth:`_evaluate_log_likelihoods_one_batch`.  When
+        ``randomize_prior_order`` is true, the batch order is permuted so the
+        accumulated samples are not biased toward the start of the file.
+        """
+        expected_nl, expected_lin = self._expected_prior_keys(prepared)
+        expected_keys = expected_nl | expected_lin
+
+        with h5py.File(path, "r") as f:
+            nl_group = f["nonlinear"]
+            # ``Samples.to_hdf5`` always writes both groups (linear may be empty);
+            # ``make_prior_cache`` matches that layout.
+            lin_group = f["linear"]
+
+            available_nl = set(nl_group)
+            available_lin = set(lin_group)
+            available = available_nl | available_lin
+            missing = expected_keys - available
+            if missing:
+                msg = (
+                    f"Prior cache at {path} is missing required keys: "
+                    f"{sorted(missing)}. Expected: {sorted(expected_keys)}."
+                )
+                raise ValueError(msg)
+
+            # All datasets share a common length.
+            first_key = next(iter(expected_keys))
+            src_group = nl_group if first_key in available_nl else lin_group
+            n_prior_samples = int(src_group[first_key].shape[0])
+            if n_prior_samples <= 0:
+                raise ValueError(f"Prior cache at {path} contains zero samples.")
+
+            n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
+
+            if randomize_prior_order:
+                batch_order = np.random.default_rng(seed).permutation(n_batches)
+            else:
+                batch_order = np.arange(n_batches)
+
+            log_lik_chunks: list[jax.Array] = []
+            sample_chunks: dict[str, list[jax.Array]] = {k: [] for k in expected_keys}
+
+            for i in batch_order:
+                start = int(i) * self.batch_size
+                stop = min(start + self.batch_size, n_prior_samples)
+                actual = stop - start
+
+                batch: dict[str, jax.Array] = {}
+                for k in expected_keys:
+                    grp = nl_group if k in available_nl else lin_group
+                    arr = np.asarray(grp[k][start:stop])
+                    # Pad the final batch to ``batch_size`` so the JIT cache
+                    # is reused (single static shape).
+                    if actual < self.batch_size:
+                        pad = self.batch_size - actual
+                        arr = np.concatenate([arr, np.repeat(arr[-1:], pad)])
+                    batch[k] = jnp.asarray(arr)
+
+                log_lik = self._evaluate_log_likelihoods_one_batch(
+                    prepared.model,
+                    batch,
+                    prepared.effective_linear_prior or {},
+                    prepared.effective_marginalized_names,
+                    data,
+                )
+                # Drop padding before accumulating.
+                log_lik_chunks.append(log_lik[:actual])
+                for k in expected_keys:
+                    sample_chunks[k].append(batch[k][:actual])
+
+        log_likelihoods = jnp.concatenate(log_lik_chunks)
+        flat = {k: jnp.concatenate(v) for k, v in sample_chunks.items()}
+        return flat, log_likelihoods
+
     @eqx.filter_jit
-    def _sample_prior_and_evaluate_batched(  # noqa: C901
+    def _sample_prior_and_evaluate_batched(
         self,
         model: AbstractComponentModel | JointModel,
         key: jax.Array,
@@ -534,24 +639,15 @@ class RejectionSampler(AbstractSampler):
         key, nl_key = jr.split(key)
         prior_samples = prior.sample_nonlinear(nl_key, n_total)
 
-        base_names = model._base_nonlinear_names()
-
-        # Sample explicit linear params (non-Gaussian, not analytically marginalized).
-        # Use the effective marginalize_names computed by _resolve_extension_priors
-        # (which auto-classified non-Gaussian entries at run-time).
+        # Sample explicit linear params (those not analytically marginalized).
+        # ``_explicit_linear_names`` honors the effective marginalize_names computed
+        # by _resolve_extension_priors (which auto-classified non-Gaussian entries
+        # at run-time) and matches the set HarvPrior.sample / run_with_samples use.
         if isinstance(eff_linear, dict):
-            if marginalize_names is not None:
-                marg_set = set(marginalize_names)
-                for name, d in eff_linear.items():
-                    if name not in marg_set:
-                        key, k = jr.split(key)
-                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
-            else:
-                # marginalize_names is None => auto-marginalize Gaussians, sample rest
-                for name, d in eff_linear.items():
-                    if _needs_explicit_sampling(d):
-                        key, k = jr.split(key)
-                        prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
+            for name in _explicit_linear_names(eff_linear, marginalize_names):
+                key, k = jr.split(key)
+                d = eff_linear[name]
+                prior_samples[name] = _unwrap_dist(d).sample(k, (n_total,))
 
         # Sample extension nonlinear parameters (jitter, GP hypers, etc.).
         if ext_nl_priors:
@@ -560,9 +656,41 @@ class RejectionSampler(AbstractSampler):
             for (model_key, d), k in zip(ext_nl_priors.items(), ext_keys, strict=True):
                 prior_samples[model_key] = _unwrap_dist(d).sample(k, (n_total,))
 
+        log_likelihoods = self._evaluate_log_likelihoods_batched(
+            model, prior_samples, eff_linear, marginalize_names, data
+        )
+
+        trimmed = {k: prior_samples[k][:n_prior_samples] for k in prior_samples}
+        return trimmed, log_likelihoods[:n_prior_samples]
+
+    @eqx.filter_jit
+    def _evaluate_log_likelihoods_batched(
+        self,
+        model: AbstractComponentModel | JointModel,
+        prior_samples: dict[str, jax.Array],
+        eff_linear: dict[str, Any],
+        marginalize_names: "tuple[str, ...] | None",
+        # data is correlated with the (polymorphic) model and is dispatched
+        # through model.log_prob; the static type cannot be narrowed here.
+        data: Any,
+    ) -> jax.Array:
+        """Evaluate the marginal log-likelihood for a pre-sampled prior dict.
+
+        Reshapes the flat ``prior_samples`` dict (each value of length
+        ``n_total = n_batches * batch_size``) into batches of size ``batch_size``,
+        evaluates ``model.log_prob`` for each batch under ``jax.lax.fori_loop``,
+        and returns the flattened length-``n_total`` log-likelihood array.
+
+        Used by both :meth:`_sample_prior_and_evaluate_batched` (fresh-draw path)
+        and :meth:`run_with_samples` (in-memory cached path).
+        """
+        prior = self.prior
+        base_names = model._base_nonlinear_names()
         model_keys = tuple(prior_samples.keys())
 
-        # Reshape into (n_batches, batch_size).
+        n_total = prior_samples[model_keys[0]].shape[0]
+        n_batches = n_total // self.batch_size
+
         batched: dict[str, jax.Array] = {
             k: prior_samples[k].reshape(n_batches, self.batch_size) for k in model_keys
         }
@@ -592,9 +720,38 @@ class RejectionSampler(AbstractSampler):
         log_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
+        return log_liks_batched.flatten()
 
-        trimmed = {k: prior_samples[k][:n_prior_samples] for k in model_keys}
-        return trimmed, log_liks_batched.flatten()[:n_prior_samples]
+    @eqx.filter_jit
+    def _evaluate_log_likelihoods_one_batch(
+        self,
+        model: AbstractComponentModel | JointModel,
+        batch: dict[str, jax.Array],
+        eff_linear: dict[str, Any],
+        marginalize_names: "tuple[str, ...] | None",
+        data: Any,
+    ) -> jax.Array:
+        """Evaluate ``model.log_prob`` over a single batch of prior samples.
+
+        Used by the HDF5-streaming branch of :meth:`run_with_samples`, where
+        a Python-level loop reads one chunk at a time from disk and feeds it
+        through this jit-compiled vmap.
+        """
+        prior = self.prior
+        base_names = model._base_nonlinear_names()
+        wrapped = _wrap_unit_values(batch, prior.nonlinear_priors, base_names)
+        if marginalize_names is None:
+            return jax.vmap(
+                lambda s: model.log_prob(s, data, linear_priors=eff_linear or None)
+            )(wrapped)
+        return jax.vmap(
+            lambda s: model.log_prob(
+                s,
+                data,
+                linear_priors=eff_linear or None,
+                marginalized_names=marginalize_names,
+            )
+        )(wrapped)
 
     @staticmethod
     @jax.jit

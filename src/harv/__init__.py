@@ -24,6 +24,7 @@ __all__ = (
     "RVModel",
     # Samplers
     "AbstractSampler",
+    "make_prior_cache",
     "NumpyroSampler",
     "HarvPrior",
     "RejectionSampler",
@@ -56,6 +57,7 @@ from harv.models import (
 )
 from harv.samplers import (
     AbstractSampler,
+    make_prior_cache,
     NumpyroSampler,
     RejectionSampler,
     Samples,

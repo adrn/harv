@@ -12,16 +12,22 @@ from typing import TYPE_CHECKING, Any
 import equinox as eqx
 import jax
 import jax.random as jr
+from unxt import Q
 
+from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDict,
     LinearPriorDist,
     PriorDist,
+    _evaluate_nonlinear_log_prior,
     _unwrap_dist,
 )
 
 if TYPE_CHECKING:
+    from harv.models.component import AbstractComponentModel
+    from harv.models.joint import JointModel
     from harv.models.parameterizations._base import AbstractParameterization
+    from harv.samplers.samples import Samples
 
 __all__ = ("HarvPrior",)
 
@@ -134,6 +140,166 @@ class HarvPrior(eqx.Module):
             name: _unwrap_dist(d).sample(k, (n_samples,))
             for (name, d), k in zip(self.nonlinear_priors.items(), keys, strict=True)
         }
+
+    def sample(
+        self,
+        key: jax.Array,
+        n_samples: int,
+        *,
+        model: "AbstractComponentModel | JointModel",
+        return_logprobs: bool = False,
+        marginalized_names: tuple[str, ...] | None = None,
+    ) -> "Samples":
+        """Draw a complete prior sample for a given model.
+
+        Unlike :meth:`sample_nonlinear`, this draws every parameter the rejection
+        sampler would consume for ``model``:
+
+        - base nonlinear params from :attr:`nonlinear_priors`
+        - extension nonlinear params (e.g. ``jitter``, GP hypers) discovered by
+          walking ``model.extensions``
+        - any linear params from :attr:`linear_priors` that are sampled
+          explicitly rather than analytically marginalized.  With the default
+          ``marginalized_names=None`` this is just the non-Gaussian linear priors
+          (e.g. ``HalfNormal``-prior parallax); when ``marginalized_names`` is
+          given it is every linear param not in that set (see below).
+
+        The returned :class:`~harv.samplers.Samples` is the same container the
+        rejection sampler produces for posteriors, with units restored from each
+        :class:`~harv.distributions.QuantityDistribution`.  Its
+        ``linear`` field is empty in the common Gaussian-linear case.
+        ``ln_likelihood`` is always ``None`` (no data yet); ``ln_prior`` is
+        populated when ``return_logprobs=True``, summing the nonlinear (base +
+        extension) prior log-densities — matching the convention used by
+        :meth:`RejectionSampler.run`.
+
+        ``model`` is required because the set of extension and explicit-linear
+        parameters depends on the extensions attached to the model.
+
+        Parameters
+        ----------
+        key
+            JAX random key.
+        n_samples
+            Number of prior draws.
+        model
+            Component or joint model template defining the extensions and
+            linear-prior classification.
+        return_logprobs
+            If ``True``, populate ``Samples.ln_prior`` with the per-sample
+            nonlinear-prior log-density.
+        marginalized_names
+            Which linear params are analytically marginalized (and therefore
+            *not* drawn here), mirroring
+            :attr:`RejectionSampler.marginalized_names`.  Must match the consuming
+            sampler so the explicit-linear keys agree.  ``None`` (default)
+            marginalizes every linear param that can be (the Gaussian ones),
+            leaving only non-Gaussian priors explicit.
+
+        Returns
+        -------
+        Samples
+            A container holding the full prior draw, suitable for passing to
+            :meth:`RejectionSampler.run_with_samples` or for caching via
+            :func:`harv.samplers.make_prior_cache`.
+
+        Examples
+        --------
+        >>> import jax
+        >>> from unxt import Q
+        >>> from harv import HarvPrior, RVModel, StandardRV
+        >>> prior = StandardRV().default_prior(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> samples = prior.sample(jax.random.key(0), 100, model=RVModel())
+        >>> samples.n_samples
+        100
+        >>> samples.data_type
+        'RVModel'
+        """
+        # Local imports break the cycle: ``harv.samplers`` already imports
+        # ``HarvPrior`` from this module.
+        from harv.samplers._prior_resolution import (  # noqa: PLC0415
+            effective_linear_prior_from_prior,
+            explicit_linear_names,
+            nonlinear_extension_priors_from_model,
+            resolve_effective_marginalized_names,
+            validate_extension_priors,
+        )
+        from harv.samplers.samples import Samples  # noqa: PLC0415
+
+        nonlinear_extension_priors, linear_extension_names = (
+            nonlinear_extension_priors_from_model(self, model)
+        )
+        effective_linear_prior = effective_linear_prior_from_prior(self, model) or {}
+        validate_extension_priors(self, model, effective_linear_prior)
+        effective_marginalized_names = resolve_effective_marginalized_names(
+            effective_linear_prior, marginalized_names
+        )
+
+        # 1. Base nonlinear orbital params (bare arrays).
+        key, nl_key = jr.split(key)
+        base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(nl_key, n_samples)
+
+        # 2. Extension nonlinear params (jitter, GP hypers, ...).
+        extension_nonlinear: dict[str, jax.Array] = {}
+        for name, d in nonlinear_extension_priors.items():
+            key, k = jr.split(key)
+            extension_nonlinear[name] = _unwrap_dist(d).sample(k, (n_samples,))
+
+        # 3. Explicit linear params -- those not analytically marginalized.
+        # ``explicit_linear_names`` honors ``marginalized_names`` exactly as the
+        # rejection sampler does, so the drawn set matches what
+        # ``RejectionSampler.run_with_samples`` expects.  In the common
+        # Gaussian-linear case (no override) this is empty.
+        explicit_linear: dict[str, jax.Array] = {}
+        for name in explicit_linear_names(
+            effective_linear_prior, effective_marginalized_names
+        ):
+            d = effective_linear_prior[name]
+            key, k = jr.split(key)
+            explicit_linear[name] = _unwrap_dist(d).sample(k, (n_samples,))
+
+        # Restore units onto nonlinear (base + extension) entries.
+        all_nonlinear_priors: dict[str, PriorDist] = {
+            **self.nonlinear_priors,
+            **nonlinear_extension_priors,
+        }
+        nonlinear_q: dict[str, Q] = {}
+        for name, value in {**base_nonlinear, **extension_nonlinear}.items():
+            d = all_nonlinear_priors[name]
+            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
+            nonlinear_q[name] = Q(value, unit)
+
+        # Restore units onto explicit linear entries.
+        linear_q: dict[str, Q] = {}
+        for name, value in explicit_linear.items():
+            d = effective_linear_prior[name]
+            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
+            linear_q[name] = Q(value, unit)
+
+        ln_prior: jax.Array | None = None
+        if return_logprobs:
+            # Match the rejection sampler's convention: ln_prior sums only the
+            # nonlinear (base + extension) contributions; explicit-linear and
+            # marginalized-linear priors contribute via ln_likelihood in the
+            # posterior path.
+            ln_prior = _evaluate_nonlinear_log_prior(
+                all_nonlinear_priors,
+                {**base_nonlinear, **extension_nonlinear},
+            )
+
+        return Samples(
+            nonlinear=nonlinear_q,
+            linear=linear_q,
+            data_type=type(model).__name__,
+            linear_extension_names=linear_extension_names,
+            ln_prior=ln_prior,
+            ln_likelihood=None,
+        )
 
     @classmethod
     def from_parameterization(

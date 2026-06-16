@@ -1274,7 +1274,47 @@ observation covariance diagonal.
 
 `sample_nonlinear(key, n_samples) -> dict[str, jax.Array]` draws from all nonlinear
 priors. Returns bare JAX arrays regardless of whether the distribution is wrapped in
-`QuantityDistribution`.
+`QuantityDistribution`. This is a low-level primitive; user code should prefer
+`HarvPrior.sample(...)` (below).
+
+### `sample`
+
+```python
+prior.sample(
+    key: jax.Array,
+    n_samples: int,
+    *,
+    model: AbstractComponentModel | JointModel,
+    return_logprobs: bool = False,
+    marginalized_names: tuple[str, ...] | None = None,
+) -> Samples
+```
+
+Draws a *complete* prior sample for ``model`` — base nonlinear params, any
+nonlinear extension params declared by ``model.extensions`` (jitter, GP hypers,
+…), and any linear params from ``linear_priors`` that are sampled explicitly
+rather than analytically marginalized. ``model`` is required because the set of
+extension and explicit-linear params is determined by the model template.
+
+`marginalized_names` mirrors `RejectionSampler.marginalized_names` and controls
+which linear params are marginalized (and so *not* drawn here). With the default
+`None`, every linear param that can be marginalized is (the Gaussian ones),
+leaving only the non-Gaussian linear priors explicit. When set, every linear
+param not in the set is sampled explicitly — even Gaussian ones. To build a
+prior library (in memory or via `make_prior_cache`) for a sampler with a custom
+`marginalized_names`, pass the **same** value here so the explicit-linear keys
+match what `run_with_samples` expects.
+
+Returns a `Samples` container (the same one produced by the rejection sampler
+for posteriors), with units restored from each `QuantityDistribution`. The
+`linear` field is empty in the common Gaussian-linear case. `ln_likelihood`
+is always `None`; `ln_prior` is populated when `return_logprobs=True`, summing
+the nonlinear (base + extension) prior log-densities — matching the
+convention used by `RejectionSampler.run(..., return_logprobs=True)`.
+
+Use `prior.sample(...)` to (a) inspect a draw, (b) hand a pre-computed library
+to `RejectionSampler.run_with_samples(...)`, or (c) seed a chunked HDF5 cache
+via `make_prior_cache(...)`.
 
 ______________________________________________________________________
 
@@ -1334,8 +1374,15 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 1. **Rejection.** Normalize weights to `max` and accept samples where
    `Uniform() < weight`.
 
-1. **Linear parameter sampling.** For each accepted nonlinear sample, call
-   `model.sample_conditional_linear(values, key)` to draw the marginalized
+1. **Cap.** If `max_posterior_samples` is set and more than that many samples
+   were accepted, randomly subsample to `max_posterior_samples` via
+   `jax.random.choice(..., replace=False)`. This happens *before* linear-
+   parameter sampling so the `jax.vmap` shape in step 5 is stable across
+   calls — important for population-scale loops where the same sampler is
+   reused over many datasets.
+
+1. **Linear parameter sampling.** For each (kept) accepted nonlinear sample,
+   call `model.sample_conditional_linear(values, key)` to draw the marginalized
    linear parameters from their conditional posterior, honoring the sampler's
    `marginalized_names` override when present.
 
@@ -1376,6 +1423,76 @@ component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
 The `batch_size` field controls how many samples are vmapped at once within a
 `fori_loop`. On CPU, the default of 100,000 is appropriate. On GPU, set
 `batch_size = n_prior_samples` to let XLA fully utilize the device.
+
+### Pre-computed prior samples (`run_with_samples`)
+
+When the same prior library is reused across many datasets, draw it once with
+`HarvPrior.sample(...)` (in memory) or `make_prior_cache(...)` (HDF5) and feed
+it back via `run_with_samples`:
+
+```python
+sampler.run_with_samples(
+    data: AbstractData | AbstractDatasetContainer,
+    prior_samples: Samples | str | os.PathLike,
+    *,
+    max_posterior_samples: int | None = None,
+    seed: int | None = None,
+    ignore_non_finite: bool = False,
+    return_logprobs: bool = False,
+    randomize_prior_order: bool = True,
+) -> Samples
+```
+
+`prior_samples` dispatches on type:
+
+- `Samples` — in-memory cache returned by `prior.sample(...)`. Requires every
+  key the (prior, model) bundle expects to be present; any missing keys raise
+  `ValueError` listing them. Extra keys are ignored, so a superset cache (e.g. a
+  jitter cache reused by a non-jitter sampler) is reused safely.
+- `str | os.PathLike` — path to an HDF5 cache (see `make_prior_cache`). The
+  file is streamed `batch_size` rows at a time via contiguous h5py slices, so
+  the file may be much larger than RAM. Same key handling as the in-memory
+  branch: missing keys raise, extra keys are ignored.
+
+`randomize_prior_order` (HDF5 path only): when `True` (default), batch *order*
+is permuted via `np.random.default_rng(seed).permutation(n_batches)`. Each
+batch is still a single contiguous h5py slice — no random seeks, no read
+amplification. Set to `False` for strictly sequential reads (reproducibility /
+debugging).
+
+The other keyword arguments behave exactly as on `run`.
+
+### Building a prior cache (`make_prior_cache`)
+
+```python
+from harv.samplers import make_prior_cache
+
+make_prior_cache(
+    prior: HarvPrior,
+    model: AbstractComponentModel | JointModel,
+    n_samples: int,
+    filename: str | os.PathLike,
+    *,
+    key: jax.Array,
+    batch_size: int = 100_000,
+    return_logprobs: bool = False,
+    marginalized_names: tuple[str, ...] | None = None,
+) -> None
+```
+
+Writes `n_samples` prior draws to an HDF5 file without materializing more than
+`batch_size` rows in memory. Each batch is drawn from an independent subkey
+via `jax.random.fold_in(key, i)`, so on-disk row order is i.i.d.
+
+`marginalized_names` is forwarded to `HarvPrior.sample` and must match the
+consuming sampler's `marginalized_names` (see above).
+
+The on-disk layout is identical to `Samples.to_hdf5` (see "`to_hdf5` /
+`from_hdf5`" below): nonlinear and linear datasets under `nonlinear/` and
+`linear/` groups (with `@unit` attrs, each dataset keeping its parameter's
+dtype), metadata under `metadata/`, and `ln_prior` as a top-level dataset when
+`return_logprobs=True`. A prior cache is therefore loadable directly via
+`Samples.from_hdf5(path)` for inspection.
 
 ### MCMC sampling (`NumpyroSampler`)
 
