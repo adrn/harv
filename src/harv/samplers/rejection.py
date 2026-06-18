@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+from jax.scipy.special import logsumexp
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
@@ -100,6 +101,47 @@ def _wrap_unit_values(
     return result
 
 
+def _prior_monte_carlo_evidence_stats(
+    log_likelihoods: jax.Array,
+) -> dict[str, Any]:
+    """Estimate the log-evidence using Monte Carlo integration with the prior.
+
+    Parameters
+    ----------
+    log_likelihoods
+        The log-likelihood values for each prior sample.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary containing the estimated log-evidence and related statistics.
+    """
+    n_prior = int(log_likelihoods.shape[0])
+
+    log_s1 = logsumexp(log_likelihoods)
+    log_s2 = logsumexp(2.0 * log_likelihoods)
+    max_log_likelihood = jnp.max(log_likelihoods)
+
+    logz = log_s1 - jnp.log(n_prior)
+
+    # Evidence effective sample size:
+    # ESS_Z = (sum L)^2 / sum L^2
+    log_ess = 2.0 * log_s1 - log_s2
+    ess = jnp.exp(log_ess)
+
+    # Delta-method MC standard error for log(mean L):
+    # se(log Z) ~ sqrt(1 / ESS_Z - 1 / N)
+    logz_mcse = jnp.sqrt(jnp.maximum(0.0, jnp.exp(-log_ess) - 1.0 / n_prior))
+
+    return {
+        "logZ_int": logz,
+        "logZ_int_mcse": logz_mcse,
+        "logZ_int_ess": ess,
+        "max_log_likelihood": max_log_likelihood,
+        "n_prior_samples": n_prior,
+    }
+
+
 @final
 class RejectionSampler(AbstractSampler):
     """Rejection sampler for Keplerian orbital parameters.
@@ -152,6 +194,7 @@ class RejectionSampler(AbstractSampler):
         seed: int | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
+        return_evidence_stats: bool = False,
     ) -> Samples:
         """Run rejection sampling.
 
@@ -183,6 +226,9 @@ class RejectionSampler(AbstractSampler):
             marginal log-likelihood) and ``ln_prior`` (the summed nonlinear
             prior log-density).  These enable :meth:`Samples.map_sample` and
             the :attr:`Samples.ln_posterior` property.  Default ``False``.
+        return_evidence_stats
+            If ``True``, return additional statistics about the evidence integral
+            estimate. Default ``False``.
 
         Returns
         -------
@@ -225,6 +271,7 @@ class RejectionSampler(AbstractSampler):
             ignore_non_finite=ignore_non_finite,
             max_posterior_samples=max_posterior_samples,
             return_logprobs=return_logprobs,
+            return_evidence_stats=return_evidence_stats,
         )
 
     def _finalize_posterior(
@@ -239,6 +286,7 @@ class RejectionSampler(AbstractSampler):
         ignore_non_finite: bool,
         max_posterior_samples: int | None,
         return_logprobs: bool,
+        return_evidence_stats: bool,
     ) -> Samples:
         """Shared downstream: rejection -> linear -> trim -> Samples assembly.
 
@@ -312,12 +360,18 @@ class RejectionSampler(AbstractSampler):
         t_ref = data.t_ref
 
         metadata: dict[str, Any] = {}
+
         if t_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
             _t_unit = str(t_ref.unit)
             metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
+
+        if return_evidence_stats:
+            evidence_meta = _prior_monte_carlo_evidence_stats(log_likelihoods)
+            evidence_meta = {k: float(v) for k, v in evidence_meta.items()}
+            metadata.update(evidence_meta)
 
         ln_likelihood_arr: jax.Array | None = None
         ln_prior_arr: jax.Array | None = None
@@ -346,6 +400,7 @@ class RejectionSampler(AbstractSampler):
         seed: int | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
+        return_evidence_stats: bool = False,
         randomize_prior_order: bool = True,
     ) -> Samples:
         """Run rejection against pre-computed prior samples.
@@ -373,6 +428,8 @@ class RejectionSampler(AbstractSampler):
         ignore_non_finite
             See :meth:`run`.
         return_logprobs
+            See :meth:`run`.
+        return_evidence_stats
             See :meth:`run`.
         randomize_prior_order
             Disk-streaming branch only: when ``True`` (default), batches are
@@ -424,6 +481,7 @@ class RejectionSampler(AbstractSampler):
             ignore_non_finite=ignore_non_finite,
             max_posterior_samples=max_posterior_samples,
             return_logprobs=return_logprobs,
+            return_evidence_stats=return_evidence_stats,
         )
 
     def _expected_prior_keys(
@@ -717,6 +775,7 @@ class RejectionSampler(AbstractSampler):
                 )(wrapped)
             )
 
+        # TODO: investigate parallelizing this over device - using shard_map instead?
         log_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
