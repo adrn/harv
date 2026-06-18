@@ -5,7 +5,7 @@ rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
 import warnings
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, overload
 
@@ -33,7 +33,7 @@ try:
 except ImportError:
     HAS_ARVIZ = False
 
-__all__ = ["Samples"]
+__all__ = ("Samples", "pad_and_stack_samples")
 
 
 def _find_namespaced_keys(d: dict[str, Any], param_name: str) -> list[str]:
@@ -303,8 +303,24 @@ class Samples(eqx.Module):
 
     @property
     def n_samples(self) -> int:
-        """Number of posterior samples."""
-        return int(next(iter(self.nonlinear.values())).shape[0])
+        """Number of posterior samples per batch entry.
+
+        For a flat ``Samples`` (each parameter array 1-D) this is the total
+        number of samples. For a batched ``Samples`` -- e.g. shape
+        ``(N_stars, K_max)`` after :func:`pad_and_stack_samples` -- this is
+        the trailing-axis length (samples per entity); the leading batch
+        dimensions are exposed via :attr:`batch_shape`.
+        """
+        return int(next(iter(self.nonlinear.values())).shape[-1])
+
+    @property
+    def batch_shape(self) -> tuple[int, ...]:
+        """Leading batch dimensions of the parameter arrays (``shape[:-1]``).
+
+        Empty tuple for a flat ``Samples``; ``(N_stars,)`` after
+        :func:`pad_and_stack_samples`.
+        """
+        return tuple(next(iter(self.nonlinear.values())).shape[:-1])
 
     @property
     def meta(self) -> _MetadataView:
@@ -1581,3 +1597,180 @@ class Samples(eqx.Module):
             triangle=default_kwargs.get("triangle", "lower"),
         )
         return plot_matrix
+
+
+def _check_stack_consistency(samples_list: Sequence[Samples]) -> None:
+    """Verify all entries share schema (data_type, keys, units, ext names)."""
+    first = samples_list[0]
+    first_nl_units = {k: str(v.unit) for k, v in first.nonlinear.items()}
+    first_lin_units = {k: str(v.unit) for k, v in first.linear.items()}
+    for i, s in enumerate(samples_list[1:], start=1):
+        if s.data_type != first.data_type:
+            msg = (
+                f"Samples[{i}].data_type={s.data_type!r} does not match "
+                f"Samples[0].data_type={first.data_type!r}"
+            )
+            raise ValueError(msg)
+        if s.linear_extension_names != first.linear_extension_names:
+            msg = (
+                f"Samples[{i}].linear_extension_names="
+                f"{s.linear_extension_names!r} does not match "
+                f"Samples[0].linear_extension_names="
+                f"{first.linear_extension_names!r}"
+            )
+            raise ValueError(msg)
+        if set(s.nonlinear) != set(first.nonlinear):
+            msg = (
+                f"Samples[{i}].nonlinear keys {set(s.nonlinear)!r} differ from "
+                f"Samples[0].nonlinear keys {set(first.nonlinear)!r}"
+            )
+            raise ValueError(msg)
+        if set(s.linear) != set(first.linear):
+            msg = (
+                f"Samples[{i}].linear keys {set(s.linear)!r} differ from "
+                f"Samples[0].linear keys {set(first.linear)!r}"
+            )
+            raise ValueError(msg)
+        for k, expected in first_nl_units.items():
+            got = str(s.nonlinear[k].unit)
+            if got != expected:
+                msg = (
+                    f"Samples[{i}].nonlinear[{k!r}] has unit {got!r}, "
+                    f"expected {expected!r} (from Samples[0])"
+                )
+                raise ValueError(msg)
+        for k, expected in first_lin_units.items():
+            got = str(s.linear[k].unit)
+            if got != expected:
+                msg = (
+                    f"Samples[{i}].linear[{k!r}] has unit {got!r}, "
+                    f"expected {expected!r} (from Samples[0])"
+                )
+                raise ValueError(msg)
+
+
+def _pad_quantity_dict(
+    qdicts: Sequence[dict[str, Q]],
+    sample_counts: Sequence[int],
+    K_max: int,
+    pad_value: float,
+) -> dict[str, Q]:
+    """Pad a list of ``{key: Q}`` dicts to a single ``{key: Q[N, K_max]}`` dict."""
+    out: dict[str, Q] = {}
+    N = len(qdicts)
+    for key, ref_q in qdicts[0].items():
+        unit = str(ref_q.unit)
+        dtype = np.asarray(ref_q.value).dtype
+        padded = np.full((N, K_max), pad_value, dtype=dtype)
+        for n, (qd, k_n) in enumerate(zip(qdicts, sample_counts, strict=True)):
+            padded[n, :k_n] = np.asarray(ustrip(unit, qd[key]))
+        out[key] = Q(jnp.asarray(padded), unit)
+    return out
+
+
+def pad_and_stack_samples(
+    samples_list: Sequence[Samples],
+    *,
+    pad_value: float = float("nan"),
+) -> tuple[Samples, jax.Array]:
+    """Stack a list of per-entity ``Samples`` into one batched ``Samples`` + mask.
+
+    All inputs must share ``data_type``, ``linear_extension_names``, and the
+    set of nonlinear / linear keys with matching units. Per-entity sample
+    counts may differ; the trailing axis is padded to
+    ``K_max = max(s.n_samples for s in samples_list)`` with ``pad_value``.
+
+    ``ln_likelihood`` and ``ln_prior`` are stacked iff every input carries
+    them, with ``-inf`` as the log-space padding sentinel; otherwise the
+    stacked ``Samples`` has ``None`` for those fields. ``metadata`` is
+    inherited from ``samples_list[0]``.
+
+    Parameters
+    ----------
+    samples_list
+        Sequence of per-entity ``Samples`` to stack. Must be non-empty.
+    pad_value
+        Fill value for unused trailing-axis positions in the nonlinear and
+        linear arrays. Default ``NaN``: a quiet stand-in that propagates
+        loudly if a consumer forgets to apply the returned mask.
+
+    Returns
+    -------
+    stacked : Samples
+        Batched ``Samples`` with each parameter array of shape
+        ``(N, K_max)`` where ``N = len(samples_list)``. ``stacked.n_samples``
+        is ``K_max`` and ``stacked.batch_shape`` is ``(N,)``.
+    mask : jax.Array
+        Boolean array of shape ``(N, K_max)``; ``True`` where the entry
+        carries a real sample.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers.samples import Samples, pad_and_stack_samples
+    >>> def _mk(periods, K):
+    ...     return Samples(
+    ...         nonlinear={
+    ...             "period": Q(periods, "day"),
+    ...             "eccentricity": Q([0.1] * len(periods), ""),
+    ...             "phase_peri": Q([0.0] * len(periods), ""),
+    ...         },
+    ...         linear={
+    ...             "rv_semiamp": Q([K] * len(periods), "km/s"),
+    ...             "v_sys": Q([0.0] * len(periods), "km/s"),
+    ...         },
+    ...         data_type="rv",
+    ...     )
+    >>> stacked, mask = pad_and_stack_samples([_mk([10.0, 20.0], 5.0),
+    ...                                        _mk([30.0, 40.0, 50.0], 7.0)])
+    >>> stacked.batch_shape, stacked.n_samples
+    ((2,), 3)
+    >>> bool(mask[0, 2]), bool(mask[1, 2])
+    (False, True)
+    """
+    if len(samples_list) == 0:
+        msg = "pad_and_stack_samples requires at least one Samples instance"
+        raise ValueError(msg)
+
+    _check_stack_consistency(samples_list)
+
+    first = samples_list[0]
+    N = len(samples_list)
+    sample_counts = [s.n_samples for s in samples_list]
+    K_max = max(sample_counts)
+
+    nonlinear = _pad_quantity_dict(
+        [s.nonlinear for s in samples_list], sample_counts, K_max, pad_value
+    )
+    linear = _pad_quantity_dict(
+        [s.linear for s in samples_list], sample_counts, K_max, pad_value
+    )
+
+    mask_np = np.zeros((N, K_max), dtype=bool)
+    for n, k_n in enumerate(sample_counts):
+        mask_np[n, :k_n] = True
+    mask = jnp.asarray(mask_np)
+
+    def _stack_logprob(getter: str) -> jax.Array | None:
+        if any(getattr(s, getter) is None for s in samples_list):
+            return None
+        ref = getattr(first, getter)
+        dtype = np.asarray(ref).dtype
+        padded = np.full((N, K_max), -np.inf, dtype=dtype)
+        for n, s in enumerate(samples_list):
+            padded[n, : sample_counts[n]] = np.asarray(getattr(s, getter))
+        return jnp.asarray(padded)
+
+    ln_likelihood = _stack_logprob("ln_likelihood")
+    ln_prior = _stack_logprob("ln_prior")
+
+    stacked = Samples(
+        nonlinear=nonlinear,
+        linear=linear,
+        data_type=first.data_type,
+        metadata=first.metadata,
+        linear_extension_names=first.linear_extension_names,
+        ln_likelihood=ln_likelihood,
+        ln_prior=ln_prior,
+    )
+    return stacked, mask
