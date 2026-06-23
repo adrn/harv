@@ -42,7 +42,7 @@ jobs:
         run: uv sync --group docs
 
       - name: Execute the notebooks
-        # TODO: docs/tutorials/astrometry/*.ipynb docs/tutorials/case-studies/*.ipynb
+        # TODO: docs/tutorials/astrometry/*.ipynb
         run: |
             for nb in docs/tutorials/rv/*.ipynb; do
             echo "Executing $nb"
