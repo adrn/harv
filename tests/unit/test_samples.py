@@ -10,7 +10,7 @@ from harv.kepler.orbits import (
     rv_at_times,
     thiele_innes_ABFG,
 )
-from harv.samplers.samples import Samples, _MetadataView
+from harv.samplers.samples import Samples, _MetadataView, pad_and_stack_samples
 
 
 def _make_astro_samples() -> Samples:
@@ -887,3 +887,188 @@ class TestThieleInnesToCampbell:
         # Non-TI linear params preserved
         assert jnp.allclose(converted["ra0"].value, s["ra0"].value)
         assert jnp.allclose(converted["parallax"].value, s["parallax"].value)
+
+
+def _make_rv_samples(
+    periods,
+    K,
+    *,
+    with_logprobs: bool = False,
+    data_type: str = "rv",
+    linear_extension_names: tuple[str, ...] = (),
+) -> Samples:
+    """RV Samples with a given period vector and constant K."""
+    n = len(periods)
+    nonlinear = {
+        "period": Q(jnp.asarray(periods), "day"),
+        "eccentricity": Q(jnp.full((n,), 0.1), ""),
+        "phase_peri": Q(jnp.full((n,), 0.0), ""),
+        "arg_peri": Q(jnp.full((n,), 1.0), "rad"),
+    }
+    linear = {
+        "rv_semiamp": Q(jnp.full((n,), float(K)), "km/s"),
+        "v_sys": Q(jnp.full((n,), 0.0), "km/s"),
+    }
+    kw: dict = {}
+    if with_logprobs:
+        kw["ln_likelihood"] = jnp.arange(n, dtype=jnp.float32)
+        kw["ln_prior"] = -jnp.arange(n, dtype=jnp.float32)
+    return Samples(
+        nonlinear=nonlinear,
+        linear=linear,
+        data_type=data_type,
+        metadata={"t_ref": 0.0},
+        linear_extension_names=linear_extension_names,
+        **kw,
+    )
+
+
+class TestBatchedSamples:
+    """n_samples / batch_shape support for batched parameter arrays."""
+
+    def test_n_samples_uses_trailing_axis_1d(self):
+        s = _make_rv_samples([10.0, 20.0, 30.0], 5.0)
+        assert s.n_samples == 3
+        assert s.batch_shape == ()
+
+    def test_n_samples_uses_trailing_axis_batched(self):
+        # Hand-build a (3, 7) batched Samples by stacking.
+        s = Samples(
+            nonlinear={
+                "period": Q(jnp.zeros((3, 7)) + 100.0, "day"),
+                "eccentricity": Q(jnp.zeros((3, 7)) + 0.1, ""),
+                "phase_peri": Q(jnp.zeros((3, 7)), ""),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.zeros((3, 7)) + 5.0, "km/s"),
+                "v_sys": Q(jnp.zeros((3, 7)), "km/s"),
+            },
+            data_type="rv",
+            metadata={"t_ref": 0.0},
+        )
+        assert s.n_samples == 7
+        assert s.batch_shape == (3,)
+
+
+class TestPadAndStackSamples:
+    """Behaviour of ``pad_and_stack_samples``."""
+
+    def test_basic_shape_and_mask(self):
+        s1 = _make_rv_samples([10.0, 20.0, 30.0, 40.0], 5.0)
+        s2 = _make_rv_samples([100.0] * 7, 6.0)
+        s3 = _make_rv_samples([1.0, 2.0, 3.0, 4.0, 5.0], 7.0)
+
+        stacked, mask = pad_and_stack_samples([s1, s2, s3])
+
+        assert stacked.batch_shape == (3,)
+        assert stacked.n_samples == 7
+        assert mask.shape == (3, 7)
+        assert int(mask.sum()) == 4 + 7 + 5
+
+        # Per-entry mask layout: True up to s_i.n_samples, False after.
+        assert bool(mask[0, 3]) is True
+        assert bool(mask[0, 4]) is False
+        assert bool(mask[2, 4]) is True
+        assert bool(mask[2, 5]) is False
+
+        # Values land in the right (entity, sample) slots.
+        period_pad = stacked["period"]
+        assert float(period_pad.value[0, 0]) == 10.0
+        assert float(period_pad.value[1, 6]) == 100.0
+        assert float(period_pad.value[2, 4]) == 5.0
+        # Padded slot is NaN.
+        assert jnp.isnan(period_pad.value[0, 4])
+
+    def test_units_and_metadata_round_trip(self):
+        s1 = _make_rv_samples([10.0, 20.0], 5.0, linear_extension_names=("offset",))
+        s2 = _make_rv_samples([30.0], 6.0, linear_extension_names=("offset",))
+        stacked, _mask = pad_and_stack_samples([s1, s2])
+
+        assert str(stacked.nonlinear["period"].unit) == "d"
+        assert str(stacked.linear["rv_semiamp"].unit) == "km / s"
+        assert stacked.data_type == "rv"
+        assert stacked.linear_extension_names == ("offset",)
+        assert stacked.metadata == s1.metadata
+
+    def test_logprobs_when_all_present(self):
+        s1 = _make_rv_samples([10.0, 20.0], 5.0, with_logprobs=True)
+        s2 = _make_rv_samples([30.0, 40.0, 50.0], 6.0, with_logprobs=True)
+        stacked, mask = pad_and_stack_samples([s1, s2])
+
+        assert stacked.ln_likelihood is not None
+        assert stacked.ln_prior is not None
+        assert stacked.ln_likelihood.shape == (2, 3)
+
+        # Padded position uses -inf.
+        assert bool(jnp.isneginf(stacked.ln_likelihood[0, 2]))
+        # Real values preserved.
+        assert float(stacked.ln_likelihood[1, 2]) == 2.0
+        assert float(stacked.ln_prior[1, 2]) == -2.0
+        # Mask agrees with padded positions.
+        assert int(mask.sum()) == 2 + 3
+
+    def test_logprobs_inconsistent_becomes_none(self):
+        s1 = _make_rv_samples([10.0, 20.0], 5.0, with_logprobs=True)
+        s2 = _make_rv_samples([30.0], 6.0, with_logprobs=False)
+        stacked, _mask = pad_and_stack_samples([s1, s2])
+        assert stacked.ln_likelihood is None
+        assert stacked.ln_prior is None
+
+    def test_mismatched_data_type_raises(self):
+        s1 = _make_rv_samples([10.0], 5.0, data_type="rv")
+        s2 = _make_rv_samples([20.0], 6.0, data_type="gaia_astro")
+        with pytest.raises(ValueError, match="data_type"):
+            pad_and_stack_samples([s1, s2])
+
+    def test_mismatched_keys_raise(self):
+        s1 = _make_rv_samples([10.0], 5.0)
+        s2 = _make_rv_samples([20.0], 6.0)
+        # Drop a nonlinear key from s2.
+        bad = Samples(
+            nonlinear={k: v for k, v in s2.nonlinear.items() if k != "arg_peri"},
+            linear=s2.linear,
+            data_type=s2.data_type,
+            metadata=s2.metadata,
+            linear_extension_names=s2.linear_extension_names,
+        )
+        with pytest.raises(ValueError, match="nonlinear keys"):
+            pad_and_stack_samples([s1, bad])
+
+    def test_mismatched_units_raise(self):
+        s1 = _make_rv_samples([10.0, 20.0], 5.0)
+        s2 = _make_rv_samples([30.0, 40.0], 6.0)
+        # Replace s2.period with a Q in hours.
+        bad_nonlinear = dict(s2.nonlinear)
+        bad_nonlinear["period"] = Q(s2.nonlinear["period"].value, "hr")
+        bad = Samples(
+            nonlinear=bad_nonlinear,
+            linear=s2.linear,
+            data_type=s2.data_type,
+            metadata=s2.metadata,
+            linear_extension_names=s2.linear_extension_names,
+        )
+        with pytest.raises(ValueError, match="unit"):
+            pad_and_stack_samples([s1, bad])
+
+    def test_mismatched_extension_names_raise(self):
+        s1 = _make_rv_samples([10.0], 5.0, linear_extension_names=("offset_a",))
+        s2 = _make_rv_samples([20.0], 6.0, linear_extension_names=("offset_b",))
+        with pytest.raises(ValueError, match="linear_extension_names"):
+            pad_and_stack_samples([s1, s2])
+
+    def test_empty_input_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            pad_and_stack_samples([])
+
+    def test_pytree_jittable(self):
+        s1 = _make_rv_samples([10.0, 20.0], 5.0)
+        s2 = _make_rv_samples([30.0, 40.0, 50.0], 6.0)
+        stacked, mask = pad_and_stack_samples([s1, s2])
+
+        @jax.jit
+        def masked_period_sum(samples: Samples, m: jax.Array) -> jax.Array:
+            return jnp.where(m, samples["period"].value, 0.0).sum()
+
+        out = float(masked_period_sum(stacked, mask))
+        expected = 10.0 + 20.0 + 30.0 + 40.0 + 50.0
+        assert jnp.allclose(out, expected)

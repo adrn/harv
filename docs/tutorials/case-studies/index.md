@@ -2,9 +2,10 @@
 
 End-to-end analyses of real systems with harv.
 
-<!-- ::::{toctree}
+::::{toctree}
 :maxdepth: 1
 
-HD285968
-gaia-bh3
-:::: -->
+population-binary-fraction
+<!-- HD285968
+gaia-bh3 -->
+::::

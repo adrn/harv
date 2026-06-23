@@ -1631,7 +1631,7 @@ to construct a new `Samples` with the same metadata).
     carrying `semi_major_axis` and `parallax`)
 
 Integer, slice, or array keys return a new `Samples` with all parameter arrays
-sliced along the sample axis:
+sliced along the *leading* axis:
 
 ```python
 samples[0]       # first sample — returns Samples with shape (1,) arrays
@@ -1639,13 +1639,37 @@ samples[:100]    # first 100 samples
 samples[mask]    # boolean mask
 ```
 
-Integer keys are promoted to length-1 slices so all arrays remain 1-d. Static
-fields (`data_type`, `metadata`, `linear_extension_names`) are passed through unchanged.
+Integer keys are promoted to length-1 slices so all arrays remain at least 1-d.
+Static fields (`data_type`, `metadata`, `linear_extension_names`) are passed
+through unchanged.
+
+Parameter arrays may carry one or more leading batch dimensions -- for example
+`(N_stars, K_max)` after [`pad_and_stack_samples`](#stacking-per-entity-samples).
+In that case, integer / slice / array indexing slices the leading axis (the
+batch axis), and `n_samples` is the trailing-axis length (samples per entity);
+the leading shape is exposed via `batch_shape`.
+
+### Stacking per-entity Samples
+
+`harv.samplers.pad_and_stack_samples(samples_list, *, pad_value=float('nan')) -> tuple[Samples, jax.Array]`
+combines a sequence of per-entity `Samples` (each with 1-D parameter arrays of
+possibly differing length) into one batched `Samples` of shape `(N, K_max)`
+plus a `(N, K_max)` boolean mask that is `True` at non-padded positions. All
+inputs must share `data_type`, `linear_extension_names`, and the set of
+nonlinear / linear keys with matching units per key (mismatches raise
+`ValueError`). `ln_likelihood` and `ln_prior` are stacked iff every input
+carries them, with `-inf` as the log-space padding sentinel; otherwise the
+stacked `Samples` has `None` for those fields. `metadata` is inherited from
+the first entry.
 
 ### Methods
 
 - `keys() -> list[str]` — nonlinear + linear + derived parameter names
-- `n_samples -> int` — number of posterior samples
+- `n_samples -> int` — number of samples per batch entry (trailing-axis
+  length; equals total samples for a flat 1-D `Samples`)
+- `batch_shape -> tuple[int, ...]` — leading batch dimensions
+  (empty tuple for a flat `Samples`; e.g. `(N_stars,)` after
+  `pad_and_stack_samples`)
 - `median(key=None)` — median of one key or all keys
 - `percentile(key, percentiles=(16, 50, 84))` — compute percentiles
 - `summary(params=None)` — dict of statistics (median, mean, std, p16, p84)

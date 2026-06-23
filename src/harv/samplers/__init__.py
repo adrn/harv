@@ -11,7 +11,7 @@ from .conversion import convert_parameterization
 from .numpyro import NumpyroSampler
 from .prior_cache import make_prior_cache
 from .rejection import RejectionSampler
-from .samples import Samples
+from .samples import Samples, pad_and_stack_samples
 
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "NumpyroSampler",
     "convert_parameterization",
     "make_prior_cache",
+    "pad_and_stack_samples",
     "QD",
     "QuantityDistribution",
     "RejectionSampler",
