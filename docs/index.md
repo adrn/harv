@@ -46,7 +46,8 @@ individual systems are not well-constrained.
 
 ### Where to go next
 
-- New to harv? Start with the **{doc}`tutorials/index`**.
+- New to harv? Start with **{doc}`getting-started`**.
+- Check out the **{doc}`tutorials/index`**.
 - Read about some  **{doc}`key concepts <concepts>`**.
 - New to JAX, NumPyro, or unxt? Check **{doc}`sharp-bits`**.
 - Looking up a specific class or function? Use the **{doc}`api/index`**.

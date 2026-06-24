@@ -114,7 +114,7 @@ nox = [
 Homepage = "https://github.com/adrn/harv"
 "Source Code" = "https://github.com/adrn/harv"
 "Bug Tracker" = "https://github.com/adrn/harv/issues"
-Documentation = "https://harv.readthedocs.io"
+Documentation = "https://harvey.readthedocs.io"
 Download = "https://pypi.org/project/harv/#files"
 
 ################################################################################
