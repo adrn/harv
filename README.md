@@ -61,7 +61,9 @@ uv add git+https://github.com/adrn/harv
 
 Here are a few entry points to the documentation:
 
-- [General getting started guide](<>)
+- [Documentation](https://harvey.readthedocs.io/en/latest)
+- [Getting started with harv](https://harvey.readthedocs.io/en/latest/getting-started.html)
+- [Tutorials](https://harvey.readthedocs.io/en/latest/tutorials/index.html)
 
 ## How it works
 
