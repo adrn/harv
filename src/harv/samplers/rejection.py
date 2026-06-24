@@ -2,6 +2,7 @@
 
 import os
 import uuid
+import warnings
 from pathlib import Path
 from typing import Any, NamedTuple, cast, final
 
@@ -19,6 +20,7 @@ from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     _evaluate_nonlinear_log_prior,
+    _needs_explicit_sampling,
     _unwrap_dist,
 )
 from harv.models.component import AbstractComponentModel
@@ -142,6 +144,40 @@ def _prior_monte_carlo_evidence_stats(
     }
 
 
+def _describe_prior(d: Any) -> tuple[str, str]:
+    """Return ``(distribution_name, unit)`` for a prior entry, for :meth:`summary`.
+
+    Handles :class:`~harv.distributions.QuantityDistribution` wrappers (which
+    carry a unit), bare numpyro distributions (dimensionless), and
+    ``LinearPriorCallable`` entries (callables that produce a ``Normal`` at
+    sampling time, e.g. :class:`~harv.models.priors.PeriodDependentKPrior`).
+    Only ``QuantityDistribution`` exposes a unit; everything else reports ``"-"``.
+    """
+    if isinstance(d, QuantityDistribution):
+        return type(d.distribution).__name__, (str(d.unit) or "-")
+    # Bare numpyro distribution or a LinearPriorCallable: the class name is the
+    # most useful label, and the unit (if any) is only resolved at call time.
+    return type(d).__name__, "-"
+
+
+def _describe_extension(ext: Any) -> str:
+    """Short label for an extension, e.g. ``"Jitter(km/s)"``."""
+    name = type(ext).__name__
+    unit = getattr(ext, "param_unit", None)
+    return f"{name}({unit})" if unit else name
+
+
+def _fmt_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    """Format an aligned, indented ASCII table (header row + data rows)."""
+    all_rows = [header, *rows]
+    widths = [max(len(r[i]) for r in all_rows) for i in range(len(header))]
+    lines: list[str] = []
+    for r in all_rows:
+        cells = [r[i].ljust(widths[i]) for i in range(len(header))]
+        lines.append(("  " + "  ".join(cells)).rstrip())
+    return lines
+
+
 @final
 class RejectionSampler(AbstractSampler):
     """Rejection sampler for Keplerian orbital parameters.
@@ -184,6 +220,150 @@ class RejectionSampler(AbstractSampler):
     """
 
     batch_size: int = eqx.field(static=True, default=100_000)
+
+    def summary(self) -> str:
+        """Return a plain-ASCII summary of this sampler's model and parameters.
+
+        The summary reports the model and parameterization, the active
+        extensions, and -- crucially -- how the rejection sampler will treat each
+        parameter:
+
+        - **Nonlinear** parameters (orbital params plus any nonlinear extension
+          params such as ``jitter``) are always sampled explicitly.
+        - **Linear** parameters are classified as ``marginalized`` (analytically
+          integrated out), ``sampled`` (a non-Gaussian linear prior that cannot
+          be marginalized, e.g. a ``HalfNormal`` parallax), or
+          ``sampled (could marg.)`` (a Gaussian/linear prior that *could* be
+          marginalized but is excluded via :attr:`marginalized_names`).
+
+        Each row also shows the prior-distribution type and unit.  This is an
+        introspection helper only: it runs no sampling and emits no warnings.
+
+        Returns
+        -------
+        str
+            The formatted summary.  Print it with ``print(sampler.summary())``.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> import harv.models as hm
+        >>> from harv import RejectionSampler
+        >>> from harv.models.rv import RVModel
+        >>> prior = hm.StandardRV().default_prior(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> sampler = RejectionSampler(prior, RVModel())
+        >>> text = sampler.summary()
+        >>> "RVModel" in text and "marginalized" in text
+        True
+        >>> "rv_semiamp" in text and "period" in text
+        True
+        """
+        # Resolve the model/prior bundle the same way ``run`` does, but suppress
+        # the non-Gaussian-marginalization warning: introspection must be
+        # side-effect-free, and the table below already surfaces that fact.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            prepared = _prepare_sampler_model(
+                self.prior, self.model, self.marginalized_names
+            )
+
+        # Nonlinear parameters: always sampled explicitly (base + extension).
+        nl_rows: list[tuple[str, ...]] = []
+        for name, d in self.prior.nonlinear_priors.items():
+            dist_name, unit = _describe_prior(d)
+            nl_rows.append((name, dist_name, unit))
+        for name, d in prepared.nonlinear_extension_priors.items():
+            dist_name, unit = _describe_prior(d)
+            nl_rows.append((f"{name} (ext)", dist_name, unit))
+
+        # Linear parameters: classify marginalized vs explicitly sampled.
+        eff_linear = prepared.effective_linear_prior or {}
+        explicit = set(
+            _explicit_linear_names(eff_linear, prepared.effective_marginalized_names)
+        )
+        lin_rows: list[tuple[str, ...]] = []
+        n_marginalized = 0
+        for name, d in eff_linear.items():
+            dist_name, unit = _describe_prior(d)
+            if name not in explicit:
+                status = "marginalized"
+                n_marginalized += 1
+            elif _needs_explicit_sampling(d):
+                status = "sampled"
+            else:
+                status = "sampled (could marg.)"
+            lin_rows.append((name, status, dist_name, unit))
+
+        # Sampled = all nonlinear params + the linear params not marginalized.
+        n_sampled = len(nl_rows) + (len(lin_rows) - n_marginalized)
+
+        bar = "=" * 60
+        lines: list[str] = [bar, type(self).__name__, bar]
+        lines.extend(self._summary_header_lines())
+        lines.append(
+            f"{'parameters'.ljust(16)} {n_sampled} sampled, "
+            f"{n_marginalized} marginalized"
+        )
+
+        lines.append("")
+        lines.append("Nonlinear parameters (sampled)")
+        lines.extend(_fmt_table(("name", "prior", "unit"), nl_rows))
+
+        if lin_rows:
+            lines.append("")
+            lines.append("Linear parameters")
+            lines.extend(_fmt_table(("name", "status", "prior", "unit"), lin_rows))
+
+        lines.append("")
+        lines.append("status legend: marginalized = integrated out analytically;")
+        lines.append("  sampled = drawn explicitly (non-Gaussian);")
+        lines.append(
+            "  sampled (could marg.) = Gaussian/linear but excluded via "
+            "marginalized_names"
+        )
+        return "\n".join(lines)
+
+    def _summary_header_lines(self) -> list[str]:
+        """Model / parameterization / extension metadata lines for :meth:`summary`."""
+
+        def _kv(label: str, value: str) -> str:
+            return f"{label.ljust(16)} {value}"
+
+        model = self.model
+        if isinstance(model, JointModel):
+            comp_descs = []
+            for comp_name, comp in model.components.items():
+                param = getattr(comp, "parameterization", None)
+                pname = type(param).__name__ if param is not None else "-"
+                comp_descs.append(f"{comp_name}={type(comp).__name__}({pname})")
+            ext_map = cast("dict[str, tuple[Any, ...]]", self.get_extensions())
+            ext_descs = [
+                f"{comp_name}: " + ", ".join(_describe_extension(e) for e in exts)
+                for comp_name, exts in ext_map.items()
+                if exts
+            ]
+            return [
+                _kv("model", "JointModel"),
+                _kv("components", ", ".join(comp_descs)),
+                _kv("extensions", "; ".join(ext_descs) if ext_descs else "(none)"),
+            ]
+
+        param = getattr(model, "parameterization", None)
+        exts = model.extensions
+        ext_str = ", ".join(_describe_extension(e) for e in exts) if exts else "(none)"
+        return [
+            _kv("model", type(model).__name__),
+            _kv(
+                "parameterization",
+                type(param).__name__ if param is not None else "-",
+            ),
+            _kv("extensions", ext_str),
+        ]
 
     def run(
         self,
