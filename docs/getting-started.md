@@ -24,6 +24,10 @@ prior = hm.StandardRV().default_prior(
 
 # Run the rejection sampler
 sampler = harv.RejectionSampler(prior, harv.RVModel())
+
+# Inspect how each parameter will be treated before running:
+print(sampler.summary())   # which params are marginalized vs. sampled
+
 samples = sampler.run(data, n_prior_samples=1_000_000, seed=42)
 
 # Inspect results — quantities carry units:

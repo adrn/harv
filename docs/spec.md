@@ -1424,6 +1424,33 @@ The `batch_size` field controls how many samples are vmapped at once within a
 `fori_loop`. On CPU, the default of 100,000 is appropriate. On GPU, set
 `batch_size = n_prior_samples` to let XLA fully utilize the device.
 
+### `summary` method
+
+`summary() -> str` returns a plain-ASCII, sectioned-table description of how the
+configured sampler will treat each parameter — useful for inspecting a `(prior, model,
+marginalized_names)` setup before running. It performs **no sampling** and is
+side-effect-free (it suppresses the non-Gaussian-marginalization warning that `run`
+emits, since the table itself surfaces that information).
+
+The string contains:
+
+- a header with the model class, the parameterization class (per component for a
+  `JointModel`), the active extensions, and a `parameters` line giving the count of
+  sampled vs. marginalized parameters;
+- a **Nonlinear parameters** table — base orbital params plus any nonlinear extension
+  params (marked `(ext)`), which are always sampled explicitly;
+- a **Linear parameters** table classifying each linear param as:
+  - `marginalized` — analytically integrated out (Gaussian prior, in the effective
+    marginalized set);
+  - `sampled` — a non-Gaussian linear prior (e.g. a `HalfNormal` parallax) that cannot be
+    marginalized and is drawn explicitly;
+  - `sampled (could marg.)` — a Gaussian/linear prior that *could* be marginalized but is
+    excluded via `marginalized_names`.
+
+Each row shows the prior-distribution type and unit. The classification reuses the same
+`effective_linear_prior` / marginalized-name resolution that `run` uses, so the summary
+matches the actual run behavior. Print it with `print(sampler.summary())`.
+
 ### Pre-computed prior samples (`run_with_samples`)
 
 When the same prior library is reused across many datasets, draw it once with
