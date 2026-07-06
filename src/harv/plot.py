@@ -145,6 +145,7 @@ def get_t_grid(
     span_buffer_factor: float = 0.1,
     n_points_per_period: int = 256,
     max_t_grid: int | None = int(1e6),
+    min_t_grid: int | None = None,
 ) -> NTime:
     """Dense time grid spanning the observation baseline with a small buffer.
 
@@ -166,6 +167,8 @@ def get_t_grid(
         Number of grid points per orbital period.  Default: 256.
     max_t_grid
         Maximum number of grid points. Default: 1e6. Set to None to disable.
+    min_t_grid
+        Minimum number of grid points. Default: None. Set to None to disable.
 
     Returns
     -------
@@ -187,15 +190,17 @@ def get_t_grid(
     p_val = float(ustrip(time_unit, period))
     dt = p_val / n_points_per_period
 
-    n_grid = span / dt if dt > 0 else 1
-    if max_t_grid is not None and n_grid > max_t_grid:
-        dt = span / max_t_grid
+    buffer = max(span * span_buffer_factor, 0.5 * p_val)
+    full = span + 2 * buffer  # buffered baseline actually plotted
 
-    grid = np.arange(
-        t_min - span * span_buffer_factor,
-        t_max + span * span_buffer_factor + dt,
-        dt,
-    )
+    # Points to resolve the period across the buffered baseline, then clamp
+    n_grid = int(np.ceil(full / dt)) + 1
+    if max_t_grid is not None:
+        n_grid = min(n_grid, max_t_grid)
+    if min_t_grid is not None:
+        n_grid = max(n_grid, min_t_grid)
+
+    grid = np.linspace(t_min - buffer, t_max + buffer, n_grid)
     return Q(grid, time_unit)
 
 
