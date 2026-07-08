@@ -201,6 +201,13 @@ src/harv/
 │   ├── rejection.py         # RejectionSampler
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
 │   └── samples.py           # Samples container
+├── periodogram/             # Periodogram-informed interim period priors
+│   ├── grid.py              # frequency_grid
+│   ├── _design.py           # Trial-period design matrices (private)
+│   ├── core.py              # periodogram(), PeriodogramResult
+│   ├── distribution.py      # LogGridDensity
+│   ├── priors.py            # tempered_period_prior, peak_period_prior, attach_ln_pint
+│   └── io.py                # save_period_prior / load_period_prior
 ├── plot.py                  # get_t_grid and plotting utilities
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
@@ -1472,6 +1479,49 @@ component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
   `ln_prior` (the summed nonlinear-prior log-density). These enable
   `Samples.map_sample()` and the `Samples.ln_posterior` property. Default:
   `False`. Supported by both `RejectionSampler.run` and `NumpyroSampler.run`.
+- `return_evidence_stats` -- when `True`, the returned `Samples.metadata`
+  carries the prior-Monte-Carlo evidence statistics `logZ_int`,
+  `logZ_int_mcse`, `logZ_int_ess`, `max_log_likelihood`, and `n_prior_samples`
+  (used by the population-inference reweighting and by
+  `Samples.acceptance_diagnostics()`; see "Interpreting acceptance"). The
+  under-resolution warning is emitted regardless of this flag. Default:
+  `False`.
+
+### Interpreting acceptance
+
+The rejection step accepts each prior draw with probability `exp(L − max L)`,
+where `max L` is the maximum marginal log-likelihood **over the drawn prior
+samples**. The accepted-sample *count* is therefore only a meaningful posterior
+size once `max L` has converged to the true peak `L*`. When the likelihood is
+sharply peaked (high SNR, dense sampling), a broad prior may never sample near
+the peak: `max L` sits far below `L*`, and the sampler "accepts" a handful of
+poor fits simply because it never saw a good one. Concentrating the prior (e.g.
+a periodogram-informed period prior) then *finds* the peak, raising `max L` — so
+it can report **fewer** accepted samples against the correct (higher) bar even
+though it resolved the posterior far better. **Comparing raw accept counts
+across priors is misleading until `max_log_likelihood` has converged.**
+
+The reliable diagnostic is the evidence effective sample size
+(`logZ_int_ess = (Σ L)² / Σ L²`): the number of prior draws that effectively
+contribute to the marginal-likelihood integral. When it is O(1), the integral —
+and the `max`-normalization — is dominated by a single draw, so the run is
+under-resolved.
+
+- `run(...)` and `run_with_samples(...)` emit a `UserWarning` when
+  `logZ_int_ess < 3` (the evidence is dominated by ≲3 effective draws),
+  regardless of `return_evidence_stats`. It is a filterable `UserWarning`;
+  silence it in population loops via `warnings.catch_warnings`.
+- `Samples.acceptance_diagnostics()` (requires `return_evidence_stats=True`)
+  returns `{n_prior_samples, n_accepted, evidence_ess, max_log_likelihood,
+  logZ_int, well_resolved, message}` for inspection.
+
+**Recommended workflow for peaked likelihoods:** use the rejection sampler
+(ideally with a periodogram-informed period prior) to *locate* the mode — check
+that `max_log_likelihood` stops rising as `n_prior_samples` increases and across
+seeds — then continue with `NumpyroSampler(prior, model).run(data,
+init_samples=...)` to draw the posterior. In this regime the rejection stage is
+a mode-finder, not a posterior sampler: even with the period pinned, the joint
+(eccentricity, phase, `arg_peri`) volume at high SNR is a tiny acceptance target.
   Forced on by `top_k`.
 - `return_evidence_stats` -- when `True`, add prior-Monte-Carlo evidence
   statistics to `Samples.metadata`, estimated from the **full** `(M,)`
@@ -1797,6 +1847,23 @@ Integer keys are promoted to length-1 slices so all arrays remain at least 1-d.
 Static fields (`data_type`, `metadata`, `linear_extension_names`) are passed
 through unchanged.
 
+### Extra parameter columns
+
+`Samples.nonlinear` may carry **extra dimensionless columns** beyond the
+parameters declared by the model — per-sample derived quantities attached by
+tools or user code (e.g. Jacobian factors for population reweighting). Extra
+columns behave exactly like parameters: they flow through indexing/slicing,
+`pad_and_stack_samples`, and `to_hdf5` / `from_hdf5` unchanged. When stacking,
+every input must carry the same key set, so attach extra columns to *every*
+per-source `Samples` before stacking.
+
+Reserved extra-column names:
+
+- `ln_pint_period` — the per-sample interim period prior log-density (per unit
+  natural-log period), written by `harv.periodogram.attach_ln_pint` (see
+  "Periodogram and interim period priors"). The key is exported as
+  `harv.periodogram.LN_PINT_PERIOD_KEY`.
+
 Parameter arrays may carry one or more leading batch dimensions -- for example
 `(N_stars, K_max)` after [`pad_and_stack_samples`](#stacking-per-entity-samples).
 In that case, integer / slice / array indexing slices the leading axis (the
@@ -1868,6 +1935,8 @@ sampling take the `data` object; all support single-component samples only
 
 - `map_sample(return_index=False) -> Samples` — the maximum a posteriori sample
   (highest `ln_posterior`), as a length-1 `Samples`. Requires `return_logprobs`.
+- `acceptance_diagnostics() -> dict` — whether the rejection run resolved the
+  posterior (see "Interpreting acceptance"). Requires `return_evidence_stats`.
 - `period_unimodal(data) -> bool` — whether the period samples lie in one mode.
 - `period_modes(data, n_clusters=2) -> (bool, Q, ndarray)` — K-means clustering
   of `log(period)` into modes (needs the optional `scikit-learn` dependency).
@@ -1904,6 +1973,232 @@ These wrap the pure functions in `harv.kepler.masses` (see "Mass functions").
   minimum companion mass); astrometry samples use the dark-companion astrometric
   mass function and ignore `sini`.
 - `minimum_companion_mass(m1) -> Q` — convenience for `companion_mass(m1, sini=1)`.
+
+______________________________________________________________________
+
+## Periodogram and interim period priors (`harv.periodogram`)
+
+The rejection sampler's acceptance rate is dominated by how much prior mass
+falls near the data's true period. `harv.periodogram` builds a **per-source
+interim period prior** from a periodogram of that source's data: prior mass
+concentrates near plausible periods (dramatically higher acceptance at fixed
+`n_prior_samples`), while a log-uniform mixture "floor" preserves full period
+support so the samplings remain valid for downstream hierarchical inference.
+
+### The Δ log-marginal-likelihood statistic
+
+The periodogram scans **period only**. At each trial frequency `f` on a grid,
+every other parameter of the trial model is *linear* and is analytically
+marginalized via `MarginalizedLinear` (see "Why MarginalizedLinear"):
+
+```
+delta_ln_likelihood(f) = ln L(f) − ln L_base
+```
+
+where both terms are Gaussian marginal likelihoods with **identical, fixed**
+amplitude priors `Normal(0, s0)` and per-point noise at every trial frequency
+(so the Occam factors are constant across the grid, and Δ is a per-frequency
+log Bayes factor of "base + orbit harmonics" vs. the base model). The
+amplitude scale is data-driven and computed once per dataset:
+`s0 = sqrt(weighted_var(y) + median(err)^2)`.
+
+Design matrices per data type (`n_harmonics = H`, default 2 — the harmonic
+columns are a truncated Fourier series in the mean longitude `M = 2π f t`
+whose coefficients are linear, absorbing eccentricity distortion of the orbit
+shape; no Kepler solve occurs). Each harmonic adds free linear columns, so
+`n_harmonics` is **capped per dataset** to keep the trial model overdetermined
+(at least two observations per column, floored at 1), emitting a `UserWarning`
+when reduced. This is a correctness safeguard, not just an optimization: on
+sparse data an overfit trial model fits almost any trial period, so spurious
+alias peaks dominate the periodogram and a prior built from it can *hurt*
+acceptance. The cap engages only when the harmonics could not be reliably
+estimated anyway; where multi-term genuinely helps (eccentric orbits with
+adequate sampling) it does not engage. `PeriodogramResult.n_harmonics` reports
+the effective value used:
+
+- **RV**: base `(n_obs, 1)` = `[1]` (v_sys); trial `(n_obs, 1 + 2H)` =
+  `[1, cos(k·2πft), sin(k·2πft)]` for `k = 1..H`. Observations are centered by
+  their weighted mean (Δ-invariant; keeps one amplitude scale valid for all
+  columns).
+- **Gaia along-scan**: base `(n_obs, 5)` = the same five columns as
+  `StandardGaiaAstrometry.design_matrix`
+  (`[sinψ, cosψ, sinψ·dt̃, cosψ·dt̃, p̃f]`, with the time and parallax-factor
+  regressors standardized to O(1) RMS); trial `(n_obs, 5 + 4H)` adds, per
+  harmonic, the circular-orbit Thiele-Innes columns
+  `[cos(kM)·cosψ, cos(kM)·sinψ, sin(kM)·cosψ, sin(kM)·sinψ]`. Because the five
+  base columns appear in **both** models, scan-law / parallax / proper-motion
+  power cancels — no spurious peaks at one year or the scan-law periods.
+- **Containers** (`SourceData`, `SystemData`): each dataset's Δ is evaluated
+  on the shared grid and summed — one periodogram per source. Each RV
+  instrument carries its own constant column, so zero-point offsets are
+  handled without extensions.
+
+Other data types raise `NotImplementedError` (2-d absolute/relative astrometry
+is future work; see "Planned features").
+
+### `frequency_grid`
+
+```python
+frequency_grid(
+    data=None, *,
+    period_min,               # required; its unit sets the grid unit (1/unit)
+    period_max=None,          # default: max_period_factor * t_span
+    t_span=None,              # alternative to data (exactly one required)
+    samples_per_peak=5,       # oversampling per peak width 1/t_span
+    max_period_factor=1.0,
+    n_grid=None,              # explicit grid size override
+) -> Q["frequency"]           # uniform in frequency, ascending
+```
+
+**Cross-source shape stability:** pass the same `(period_min, period_max,
+n_grid)` (or one precomputed grid) for every source in a population so the
+resulting prior pytree structure is identical and the sampler JIT-compiles
+once for all sources.
+
+### `periodogram` and `PeriodogramResult`
+
+```python
+periodogram(
+    data,                     # RVData | GaiaAstrometryData | container
+    frequency=None,           # explicit grid; exclusive with grid kwargs
+    *,
+    period_min=None, period_max=None, samples_per_peak=5, n_grid=None,
+    n_harmonics=2,
+) -> PeriodogramResult
+```
+
+`PeriodogramResult` is an `eqx.Module` with fields `frequency`,
+`delta_ln_likelihood`, `ln_likelihood_base`, `t_span`, `t_ref`, optional
+`per_dataset` (per-dataset Δ for container inputs), and static `n_harmonics`;
+plus `period` (property, `1/frequency`), `max_period()`, and `plot(ax=None,
+x="period" | "frequency")`.
+
+### `LogGridDensity`
+
+A numpyro `Distribution` over `x > 0` whose pdf is **piecewise-linear in
+`u = ln x`** on fixed knots `(ln_grid, log_density)` — the shared backbone of
+both prior builders:
+
+- `log_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
+  normalization is trapezoid-exact. Zero density (`-inf` log-density) knots
+  are allowed.
+- `log_prob(x)` is the density **per unit x** (same convention as
+  `dist.LogUniform`); `log_prob_ln(x) = log_prob(x) + ln x` is the density per
+  unit `ln x` and is invariant under a change of x's unit.
+- `cdf` / `icdf` are closed-form per segment (piecewise-quadratic CDF;
+  "citardauq" quadratic inversion, stable as the slope → 0); `sample` is
+  inverse-CDF. All operations are shape-static and jit/vmap-safe; instances
+  with equal knot counts share a pytree structure.
+- `support` is `constraints.interval(exp(ln_grid[0]), exp(ln_grid[-1]))`, so
+  `biject_to` and hence `NumpyroSampler` MCMC continuation work. Caveat: the
+  gradient of `log_prob` is discontinuous at the knots (acceptable for NUTS
+  in practice).
+
+Wrapped in a `QD` (e.g. `QD(LogGridDensity(...), "day")`) it is a **drop-in
+period prior**: pass it via the `period=` override of any `default_prior(...)`
+or set `nonlinear_priors["period"]` directly. **No sampler changes are
+involved anywhere in this feature.**
+
+### Prior builders
+
+Both builders map a `PeriodogramResult` onto ln-period knots on the requested
+domain `[period_min, period_max]` (defaults: the grid range; the domain may
+extend beyond the grid, where Δ continues flat at 0 so the tempered prior is
+floor-like there), and both **mix in a log-uniform floor of weight `floor`**
+(λ, default 0.1). Since a log-uniform is constant in `ln P`, the mixture is
+itself a grid density — one distribution class covers everything.
+
+```python
+tempered_period_prior(result, *, beta=1.0, floor=0.1,
+                      period_min=None, period_max=None, unit=None) -> QD
+```
+
+Density per unit ln-period `∝ (1−λ)·exp(β·Δ)/Z + λ·log-uniform`. `beta=0`
+reduces to an exact log-uniform; `beta=1` treats the periodogram as a
+likelihood times log-uniform. Note that on high-SNR data `exp(Δ)` can be
+narrower than the grid spacing; the piecewise-linear density then smears the
+peak to roughly one knot spacing (increase `samples_per_peak` to resolve it).
+
+```python
+peak_period_prior(result, *, height_drop=10.0, max_peaks=8, peak_width=None,
+                  floor=0.1, period_min=None, period_max=None, unit=None) -> QD
+```
+
+Amplitude-agnostic alternative: strict local maxima of Δ **within `height_drop`
+nats of the global maximum** each get a top-hat in ln-period of full frequency
+width `peak_width` (default `1/t_span`) with **equal mass** `1/n_peaks`
+regardless of amplitude. The criterion is *relative to the best peak*, so it is
+scale-invariant across data types — RV periodograms span hundreds of nats,
+while astrometry periodograms (the orbit is a small perturbation on the
+marginalized 5-parameter astrometric signal) span only a few; an absolute
+threshold would silently reject every astrometry peak. Candidate maxima within
+one peak width of a stronger peak are suppressed (real periodograms carry
+hundreds of spurious local maxima), and at most `max_peaks` survivors are kept —
+bounding the dilution so each peak carries at least `(1−floor)/max_peaks`. The
+global maximum always qualifies, so the fallback (a `UserWarning` degrading to
+a pure log-uniform on the same knots, preserving the pytree structure) fires
+only for a perfectly flat or monotonic periodogram.
+
+Usage:
+
+```python
+import harv.periodogram as hp
+
+result = hp.periodogram(data, period_min=Q(2.0, "day"), period_max=Q(2000.0, "day"))
+prior = hm.StandardRV().default_prior(
+    period=hp.tempered_period_prior(result, beta=1.0, floor=0.1),
+    sigma_K0=Q(30.0, "km/s"),
+    sigma_v0=Q(10.0, "km/s"),
+)
+samples = RejectionSampler(prior, RVModel()).run(data, n_prior_samples=100_000)
+```
+
+### Hierarchical inference bookkeeping (interim priors)
+
+Per-source interim priors remain valid for Hogg/Myers/Bovy-style population
+reweighting: the per-source estimator
+`Z_n(α)/Z_int,n ≈ (1/K_n) Σ_k p(θ_nk|α) / p_int,n(θ_nk)` is importance
+sampling of each source's integral, and conditioned on the data each source's
+interim prior is a fixed, exactly-normalized proposal that is divided out
+exactly (its data-dependence does not bias the estimator). Requirements:
+
+1. **Support** — `p_int,n(P) > 0` wherever the population prior can put mass.
+   The λ floor guarantees this and bounds the importance weights by `1/λ`
+   relative to a log-uniform interim prior. `floor=0` voids the guarantee
+   (a `UserWarning` is emitted).
+1. **Per-source evaluability** — the reweighting needs `ln p_int,n` at each
+   retained sample. `attach_ln_pint(samples, period_prior)` evaluates and
+   stores it as the reserved extra column `ln_pint_period` (see "Extra
+   parameter columns"), which flows through `pad_and_stack_samples` into the
+   population step. It works for any scalar-unit period prior, including
+   `QD(LogUniform, ...)` for the classic shared-prior case.
+1. **Interim evidence** — the per-source `Z_int,n` from
+   `run(..., return_evidence_stats=True)` (`metadata["logZ_int"]`) enters the
+   population likelihood as usual; nothing changes with per-source priors.
+
+**Measure convention:** the stored `ln_pint_period` is the log-density **per
+unit natural-log period** (`log_prob(P) + ln(P/unit)`), which is invariant
+under the prior's time unit. Convert to a density in `log10 P` by adding
+`ln(ln 10)`; to a density in P (unit u) by subtracting `ln(P/u)`. Population
+densities must be expressed in the same measure before forming weight ratios.
+
+`save_period_prior(file, prior, *, group="interim_period_prior",
+metadata=None)` / `load_period_prior(file, *, group=...)` persist the prior
+spec (knots + log-densities + unit + scalar provenance attrs) as a small HDF5
+group. The group can live in the **same file** as `Samples.to_hdf5` output —
+`Samples.from_hdf5` reads only its own groups — so a per-source posterior file
+can carry its interim prior alongside the samples. The round trip is exact
+(the stored arrays are the constructor arguments).
+
+### Per-source priors vs. the shared prior cache
+
+Per-source interim priors are incompatible with reusing one
+`make_prior_cache` library across sources (the period column's distribution
+differs per source). The intended path is **per-source on-the-fly prior
+sampling** with a shared grid configuration: identical knot counts give an
+identical prior pytree structure, so the sampler JIT-compiles once for the
+whole population. A cache-resampling utility (replacing the period column of
+a shared cache per source) is future work — see "Planned features".
 
 ______________________________________________________________________
 
@@ -2154,6 +2449,21 @@ The planned design separates prior sampling from likelihood evaluation:
 The Joker's iterative scheme grows the sample batch exponentially until enough
 posterior samples are accepted. Useful when the likelihood is very constraining.
 
+### Prior-cache resampling for per-source interim priors
+
+`harv.periodogram` interim period priors are per-source, so they cannot reuse
+a single shared `make_prior_cache` library. A planned utility would take a
+shared prior cache and, per source, resample/reweight the period column to a
+tailored interim prior — combining the cache's one-time prior-draw cost with
+per-source period priors.
+
+### Periodogram for 2-d astrometry
+
+`harv.periodogram.periodogram` currently supports `RVData` and
+`GaiaAstrometryData` (both 1-d observables). Absolute and relative astrometry
+(2-d position time series) will need a 2-d periodogram variant once those data
+and model types exist.
+
 ### Absolute and relative astrometry
 
 Future data and model types:
@@ -2232,6 +2542,18 @@ sampler = RejectionSampler(
     RVModel(parameterization=EcoswEsinwRV(), extensions=(Jitter(param_unit="km/s"),)),
 )
 samples = sampler.run(data, n_prior_samples=500_000)
+
+# --- Periodogram-informed interim period prior ---
+import harv.periodogram as hp
+
+result = hp.periodogram(data, period_min=Q(2, "day"), period_max=Q(2000, "day"))
+prior = hm.StandardRV().default_prior(
+    period=hp.tempered_period_prior(result, beta=1.0, floor=0.1),  # or peak_period_prior
+    sigma_K0=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
+)
+samples = RejectionSampler(prior, RVModel()).run(data, n_prior_samples=100_000)
+samples = hp.attach_ln_pint(samples, prior.nonlinear_priors["period"])  # for reweighting
 
 # --- Gaia astrometry only ---
 prior = hm.StandardGaiaAstrometry().default_prior(
