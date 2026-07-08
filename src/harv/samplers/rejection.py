@@ -42,7 +42,7 @@ from harv.samplers._prior_resolution import (
     validate_extension_priors as _validate_extension_priors,
 )
 from harv.samplers.base import AbstractSampler, _validate_data
-from harv.samplers.samples import Samples
+from harv.samplers.samples import Samples, _assess_resolution
 
 __all__ = ("RejectionSampler",)
 
@@ -647,13 +647,27 @@ class RejectionSampler(AbstractSampler):
             metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
 
+        # Always assess resolution (cheap: a few reductions over log-likelihoods
+        # already in memory) so the under-resolution warning fires even when the
+        # caller did not ask to keep the full evidence statistics.
+        evidence_meta = {
+            k: float(v)
+            for k, v in _prior_monte_carlo_evidence_stats(log_likelihoods).items()
+        }
+        n_accepted = int(next(iter(accepted_nonlinear.values())).shape[0])
+        well_resolved, resolution_msg = _assess_resolution(
+            n_prior=int(evidence_meta["n_prior_samples"]),
+            n_accepted=n_accepted,
+            evidence_ess=evidence_meta["logZ_int_ess"],
+            max_log_likelihood=evidence_meta["max_log_likelihood"],
+        )
+        if not well_resolved:
+            warnings.warn(resolution_msg, UserWarning, stacklevel=2)
         # ``top_k`` forces both on: ``Samples["weight"]`` is reconstructed from
         # ``ln_likelihood`` plus ``logZ_int`` / ``n_prior_samples``, so a
         # top-K result without them would carry samples whose weights cannot be
         # recovered -- and the weights are what make the output usable.
         if return_evidence_stats or top_k is not None:
-            evidence_meta = _prior_monte_carlo_evidence_stats(log_likelihoods)
-            evidence_meta = {k: float(v) for k, v in evidence_meta.items()}
             metadata.update(evidence_meta)
 
         if top_k is not None:
