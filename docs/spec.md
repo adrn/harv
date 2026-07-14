@@ -901,6 +901,37 @@ Non-Gaussian linear priors (e.g. `HalfNormal` for parallax) must have their
 values present in the `values` dict alongside the nonlinear parameters. The
 model extracts them automatically in auto mode.
 
+### The `LinearPriorCallable` contract
+
+A linear prior may be given as a callable, so that the prior on a linear parameter
+can depend on the values of the nonlinear parameters. The contract is:
+
+```python
+LinearPriorCallable = Callable[[dict[str, Any]], QuantityDistribution | dist.Normal]
+```
+
+The callable receives a **plain dict** keyed by bare parameter name and must return a
+`Normal` (bare, or wrapped in a `QuantityDistribution` to declare its unit). The dict
+contains:
+
+- every **nonlinear** parameter value sampled so far (`period`, `eccentricity`, …), and
+- every **explicit** (non-marginalized) **linear** parameter value sampled so far.
+
+The second bullet is why `parallax` is readable by callable priors: with the default
+`HalfNormal` prior it is classified non-Gaussian, so it is sampled explicitly rather
+than analytically marginalized. If a user overrides it with a `Normal` prior it becomes
+marginalized, disappears from the dict, and the parallax-dependent priors raise
+`KeyError` with an explanatory message.
+
+Values that carry units are `unxt.Q`-wrapped, so a callable can do
+`ustrip("", params["period"] / self.P0)` without assuming a unit; dimensionless values
+(e.g. `eccentricity`) are bare arrays. In a `JointModel`, component-specific values are
+additionally reachable under their qualified `"component.param"` key.
+
+Callables are resolved once per likelihood evaluation, inside the sampler trace, so they
+must be JAX-traceable: no Python branching on parameter *values*. Branching on dict
+*keys* (as the `parallax` guard above does) is fine — that is static structure.
+
 ### Three `log_prob` calling conventions
 
 1. **Auto mode** (recommended): `model.log_prob(values)` where `values` is a
@@ -1031,7 +1062,9 @@ prior, following the Joker's default:
 ```
 
 This keeps the prior approximately constant in companion mass at fixed primary mass.
-`__call__` returns a `QD(dist.Normal(0, σ_K_stripped), unit)`.
+`__call__` receives a `dict[str, Any]` containing `"period"` and `"eccentricity"` (see
+[The `LinearPriorCallable` contract](#the-linearpriorcallable-contract)) and returns a
+`QD(dist.Normal(0, σ_K_stripped), unit)`.
 
 Fields:
 
@@ -1056,9 +1089,10 @@ This keeps the prior approximately constant in companion mass at fixed primary m
 and accounts for the distance dependence of angular semi-major axis. Unlike the RV
 amplitude, there is **no eccentricity dependence**.
 
-`__call__` receives a parameter struct with `.period`, `.eccentricity`, and `.parallax`
-fields (parallax is available because it is explicitly sampled by default) and returns
-`QD(dist.Normal(0, σ_a_stripped), "mas")`.
+`__call__` receives a `dict[str, Any]` containing `"period"`, `"eccentricity"`, and
+`"parallax"` (parallax is available because it is explicitly sampled by default) and
+returns `QD(dist.Normal(0, σ_a_stripped), "mas")`.  Raises `KeyError` if `parallax` has
+been analytically marginalized away.
 
 Fields:
 
@@ -1083,9 +1117,10 @@ the same angular unit as the parallax per year.
 This keeps the velocity prior constant across distances — a source at larger
 distance (smaller parallax) gets a proportionally smaller proper motion prior scale.
 
-`__call__` receives a parameter struct with a `.parallax` field (parallax is available
+`__call__` receives a `dict[str, Any]` containing `"parallax"` (parallax is available
 because it is explicitly sampled by default) and returns
-`QD(dist.Normal(0, σ_μ), parallax_unit + "/yr")`.
+`QD(dist.Normal(0, σ_μ), parallax_unit + "/yr")`.  Raises `KeyError` if `parallax` has
+been analytically marginalized away.
 
 Fields:
 

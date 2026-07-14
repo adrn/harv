@@ -2,7 +2,6 @@
 
 __all__: tuple[str, ...] = ()
 
-import types
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -17,8 +16,11 @@ from harv.distributions import QuantityDistribution
 PriorDist = dist.Distribution | QuantityDistribution
 # Union type for prior distributions (bare numpyro or unit-aware).
 
-LinearPriorCallable = Callable[..., QuantityDistribution | dist.Normal]
-# Callable that returns a Normal-like prior given nonlinear parameter values.
+LinearPriorCallable = Callable[[dict[str, Any]], QuantityDistribution | dist.Normal]
+# Callable that returns a Normal-like prior given a dict of parameter values.
+# The dict is keyed by bare parameter name and holds the already-sampled nonlinear
+# values plus any explicit (non-marginalized) linear values. Values carrying units
+# are ``unxt.Q``-wrapped; dimensionless ones (e.g. ``eccentricity``) are bare arrays.
 
 LinearPriorDist = PriorDist | LinearPriorCallable
 
@@ -80,13 +82,12 @@ def _resolve_prior_to_mvn(
     """Build diagonal MVN from per-parameter priors."""
     locs: list[Any] = []
     scales: list[Any] = []
-    # Build a namespace proxy for any LinearPriorCallable that needs it.
-    # Include explicit linear values so that callables depending on
-    # explicitly-sampled linear params (e.g. parallax) can resolve.
-    proxy_values = dict(nl_values)
+    # Values passed to any LinearPriorCallable. Include explicit linear values so
+    # that callables depending on explicitly-sampled linear params (e.g. parallax)
+    # can resolve.
+    param_values = dict(nl_values)
     if extra_values:
-        proxy_values.update(extra_values)
-    params_proxy = types.SimpleNamespace(**proxy_values)
+        param_values.update(extra_values)
     for name, prior in prior_dict.items():
         target_u = unit_dict.get(name, "")
         resolved = None
@@ -94,7 +95,7 @@ def _resolve_prior_to_mvn(
         if isinstance(prior, (dist.Distribution, QuantityDistribution)):
             resolved = prior
         elif callable(prior):
-            resolved = prior(params_proxy)
+            resolved = prior(param_values)
 
         expected_msg = (
             f"Expected Normal inside QuantityDistribution for {name}, "

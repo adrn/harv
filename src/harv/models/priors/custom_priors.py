@@ -57,35 +57,37 @@ class PeriodDependentKPrior(eqx.Module):
     Unit("km / s")
 
     Used as the default ``linear_prior`` for ``rv_semiamp`` in
-    :meth:`~harv.models.priors.HarvPrior.default_rv`.  Called with a
-    param struct to condition on nonlinear parameters:
+    :meth:`~harv.models.priors.HarvPrior.default_rv`.  Called with a dict of
+    parameter values to condition on the nonlinear parameters:
 
-    >>> qd = prior(params)  # doctest: +SKIP
+    >>> qd = prior({"period": Q(100.0, "day"), "eccentricity": 0.3})
+    >>> qd.unit
+    'km / s'
     """
 
     sigma_K0: ScalarQSpeed
     P0: ScalarQTime
 
-    def __call__(self, params: Any) -> QuantityDistribution:
+    def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
 
         Parameters
         ----------
         params
-            A parameter struct whose ``.period`` and ``.eccentricity`` fields
-            are accessible.  ``.period`` must be a ``Quantity`` compatible
-            with ``P0_unit``.
+            Parameter values keyed by bare parameter name.  Must contain
+            ``"period"`` (a ``Quantity`` compatible with ``P0``) and
+            ``"eccentricity"``.
 
         Returns
         -------
         QuantityDistribution
             Prior over the RV semi-amplitude ``rv_semiamp``.
         """
-        P_ratio = ustrip("", params.period / self.P0)
+        P_ratio = ustrip("", params["period"] / self.P0)
         sigma_K = (
             self.sigma_K0
             * P_ratio ** (-1.0 / 3.0)
-            * (1.0 - params.eccentricity**2) ** (-0.5)
+            * (1.0 - params["eccentricity"] ** 2) ** (-0.5)
         )
         return QuantityDistribution(
             dist.Normal(loc=0.0, scale=ustrip(self.sigma_K0.unit, sigma_K)),
@@ -124,8 +126,8 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     and is the default ``linear_prior`` for ``semi_major_axis`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
-    The ``params`` struct must have ``.period``, ``.eccentricity``, and
-    ``.parallax`` fields.  ``parallax`` is available because it is classified
+    The ``params`` dict must contain ``"period"``, ``"eccentricity"``, and
+    ``"parallax"``.  ``parallax`` is available because it is classified
     as an explicit (non-marginalized) linear parameter by default.
 
     Examples
@@ -137,42 +139,49 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     ... )
     >>> prior.sigma_a0.unit
     Unit("AU")
+
+    >>> qd = prior(
+    ...     {"period": Q(2.0, "yr"), "eccentricity": 0.1, "parallax": Q(10.0, "mas")}
+    ... )
+    >>> qd.unit
+    'mas'
     """
 
     sigma_a0: ScalarQLength
     P0: ScalarQTime
 
-    def __call__(self, params: Any) -> QuantityDistribution:
+    def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
 
         Parameters
         ----------
         params
-            A parameter struct with ``.period`` (``Quantity``),
-            ``.eccentricity`` (float), and ``.parallax`` (``Quantity``)
-            fields.
+            Parameter values keyed by bare parameter name.  Must contain
+            ``"period"`` (``Quantity``), ``"eccentricity"`` (float), and
+            ``"parallax"`` (``Quantity``).
 
         Returns
         -------
         QuantityDistribution
             Prior over the astrometric semi-major axis, in the same
-            angular unit as ``params.parallax``.
+            angular unit as ``params["parallax"]``.
         """
-        if not hasattr(params, "parallax"):
-            raise AttributeError(
+        if "parallax" not in params:
+            raise KeyError(
                 "PeriodDependentSemiMajorAxisPrior requires 'parallax' to be "
-                "explicitly sampled, but it is not available in the parameter proxy. "
+                "explicitly sampled, but it is not present in the parameter dict. "
                 "This happens when 'parallax' has a Gaussian (Normal) prior and is "
                 "analytically marginalized. Override 'semi_major_axis' with an "
                 "explicit prior, or use a non-Gaussian parallax prior "
                 "(e.g., HalfNormal)."
             )
-        P_ratio = ustrip("", params.period / self.P0)
+        parallax = params["parallax"]
+        P_ratio = ustrip("", params["period"] / self.P0)
         # By the definition of parallax (varpi == 1 AU / d), the angular
         # semi-major axis is a_angular = a_physical [AU] * varpi [angle].
         sigma_a0_au = ustrip("AU", self.sigma_a0)
-        sigma_angular = params.parallax * (sigma_a0_au * P_ratio ** (2.0 / 3.0))
-        out_unit = str(params.parallax.unit)
+        sigma_angular = parallax * (sigma_a0_au * P_ratio ** (2.0 / 3.0))
+        out_unit = str(parallax.unit)
         return QuantityDistribution(
             dist.Normal(loc=0.0, scale=ustrip(out_unit, sigma_angular)),
             out_unit,
@@ -206,8 +215,8 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
-    The ``params`` struct must have a ``.parallax`` field (``Quantity`` with
-    angular units).  ``parallax`` is available because it is classified as an
+    The ``params`` dict must contain ``"parallax"`` (``Quantity`` with angular
+    units).  ``parallax`` is available because it is classified as an
     explicit (non-marginalized) linear parameter by default.
 
     Examples
@@ -217,37 +226,43 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     >>> prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
     >>> prior.sigma_v0.unit
     Unit("km / s")
+
+    >>> qd = prior({"parallax": Q(10.0, "mas")})
+    >>> qd.unit
+    'mas/yr'
     """
 
     sigma_v0: ScalarQSpeed
 
-    def __call__(self, params: Any) -> QuantityDistribution:
+    def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
 
         Parameters
         ----------
         params
-            A parameter struct with a ``.parallax`` (``Quantity``) field.
+            Parameter values keyed by bare parameter name.  Must contain
+            ``"parallax"`` (``Quantity``).
 
         Returns
         -------
         QuantityDistribution
             Prior over the proper-motion component, in units of
-            ``params.parallax.unit + "/yr"``.
+            ``params["parallax"].unit + "/yr"``.
         """
         # Convert velocity to AU/yr so that (AU/yr) x parallax [angle]
         # gives angular speed [angle/yr].
-        if not hasattr(params, "parallax"):
-            raise AttributeError(
+        if "parallax" not in params:
+            raise KeyError(
                 "ParallaxDependentProperMotionPrior requires 'parallax' to be "
-                "explicitly sampled, but it is not available in the parameter proxy. "
+                "explicitly sampled, but it is not present in the parameter dict. "
                 "This happens when 'parallax' has a Gaussian (Normal) prior and is "
                 "analytically marginalized. Override 'pmra'/'pmdec' with explicit "
                 "priors, or use a non-Gaussian parallax prior (e.g. HalfNormal)."
             )
+        parallax = params["parallax"]
         sigma_v_au_yr = ustrip("AU/yr", self.sigma_v0)
-        plx_unit = str(params.parallax.unit)
-        plx_val = ustrip(plx_unit, params.parallax)
+        plx_unit = str(parallax.unit)
+        plx_val = ustrip(plx_unit, parallax)
         scale = sigma_v_au_yr * plx_val
         return QuantityDistribution(
             dist.Normal(loc=0.0, scale=scale),
