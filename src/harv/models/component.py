@@ -7,7 +7,6 @@ marginalizing over the linear parameters or by evaluating at explicit values.
 
 __all__ = ("AbstractComponentModel",)
 
-import types
 from abc import abstractmethod
 from collections.abc import Callable
 from typing import Any, NamedTuple, cast
@@ -868,7 +867,7 @@ def _build_marginalized_component_model(
         values = _sample_nonlinear_params(nonlinear_priors)
         nl_values = _apply_unit_conversions(values, nonlinear_priors, component)
         explicit_linear_values: dict[str, Any] = {}
-        explicit_linear_proxy: dict[str, Any] = {}
+        explicit_linear_q: dict[str, Any] = {}
 
         for name, prior_dist in explicit_direct_prior.items():
             raw = numpyro.sample(name, _unwrap_dist(prior_dist))
@@ -876,7 +875,7 @@ def _build_marginalized_component_model(
             if isinstance(prior_dist, QuantityDistribution) and target_unit:
                 raw = ustrip(target_unit, Q(raw, cast("str", prior_dist.unit)))
             explicit_linear_values[name] = raw
-            explicit_linear_proxy[name] = Q(raw, target_unit) if target_unit else raw
+            explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
         for name, prior_dist in explicit_callable_prior.items():
             target_unit = param_units.get(name, "")
@@ -884,14 +883,14 @@ def _build_marginalized_component_model(
                 {name: prior_dist},
                 nl_values,
                 {name: target_unit},
-                extra_values=explicit_linear_proxy,
+                extra_values=explicit_linear_q,
             )
             raw = numpyro.sample(
                 name,
                 dist.Normal(resolved_prior.loc[0], resolved_prior.scale_tril[0, 0]),
             )
             explicit_linear_values[name] = raw
-            explicit_linear_proxy[name] = Q(raw, target_unit) if target_unit else raw
+            explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
         numpyro.factor(
             "log_lik",
@@ -956,12 +955,11 @@ def _build_full_component_model(  # noqa: C901
         if gaussian_names:
             # Resolve callable priors (e.g. parallax-dependent proper motion)
             resolved_lp: dict[str, PriorDist | LinearPriorCallable] = {}
-            proxy = types.SimpleNamespace(**nl_values)
             for name, d in gaussian_lp.items():
                 if callable(d) and not isinstance(
                     d, dist.Distribution | QuantityDistribution
                 ):
-                    resolved_lp[name] = d(proxy)
+                    resolved_lp[name] = d(nl_values)
                 else:
                     resolved_lp[name] = d
             gaussian_units = {n: param_units.get(n, "") for n in gaussian_names}

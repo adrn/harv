@@ -1,9 +1,13 @@
 """Unit tests for rejection sampling priors."""
 
+import jax
+import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import numpyro.distributions as dist
 import pytest
 from unxt import Q
+from unxt.quantity import ustrip
 
 import harv.models as hm
 from harv.distributions import QD
@@ -15,6 +19,7 @@ from harv.models.priors import (
     PeriodDependentSemiMajorAxisPrior,
     default_sb2_prior,
 )
+from harv.models.priors.custom_priors import PeriodDependentKPrior
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = {
@@ -579,3 +584,112 @@ class TestDefaultSB2Prior:
             "B.rv_semiamp",
             "v_sys",
         ]
+
+
+class TestPeriodDependentKPrior:
+    """Direct tests of the ``LinearPriorCallable`` dict contract for sigma_K."""
+
+    prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(100.0, "day"))
+
+    @pytest.mark.parametrize(
+        ("period_day", "ecc"), [(100.0, 0.0), (400.0, 0.3), (25.0, 0.6)]
+    )
+    def test_scale_matches_closed_form(self, period_day, ecc):
+        """sigma_K(P, e) = sigma_K0 * (P/P0)**(-1/3) * (1 - e**2)**(-1/2)."""
+        qd = self.prior({"period": Q(period_day, "day"), "eccentricity": ecc})
+
+        expected = (
+            30.0 * (period_day / 100.0) ** (-1.0 / 3.0) * (1.0 - ecc**2) ** (-0.5)
+        )
+        assert qd.unit == "km / s"
+        assert np.isclose(float(qd.distribution.scale), expected)
+        assert float(qd.distribution.loc) == 0.0
+
+    def test_period_unit_agnostic(self):
+        """The same physical period gives the same scale in any time unit."""
+        qd_yr = self.prior({"period": Q(2.0, "yr"), "eccentricity": 0.2})
+        qd_day = self.prior(
+            {"period": Q(ustrip("day", Q(2.0, "yr")), "day"), "eccentricity": 0.2}
+        )
+        assert np.isclose(
+            float(qd_yr.distribution.scale), float(qd_day.distribution.scale)
+        )
+
+    def test_jit_and_vmap(self):
+        """The dict input stays traceable under jit and vmap over parameters."""
+
+        def scale_of(period_day, ecc):
+            qd = self.prior({"period": Q(period_day, "day"), "eccentricity": ecc})
+            return qd.distribution.scale
+
+        periods = jnp.array([100.0, 400.0, 25.0])
+        eccs = jnp.array([0.0, 0.3, 0.6])
+
+        jitted = jax.jit(scale_of)(periods[0], eccs[0])
+        assert np.isclose(float(jitted), float(scale_of(periods[0], eccs[0])))
+
+        batched = jax.vmap(scale_of)(periods, eccs)
+        expected = [float(scale_of(p, e)) for p, e in zip(periods, eccs, strict=True)]
+        assert np.allclose(np.asarray(batched), expected)
+
+
+class TestPeriodDependentSemiMajorAxisPrior:
+    """Direct tests of the ``LinearPriorCallable`` dict contract for sigma_a."""
+
+    prior = PeriodDependentSemiMajorAxisPrior(sigma_a0=Q(5.0, "AU"), P0=Q(100.0, "day"))
+
+    def test_scale_matches_closed_form(self):
+        """sigma_a(P, plx) = sigma_a0 * (P/P0)**(2/3) * plx, in the parallax's unit."""
+        qd = self.prior(
+            {
+                "period": Q(400.0, "day"),
+                "eccentricity": 0.1,
+                "parallax": Q(10.0, "mas"),
+            }
+        )
+
+        # 1 AU at 1 mas parallax subtends 1 mas, so the product is already angular.
+        expected = 5.0 * 4.0 ** (2.0 / 3.0) * 10.0
+        assert qd.unit == "mas"
+        assert np.isclose(float(qd.distribution.scale), expected)
+        assert float(qd.distribution.loc) == 0.0
+
+    def test_no_eccentricity_dependence(self):
+        """Unlike the RV amplitude, sigma_a does not depend on eccentricity."""
+        base = {"period": Q(400.0, "day"), "parallax": Q(10.0, "mas")}
+        scales = [
+            float(self.prior({**base, "eccentricity": e}).distribution.scale)
+            for e in (0.0, 0.5, 0.9)
+        ]
+        assert np.allclose(scales, scales[0])
+
+    def test_missing_parallax_raises(self):
+        """A marginalized parallax is absent from the dict -> actionable KeyError."""
+        with pytest.raises(KeyError, match="requires 'parallax'"):
+            self.prior({"period": Q(400.0, "day"), "eccentricity": 0.1})
+
+
+class TestParallaxDependentProperMotionPrior:
+    """Direct tests of the ``LinearPriorCallable`` dict contract for sigma_mu."""
+
+    prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
+
+    def test_scale_matches_closed_form(self):
+        """sigma_mu(plx) = sigma_v0 [AU/yr] * plx, in parallax_unit / yr."""
+        qd = self.prior({"parallax": Q(10.0, "mas")})
+
+        # 1 AU/yr == 4.74047 km/s, so 50 km/s is 50 / 4.74047 AU/yr.
+        expected = (50.0 / 4.740470446) * 10.0
+        assert qd.unit == "mas/yr"
+        assert np.isclose(float(qd.distribution.scale), expected, rtol=1e-5)
+        assert float(qd.distribution.loc) == 0.0
+
+    def test_scales_linearly_with_parallax(self):
+        """Twice the parallax (half the distance) -> twice the proper-motion scale."""
+        near = float(self.prior({"parallax": Q(20.0, "mas")}).distribution.scale)
+        far = float(self.prior({"parallax": Q(10.0, "mas")}).distribution.scale)
+        assert np.isclose(near, 2.0 * far)
+
+    def test_missing_parallax_raises(self):
+        with pytest.raises(KeyError, match="requires 'parallax'"):
+            self.prior({"period": Q(400.0, "day")})

@@ -177,7 +177,7 @@ def _build_extra_numpyro_model(
         }
 
         explicit_linear_values = dict(fixed_linear)
-        explicit_linear_proxy = {
+        explicit_linear_q = {
             name: Q(value, param_units.get(name, ""))
             if param_units.get(name, "")
             else value
@@ -190,7 +190,7 @@ def _build_extra_numpyro_model(
             if isinstance(prior_dist, QuantityDistribution) and target_unit:
                 raw = ustrip(target_unit, Q(raw, str(prior_dist.unit)))
             explicit_linear_values[name] = raw
-            explicit_linear_proxy[name] = Q(raw, target_unit) if target_unit else raw
+            explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
         for name, prior_dist in explicit_callable_prior.items():
             target_unit = param_units.get(name, "")
@@ -198,14 +198,14 @@ def _build_extra_numpyro_model(
                 {name: prior_dist},
                 nl_values,
                 {name: target_unit},
-                extra_values=explicit_linear_proxy,
+                extra_values=explicit_linear_q,
             )
             raw = numpyro.sample(
                 name,
                 dist.Normal(resolved_prior.loc[0], resolved_prior.scale_tril[0, 0]),
             )
             explicit_linear_values[name] = raw
-            explicit_linear_proxy[name] = Q(raw, target_unit) if target_unit else raw
+            explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
         if marginalized and requested_marginalized_names:
             numpyro.factor(

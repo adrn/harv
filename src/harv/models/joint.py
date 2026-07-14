@@ -11,7 +11,6 @@ component).
 
 __all__ = ("JointModel",)
 
-import types
 from collections.abc import Callable
 from typing import Any, cast, final
 
@@ -137,7 +136,7 @@ def _sample_explicit_linear_prior(
     extra_values
         Optional ``Q``-wrapped versions of values that callable priors may
         consume to evaluate unit-aware dependencies; ``None`` when no such
-        proxy is needed (e.g. for shared explicit-linear priors).
+        values are needed (e.g. for shared explicit-linear priors).
     site_name
         Optional site name to use within numpyro.
 
@@ -1165,11 +1164,11 @@ class JointModel(eqx.Module):
                 )
 
             # 3. Sample per-component explicit-linear priors.  Direct first,
-            #    then callable; the per-component ``explicit_linear_proxy``
+            #    then callable; the per-component ``explicit_linear_q``
             #    feeds Q-wrapped values to callable resolvers that need units.
             for comp_name in joint.component_names:
                 pu = _comp_param_units[comp_name]
-                explicit_linear_proxy: dict[str, Any] = {}
+                explicit_linear_q: dict[str, Any] = {}
                 for name, p in _comp_explicit_direct_lp[comp_name].items():
                     target_u = pu.get(name, "")
                     raw = _sample_explicit_linear_prior(
@@ -1180,14 +1179,14 @@ class JointModel(eqx.Module):
                         site_name=f"{comp_name}.{name}",
                     )
                     nl_values[f"{comp_name}.{name}"] = raw
-                    explicit_linear_proxy[name] = Q(raw, target_u) if target_u else raw
+                    explicit_linear_q[name] = Q(raw, target_u) if target_u else raw
                 for name, p in _comp_explicit_callable_lp[comp_name].items():
                     target_u = pu.get(name, "")
                     raw = _sample_explicit_linear_prior(
-                        name, p, target_u, nl_values, extra_values=explicit_linear_proxy
+                        name, p, target_u, nl_values, extra_values=explicit_linear_q
                     )
                     nl_values[f"{comp_name}.{name}"] = raw
-                    explicit_linear_proxy[name] = Q(raw, target_u) if target_u else raw
+                    explicit_linear_q[name] = Q(raw, target_u) if target_u else raw
 
             # 4. Split nl_values per component and route explicit-linear values.
             comp_nl = _split_nl_values(
@@ -1316,9 +1315,9 @@ class JointModel(eqx.Module):
             )
 
             # Per-component view of linear values, used both to feed callable
-            # Gaussian priors (proxy) and to assemble each component's log-prob
-            # input.  Shared linear values are mirrored into every component's
-            # entry so callable priors can read them as bare attributes.
+            # Gaussian priors and to assemble each component's log-prob input.
+            # Shared linear values are mirrored into every component's entry so
+            # callable priors can read them under their bare parameter name.
             linear_by_comp: dict[str, dict[str, jax.Array]] = {
                 c: {} for c in joint.component_names
             }
@@ -1355,13 +1354,12 @@ class JointModel(eqx.Module):
 
                     # Resolve callable priors against the owning component's
                     # nonlinear + already-sampled-explicit values.
-                    proxy_values = dict(comp_nl[cname])
-                    proxy_values.update(linear_by_comp[cname])
-                    params_proxy = types.SimpleNamespace(**proxy_values)
+                    param_values = dict(comp_nl[cname])
+                    param_values.update(linear_by_comp[cname])
                     if callable(d) and not isinstance(
                         d, dist.Distribution | QuantityDistribution
                     ):
-                        resolved = d(params_proxy)
+                        resolved = d(param_values)
                     else:
                         resolved = d
 
