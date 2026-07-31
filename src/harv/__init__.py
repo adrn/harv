@@ -31,6 +31,7 @@ __all__ = (
     "Samples",
     # Modules:
     "data",
+    "periodogram",
     "plot",
 )
 
@@ -63,5 +64,6 @@ from harv.samplers import (
     Samples,
 )
 from harv import data
+from harv import periodogram
 from harv import plot
 from harv._version import __version__
