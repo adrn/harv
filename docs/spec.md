@@ -182,7 +182,8 @@ src/harv/
 │   ├── parameterizations/    # Parameter declarations and design matrices
 │   │   ├── _base.py         # AbstractParameterization base class
 │   │   ├── rv.py            # StandardRV, EcoswEsinwRV
-│   │   └── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
+│   │   ├── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
+│   │   └── fourier.py       # FourierRV, FourierGaiaAstrometry (Kepler-free)
 │   ├── component.py         # AbstractComponentModel (marginalization, numpyro)
 │   ├── rv.py                # RVModel (final)
 │   ├── astrometry.py        # GaiaAstrometryModel (final)
@@ -203,7 +204,6 @@ src/harv/
 │   └── samples.py           # Samples container
 ├── periodogram/             # Periodogram-informed interim period priors
 │   ├── grid.py              # frequency_grid
-│   ├── _design.py           # Trial-period design matrices (private)
 │   ├── core.py              # periodogram(), PeriodogramResult
 │   ├── distribution.py      # LogGridDensity
 │   ├── priors.py            # tempered_period_prior, peak_period_prior, attach_ln_pint
@@ -694,6 +694,54 @@ sigma_vtan, P0=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
 
 The Jacobian correction (`apply_jacobian_correction=True`) restores the
 correct posterior under a flat-Campbell-elements prior.
+
+### `FourierRV` and `FourierGaiaAstrometry` (Kepler-free)
+
+Two **Kepler-free** parameterizations replace the Keplerian orbit with a
+truncated Fourier series in the mean longitude `M = 2π(t − t_ref)/P` whose
+coefficients are all *linear*. The only nonlinear parameter is `period`: the
+periastron phase is absorbed into each `(cos, sin)` amplitude pair, and
+eccentricity distortion of the orbit shape is absorbed by the higher
+harmonics. **No Kepler solve occurs** — `RVModel` / `GaiaAstrometryModel`
+dispatch (at trace time, on the parameterization type) to a mean-longitude
+branch instead of `_solve_kepler`.
+
+`n_terms: int` is a **static** field; the parameter list is computed from it
+(the same pattern as `MonomialTrend.order` / `MultiSurveyOffset`). `n_terms =
+0` is the valid **null (no-signal) model**, which the periodogram uses as its
+base model.
+
+- `FourierRV(n_terms=H)` — nonlinear: `period`. Linear: `cos_amp_k`,
+  `sin_amp_k` for `k = 1..H` (unit kind `speed`), plus `v_sys`. Design matrix
+  `(n_obs, 2H + 1)`: `[cos(kM), sin(kM)] for k = 1..H` plus a constant column.
+- `FourierGaiaAstrometry(n_terms=H)` — nonlinear: `period`. Linear: the same
+  five astrometric-solution parameters as `StandardGaiaAstrometry` (`ra0`,
+  `dec0`, `pmra`, `pmdec`, `parallax`), plus per harmonic the Thiele-Innes-like
+  amplitudes `ti_A_k`, `ti_B_k`, `ti_F_k`, `ti_G_k`. Design matrix
+  `(n_obs, 5 + 4H)`; per harmonic the four columns are
+  `[cos(kM)·cosψ, cos(kM)·sinψ, sin(kM)·cosψ, sin(kM)·sinψ]` — the
+  circular-orbit Thiele-Innes structure (i.e. `ThieleInnesGaiaAstrometry` at
+  `e = 0`).
+
+`default_prior(...)` requires **explicit** scales — `sigma_amp` (applied to
+every harmonic amplitude; individual amplitudes may be overridden by name) plus
+`sigma_v0` (RV) or `sigma_pos` / `sigma_pm` / `sigma_parallax` (Gaia). There is
+deliberately **no data-driven default**: nothing in these classes inspects the
+data. In particular there is **no centering**, so the `v_sys` / `ra0`/`dec0`
+priors must be appropriate for the data's actual offsets. Every Gaia linear
+prior is a plain Gaussian (including `parallax`, a zero-mean nuisance by
+default) so the model marginalizes analytically; override `parallax=` with a
+catalog-informed `Normal` when known.
+
+These are first-class parameterizations: extensions that add linear columns
+(`MultiSurveyOffset`, `MonomialTrend`) and the `RejectionSampler` work as
+usual. They exist primarily to drive the periodogram through the standard
+model/likelihood machinery (see "Periodogram and interim period priors").
+Being Kepler-free they carry no orbital elements, so orbital-element-specific
+analysis raises cleanly: `Samples` from these parameterizations do not
+advertise the derived `t_peri` key (it requires `phase_peri`), and
+`binary_mass_function` / `companion_mass` / `convert_parameterization` /
+Gaia sky-orbit plotting are not applicable.
 
 ### Parameter naming convention
 
@@ -1987,51 +2035,51 @@ support so the samplings remain valid for downstream hierarchical inference.
 
 ### The Δ log-marginal-likelihood statistic
 
-The periodogram scans **period only**. At each trial frequency `f` on a grid,
-every other parameter of the trial model is *linear* and is analytically
-marginalized via `MarginalizedLinear` (see "Why MarginalizedLinear"):
+The periodogram scans **period only**, and owns no likelihood machinery of its
+own: it is a thin `jax.vmap` of `model.log_prob(...)` over the period grid,
+using the Kepler-free Fourier parameterizations (see "`FourierRV` and
+`FourierGaiaAstrometry`"), whose amplitudes are all linear and therefore
+analytically marginalized by the standard model path.
 
 ```
 delta_ln_likelihood(f) = ln L(f) − ln L_base
 ```
 
-where both terms are Gaussian marginal likelihoods with **identical, fixed**
-amplitude priors `Normal(0, s0)` and per-point noise at every trial frequency
-(so the Occam factors are constant across the grid, and Δ is a per-frequency
-log Bayes factor of "base + orbit harmonics" vs. the base model). The
-amplitude scale is data-driven and computed once per dataset:
-`s0 = sqrt(weighted_var(y) + median(err)^2)`.
+- `ln L(f)` = `model.log_prob({"period": 1/f, ...}, data, linear_priors=...)`
+  with `FourierX(n_terms=H)`.
+- `ln L_base` = the same call with `FourierX(n_terms=0)` — the null model (RV:
+  the constant offset alone; Gaia: the 5-parameter astrometric solution
+  alone). It is period-independent, so it is evaluated **once**.
 
-Design matrices per data type (`n_harmonics = H`, default 2 — the harmonic
-columns are a truncated Fourier series in the mean longitude `M = 2π f t`
-whose coefficients are linear, absorbing eccentricity distortion of the orbit
-shape; no Kepler solve occurs). Each harmonic adds free linear columns, so
-`n_harmonics` is **capped per dataset** to keep the trial model overdetermined
-(at least two observations per column, floored at 1), emitting a `UserWarning`
-when reduced. This is a correctness safeguard, not just an optimization: on
+Δ is therefore a per-frequency log Bayes factor of "base + orbit harmonics" vs.
+the base model, **under exactly the priors supplied** by the required `prior`
+argument. Because the base columns appear in *both* models, their power cancels
+in Δ — for Gaia this is what suppresses scan-law / parallax / proper-motion
+signal (no spurious peaks at one year or the scan-law periods).
+
+`eccentricity = 0` is adopted inside the periodogram: the Fourier trial model
+has no eccentricity, but `e = 0` is passed alongside `period` so that
+eccentricity-dependent amplitude priors (e.g. `PeriodDependentKPrior`) resolve
+through the standard prior machinery. It is ignored by the Fourier design
+matrix.
+
+`n_terms` (default 2) is **capped per dataset** to keep the trial model
+overdetermined — at least two observations per linear column, floored at 1 —
+emitting a `UserWarning` when reduced. Column counts are derived from the
+parameterization and any linear extensions, so extension columns count against
+the same budget. This is a correctness safeguard, not just an optimization: on
 sparse data an overfit trial model fits almost any trial period, so spurious
 alias peaks dominate the periodogram and a prior built from it can *hurt*
 acceptance. The cap engages only when the harmonics could not be reliably
 estimated anyway; where multi-term genuinely helps (eccentric orbits with
-adequate sampling) it does not engage. `PeriodogramResult.n_harmonics` reports
-the effective value used:
+adequate sampling) it does not engage. `PeriodogramResult.n_terms` reports the
+effective value used.
 
-- **RV**: base `(n_obs, 1)` = `[1]` (v_sys); trial `(n_obs, 1 + 2H)` =
-  `[1, cos(k·2πft), sin(k·2πft)]` for `k = 1..H`. Observations are centered by
-  their weighted mean (Δ-invariant; keeps one amplitude scale valid for all
-  columns).
-- **Gaia along-scan**: base `(n_obs, 5)` = the same five columns as
-  `StandardGaiaAstrometry.design_matrix`
-  (`[sinψ, cosψ, sinψ·dt̃, cosψ·dt̃, p̃f]`, with the time and parallax-factor
-  regressors standardized to O(1) RMS); trial `(n_obs, 5 + 4H)` adds, per
-  harmonic, the circular-orbit Thiele-Innes columns
-  `[cos(kM)·cosψ, cos(kM)·sinψ, sin(kM)·cosψ, sin(kM)·sinψ]`. Because the five
-  base columns appear in **both** models, scan-law / parallax / proper-motion
-  power cancels — no spurious peaks at one year or the scan-law periods.
-- **Containers** (`SourceData`, `SystemData`): each dataset's Δ is evaluated
-  on the shared grid and summed — one periodogram per source. Each RV
-  instrument carries its own constant column, so zero-point offsets are
-  handled without extensions.
+**Containers** (`SourceData`, `SystemData`): each dataset's Δ is evaluated on
+the shared grid and summed — one periodogram per source; per-dataset Δ are kept
+in `PeriodogramResult.per_dataset`. Multiple RV instruments are handled by
+passing a `MultiSurveyOffset` extension (offset columns are marginalized in
+both models, as with any model).
 
 Other data types raise `NotImplementedError` (2-d absolute/relative astrometry
 is future work; see "Planned features").
@@ -2060,18 +2108,55 @@ once for all sources.
 ```python
 periodogram(
     data,                     # RVData | GaiaAstrometryData | container
-    frequency=None,           # explicit grid; exclusive with grid kwargs
+    frequency_grid=None,      # explicit grid; exclusive with grid kwargs
     *,
+    prior,                    # REQUIRED: HarvPrior (or {dataset_name: HarvPrior})
     period_min=None, period_max=None, samples_per_peak=5, n_grid=None,
-    n_harmonics=2,
+    n_terms=2,
+    extensions=(),            # linear-column extensions (or per-dataset mapping)
 ) -> PeriodogramResult
 ```
 
 `PeriodogramResult` is an `eqx.Module` with fields `frequency`,
 `delta_ln_likelihood`, `ln_likelihood_base`, `t_span`, `t_ref`, optional
-`per_dataset` (per-dataset Δ for container inputs), and static `n_harmonics`;
+`per_dataset` (per-dataset Δ for container inputs), and static `n_terms`;
 plus `period` (property, `1/frequency`), `max_period()`, and `plot(ax=None,
 x="period" | "frequency")`.
+
+### Priors are explicit
+
+`prior` is **required** and is an ordinary `HarvPrior` for the Fourier trial
+model, normally built by `FourierRV(n_terms=H).default_prior(...)` /
+`FourierGaiaAstrometry(n_terms=H).default_prior(...)`. The periodogram makes
+**no data-driven prior choices** — it never inspects the data to set a scale,
+does no centering, and keeps no table of column names: Δ is a log Bayes factor
+under exactly the priors given. Consequences:
+
+- The `v_sys` / `ra0` / `dec0` priors must suit the data's actual offsets
+  (there is no centering). Δ becomes invariant to a constant offset only in the
+  limit that the offset prior is wide enough to absorb it.
+- Amplitude priors may be `LinearPriorCallable`s (e.g. `PeriodDependentKPrior`)
+  — they resolve per trial period through the standard prior machinery, with
+  `e = 0` adopted, and so intentionally tilt Δ. The Occam factors are constant
+  across the grid only for period-independent amplitude priors.
+- Extensions adding linear columns (`MultiSurveyOffset`, `MonomialTrend`) are
+  passed via `extensions=` and apply to both the trial and base models; their
+  priors come from `prior.extension_priors` as usual. Extensions with nonlinear
+  parameters (`Jitter`, `GP`) raise `TypeError` — the periodogram can neither
+  scan nor marginalize them.
+- Prior/data mismatches raise `TypeError`: extra nonlinear priors (e.g. handing
+  it a `StandardRV` prior), unknown linear names, or missing linear entries.
+  For containers, `prior` may be a `{dataset_name: HarvPrior}` mapping (a
+  single prior may be shared when all datasets are of one type).
+
+**Open question (deliberately unsettled).** What amplitude scale to *recommend*
+is not settled. A scale comparable to the data RMS under-estimates the true
+amplitude in the partial-arc regime (baseline < period) and biases the peak
+toward short periods; a broader or period-dependent prior mitigates it, but
+choosing a default needs a study against a converged period posterior (dense
+rejection / MCMC) across many seeds and regimes. Until then the API requires
+the user to choose. See the `TODO` in
+`harv.models.parameterizations.fourier`.
 
 ### `LogGridDensity`
 
@@ -2546,7 +2631,16 @@ samples = sampler.run(data, n_prior_samples=500_000)
 # --- Periodogram-informed interim period prior ---
 import harv.periodogram as hp
 
-result = hp.periodogram(data, period_min=Q(2, "day"), period_max=Q(2000, "day"))
+# The periodogram runs a Kepler-free Fourier model; its priors are explicit:
+fourier_prior = hm.FourierRV(n_terms=2).default_prior(
+    period_min=Q(2, "day"),
+    period_max=Q(2000, "day"),
+    sigma_amp=Q(30, "km/s"),
+    sigma_v0=Q(10, "km/s"),
+)
+result = hp.periodogram(
+    data, prior=fourier_prior, period_min=Q(2, "day"), period_max=Q(2000, "day")
+)
 prior = hm.StandardRV().default_prior(
     period=hp.tempered_period_prior(result, beta=1.0, floor=0.1),  # or peak_period_prior
     sigma_K0=Q(30, "km/s"),
