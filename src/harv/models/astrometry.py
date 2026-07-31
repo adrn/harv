@@ -18,6 +18,7 @@ from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.models.parameterizations.fourier import FourierGaiaAstrometry
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
@@ -50,9 +51,9 @@ class GaiaAstrometryModel(AbstractComponentModel):
     ['arg_peri', 'cos_i', 'eccentricity', 'lon_asc_node', 'period', 'phase_peri']
     """
 
-    parameterization: StandardGaiaAstrometry | ThieleInnesGaiaAstrometry = (
-        StandardGaiaAstrometry()
-    )
+    parameterization: (
+        StandardGaiaAstrometry | ThieleInnesGaiaAstrometry | FourierGaiaAstrometry
+    ) = StandardGaiaAstrometry()
     extensions: tuple[AbstractExtension, ...] = ()
     _: KW_ONLY
     pm_time_unit: str = "yr"
@@ -105,10 +106,27 @@ class GaiaAstrometryModel(AbstractComponentModel):
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
+    def _mean_longitude(
+        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+    ) -> tuple[jax.Array, jax.Array]:
+        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - t_ref)/P``.
+
+        Kepler-free path used by Fourier parameterizations: no periastron
+        phase (absorbed into the linear amplitude pairs) and no Kepler solve.
+        """
+        M = mean_anomaly(data.time - data.t_ref, nl_values["period"])
+        m_rad = ustrip(AllowValue, "rad", M)
+        return jnp.sin(m_rad), jnp.cos(m_rad)
+
     def _base_design_matrix(
         self, nl_values: dict[str, Any], data: GaiaAstrometryData
     ) -> jax.Array:
-        sin_f, cos_f = self._solve_kepler(nl_values, data)
+        # Fourier parameterizations are Kepler-free: their basis is the mean
+        # longitude, not the true anomaly (trace-time dispatch, no runtime cost).
+        if isinstance(self.parameterization, FourierGaiaAstrometry):
+            sin_f, cos_f = self._mean_longitude(nl_values, data)
+        else:
+            sin_f, cos_f = self._solve_kepler(nl_values, data)
 
         # Prepare auxiliary data arrays
         dt = jnp.array(ustrip(self.pm_time_unit, data.time - data.t_ref))

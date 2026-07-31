@@ -14,6 +14,8 @@ from harv.models.joint import JointModel
 from harv.models.parameterizations import (
     AbstractParameterization,
     EcoswEsinwRV,
+    FourierGaiaAstrometry,
+    FourierRV,
     StandardGaiaAstrometry,
     StandardRV,
 )
@@ -25,6 +27,8 @@ __all__ = (
     "AbstractComponentModel",
     "AbstractParameterization",
     "EcoswEsinwRV",
+    "FourierGaiaAstrometry",
+    "FourierRV",
     "GaiaAstrometryModel",
     "GP",
     "Jitter",

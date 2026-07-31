@@ -481,7 +481,11 @@ class Samples(eqx.Module):
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
-        derived_keys = ["log_period", "t_peri"]
+        derived_keys = ["log_period"]
+        # Kepler-free samples (e.g. Fourier parameterizations) have no
+        # periastron phase, so t_peri is only derivable when phase_peri exists.
+        if "phase_peri" in self.nonlinear:
+            derived_keys.append("t_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
         if "rv_semiamp" in self.linear:
