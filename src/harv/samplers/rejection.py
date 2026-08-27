@@ -1005,35 +1005,55 @@ class RejectionSampler(AbstractSampler):
         uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
         return uniform_draws < weights
 
-    def _sample_linear_parameters(  # noqa: C901
+    @eqx.filter_jit
+    def _vmap_conditional_linear(
         self,
         model: AbstractComponentModel | JointModel,
-        key: jax.Array,
+        keys: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
         marginalized_names: tuple[str, ...] | None,
         # data is correlated with the (polymorphic) model and is dispatched
         # through model.sample_conditional_linear; cannot be narrowed here.
         data: Any,
         linear_priors: dict[str, Any] | None,
-    ) -> dict[str, AbstractQuantity]:
-        """Sample linear parameters from conditional posterior using vmap.
+    ) -> dict[str, Any]:
+        """Draw conditional linear parameters for a batch of nonlinear samples.
 
-        The model's ``sample_conditional_linear`` uses the sampler-resolved
-        ``marginalized_names`` override when one is provided.
+        Split out of :meth:`_sample_linear_parameters` purely so it can carry
+        ``@eqx.filter_jit``: a closure defined inside the calling method would
+        be rebuilt on every call and so never hit the jit cache.  Without this,
+        each call re-runs the quaxed/plum multiple-dispatch stack in Python --
+        invisible at a hundred stars, but pure per-system overhead on the
+        critical path of a population-scale loop.
+
+        The cache is keyed on the leading-axis length of ``keys``, so it is
+        reused across datasets only when that length is stable, which is what
+        ``max_posterior_samples`` exists to arrange.
+
+        Parameters
+        ----------
+        model : AbstractComponentModel | JointModel
+            The model whose ``sample_conditional_linear`` is vmapped.
+        keys : jax.Array
+            One PRNG key per sample, shape ``(n_samples,)``.
+        nonlinear_samples : dict[str, jax.Array]
+            Unit-stripped nonlinear (and explicit-linear) values, each of
+            leading length ``n_samples``.
+        marginalized_names : tuple[str, ...] | None
+            Sampler-resolved marginalization override, or ``None`` for the
+            model's own auto-classification.
+        data : Any
+            Observed data, forwarded to ``sample_conditional_linear``.
+        linear_priors : dict[str, Any] | None
+            Effective linear prior for this (prior, model) bundle.
+
+        Returns
+        -------
+        dict[str, Any]
+            Raw (unit-less) conditional draws, keyed as the model returns
+            them -- per-component sub-dicts for a :class:`JointModel`.
         """
         prior = self.prior
-
-        n_samples = len(next(iter(nonlinear_samples.values())))
-        if n_samples == 0:
-            if isinstance(model, JointModel):
-                names: list[str] = []
-                for comp in model.components.values():
-                    names.extend(comp._all_linear_names())
-            else:
-                names = list(model._all_linear_names())
-            return {name: Q(jnp.zeros(0), "") for name in names}
-
-        keys = jr.split(key, n_samples)
         base_names = model._base_nonlinear_names()
         model_keys = tuple(nonlinear_samples.keys())
 
@@ -1048,8 +1068,45 @@ class RejectionSampler(AbstractSampler):
                 marginalized_names=marginalized_names,
             )
 
-        filtered = {k: nonlinear_samples[k] for k in model_keys}
-        result = jax.vmap(_sample_one)(keys, filtered)
+        return jax.vmap(_sample_one)(keys, nonlinear_samples)
+
+    def _sample_linear_parameters(
+        self,
+        model: AbstractComponentModel | JointModel,
+        key: jax.Array,
+        nonlinear_samples: dict[str, jax.Array],
+        marginalized_names: tuple[str, ...] | None,
+        # data is correlated with the (polymorphic) model and is dispatched
+        # through model.sample_conditional_linear; cannot be narrowed here.
+        data: Any,
+        linear_priors: dict[str, Any] | None,
+    ) -> dict[str, AbstractQuantity]:
+        """Sample linear parameters from conditional posterior using vmap.
+
+        The model's ``sample_conditional_linear`` uses the sampler-resolved
+        ``marginalized_names`` override when one is provided.  The vmap itself
+        lives in :meth:`_vmap_conditional_linear` so it can be jit-compiled;
+        this method handles the empty-input case and re-attaches units.
+        """
+        n_samples = len(next(iter(nonlinear_samples.values())))
+        if n_samples == 0:
+            if isinstance(model, JointModel):
+                names: list[str] = []
+                for comp in model.components.values():
+                    names.extend(comp._all_linear_names())
+            else:
+                names = list(model._all_linear_names())
+            return {name: Q(jnp.zeros(0), "") for name in names}
+
+        keys = jr.split(key, n_samples)
+        result = self._vmap_conditional_linear(
+            model,
+            keys,
+            nonlinear_samples,
+            marginalized_names,
+            data,
+            linear_priors,
+        )
 
         # Attach units from the model's linear_param_units
         if isinstance(model, JointModel):
