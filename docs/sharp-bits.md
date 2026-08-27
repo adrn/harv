@@ -96,3 +96,29 @@ This rewrites the samples into the equivalent convention
 - `arg_peri` wrapped into $\[0, 2\\pi)$
 
 without changing the physical orbit.
+
+## Top-K samples are weighted, and truncating them biases your estimates
+
+`RejectionSampler.run(..., top_k=k)` returns exactly `k` samples for every dataset,
+which is what population-scale loops need. The price is that those samples are
+**not** equal-weight posterior draws. Averaging them as if they were is wrong.
+
+The weights live in `samples["weight"]` and are normalized over the *full* prior
+library, so they sum to less than one whenever samples were truncated away.
+Posterior expectations need renormalizing:
+
+```python
+w = samples["weight"] / samples["weight"].sum()
+mean_period = (w * samples["period"]).sum()
+```
+
+Even then the estimate is biased unless nearly all the posterior mass survived,
+because the top `k` samples are the highest-likelihood ones rather than a fair draw.
+Check the two diagnostics before trusting any number, and note that a system can
+pass one and fail the other:
+
+- `metadata["logZ_int_ess"]` — did the prior library resolve this posterior?
+  `ESS ≲ 10` means it did not, and the result is a localization, not a posterior.
+- `metadata["weight_captured"]` — was `k` big enough? `~1.0` is ample; `0.1` means
+  90% of the posterior mass was truncated away and the weighted mean is not the
+  posterior mean, however large `k` looks.

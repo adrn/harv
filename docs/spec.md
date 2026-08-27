@@ -1406,15 +1406,28 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
    passed through explicitly.
    Evaluated via `jax.lax.fori_loop` to bound memory.
 
-1. **Rejection.** Normalize weights to `max` and accept samples where
-   `Uniform() < weight`.
+1. **Selection.** One of two mutually exclusive policies:
 
-1. **Cap.** If `max_posterior_samples` is set and more than that many samples
-   were accepted, randomly subsample to `max_posterior_samples` via
-   `jax.random.choice(..., replace=False)`. This happens *before* linear-
-   parameter sampling so the `jax.vmap` shape in step 5 is stable across
-   calls — important for population-scale loops where the same sampler is
-   reused over many datasets.
+   - **Rejection** (default). Normalize weights to `max` and accept samples
+     where `Uniform() < weight`. The number of survivors depends on how
+     constraining the data are.
+   - **Top-K by weight** (`top_k=k`). Take the `k` prior samples with the
+     largest importance weights, via `jax.lax.top_k` on the log-likelihood
+     array, ordered by decreasing weight. Ranking by log-likelihood is
+     identical to ranking by log-weight (the normalization is a per-run
+     constant), so no `logsumexp` is needed and there is no intermediate
+     normalized array to become `NaN` when every likelihood is non-finite.
+     Non-finite log-likelihoods sort last and carry zero weight regardless of
+     `ignore_non_finite`. The output length is exactly `k` for every dataset —
+     see §Top-K selection.
+
+1. **Cap** (rejection only). If `max_posterior_samples` is set and more than
+   that many samples were accepted, randomly subsample to
+   `max_posterior_samples` via `jax.random.choice(..., replace=False)`. This
+   happens *before* linear-parameter sampling so the `jax.vmap` shape in step 5
+   is stable across calls — important for population-scale loops where the same
+   sampler is reused over many datasets. The `top_k` policy makes that shape
+   static by construction and so needs no equivalent step.
 
 1. **Linear parameter sampling.** For each (kept) accepted nonlinear sample,
    call `model.sample_conditional_linear(values, key)` to draw the marginalized
@@ -1431,9 +1444,11 @@ sampler.run(
     *,
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
+    top_k: int | None = None,
     seed: int = 0,
-  ignore_non_finite: bool = False,
-  return_logprobs: bool = False,
+    ignore_non_finite: bool = False,
+    return_logprobs: bool = False,
+    return_evidence_stats: bool = False,
 ) -> Samples
 ```
 
@@ -1444,14 +1459,76 @@ requires an `AbstractDatasetContainer` (`SystemData`, `SourceData`) keyed by
 component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
 `dict` or any other object raises `TypeError`.
 
+- `max_posterior_samples` -- cap on the number of accepted samples returned.
+  Mutually exclusive with `top_k`; passing both raises `ValueError`.
+- `top_k` -- when set, skip rejection and return exactly `top_k` samples by
+  importance weight (see §Top-K selection). Default: `None`.
 - `ignore_non_finite` -- when `True`, any `NaN` or infinite log-likelihoods
   are treated as rejected samples by replacing them with `-inf` before the
-  rejection step. Default: `False`.
+  rejection step. Default: `False`. On the `top_k` path this is a no-op:
+  non-finite log-likelihoods always sort last and carry zero weight.
 - `return_logprobs` -- when `True`, the returned `Samples` carries per-sample
   log-probabilities: `ln_likelihood` (the marginal log-likelihood) and
   `ln_prior` (the summed nonlinear-prior log-density). These enable
   `Samples.map_sample()` and the `Samples.ln_posterior` property. Default:
   `False`. Supported by both `RejectionSampler.run` and `NumpyroSampler.run`.
+  Forced on by `top_k`.
+- `return_evidence_stats` -- when `True`, add prior-Monte-Carlo evidence
+  statistics to `Samples.metadata`, estimated from the **full** `(M,)`
+  log-likelihood array before selection. Default: `False`. Forced on by
+  `top_k`. Keys:
+
+  | key | meaning |
+  | --- | --- |
+  | `logZ_int` | log-evidence, `logsumexp(ln L) - ln M` |
+  | `logZ_int_mcse` | delta-method MC standard error on `logZ_int`, `sqrt(max(0, 1/ESS - 1/M))` |
+  | `logZ_int_ess` | Kish effective sample size of the importance weights, `(Σ L)² / Σ L²` |
+  | `max_log_likelihood` | `max(ln L)` over the library |
+  | `n_prior_samples` | library size `M` |
+
+  `logZ_int_ess` is the diagnostic for whether the prior library resolved this
+  posterior at all: `ESS ≲ 10` means it did not, and the result is a
+  localization rather than a posterior.
+
+### Top-K selection (`top_k`)
+
+Rejection returns a data-dependent number of rows — ~1000 for an unconstrained
+system, ~1 for a well-constrained one. Population-scale workflows need a uniform
+output: one `run_with_samples` call per system, every call yielding the same
+number of rows so the results form a rectangular table. `top_k=k` provides that
+by keeping the `k` highest-importance-weight prior draws *with their weights*
+instead of accept/rejecting.
+
+The output shape is static in `k`, which removes the recompile-per-acceptance-count
+problem at its source: the boolean rejection mask forces a device→host sync and a
+fresh trace of the per-sample conditional Gaussian solve for every distinct
+acceptance count, which `max_posterior_samples` only works around. A `top_k`
+gather is by index, so the `jax.vmap` in the linear-parameter step sees one shape
+forever.
+
+`top_k` forces `return_logprobs=True` and `return_evidence_stats=True`, because
+`Samples["weight"]` is reconstructed from `ln_likelihood` plus the `logZ_int` and
+`n_prior_samples` metadata. It adds one further metadata key:
+
+| key | meaning |
+| --- | --- |
+| `weight_captured` | `Samples["weight"].sum()` — the fraction of total posterior mass the returned `k` samples capture |
+
+Two diagnostics are reported because they answer different questions, and a
+system can pass one while failing the other:
+
+- `logZ_int_ess` — *did the library sample this posterior?*
+- `weight_captured` — *was `k` big enough?* ~1.0 means ample; 0.1 means 90% of
+  the posterior mass was truncated away.
+
+**The returned samples are weighted, and truncation biases them.** Treating them
+as equal-weight posterior draws is wrong, and `Σ w f / Σ w` over a truncated
+top-K set is biased whenever `weight_captured` is not close to 1 — however large
+`k` is in absolute terms. See `docs/sharp-bits.md`.
+
+Errors: `ValueError` if `top_k` is combined with `max_posterior_samples`, if
+`top_k < 1`, or if `top_k` exceeds the prior library size (returning fewer than
+`top_k` rows would defeat the fixed-shape contract the caller depends on).
 
 ### `batch_size` and GPU support
 
@@ -1498,9 +1575,11 @@ sampler.run_with_samples(
     prior_samples: Samples | str | os.PathLike,
     *,
     max_posterior_samples: int | None = None,
+    top_k: int | None = None,
     seed: int | None = None,
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
+    return_evidence_stats: bool = False,
     randomize_prior_order: bool = True,
 ) -> Samples
 ```
@@ -1522,7 +1601,11 @@ batch is still a single contiguous h5py slice — no random seeks, no read
 amplification. Set to `False` for strictly sequential reads (reproducibility /
 debugging).
 
-The other keyword arguments behave exactly as on `run`.
+The other keyword arguments behave exactly as on `run`. This is the intended
+entry point for `top_k`: one shared prior library, one call per system, exactly
+`top_k` rows out of every call. Top-K selection depends only on the
+log-likelihoods, so it selects the same library draws either way and is
+unaffected by `randomize_prior_order`.
 
 ### Building a prior cache (`make_prior_cache`)
 
@@ -1663,6 +1746,11 @@ shape, `to_hdf5` writes the dict entries one-for-one as HDF5 attrs, and
 - `t_ref` (`float`) + `t_ref_unit` (`str`) -- the reference epoch in the
   source data's time unit.
 - `num_chains` (`int`) -- written by `NumpyroSampler.run()`.
+- `logZ_int`, `logZ_int_mcse`, `logZ_int_ess`, `max_log_likelihood` (`float`)
+  and `n_prior_samples` (`int`) -- written by `RejectionSampler` when
+  `return_evidence_stats=True` or `top_k` is set. See §`run` method.
+- `weight_captured` (`float`) -- written by `RejectionSampler` when `top_k` is
+  set. See §Top-K selection.
 
 For Q-aware reads, use `samples.meta` -- a `collections.abc.Mapping` view
 that reassembles `<name>` + `<name>_unit` pairs into `Q` instances on the
