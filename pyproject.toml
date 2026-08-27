@@ -11,14 +11,23 @@ authors = [
     { name = "adrn", email = "583379+adrn@users.noreply.github.com" },
 ]
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">= 3.12"
 readme = {"file" = "README.md", "content-type" = "text/markdown"}
+# No "License :: OSI Approved :: ..." classifier: deprecated by PEP 639 now that
+# `license` above is an SPDX expression.
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
 # TODO: add keywords
 keywords = []
@@ -47,9 +56,8 @@ extra = [
 
 [tool.uv]
 override-dependencies = [
-    # "unxt @ file:///Users/aprice-whelan/projects/unxt",
-    # "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
-    "unxt @ git+https://github.com/adrn/unxt.git@a78e1965f5033c31e8ab519848b3ff0a01e9e9ab",
+    # TODO: remove this once unxt is released with the quantity-stub branch merged.
+    "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
     "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git"
 ]
 
@@ -73,8 +81,15 @@ dev = [
     "ipykernel",
     "ipywidgets",
     "pre-commit",
-    "twine",
-    "ruff",
+    # >=7: hatchling>=1.27 emits core metadata 2.5 for PEP 639 license fields, and
+    # twine only learned to read that in 7.0 (pypa/twine#1327). Older twine fails
+    # `twine check` on a perfectly valid wheel. The release workflow gets twine 7
+    # via build-and-inspect-python-package; this keeps local checks in step.
+    "twine>=7",
+    # Keep in lockstep with the ruff-pre-commit rev in .pre-commit-config.yaml.
+    # When they drift, `uv run ruff` and CI disagree about which rules exist --
+    # that is how CPY001 stayed invisible locally while failing pre-commit.
+    "ruff==0.16.0",
     "ty>=0.0.22",
     "jedi==0.19.1",
 ]
@@ -83,18 +98,15 @@ docs = [
     "sphinx~=8.0",
     "myst-parser>=4.0",
     "sphinx-autobuild>=2024.10.3",
-    "sphinx-autoapi>=3.6.0",
     "sphinx-design>=0.6.1",
     "sphinx-copybutton>=0.5.2",
     "sphinx_autodoc_typehints>=2.5",
     "corner>=2.2.3",
     "ipykernel>=7.1.0",
     "myst-nb>=1.4.0",
-    "autoapi>=2.0.1",
     "nbconvert>=7.17.1",
     "rtds-action>=1.1.0",
     "furo>=2024.8.6",
-    "pytz>=2026.2",
 ]
 test = [
     "pytest",
@@ -105,6 +117,20 @@ test = [
     "beartype",
     "matplotlib>=3.10.7",
     "sybil>=10.0.1",
+    # Optional runtime deps the suite exercises. CI installs only this group
+    # (uv sync --no-default-groups --group test), so anything missing here is
+    # silently lost coverage rather than a failure -- and before that change CI
+    # installed the whole `dev` group, so these all ran. Keep this list complete:
+    #   corner       -> Samples.plot_corner
+    #   scikit-learn -> Samples.period_modes
+    #   arviz        -> Samples.to_arviz (and the tests that monkeypatch samples.az)
+    #   tinygp       -> the GP likelihood extension
+    # What is deliberately absent is the *docs* toolchain, nox, hatch, and the git
+    # checkout of gaiaunlimited -- that is the weight this scoping removes.
+    "corner>=2.2.3",
+    "scikit-learn>=1.5",
+    "arviz>=1.0.0",
+    "tinygp>=0.3.1",
 ]
 nox = [
     "nox>=2026.4.10",
@@ -146,8 +172,44 @@ allow-direct-references = true
 
 ######## Configure pytest for your test suite ########
 [tool.pytest.ini_options]
+minversion = "8.3"
+addopts = [
+    "-ra",              # short summary of all non-passing outcomes
+    "--showlocals",
+    "--strict-markers", # an unregistered marker is an error, not a typo that silently does nothing
+    "--strict-config",  # an unknown key in this table is an error
+]
+xfail_strict = true
+log_cli_level = "INFO"
 testpaths = ["README.md", "tests", "src"]
 markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.mark.raises
+# Warnings are errors: harv tracks fast-moving upstreams (jax, unxt, numpyro) and a
+# deprecation that only prints is a deprecation nobody acts on. Add a narrow
+# "ignore:<regex>:<Category>" line per warning that is genuinely not ours to fix, and
+# delete it once upstream does.
+filterwarnings = [
+    "error",
+    # -- harv's own advisory warnings -------------------------------------------
+    # Both fire on paths the suite deliberately exercises: a non-Gaussian linear
+    # prior that cannot be marginalized, and an optimizer given deliberately hard
+    # data. Advisory by design, not defects. Matched by message so that a *new*
+    # warning from the same module still fails the suite.
+    "ignore:Non-Gaussian linear prior:UserWarning",       # samplers/_prior_resolution.py
+    "ignore:BFGS did not converge:UserWarning",           # samplers/numpyro.py
+    # -- third-party chatter ----------------------------------------------------
+    "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
+    # -- KNOWN BUGS, not noise --------------------------------------------------
+    # Both of these are real defects that warnings-as-errors surfaced. They are
+    # ignored to keep the suite green, NOT because they are benign. Remove each
+    # entry when the underlying bug is fixed.
+    #
+    # harv.plot calls ax.legend() on axes that have no labelled artists.
+    "ignore:No artists with labels found to put in legend:UserWarning",
+    # Samples.read() assigns h5py attribute values (numpy scalars/arrays) into
+    # `metadata`, which is declared eqx.field(static=True) -- an array in a static
+    # field breaks hashing and jit caching. See samplers/samples.py:1467.
+    "ignore:A JAX array is being set as static:UserWarning",
+]
 
 [tool.coverage.paths]
 source = [
@@ -164,76 +226,20 @@ omit = [
 ]
 
 [tool.coverage.report]
-# This configures the output test coverage report
-exclude_lines = ["pragma: no cover"]
+# This configures the output test coverage report.
+# `exclude_also` *extends* coverage's built-in defaults (which already cover
+# `pragma: no cover`); `exclude_lines` would replace them.
+exclude_also = [
+    '\.\.\.',
+    'if typing.TYPE_CHECKING:',
+    'if TYPE_CHECKING:',
+]
 precision = 2
-
-################################################################################
-# Tool configuration
-################################################################################
-
-# [tool.mypy]
-#   disable_error_code = [
-#     "name-defined",  # for jaxtyping
-#   ]
-
-#   disallow_incomplete_defs = false
-#   disallow_subclassing_any = false
-#   disallow_untyped_defs = false
-#   enable_error_code = [
-#     "ignore-without-code", "redundant-expr", "truthy-bool"
-# ]
-#   files = ["src", "tests"]
-#   python_version = "3.12"
-#   strict = true
-#   warn_return_any = false
-#   warn_unreachable = true
-#   warn_unused_configs = true
-
-#   [[tool.mypy.overrides]]
-#     disable_error_code = ["untyped-decorator"]
-#     disallow_incomplete_defs = true
-#     disallow_untyped_defs = true
-#     module = "harv.*"
-
-#   [[tool.mypy.overrides]]
-#     # simulate/* uses external libraries (unxt, coordinax) whose stubs are only
-#     # available when those packages are installed. Suppress errors that vary
-#     # between environments so that both `uv run mypy` and pre-commit agree.
-#     disable_error_code = ["arg-type", "assignment", "attr-defined"]
-#     module = "harv.simulate.*"
-
-#   [[tool.mypy.overrides]]
-#     # cast() calls in orbits.py are required when unxt is installed (standalone
-#     # mypy) but appear redundant when unxt is absent (pre-commit environment).
-#     disable_error_code = ["redundant-cast"]
-#     module = "harv.kepler.orbits"
-
-#   [[tool.mypy.overrides]]
-#     ignore_missing_imports = true
-#     module = [
-#       "astropy.*",
-#       "coordinax.*",
-#       "equinox.*",
-#       "h5py.*",
-#       "healpy.*",
-#       "hypothesis.*",
-#       "jax.*",
-#       "jaxoplanet.*",
-#       "jaxtyping.*",
-#       "numpy.*",
-#       "numpyro.*",
-#       "pandas.*",
-#       "plum.*",
-#       "pooch.*",
-#       "quax.*",
-#       "quaxed.*",
-#       "unxt.*",
-#     ]
 
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+src = ["src"]
 
     [tool.ruff.lint]
     select = ["ALL"]
@@ -250,6 +256,7 @@ target-version = "py312"
         "ARG001",  # Unused function argument  # TODO: resolve
         "B008",    # Do not perform function calls in argument defaults
         "COM812",  # <- for ruff.format
+        "CPY001",  # Missing copyright notice -- this project does not use file headers
         "D103",    # Missing docstring in public function  # TODO: resolve
         "D105",    # Missing docstring in magic method
         "D203",    # 1 blank line required before class docstring
@@ -325,7 +332,7 @@ target-version = "py312"
 
     [tool.ruff.lint.isort]
     case-sensitive = true
-    known-first-party = ["src", "harv"]
+    known-first-party = ["harv"]
 
 [tool.ty.rules]
 
@@ -341,6 +348,25 @@ target-version = "py312"
     [[tool.ty.overrides]]
     include = ["src/harv/plot.py"]
     rules = { possibly-missing-attribute = "ignore", possibly-missing-submodule = "ignore"}
+
+    # quaxed's .pyi stubs declare ArrayLike / Sequence[ArrayLike] for these
+    # functions and do not admit unxt.Quantity -- but accepting Quantity and
+    # propagating units is the entire reason we call quaxed.numpy rather than
+    # jax.numpy. Passing a Quantity here is correct; the stub is what is narrow.
+    #
+    # These only became visible with the `unxt @ quantity-stub` override in
+    # [tool.uv]: that branch gives Quantity a real type, so ty can finally see
+    # the mismatch it previously treated as Unknown. Delete this block together
+    # with that override once the stubs upstream accept Quantity.
+    [[tool.ty.overrides]]
+    include = [
+        "src/harv/data/helpers.py",
+        "src/harv/kepler/body.py",
+        "src/harv/kepler/orientation.py",
+        "src/harv/models/parameterizations/rv.py",
+        "src/harv/plot.py",
+    ]
+    rules = { invalid-argument-type = "ignore" }
 
     [[tool.ty.overrides]]
     include = ["src/harv/kepler/constants.py"]

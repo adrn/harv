@@ -4,20 +4,16 @@
 import os
 import sys
 import importlib.metadata
-from datetime import datetime
-import pytz
+from datetime import UTC, datetime
 
 # Ensure src/ is on the path so autodoc can find the package
 sys.path.insert(0, os.path.abspath("../src"))
-
-# Get the year so it automatically updates
-current_year = datetime.now().year
 
 # -- General project information -----------------------------
 # General information about the project.
 project = "harv"
 author = f"{project} Developers"
-copyright = f"{datetime.now(pytz.timezone('UTC')).year}, {author}"
+copyright = f"{datetime.now(UTC).year}, {author}"
 html_show_sphinx = False
 
 # Try to get the version info for the project you're documenting, acts as replacement for
