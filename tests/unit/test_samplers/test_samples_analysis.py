@@ -139,6 +139,33 @@ class TestLogProbStorage:
         assert loaded.ln_likelihood is None
         assert loaded.ln_prior is None
 
+    def test_hdf5_roundtrip_metadata_stays_python_scalars(self, tmp_path):
+        """``metadata`` is eqx.field(static=True), so it must hold no numpy values.
+
+        h5py returns ``np.float64`` / ``np.int64`` for numeric attributes, and
+        equinox treats a numpy scalar as an array: putting one in a static field
+        breaks hashing and jit-cache keys. ``to_hdf5`` only ever writes
+        JSON-friendly int/float/str, so the read side must give those back.
+        """
+        base = _rv_samples(n=10)
+        s = Samples(
+            nonlinear=base.nonlinear,
+            linear=base.linear,
+            data_type=base.data_type,
+            metadata={"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 4},
+        )
+        path = tmp_path / "samples_metadata.h5"
+        s.to_hdf5(path)
+        loaded = Samples.from_hdf5(path)
+
+        assert loaded.metadata == s.metadata
+        assert type(loaded.metadata["t_ref"]) is float
+        assert type(loaded.metadata["num_chains"]) is int
+        assert type(loaded.metadata["t_ref_unit"]) is str
+        assert not any(
+            isinstance(v, np.generic | np.ndarray) for v in loaded.metadata.values()
+        )
+
 
 # ---------------------------------------------------------------------------
 # Sample analysis (ported from thejoker.samples_analysis)

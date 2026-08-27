@@ -1464,7 +1464,17 @@ class Samples(eqx.Module):
                     "data_type",
                 ]:
                     continue
-                metadata[key] = meta.attrs[key]
+                value = meta.attrs[key]
+                # h5py hands back numpy scalars (np.int64, np.float64) for
+                # numeric attributes. ``metadata`` is eqx.field(static=True),
+                # and equinox treats a numpy scalar as an array: storing one
+                # there breaks hashing and jit-cache keys, and warns. Coercing
+                # to a Python scalar also makes write -> read round-trip, and
+                # matches the invariant to_hdf5 enforces on the way out (only
+                # JSON-friendly int/float/str reach the file). Anything genuinely
+                # non-scalar in a file is out of contract; leaving it alone lets
+                # equinox say so rather than silently corrupting the cache key.
+                metadata[key] = value.item() if isinstance(value, np.generic) else value
 
             nonlinear: dict[str, Q] = {}
             for key in f["nonlinear"]:

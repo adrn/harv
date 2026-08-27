@@ -198,17 +198,6 @@ filterwarnings = [
     "ignore:BFGS did not converge:UserWarning",           # samplers/numpyro.py
     # -- third-party chatter ----------------------------------------------------
     "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
-    # -- KNOWN BUGS, not noise --------------------------------------------------
-    # Both of these are real defects that warnings-as-errors surfaced. They are
-    # ignored to keep the suite green, NOT because they are benign. Remove each
-    # entry when the underlying bug is fixed.
-    #
-    # harv.plot calls ax.legend() on axes that have no labelled artists.
-    "ignore:No artists with labels found to put in legend:UserWarning",
-    # Samples.read() assigns h5py attribute values (numpy scalars/arrays) into
-    # `metadata`, which is declared eqx.field(static=True) -- an array in a static
-    # field breaks hashing and jit caching. See samplers/samples.py:1467.
-    "ignore:A JAX array is being set as static:UserWarning",
 ]
 
 [tool.coverage.paths]
