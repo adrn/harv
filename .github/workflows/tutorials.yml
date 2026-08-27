@@ -1,6 +1,7 @@
 name: Tutorials
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -9,6 +10,9 @@ on:
   pull_request:
     branches:
       - main
+    # "labeled" is required: without it, adding the `tutorials` label to an
+    # already-open PR would never trigger a run. Listing types overrides the
+    # default set, so the other three have to be spelled out too.
     types:
       - opened
       - synchronize
@@ -18,16 +22,22 @@ on:
     types:
       - published
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Executing the notebooks is the most expensive job in the repo, so on a PR it
+  # is opt-in via the "tutorials" label. Pushes to main and published releases
+  # always run it.
   notebooks:
     name: "Build the notebooks for the docs"
     runs-on: ubuntu-latest
-    if:
-      ${{ github.event_name == 'push' ||
-      github.event_name == 'release' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'tutorials')) }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'tutorials')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -39,25 +49,25 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --group docs
+        run: uv sync --no-default-groups --group docs
 
       - name: Execute the notebooks
         # TODO: docs/tutorials/astrometry/*.ipynb
         run: |
-            for nb in docs/tutorials/rv/*.ipynb; do
+          for nb in docs/tutorials/rv/*.ipynb; do
             echo "Executing $nb"
-            uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
-            done
+            uv run --no-sync jupyter nbconvert --to notebook --execute --inplace "$nb"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
-            name: notebooks-for-${{ github.sha }}
-            path: docs/tutorials
+          name: notebooks-for-${{ github.sha }}
+          path: docs/tutorials
 
       - name: Trigger RTDs build
         if: ${{ github.event_name != 'pull_request' }}
         uses: dfm/rtds-action@v1.1.0
         with:
-            webhook_url: ${{ secrets.RTDS_WEBHOOK_URL }}
-            webhook_token: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
-            commit_ref: ${{ github.ref }}
+          webhook_url: ${{ secrets.RTDS_WEBHOOK_URL }}
+          webhook_token: ${{ secrets.RTDS_WEBHOOK_TOKEN }}
+          commit_ref: ${{ github.ref }}

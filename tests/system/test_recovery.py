@@ -136,7 +136,10 @@ class TestHighSNRRVRecovery:
     def test_eccentricity_positive(self, rv_samples_high_snr):
         """Sampled eccentricities must lie in [0, 1)."""
         samples, _ = rv_samples_high_snr
-        ecc = samples["eccentricity"]
+        # .value, not the Quantity: comparisons on a Quantity return a Quantity
+        # mask, which jax.numpy.all rejects. Same idiom as the ustrip/.value
+        # calls elsewhere in this module.
+        ecc = samples["eccentricity"].value
         assert jnp.all(ecc >= 0.0)
         assert jnp.all(ecc < 1.0)
 

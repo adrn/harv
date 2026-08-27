@@ -144,6 +144,79 @@ def _prior_monte_carlo_evidence_stats(
     }
 
 
+def _top_k_indices_impl(log_likelihoods: jax.Array, k: int) -> jax.Array:
+    """Indices of the ``k`` largest importance weights, at a static ``(k,)`` shape.
+
+    Importance weights are ``exp(ln L - logsumexp(ln L))``, so the normalization
+    is a per-run constant and ranking by ``ln L`` is identical to ranking by
+    ``ln w``.  Selecting on the un-normalized log-likelihoods therefore needs no
+    :func:`~jax.scipy.special.logsumexp`, and there is no intermediate
+    normalized array to become ``NaN`` when every likelihood in a run is
+    non-finite (``-inf - -inf``).  That degenerate case instead yields the first
+    ``k`` indices, all with zero weight.
+
+    Non-finite entries are mapped to ``-inf`` so they sort last regardless of
+    the caller's ``ignore_non_finite`` setting.  :func:`jax.lax.top_k` sorts
+    descending, so the returned indices are ordered by decreasing weight.
+
+    Parameters
+    ----------
+    log_likelihoods : jax.Array
+        Marginal log-likelihood for every prior sample, shape ``(M,)``.
+    k : int
+        Number of samples to select.  Static, so the output shape is static.
+
+    Returns
+    -------
+    jax.Array
+        Integer indices into ``log_likelihoods``, shape ``(k,)``.
+    """
+    ll = jnp.where(jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf)
+    return jax.lax.top_k(ll, k)[1]
+
+
+# Jitted so XLA fuses the ``where`` into the ``top_k`` instead of materializing
+# the masked copy -- 4 MB of temporary per call at M = 1e6, on a path that runs
+# once per system.  Bound by direct call rather than ``functools.partial`` so
+# the static type of the result stays a plain jitted callable.
+_top_k_indices = jax.jit(_top_k_indices_impl, static_argnames=("k",))
+
+
+def _validate_selection_policy(
+    max_posterior_samples: int | None, top_k: int | None
+) -> None:
+    """Reject conflicting output-shape policies at the entry point.
+
+    ``max_posterior_samples`` caps a data-dependent rejection result; ``top_k``
+    fixes the output length exactly.  Combining them is always a mistake, and
+    it is worth catching before the likelihood evaluation rather than after.
+
+    Parameters
+    ----------
+    max_posterior_samples : int | None
+        The rejection-path cap.
+    top_k : int | None
+        The top-K-by-weight output length.
+
+    Raises
+    ------
+    ValueError
+        If both are set, or if ``top_k`` is not positive.
+    """
+    if top_k is None:
+        return
+    if max_posterior_samples is not None:
+        msg = (
+            "max_posterior_samples and top_k are mutually exclusive: the first "
+            "caps a data-dependent rejection result, the second fixes the "
+            "output length exactly. Pass only one."
+        )
+        raise ValueError(msg)
+    if top_k < 1:
+        msg = f"top_k must be a positive integer, got {top_k}."
+        raise ValueError(msg)
+
+
 def _describe_prior(d: Any) -> tuple[str, str]:
     """Return ``(distribution_name, unit)`` for a prior entry, for :meth:`summary`.
 
@@ -371,12 +444,13 @@ class RejectionSampler(AbstractSampler):
         *,
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
+        top_k: int | None = None,
         seed: int | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
     ) -> Samples:
-        """Run rejection sampling.
+        """Run rejection sampling, or top-K-by-weight selection.
 
         Parameters
         ----------
@@ -391,7 +465,23 @@ class RejectionSampler(AbstractSampler):
             Number of samples to draw from the prior.
         max_posterior_samples
             Maximum number of posterior samples to return. If None, returns all
-            accepted samples.
+            accepted samples. Mutually exclusive with ``top_k``.
+        top_k
+            If set, skip rejection entirely and return exactly ``top_k``
+            samples: the prior draws with the largest importance weights,
+            ordered by decreasing weight. The output length is then independent
+            of how constraining the data are, which is what population-scale
+            loops need -- rejection returns ~1000 rows for an unconstrained
+            system and 1 for a well-constrained one. Raises ``ValueError`` if
+            ``top_k`` exceeds the prior library size, since a short return
+            would defeat the fixed-shape contract.
+
+            The returned samples are **weighted**, not equal-weight posterior
+            draws; read the weights via ``samples["weight"]`` and see
+            ``docs/sharp-bits.md``. Setting ``top_k`` implies
+            ``return_logprobs=True`` and ``return_evidence_stats=True``,
+            because the weight column is reconstructed from them. Default
+            ``None`` (ordinary rejection).
         seed
             Random number seed. If not specified, picks a seed based on the
             current time.
@@ -399,7 +489,8 @@ class RejectionSampler(AbstractSampler):
             If ``True``, any ``NaN`` or infinite log-likelihood values are
             treated as rejected samples by replacing them with ``-inf`` before
             the rejection step. If ``False`` (default), non-finite values are
-            left unchanged.
+            left unchanged. On the ``top_k`` path this is a no-op: non-finite
+            log-likelihoods always sort last and carry zero weight.
         return_logprobs
             If ``True``, store per-sample log-probabilities on the returned
             :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
@@ -407,14 +498,26 @@ class RejectionSampler(AbstractSampler):
             prior log-density).  These enable :meth:`Samples.map_sample` and
             the :attr:`Samples.ln_posterior` property.  Default ``False``.
         return_evidence_stats
-            If ``True``, return additional statistics about the evidence integral
-            estimate. Default ``False``.
+            If ``True``, add prior-Monte-Carlo evidence statistics to the
+            returned ``Samples.metadata``: ``logZ_int``, ``logZ_int_mcse``,
+            ``logZ_int_ess``, ``max_log_likelihood`` and ``n_prior_samples``.
+            ``logZ_int_ess`` is the Kish effective sample size of the
+            importance weights over the full prior library -- the diagnostic
+            for whether the library resolved this posterior at all. Default
+            ``False``.
 
         Returns
         -------
             Posterior samples container.
+
+        Raises
+        ------
+        ValueError
+            If both ``max_posterior_samples`` and ``top_k`` are set, or if
+            ``top_k`` is not positive.
         """
         _validate_data(data, self.model)
+        _validate_selection_policy(max_posterior_samples, top_k)
 
         prepared = _prepare_sampler_model(
             self.prior,
@@ -450,6 +553,7 @@ class RejectionSampler(AbstractSampler):
             key=key,
             ignore_non_finite=ignore_non_finite,
             max_posterior_samples=max_posterior_samples,
+            top_k=top_k,
             return_logprobs=return_logprobs,
             return_evidence_stats=return_evidence_stats,
         )
@@ -465,16 +569,25 @@ class RejectionSampler(AbstractSampler):
         key: jax.Array,
         ignore_non_finite: bool,
         max_posterior_samples: int | None,
+        top_k: int | None,
         return_logprobs: bool,
         return_evidence_stats: bool,
     ) -> Samples:
-        """Shared downstream: rejection -> linear -> trim -> Samples assembly.
+        """Shared downstream: select -> linear -> Samples assembly.
 
         Both :meth:`run` and :meth:`run_with_samples` call this once the
         flat ``prior_samples`` dict and matching ``log_likelihoods`` array
         have been produced.  ``key`` seeds the linear-sampling and
         max-posterior-samples subsamples (via :func:`jax.random.fold_in`);
         ``rej_key`` seeds the per-sample uniform draws.
+
+        Selection follows one of two mutually exclusive policies: rejection
+        (the default, a data-dependent output length) or top-K by importance
+        weight when ``top_k`` is set (a static output length).  ``top_k``
+        forces ``return_logprobs`` and ``return_evidence_stats`` on, because
+        the ``Samples["weight"]`` derived key is reconstructed from
+        ``ln_likelihood`` plus the ``logZ_int`` / ``n_prior_samples``
+        metadata.
         """
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors
@@ -487,28 +600,14 @@ class RejectionSampler(AbstractSampler):
                 jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf
             )
 
-        accepted_mask = self._rejection_step(rej_key, log_likelihoods)
-        accepted_nonlinear = {k: v[accepted_mask] for k, v in prior_samples.items()}
-        accepted_log_likelihood = log_likelihoods[accepted_mask]
-
-        # Trim to ``max_posterior_samples`` *before* the linear-parameter
-        # sampling step so the ``jax.vmap`` inside ``_sample_linear_parameters``
-        # sees a stable leading-axis shape across calls.  Without this, every
-        # distinct ``accepted_mask.sum()`` value triggers a fresh trace+compile
-        # in the per-sample conditional Gaussian solve, which becomes the
-        # bottleneck for population-scale loops (one ``run`` per star).
-        if max_posterior_samples is not None:
-            n_accepted = len(next(iter(accepted_nonlinear.values())))
-            if n_accepted > max_posterior_samples:
-                idx_key = jr.fold_in(key, 3)
-                idx = jr.choice(
-                    idx_key,
-                    n_accepted,
-                    shape=(max_posterior_samples,),
-                    replace=False,
-                )
-                accepted_nonlinear = {k: v[idx] for k, v in accepted_nonlinear.items()}
-                accepted_log_likelihood = accepted_log_likelihood[idx]
+        accepted_nonlinear, accepted_log_likelihood = self._select_posterior_samples(
+            prior_samples=prior_samples,
+            log_likelihoods=log_likelihoods,
+            rej_key=rej_key,
+            key=key,
+            max_posterior_samples=max_posterior_samples,
+            top_k=top_k,
+        )
 
         linear_key = jr.fold_in(key, 2)
         # TODO: support oversampling of linear parameters?
@@ -548,14 +647,33 @@ class RejectionSampler(AbstractSampler):
             metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
             metadata["t_ref_unit"] = _t_unit
 
-        if return_evidence_stats:
+        # ``top_k`` forces both on: ``Samples["weight"]`` is reconstructed from
+        # ``ln_likelihood`` plus ``logZ_int`` / ``n_prior_samples``, so a
+        # top-K result without them would carry samples whose weights cannot be
+        # recovered -- and the weights are what make the output usable.
+        if return_evidence_stats or top_k is not None:
             evidence_meta = _prior_monte_carlo_evidence_stats(log_likelihoods)
             evidence_meta = {k: float(v) for k, v in evidence_meta.items()}
             metadata.update(evidence_meta)
 
+        if top_k is not None:
+            # Fraction of total posterior mass the returned top_k capture:
+            # sum(w) over the selected rows, where the denominator is the
+            # logsumexp over the *full* library (== logZ_int + ln M, already
+            # computed above).  ~1.0 means top_k was ample; 0.1 means 90% of the
+            # mass was truncated away.  Non-finite logZ_int (every likelihood in
+            # the run non-finite) would give -inf - -inf = NaN, so clamp to 0.0.
+            log_norm = metadata["logZ_int"] + np.log(metadata["n_prior_samples"])
+            captured = (
+                float(jnp.exp(logsumexp(accepted_log_likelihood) - log_norm))
+                if np.isfinite(log_norm)
+                else 0.0
+            )
+            metadata["weight_captured"] = captured
+
         ln_likelihood_arr: jax.Array | None = None
         ln_prior_arr: jax.Array | None = None
-        if return_logprobs:
+        if return_logprobs or top_k is not None:
             ln_likelihood_arr = accepted_log_likelihood
             ln_prior_arr = _evaluate_nonlinear_log_prior(
                 _all_nl_priors, accepted_nonlinear
@@ -571,19 +689,111 @@ class RejectionSampler(AbstractSampler):
             ln_prior=ln_prior_arr,
         )
 
+    def _select_posterior_samples(
+        self,
+        *,
+        prior_samples: dict[str, jax.Array],
+        log_likelihoods: jax.Array,
+        rej_key: jax.Array,
+        key: jax.Array,
+        max_posterior_samples: int | None,
+        top_k: int | None,
+    ) -> tuple[dict[str, jax.Array], jax.Array]:
+        """Reduce the full prior library to the samples that will be returned.
+
+        One of two mutually exclusive policies (validated up-front by
+        :func:`_validate_selection_policy`):
+
+        * **rejection** -- the accept/reject mask, optionally capped to
+          ``max_posterior_samples``.  Output length depends on the data.
+        * **top-K by weight** -- the ``top_k`` largest importance weights,
+          gathered by index.  Output length is exactly ``top_k``.
+
+        Parameters
+        ----------
+        prior_samples : dict[str, jax.Array]
+            Flat, unit-stripped prior draws, each of leading length ``M``.
+        log_likelihoods : jax.Array
+            Marginal log-likelihood per prior draw, shape ``(M,)``.
+        rej_key : jax.Array
+            Seeds the per-sample uniform draws of the rejection step.
+        key : jax.Array
+            Seeds the ``max_posterior_samples`` subsample.
+        max_posterior_samples : int | None
+            Rejection-path cap.
+        top_k : int | None
+            Top-K output length, or ``None`` for rejection.
+
+        Returns
+        -------
+        tuple[dict[str, jax.Array], jax.Array]
+            The selected samples and their log-likelihoods.
+
+        Raises
+        ------
+        ValueError
+            If ``top_k`` exceeds the number of prior samples.
+        """
+        if top_k is not None:
+            # A pure gather by index, so the output length is exactly ``top_k``
+            # for every dataset -- no data-dependent shape, no device->host sync
+            # on a boolean mask, and no recompile of the conditional Gaussian
+            # solve downstream.  Rows come back ordered by decreasing weight.
+            n_prior = int(log_likelihoods.shape[0])
+            if top_k > n_prior:
+                msg = (
+                    f"top_k={top_k} exceeds the number of prior samples "
+                    f"({n_prior}). Returning fewer than top_k samples would "
+                    "break the fixed-shape contract that top_k exists to "
+                    "provide; enlarge the prior library or lower top_k."
+                )
+                raise ValueError(msg)
+            idx = _top_k_indices(log_likelihoods, top_k)
+            return (
+                {k: v[idx] for k, v in prior_samples.items()},
+                log_likelihoods[idx],
+            )
+
+        accepted_mask = self._rejection_step(rej_key, log_likelihoods)
+        accepted = {k: v[accepted_mask] for k, v in prior_samples.items()}
+        accepted_ll = log_likelihoods[accepted_mask]
+
+        # Trim to ``max_posterior_samples`` *before* the linear-parameter
+        # sampling step so the ``jax.vmap`` inside ``_sample_linear_parameters``
+        # sees a stable leading-axis shape across calls.  Without this, every
+        # distinct ``accepted_mask.sum()`` value triggers a fresh trace+compile
+        # in the per-sample conditional Gaussian solve, which becomes the
+        # bottleneck for population-scale loops (one ``run`` per star).
+        # ``top_k`` fixes that at the source, which is why the branch above
+        # needs no equivalent.
+        if max_posterior_samples is not None:
+            n_accepted = len(next(iter(accepted.values())))
+            if n_accepted > max_posterior_samples:
+                idx = jr.choice(
+                    jr.fold_in(key, 3),
+                    n_accepted,
+                    shape=(max_posterior_samples,),
+                    replace=False,
+                )
+                accepted = {k: v[idx] for k, v in accepted.items()}
+                accepted_ll = accepted_ll[idx]
+
+        return accepted, accepted_ll
+
     def run_with_samples(
         self,
         data: InputData,
         prior_samples: "Samples | str | os.PathLike[str]",
         *,
         max_posterior_samples: int | None = None,
+        top_k: int | None = None,
         seed: int | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
         randomize_prior_order: bool = True,
     ) -> Samples:
-        """Run rejection against pre-computed prior samples.
+        """Run rejection (or top-K selection) against pre-computed prior samples.
 
         Parallel to :meth:`run` but skips the prior-sampling step: the caller
         supplies the prior draws either in memory (a :class:`Samples` returned
@@ -603,6 +813,13 @@ class RejectionSampler(AbstractSampler):
             may be much larger than RAM.
         max_posterior_samples
             See :meth:`run`.
+        top_k
+            See :meth:`run`. This is the intended entry point for
+            population-scale loops: one shared prior library, one call per
+            system, exactly ``top_k`` rows out of every call regardless of how
+            constraining that system's data are. Selection depends only on the
+            log-likelihoods, so it is unaffected by
+            ``randomize_prior_order``.
         seed
             See :meth:`run`.
         ignore_non_finite
@@ -623,8 +840,15 @@ class RejectionSampler(AbstractSampler):
         Samples
             Posterior samples, equivalent in shape and contents to
             :meth:`run`'s return.
+
+        Raises
+        ------
+        ValueError
+            If both ``max_posterior_samples`` and ``top_k`` are set, if
+            ``top_k`` is not positive, or if ``prior_samples`` is empty.
         """
         _validate_data(data, self.model)
+        _validate_selection_policy(max_posterior_samples, top_k)
 
         prepared = _prepare_sampler_model(
             self.prior,
@@ -660,6 +884,7 @@ class RejectionSampler(AbstractSampler):
             key=key,
             ignore_non_finite=ignore_non_finite,
             max_posterior_samples=max_posterior_samples,
+            top_k=top_k,
             return_logprobs=return_logprobs,
             return_evidence_stats=return_evidence_stats,
         )
@@ -1005,35 +1230,56 @@ class RejectionSampler(AbstractSampler):
         uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
         return uniform_draws < weights
 
-    def _sample_linear_parameters(  # noqa: C901
+    @eqx.filter_jit
+    def _vmap_conditional_linear(
         self,
         model: AbstractComponentModel | JointModel,
-        key: jax.Array,
+        keys: jax.Array,
         nonlinear_samples: dict[str, jax.Array],
         marginalized_names: tuple[str, ...] | None,
         # data is correlated with the (polymorphic) model and is dispatched
         # through model.sample_conditional_linear; cannot be narrowed here.
         data: Any,
         linear_priors: dict[str, Any] | None,
-    ) -> dict[str, AbstractQuantity]:
-        """Sample linear parameters from conditional posterior using vmap.
+    ) -> dict[str, Any]:
+        """Draw conditional linear parameters for a batch of nonlinear samples.
 
-        The model's ``sample_conditional_linear`` uses the sampler-resolved
-        ``marginalized_names`` override when one is provided.
+        Split out of :meth:`_sample_linear_parameters` purely so it can carry
+        ``@eqx.filter_jit``: a closure defined inside the calling method would
+        be rebuilt on every call and so never hit the jit cache.  Without this,
+        each call re-runs the quaxed/plum multiple-dispatch stack in Python --
+        invisible at a hundred stars, but pure per-system overhead on the
+        critical path of a population-scale loop.
+
+        The cache is keyed on the leading-axis length of ``keys``, so it is
+        reused across datasets only when that length is stable.  ``top_k``
+        makes it stable by construction; the rejection path relies on
+        ``max_posterior_samples`` for the same effect.
+
+        Parameters
+        ----------
+        model : AbstractComponentModel | JointModel
+            The model whose ``sample_conditional_linear`` is vmapped.
+        keys : jax.Array
+            One PRNG key per sample, shape ``(n_samples,)``.
+        nonlinear_samples : dict[str, jax.Array]
+            Unit-stripped nonlinear (and explicit-linear) values, each of
+            leading length ``n_samples``.
+        marginalized_names : tuple[str, ...] | None
+            Sampler-resolved marginalization override, or ``None`` for the
+            model's own auto-classification.
+        data : Any
+            Observed data, forwarded to ``sample_conditional_linear``.
+        linear_priors : dict[str, Any] | None
+            Effective linear prior for this (prior, model) bundle.
+
+        Returns
+        -------
+        dict[str, Any]
+            Raw (unit-less) conditional draws, keyed as the model returns
+            them -- per-component sub-dicts for a :class:`JointModel`.
         """
         prior = self.prior
-
-        n_samples = len(next(iter(nonlinear_samples.values())))
-        if n_samples == 0:
-            if isinstance(model, JointModel):
-                names: list[str] = []
-                for comp in model.components.values():
-                    names.extend(comp._all_linear_names())
-            else:
-                names = list(model._all_linear_names())
-            return {name: Q(jnp.zeros(0), "") for name in names}
-
-        keys = jr.split(key, n_samples)
         base_names = model._base_nonlinear_names()
         model_keys = tuple(nonlinear_samples.keys())
 
@@ -1048,8 +1294,45 @@ class RejectionSampler(AbstractSampler):
                 marginalized_names=marginalized_names,
             )
 
-        filtered = {k: nonlinear_samples[k] for k in model_keys}
-        result = jax.vmap(_sample_one)(keys, filtered)
+        return jax.vmap(_sample_one)(keys, nonlinear_samples)
+
+    def _sample_linear_parameters(
+        self,
+        model: AbstractComponentModel | JointModel,
+        key: jax.Array,
+        nonlinear_samples: dict[str, jax.Array],
+        marginalized_names: tuple[str, ...] | None,
+        # data is correlated with the (polymorphic) model and is dispatched
+        # through model.sample_conditional_linear; cannot be narrowed here.
+        data: Any,
+        linear_priors: dict[str, Any] | None,
+    ) -> dict[str, AbstractQuantity]:
+        """Sample linear parameters from conditional posterior using vmap.
+
+        The model's ``sample_conditional_linear`` uses the sampler-resolved
+        ``marginalized_names`` override when one is provided.  The vmap itself
+        lives in :meth:`_vmap_conditional_linear` so it can be jit-compiled;
+        this method handles the empty-input case and re-attaches units.
+        """
+        n_samples = len(next(iter(nonlinear_samples.values())))
+        if n_samples == 0:
+            if isinstance(model, JointModel):
+                names: list[str] = []
+                for comp in model.components.values():
+                    names.extend(comp._all_linear_names())
+            else:
+                names = list(model._all_linear_names())
+            return {name: Q(jnp.zeros(0), "") for name in names}
+
+        keys = jr.split(key, n_samples)
+        result = self._vmap_conditional_linear(
+            model,
+            keys,
+            nonlinear_samples,
+            marginalized_names,
+            data,
+            linear_priors,
+        )
 
         # Attach units from the model's linear_param_units
         if isinstance(model, JointModel):

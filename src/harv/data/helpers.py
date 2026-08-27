@@ -109,7 +109,7 @@ def stack_datasets[DT: AbstractData](
     # NOTE: t_ref is recomputed from the stacked time by __check_init__
     # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
     # class docstrings) about how t_ref is handled when stacking datasets.
-    return type(ref)(**all_data)  # ty: ignore[invalid-argument-type]
+    return type(ref)(**all_data)
 
 
 def build_indicator_matrix[DT: AbstractData](

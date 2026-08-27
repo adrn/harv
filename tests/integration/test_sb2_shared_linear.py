@@ -48,8 +48,10 @@ _JOINT_LINEAR_PRIOR_UNSHARED = {
 
 _NL_VALUES = {
     "period": Q(100.0, "day"),
-    "eccentricity": jnp.float64(0.3),
-    "phase_peri": jnp.float64(0.1),
+    # Plain floats, not jnp.float64: x64 is off by default, so the explicit
+    # float64 was silently truncated to float32 anyway (and warned about it).
+    "eccentricity": 0.3,
+    "phase_peri": 0.1,
     "arg_peri": Q(1.0, "rad"),
 }
 
