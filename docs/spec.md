@@ -1691,6 +1691,10 @@ to construct a new `Samples` with the same metadata).
   - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
   - `"semi_major_axis_AU"` → `Q` in `AU` (present only for astrometry samples
     carrying `semi_major_axis` and `parallax`)
+  - `"weight"` → dimensionless array; equivalent to the `weight` property
+    below. Deliberately **not** listed by `keys()`, since `keys()` enumerates
+    model parameters and drives the default axes of `plot_corner` / `to_arviz`
+    and the all-key form of `median()`.
 
 Integer, slice, or array keys return a new `Samples` with all parameter arrays
 sliced along the *leading* axis:
@@ -1756,6 +1760,17 @@ the first entry.
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz
 - `ln_posterior -> jax.Array` — per-sample log-posterior (`ln_prior +
   ln_likelihood`); raises `ValueError` if either was not stored
+- `weight -> jax.Array` — per-sample importance weight,
+  `exp(ln_likelihood - logsumexp(ln L))`, normalized over the **full** prior
+  library. Reconstructed rather than stored: the normalization is
+  `logZ_int + ln(n_prior_samples)`, both from the evidence metadata that `top_k`
+  / `return_evidence_stats=True` writes. Because the normalization spans the
+  whole library, `weight.sum()` is the posterior mass these samples capture and
+  is **less than 1** whenever samples were truncated, so expectations need
+  `w / w.sum()`. Raises `ValueError` if `ln_likelihood` or the evidence metadata
+  is missing, or if the `Samples` is batched — `pad_and_stack_samples` inherits
+  metadata from the first entry only, so a stacked normalization would be
+  silently wrong for the others. Also reachable as `samples["weight"]`.
 
 #### Sample analysis
 

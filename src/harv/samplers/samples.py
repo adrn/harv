@@ -351,6 +351,90 @@ class Samples(eqx.Module):
             raise ValueError(msg)
         return self.ln_prior + self.ln_likelihood
 
+    @property
+    def weight(self) -> jax.Array:
+        """Per-sample importance weight, normalized over the full prior library.
+
+        ``w_i = exp(ln L_i - logsumexp(ln L))`` where the ``logsumexp`` runs
+        over *every* prior draw the sampler evaluated, not just the ones
+        returned.  It is reconstructed rather than stored: the normalization is
+        ``logZ_int + ln(n_prior_samples)``, and both come from the evidence
+        metadata that ``top_k`` / ``return_evidence_stats=True`` writes.
+
+        Because the normalization spans the whole library, ``weight.sum()`` is
+        the fraction of total posterior mass these samples capture -- reported
+        directly as ``metadata["weight_captured"]`` on the ``top_k`` path.  It
+        is **less than 1** whenever samples were truncated away, so posterior
+        expectations need ``w / w.sum()``, and they are biased unless
+        ``weight_captured`` is close to 1.  See ``docs/sharp-bits.md``.
+
+        Also reachable as ``samples["weight"]``.  Deliberately *not* listed in
+        :meth:`keys`, which enumerates model parameters and drives the default
+        axes of :meth:`plot_corner`, :meth:`to_arviz` and :meth:`median`.
+
+        Returns
+        -------
+        jax.Array
+            Weights in the same order as the samples, shape ``(n_samples,)``.
+            All-zero when every evaluated likelihood was non-finite.
+
+        Raises
+        ------
+        ValueError
+            If ``ln_likelihood`` or the evidence metadata is missing, or if
+            this is a batched ``Samples``.
+
+        Examples
+        --------
+        A library of four equally likely draws, of which two were returned:
+        each carries weight ``1/4``, and half the posterior mass survived.
+
+        >>> import jax.numpy as jnp
+        >>> from unxt import Q
+        >>> from harv.samplers.samples import Samples
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 101.0], "day")},
+        ...     linear={},
+        ...     metadata={"logZ_int": 0.0, "n_prior_samples": 4},
+        ...     ln_likelihood=jnp.zeros(2),
+        ... )
+        >>> samples.weight
+        Array([0.25, 0.25], dtype=float32)
+        >>> float(samples["weight"].sum())
+        0.5
+        """
+        if self.batch_shape:
+            msg = (
+                "weight is not defined for a batched Samples: "
+                "pad_and_stack_samples inherits metadata from the first entry, "
+                "so its normalization does not apply to the other entries. "
+                "Read weight from the per-entity Samples before stacking."
+            )
+            raise ValueError(msg)
+        if self.ln_likelihood is None:
+            msg = (
+                "weight requires ln_likelihood to be stored; re-run the "
+                "sampler with top_k=... or return_logprobs=True."
+            )
+            raise ValueError(msg)
+        missing = [k for k in ("logZ_int", "n_prior_samples") if k not in self.metadata]
+        if missing:
+            msg = (
+                f"weight requires the evidence metadata {missing} to normalize "
+                "over the full prior library; re-run the sampler with "
+                "top_k=... or return_evidence_stats=True."
+            )
+            raise ValueError(msg)
+
+        log_norm = float(self.metadata["logZ_int"]) + np.log(
+            float(self.metadata["n_prior_samples"])
+        )
+        if not np.isfinite(log_norm):
+            # Every evaluated likelihood was non-finite; -inf - -inf is NaN,
+            # and zero weight is the honest answer.
+            return jnp.zeros_like(self.ln_likelihood)
+        return jnp.exp(self.ln_likelihood - log_norm)
+
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
@@ -483,6 +567,11 @@ class Samples(eqx.Module):
                 return Q(jnp.arccos(cos_i), "rad")
             msg = "Inclination only available for astrometry/combined data"
             raise KeyError(msg)
+
+        if key == "weight":
+            # Not a model parameter, so it stays out of keys() -- see the
+            # ``weight`` property.
+            return self.weight  # ty: ignore[invalid-return-type]
 
         if key == "binary_mass_function":
             return self.binary_mass_function()
