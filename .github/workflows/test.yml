@@ -82,10 +82,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Coverage is identical in every cell -- nothing in harv is
-          # platform-conditional -- so it uploads from here only, rather than
-          # once per cell. If this entry ever goes away, move the flag rather
-          # than dropping it.
           - python-version: "3.12"
             runs-on: ubuntu-latest
             coverage: true
@@ -93,12 +89,10 @@ jobs:
             runs-on: ubuntu-latest
           - python-version: "3.14"
             runs-on: ubuntu-latest
-          # Nothing here compiles, so the OS axis tests whether the JAX wheels
-          # work on a platform rather than testing our own code, and once per OS
-          # covers that. Newest Python is the riskiest cell: that is where jaxlib
-          # wheels lag furthest behind a new CPython.
           - python-version: "3.14"
             runs-on: macos-latest
+          - python-version: "3.14"
+            runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
