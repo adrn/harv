@@ -917,7 +917,13 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 **orbit_style,
             )
 
-    ax.legend(loc="best")
+    # Only when something is actually labelled. Labels come from the per-instrument
+    # data series (see instr_style above) and, with show_signal_components, from the
+    # Keplerian/Extensions curves -- the plain model curves carry none. Plotting
+    # samples with no data and no signal components therefore leaves an empty
+    # legend, which matplotlib warns about.
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="best")
     ax.set(**ax_set_info)
 
     return ax

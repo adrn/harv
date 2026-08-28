@@ -1,0 +1,6 @@
+# Generated release notes: bot commits are noise in a changelog.
+changelog:
+  exclude:
+    authors:
+      - dependabot
+      - pre-commit-ci
