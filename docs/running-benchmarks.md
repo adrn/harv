@@ -49,7 +49,10 @@ cannot start a multi-hour run by accident.
 `--benchmark-json=...`
 : pytest-benchmark prints a table but does not persist anything by default. The
 JSON is what `report.py` consumes; without this flag a finished run leaves
-nothing behind.
+nothing behind. pytest-benchmark writes it from `pytest_sessionfinish` — *after*
+every benchmark has run — so `benchmarks/conftest.py` creates the parent
+directory and checks it is writable at startup. Otherwise a typo'd path would
+discard hours of compute at the very end.
 
 ## Flags
 
