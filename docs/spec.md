@@ -2743,6 +2743,85 @@ if it stays the same, the cached compilation is reused.
 
 ______________________________________________________________________
 
+## Known bugs
+
+Defects in current behavior, recorded with enough analysis that picking one up does
+not require re-deriving it. Fixing a bug removes its entry. Features that are absent
+rather than wrong belong in "Planned features and known gaps" below.
+
+### `EcoswEsinwRV.default_prior` admits unbound orbits
+
+Status: open, mitigated but not fixed. Affects `EcoswEsinwRV.default_prior` and any
+caller relying on it.
+
+`default_prior` puts independent `Uniform(-1, 1)` priors on `ecosw` and `esinw`. That
+support is a square, while a bound orbit requires the unit disk,
+`e = sqrt(ecosw**2 + esinw**2) < 1`. About 21% of draws (`1 - pi/4`) fall outside it.
+Measured over 4000 draws, `e` ranged from 0.015 to 1.404, with 21.3% at `e >= 1`.
+
+There are two consequences:
+
+1. A fifth of every prior library is unphysical and can never be accepted. At
+   `M = 1e7` that is roughly 2.1M dead draws.
+1. The default `rv_semiamp` prior (`PeriodDependentKPrior`) scales as
+   `(1 - e**2)**(-1/2)`, which is `NaN` for `e >= 1`. That `NaN` propagates through
+   the `max` reduction the rejection step normalizes by, so `max_log_likelihood`,
+   `logZ_int`, and `logZ_int_ess` all return `NaN` and no samples are accepted, with
+   no error raised.
+
+`ignore_non_finite=True` converts those draws into ordinary rejections and restores
+finite evidence statistics: measured, `max_log_likelihood` is `nan` without the flag
+and `-1709.60` with it. See §`EcoswEsinwRV` and `docs/sharp-bits.md`. The flag removes
+the silent-`NaN` behavior, not the wasted 21%.
+
+#### Why the fix requires a spec decision first
+
+`harv.stats.numpyro_ext.UnitDisk` is the correct distribution (uniform on the disk,
+`log_prob = -log(pi)`), but it is two-dimensional: `event_shape=(2,)`, and `sample`
+returns shape `(*sample_shape, 2)`. `HarvPrior.nonlinear_priors` is
+`dict[str, PriorDist]`, exactly one scalar prior per parameter name, and
+`HarvPrior.sample_nonlinear` draws each independently at shape `(n_samples,)`. A
+single distribution spanning both `ecosw` and `esinw` therefore cannot be dropped in.
+
+Supporting it means adding a **joint (multi-name) nonlinear prior** to the public API:
+for example a tuple-keyed entry `{("ecosw", "esinw"): UnitDisk()}`, whose sample's
+trailing axis is split across the named parameters and whose `log_prob` is counted
+once for the pair. This section must specify the tuple-key form, how
+`sample_nonlinear` splits the event axis, how `ln_prior` accumulates it, and how
+prior caches key it on disk, before any implementation.
+
+Sites that assume one scalar prior per name and would need to handle the joint case:
+
+- `HarvPrior.nonlinear_priors` type and its `__check_init__` validation
+- `HarvPrior.sample_nonlinear` -- the per-name zip over `nonlinear_priors`
+- `HarvPrior.sample` -- the `all_nonlinear_priors[name]` lookup in the nonlinear
+  unit-restoration loop
+- `_sample_nonlinear_params` in `harv/models/component.py` -- the numpyro path, one
+  `numpyro.sample(name, ...)` per key
+- `_expected_prior_keys` in `harv/samplers/rejection.py` -- prior-cache key validation
+- `ln_prior` accumulation, so the pair contributes one `-log(pi)` rather than two terms
+- `EcoswEsinwRV.default_prior` itself
+
+`nonlinear_priors` has roughly 70 references across 12 files; most are annotations or
+docstrings, but the seven above are load-bearing.
+
+#### Alternatives considered
+
+- **Conditional scalar priors.** Draw `ecosw` from a semicircle density, then
+  `esinw | ecosw ~ Uniform(+/- sqrt(1 - ecosw**2))`. Exact, and it keeps one prior per
+  name, but the nonlinear prior machinery has no equivalent of `LinearPriorCallable`,
+  so a nonlinear prior cannot depend on another nonlinear parameter. This needs its
+  own new concept.
+- **One 2-vector parameter.** Declare a single nonlinear parameter of shape `(2,)`.
+  This avoids the joint-prior concept but changes the parameterization's public
+  parameter names, breaking `Samples["ecosw"]`, `convert_parameterization`, and the
+  design-matrix contract.
+- **`UnitDiskTransform`.** Not applicable. It is the `biject_to` transform for
+  unconstrained MCMC; pushing `Uniform(-1, 1)**2` through it gives a density
+  proportional to `1 / sqrt(1 - y0**2)`, which is not uniform on the disk.
+
+______________________________________________________________________
+
 ## Planned features and known gaps
 
 ### JointModel non-marginalized MCMC
