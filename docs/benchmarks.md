@@ -178,52 +178,34 @@ All other axes are held at the baseline: `n_obs=64`, `M=1e6`, `batch_size=1e5`, 
 
 | parameterization | 10000 | 100000 | 1000000 | 10000000 | slope |
 |---|---|---|---|---|---|
-| EcoswEsinwRV | -- | 212.1 ms | 2.00 s | 20.10 s | +0.99 |
-| EcoswEsinwRV batch=10,000 | 45.5 ms | -- | -- | -- | -- |
-| FourierGaiaAstrometry | -- | 641.1 ms | 5.81 s | 58.30 s | +0.98 |
-| FourierGaiaAstrometry batch=10,000 | 90.2 ms | -- | -- | -- | -- |
-| FourierRV | -- | 251.5 ms | 2.14 s | 21.64 s | +0.97 |
-| FourierRV batch=10,000 | 42.3 ms | -- | -- | -- | -- |
-| StandardGaiaAstrometry | -- | 402.8 ms | 3.24 s | 32.37 s | +0.95 |
-| StandardGaiaAstrometry batch=10,000 | 70.2 ms | -- | -- | -- | -- |
-| StandardRV | -- | 224.9 ms | 2.19 s | 20.05 s | +0.98 |
-| StandardRV batch=10,000 | 41.2 ms | -- | -- | -- | -- |
-| ThieleInnesGaiaAstrometry | -- | 521.4 ms | 4.76 s | 47.66 s | +0.98 |
-| ThieleInnesGaiaAstrometry batch=10,000 | 83.1 ms | -- | -- | -- | -- |
+| EcoswEsinwRV | 45.5 ms | 212.1 ms | 2.00 s | 20.10 s | +0.89 |
+| FourierGaiaAstrometry | 90.2 ms | 641.1 ms | 5.81 s | 58.30 s | +0.94 |
+| FourierRV | 42.3 ms | 251.5 ms | 2.14 s | 21.64 s | +0.91 |
+| StandardGaiaAstrometry | 70.2 ms | 402.8 ms | 3.24 s | 32.37 s | +0.89 |
+| StandardRV | 41.2 ms | 224.9 ms | 2.19 s | 20.05 s | +0.91 |
+| ThieleInnesGaiaAstrometry | 83.1 ms | 521.4 ms | 4.76 s | 47.66 s | +0.92 |
 
 **GPU (NVIDIA RTX 6000 Ada Generation)** — median wall time
 
 | parameterization | 10000 | 100000 | 1000000 | 10000000 | slope |
 |---|---|---|---|---|---|
-| EcoswEsinwRV | -- | 13.0 ms | 52.6 ms | 386.0 ms | +0.74 |
-| EcoswEsinwRV batch=10,000 | 9.9 ms | -- | -- | -- | -- |
-| FourierGaiaAstrometry | -- | 30.1 ms | 195.0 ms | 1.73 s | +0.88 |
-| FourierGaiaAstrometry batch=10,000 | 10.9 ms | -- | -- | -- | -- |
-| FourierRV | -- | 12.8 ms | 61.1 ms | 490.7 ms | +0.79 |
-| FourierRV batch=10,000 | 8.6 ms | -- | -- | -- | -- |
-| StandardGaiaAstrometry | -- | 23.2 ms | 96.5 ms | 745.8 ms | +0.75 |
-| StandardGaiaAstrometry batch=10,000 | 16.6 ms | -- | -- | -- | -- |
-| StandardRV | -- | 16.7 ms | 54.9 ms | 384.6 ms | +0.68 |
-| StandardRV batch=10,000 | 13.5 ms | -- | -- | -- | -- |
-| ThieleInnesGaiaAstrometry | -- | 33.9 ms | 187.1 ms | 1.61 s | +0.84 |
-| ThieleInnesGaiaAstrometry batch=10,000 | 15.4 ms | -- | -- | -- | -- |
+| EcoswEsinwRV | 9.9 ms | 13.0 ms | 52.6 ms | 386.0 ms | +0.54 |
+| FourierGaiaAstrometry | 10.9 ms | 30.1 ms | 195.0 ms | 1.73 s | +0.74 |
+| FourierRV | 8.6 ms | 12.8 ms | 61.1 ms | 490.7 ms | +0.59 |
+| StandardGaiaAstrometry | 16.6 ms | 23.2 ms | 96.5 ms | 745.8 ms | +0.56 |
+| StandardRV | 13.5 ms | 16.7 ms | 54.9 ms | 384.6 ms | +0.49 |
+| ThieleInnesGaiaAstrometry | 15.4 ms | 33.9 ms | 187.1 ms | 1.61 s | +0.68 |
 
 **Speedup** — CPU (Intel(R) Xeon(R) w5-3435X) / GPU (NVIDIA RTX 6000 Ada Generation) (>1 means GPU (NVIDIA RTX 6000 Ada Generation) is faster)
 
 | parameterization | 10000 | 100000 | 1000000 | 10000000 |
 |---|---|---|---|---|
-| EcoswEsinwRV | -- | 16.3x | 38.1x | 52.1x |
-| EcoswEsinwRV batch=10,000 | 4.6x | -- | -- | -- |
-| FourierGaiaAstrometry | -- | 21.3x | 29.8x | 33.8x |
-| FourierGaiaAstrometry batch=10,000 | 8.3x | -- | -- | -- |
-| FourierRV | -- | 19.6x | 35.0x | 44.1x |
-| FourierRV batch=10,000 | 4.9x | -- | -- | -- |
-| StandardGaiaAstrometry | -- | 17.3x | 33.6x | 43.4x |
-| StandardGaiaAstrometry batch=10,000 | 4.2x | -- | -- | -- |
-| StandardRV | -- | 13.5x | 40.0x | 52.1x |
-| StandardRV batch=10,000 | 3.1x | -- | -- | -- |
-| ThieleInnesGaiaAstrometry | -- | 15.4x | 25.4x | 29.6x |
-| ThieleInnesGaiaAstrometry batch=10,000 | 5.4x | -- | -- | -- |
+| EcoswEsinwRV | 4.6x | 16.3x | 38.1x | 52.1x |
+| FourierGaiaAstrometry | 8.3x | 21.3x | 29.8x | 33.8x |
+| FourierRV | 4.9x | 19.6x | 35.0x | 44.1x |
+| StandardGaiaAstrometry | 4.2x | 17.3x | 33.6x | 43.4x |
+| StandardRV | 3.1x | 13.5x | 40.0x | 52.1x |
+| ThieleInnesGaiaAstrometry | 5.4x | 15.4x | 25.4x | 29.6x |
 
 `slope` is the exponent of a log-log least-squares fit: 1.0 is linear
 in prior library size $M$, 0.0 is free.

@@ -25,6 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from grid import (
+    BASELINE,
     BATCH_SIZE_VALUES,
     N_OBS_VALUES,
     N_PRIOR_SAMPLE_VALUES,
@@ -212,15 +213,28 @@ def md_table(header: list[str], rows: list[list[str]]) -> str:
 
 
 def series_of(cell: Any, axis: str) -> tuple:
-    """The row identity within a curve: every coordinate except the varying axis."""
+    """The row identity within a curve: every coordinate except the varying axis.
+
+    A coordinate that the curve *derives* from its axis must not count as
+    distinguishing, or the series splits. The library-size curve sets
+    ``batch_size = min(baseline, M)`` because a batch cannot exceed the library, so
+    its ``M=1e4`` cell carries ``batch_size=1e4``; treating that as a separate
+    series dropped the smallest library from every row, every plot, and every
+    slope fit.
+    """
     parts: list[Any] = [cell.parameterization]
-    if axis != "n_prior_samples" and cell.n_prior_samples != 1_000_000:
+    if axis != "n_prior_samples" and cell.n_prior_samples != BASELINE.n_prior_samples:
         parts.append(f"M={cell.n_prior_samples:,}")
-    if axis != "n_obs" and cell.n_obs != 64:
+    if axis != "n_obs" and cell.n_obs != BASELINE.n_obs:
         parts.append(f"n_obs={cell.n_obs}")
-    if axis != "batch_size" and cell.batch_size != 100_000:
+    derived_batch = (
+        min(BASELINE.batch_size, cell.n_prior_samples)
+        if axis == "n_prior_samples"
+        else BASELINE.batch_size
+    )
+    if axis != "batch_size" and cell.batch_size != derived_batch:
         parts.append(f"batch={cell.batch_size:,}")
-    if axis != "backend" and cell.backend != "memory":
+    if axis != "backend" and cell.backend != BASELINE.backend:
         parts.append(cell.backend)
     return tuple(parts)
 
