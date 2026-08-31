@@ -196,6 +196,12 @@ filterwarnings = [
     # warning from the same module still fails the suite.
     "ignore:Non-Gaussian linear prior:UserWarning",       # samplers/_prior_resolution.py
     "ignore:BFGS did not converge:UserWarning",           # samplers/numpyro.py
+    # Fires on every small rejection run in the suite -- toy data with a few
+    # thousand prior samples really is under-resolved.  The warning's own
+    # behavior (fires when it should, stays quiet when it should not) is
+    # covered by tests/unit/test_samplers/test_acceptance_diagnostics.py,
+    # which uses pytest.warns / catch_warnings and so is unaffected by this.
+    "ignore:Under-resolved rejection run:UserWarning",    # samplers/rejection.py
     # -- third-party chatter ----------------------------------------------------
     "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
 ]
