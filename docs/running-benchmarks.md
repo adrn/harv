@@ -11,9 +11,7 @@ are **not** part of the test suite and never run on CI.
 # is correct everywhere. Drop it if you only want CPU numbers.
 uv sync --group bench --group bench-cuda
 
-# Confirm JAX actually sees the GPU -- you want a CudaDevice here, not just
-# CpuDevice. `uv sync --group bench` alone can NEVER show one. See "Installing with
-# GPU support" if it does not.
+# Confirm JAX actually sees the GPU -- you should see a CudaDevice:
 uv run --no-sync python -c "import jax; print(jax.devices())"
 
 # Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline).
@@ -28,15 +26,44 @@ uv run --no-sync python benchmarks/report.py \
 # report.py merges EVERY *.json in benchmarks/results/, so clear out old runs first.
 rm -f benchmarks/results/*.json
 HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest benchmarks/ --bench \
-    --benchmark-json=benchmarks/results/cpu.json
+    --bench-expect=cpu --benchmark-json=benchmarks/results/cpu.json
 HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench \
-    --benchmark-json=benchmarks/results/gpu.json
+    --bench-expect=gpu --benchmark-json=benchmarks/results/gpu.json
 
 # Regenerate the docs page + figures from whatever is in benchmarks/results/
 uv run --no-sync python benchmarks/report.py
 
 git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
 ```
+
+## Running both CPU and GPU from one install
+
+You do **not** need two environments. Installing CUDA-enabled jaxlib does not take the
+CPU backend away — `JAX_PLATFORMS` selects the backend per run:
+
+| Run | Command prefix | Backend |
+|---|---|---|
+| CPU | `JAX_PLATFORMS=cpu` | CPU, even with a working GPU present |
+| GPU | *(nothing)* | GPU, because JAX prefers it when visible |
+
+So the two real runs in the TL;DR differ by exactly that one variable, and both come
+from the single `uv sync --group bench --group bench-cuda`.
+
+Each run also passes `--bench-expect`, which checks `jax.default_backend()` before
+collection and aborts in seconds on a mismatch:
+
+```
+ERROR: --bench-expect=gpu but JAX is on 'cpu' (cpu). JAX falls back to CPU when
+CUDA-enabled jaxlib or the driver is missing; ...
+```
+
+This matters because a filename says nothing about which device ran — `report.py`
+labels devices from `jax.devices()[0]`. Without the guard, a GPU run that silently fell
+back to CPU produces a second CPU dataset and you find out after the hours are spent,
+not before.
+
+The two runs are independent, so order does not matter and you can do them on
+different days; `report.py` merges whatever is in `benchmarks/results/`.
 
 ## Installing with GPU support
 
@@ -57,12 +84,18 @@ uv run --no-sync python -c "import jax; print(jax.devices())"
 # want: [CudaDevice(id=0)]  (or several)
 ```
 
-`bench-cuda` is `jax[cuda12]` behind a `sys_platform == 'linux'` marker, because the
-`jax-cuda12-plugin` wheels are only published for Linux and without the marker
-`uv lock` cannot resolve on macOS or Windows. On a Mac the group installs nothing and
-the command above is harmless, which is why the TL;DR includes it unconditionally. It
-is a separate group rather than part of `bench` so a CPU-only run does not pull
-several GB of NVIDIA wheels.
+`bench-cuda` is `jax[cuda13]` behind a `sys_platform == 'linux'` marker, because the
+CUDA plugin wheels are only published for Linux and without the marker `uv lock`
+cannot resolve on macOS or Windows. On a Mac the group installs nothing and the
+command above is harmless, which is why the TL;DR includes it unconditionally. It is a
+separate group rather than part of `bench` so a CPU-only run does not pull several GB
+of NVIDIA wheels.
+
+`cuda13` needs a driver from the CUDA 13 era. On an older driver, change the group in
+`pyproject.toml` to `jax[cuda12]`; to use a system CUDA install rather than the bundled
+wheels, use the matching `-local` extra (`jax[cuda13-local]`), which must match your
+local CUDA closely. `jax` 0.8 publishes `cuda12`, `cuda12-local`, `cuda13`, and
+`cuda13-local`.
 
 It is a large download the first time. `uv sync` also *removes* anything not in the
 lockfile, so install this way rather than with a bare `uv pip install` — otherwise the
@@ -72,10 +105,10 @@ passes `--no-sync` precisely so a long run cannot be disturbed mid-flight.)
 ### If it still says CpuDevice
 
 - `nvidia-smi` — if this fails, the driver is the problem, not JAX.
-- CUDA 12 wheels need a recent driver; a too-old driver shows up as an
-  initialization error or a silent CPU fallback.
-- Using a system CUDA install instead of the bundled wheels? That is
-  `jax[cuda12-local]`, which must match your local CUDA closely.
+- A too-old driver shows up as an initialization error or a silent CPU fallback.
+  `cuda13` is the stricter of the two; `cuda12` supports older drivers.
+- Using a system CUDA install instead of the bundled wheels? Use the `-local` extra,
+  which must match your local CUDA closely.
 - The fallback prints a warning and keeps going:
 
   ```
@@ -92,9 +125,10 @@ dropping half the data, but it only finds out after the run. Check the device fi
 ## Why the incantation looks like that
 
 `JAX_PLATFORMS=cpu`
-: Forces the CPU run. Without it JAX picks the GPU when one is visible. The GPU
-run just omits it. harv has no device-placement code of its own, so this
-environment variable is the entire device-selection mechanism.
+: Forces the CPU run even when CUDA-enabled jaxlib is installed. Without it JAX picks
+the GPU when one is visible, so the GPU run simply omits it. harv has no
+device-placement code of its own, so this variable plus `batch_size` is the entire
+device story. See "Running both CPU and GPU from one install".
 
 `HARV_NO_TYPECHECK=1`
 : Skips the beartype/jaxtyping import hooks in the root `conftest.py`. Those hooks
@@ -122,6 +156,7 @@ discard hours of compute at the very end.
 | `--bench-smoke` | off | 6 tiny cells that exercise tables, slope fitting, and plotting in ~15 s. |
 | `--bench-full` | off | Full cartesian product (~650 cells) instead of the star design. |
 | `--bench-rounds N` | 5 | Timed rounds per cell, after one warmup round. `3` cuts roughly a third off the wall clock. |
+| `--bench-expect cpu\|gpu` | off | Abort before collection unless JAX is on that backend. |
 | `--bench-cache-dir DIR` | pytest temp | Where HDF5 prior caches live. Point it somewhere persistent to reuse them between runs. |
 
 Useful pytest selectors: `-k StandardRV` runs one parameterization,

@@ -54,6 +54,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Timed rounds per cell, after one warmup round (default: 5).",
     )
     group.addoption(
+        "--bench-expect",
+        choices=("cpu", "gpu"),
+        default=None,
+        help="Fail immediately unless JAX is on this backend. Guards the CPU/GPU "
+        "pair: a filename says nothing about which device actually ran, so without "
+        "this a silent fallback costs the whole run.",
+    )
+    group.addoption(
         "--bench-cache-dir",
         default=None,
         help="Directory for HDF5 prior caches. Default: a pytest temp dir, "
@@ -69,6 +77,26 @@ def pytest_configure(config: pytest.Config) -> None:
     it discards the entire session, which on a real run is hours of compute. Create
     the directory and prove it is writable now instead.
     """
+    expect = config.getoption("--bench-expect")
+    if expect is not None:
+        # jax.default_backend() is the documented answer to "what am I running on";
+        # Device.platform has spelled CUDA both "gpu" and "cuda" across versions.
+        backend = jax.default_backend()
+        actual = "cpu" if backend == "cpu" else "gpu"
+        if actual != expect:
+            msg = (
+                f"--bench-expect={expect} but JAX is on {backend!r} "
+                f"({jax.devices()[0].device_kind}). "
+                + (
+                    "JAX falls back to CPU when CUDA-enabled jaxlib or the driver is "
+                    "missing; see docs/running-benchmarks.md, 'Installing with GPU "
+                    "support'."
+                    if expect == "gpu"
+                    else "Pass JAX_PLATFORMS=cpu to force the CPU backend."
+                )
+            )
+            raise pytest.UsageError(msg)
+
     json_path = config.getoption("benchmark_json", None)
     if not json_path:
         return
