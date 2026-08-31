@@ -11,6 +11,7 @@ concepts
 sharp-bits
 tutorials/index
 api/index
+at-scale
 benchmarks
 running-benchmarks
 :::
