@@ -120,9 +120,7 @@ class TestPeriodDependentAmplitudePrior:
         r_flat = hp.periodogram(data, f, prior=flat, n_terms=1)
         assert jnp.all(jnp.isfinite(r_tilt.delta_ln_likelihood))
         # The period-dependent prior genuinely changes the statistic:
-        assert not jnp.allclose(
-            r_tilt.delta_ln_likelihood, r_flat.delta_ln_likelihood
-        )
+        assert not jnp.allclose(r_tilt.delta_ln_likelihood, r_flat.delta_ln_likelihood)
 
 
 class TestExtensions:

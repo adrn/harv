@@ -65,8 +65,13 @@ class TestParams:
         names = [pi.name for pi in p.params()]
         assert names[0] == "period"
         assert names[1:] == [
-            "cos_amp_1", "sin_amp_1", "cos_amp_2", "sin_amp_2",
-            "cos_amp_3", "sin_amp_3", "v_sys",
+            "cos_amp_1",
+            "sin_amp_1",
+            "cos_amp_2",
+            "sin_amp_2",
+            "cos_amp_3",
+            "sin_amp_3",
+            "v_sys",
         ]
         assert all(pi.linear for pi in p.linear_params())
         assert len(p.nonlinear_params()) == 1
@@ -76,15 +81,25 @@ class TestParams:
         names = [pi.name for pi in p.params()]
         assert names[:6] == ["period", "ra0", "dec0", "pmra", "pmdec", "parallax"]
         assert names[6:] == [
-            "ti_A_1", "ti_B_1", "ti_F_1", "ti_G_1",
-            "ti_A_2", "ti_B_2", "ti_F_2", "ti_G_2",
+            "ti_A_1",
+            "ti_B_1",
+            "ti_F_1",
+            "ti_G_1",
+            "ti_A_2",
+            "ti_B_2",
+            "ti_F_2",
+            "ti_G_2",
         ]
 
     def test_zero_terms_null_model(self):
         assert [pi.name for pi in hm.FourierRV(n_terms=0).linear_params()] == ["v_sys"]
         gaia_null = hm.FourierGaiaAstrometry(n_terms=0)
         assert [pi.name for pi in gaia_null.linear_params()] == [
-            "ra0", "dec0", "pmra", "pmdec", "parallax"
+            "ra0",
+            "dec0",
+            "pmra",
+            "pmdec",
+            "parallax",
         ]
 
     def test_negative_terms_raises(self):
@@ -102,8 +117,16 @@ class TestDesignMatrix:
         t = ustrip("day", data.time - data.t_ref)
         M = 2.0 * np.pi * t / 37.0
         expected = np.stack(
-            [np.cos(1*M), np.sin(1*M), np.cos(2*M), np.sin(2*M),
-             np.cos(3*M), np.sin(3*M), np.ones_like(M)], axis=-1,
+            [
+                np.cos(1 * M),
+                np.sin(1 * M),
+                np.cos(2 * M),
+                np.sin(2 * M),
+                np.cos(3 * M),
+                np.sin(3 * M),
+                np.ones_like(M),
+            ],
+            axis=-1,
         )
         # float32 suite: trig at phases of hundreds of radians carries
         # ~|M|*eps argument error, so compare loosely (structural errors
@@ -156,7 +179,11 @@ class TestDefaultPrior:
         prior = hm.FourierRV(n_terms=2).default_prior(**RV_SCALES)
         assert set(prior.nonlinear_priors) == {"period"}
         assert set(prior.linear_priors) == {
-            "cos_amp_1", "sin_amp_1", "cos_amp_2", "sin_amp_2", "v_sys"
+            "cos_amp_1",
+            "sin_amp_1",
+            "cos_amp_2",
+            "sin_amp_2",
+            "v_sys",
         }
 
     def test_sigma_amp_required(self):
@@ -177,8 +204,15 @@ class TestDefaultPrior:
     def test_gaia_prior_structure_and_required_scales(self):
         prior = hm.FourierGaiaAstrometry(n_terms=1).default_prior(**GAIA_SCALES)
         assert set(prior.linear_priors) == {
-            "ra0", "dec0", "pmra", "pmdec", "parallax",
-            "ti_A_1", "ti_B_1", "ti_F_1", "ti_G_1",
+            "ra0",
+            "dec0",
+            "pmra",
+            "pmdec",
+            "parallax",
+            "ti_A_1",
+            "ti_B_1",
+            "ti_F_1",
+            "ti_G_1",
         }
         kwargs = {k: v for k, v in GAIA_SCALES.items() if k != "sigma_pm"}
         with pytest.raises(TypeError, match="sigma_pm"):
