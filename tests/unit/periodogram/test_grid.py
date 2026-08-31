@@ -11,6 +11,12 @@ from harv.periodogram.core import _effective_n_terms
 from harv.simulate import simulate_rv_sb1_data
 
 
+def _capped(fourier_cls, n_requested, n_obs, n_ext_linear):
+    """``_effective_n_terms``, asserting the overfit warning fires when capping."""
+    with pytest.warns(UserWarning, match="overfits"):
+        return _effective_n_terms(fourier_cls, n_requested, n_obs, n_ext_linear)
+
+
 class TestEffectiveNTerms:
     """Overfitting cap: at least 2 observations per fitted linear column.
 
@@ -20,26 +26,27 @@ class TestEffectiveNTerms:
 
     def test_rv_cap(self):
         # RV trial model has 1 + 2H columns.
-        assert _effective_n_terms(FourierRV, 5, 8, 0) == 1  # 8/2=4 cols -> H=1
-        assert _effective_n_terms(FourierRV, 5, 10, 0) == 2  # 5 cols -> H=2
-        assert _effective_n_terms(FourierRV, 20, 40, 0) == 9
+        assert _capped(FourierRV, 5, 8, 0) == 1  # 8/2=4 cols -> H=1
+        assert _capped(FourierRV, 5, 10, 0) == 2  # 5 cols -> H=2
+        assert _capped(FourierRV, 20, 40, 0) == 9
 
     def test_gaia_cap(self):
         # Gaia trial model has 5 + 4H columns.
-        assert _effective_n_terms(FourierGaiaAstrometry, 5, 20, 0) == 1  # 10 cols
-        assert _effective_n_terms(FourierGaiaAstrometry, 20, 60, 0) == 6
+        assert _capped(FourierGaiaAstrometry, 5, 20, 0) == 1  # 10 cols
+        assert _capped(FourierGaiaAstrometry, 20, 60, 0) == 6
 
     def test_floored_at_one(self):
-        assert _effective_n_terms(FourierRV, 2, 2, 0) == 1
-        assert _effective_n_terms(FourierGaiaAstrometry, 2, 4, 0) == 1
+        assert _capped(FourierRV, 2, 2, 0) == 1
+        assert _capped(FourierGaiaAstrometry, 2, 4, 0) == 1
 
     def test_not_raised_above_request(self):
+        # No capping -> no warning.
         assert _effective_n_terms(FourierRV, 2, 1000, 0) == 2
 
     def test_extension_columns_count_against_the_budget(self):
         # 3 linear extension columns eat into the same budget.
-        assert _effective_n_terms(FourierRV, 5, 10, 0) == 2
-        assert _effective_n_terms(FourierRV, 5, 10, 3) == 1
+        assert _capped(FourierRV, 5, 10, 0) == 2
+        assert _capped(FourierRV, 5, 10, 3) == 1
 
 
 class TestBounds:
