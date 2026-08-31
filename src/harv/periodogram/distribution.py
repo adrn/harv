@@ -12,11 +12,12 @@ inverse-CDF sampling — all shape-static and safe under ``jax.jit`` and
 
 __all__ = ("LogGridDensity",)
 
-from typing import ClassVar
+from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.typing import ArrayLike
 from numpyro.distributions import Distribution, constraints
 from numpyro.distributions.util import validate_sample
 from numpyro.util import is_prng_key
@@ -71,12 +72,14 @@ class LogGridDensity(Distribution):
     True
     """
 
-    arg_constraints: ClassVar[dict] = {
+    # ``Distribution`` declares these as instance-level attributes, so they
+    # cannot be narrowed to ``ClassVar`` here (that would violate LSP).
+    arg_constraints: dict[str, Any] = {  # noqa: RUF012
         "ln_grid": constraints.real_vector,
         "log_density": constraints.real_vector,
     }
-    reparametrized_params: ClassVar[list[str]] = []
-    pytree_data_fields: ClassVar[tuple[str, ...]] = (
+    reparametrized_params: list[str] = []  # noqa: RUF012
+    pytree_data_fields: tuple[str, ...] = (
         "ln_grid",
         "log_density",
         "_rho",
@@ -130,12 +133,12 @@ class LogGridDensity(Distribution):
     @property
     def low(self) -> jax.Array:
         """Lower edge of the support, ``exp(ln_grid[0])``."""
-        return self._support.lower_bound
+        return jnp.exp(self.ln_grid[0])
 
     @property
     def high(self) -> jax.Array:
         """Upper edge of the support, ``exp(ln_grid[-1])``."""
-        return self._support.upper_bound
+        return jnp.exp(self.ln_grid[-1])
 
     def _segment(self, u: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Locate the knot segment containing ``u``: ``(j, u_j, du_j)``."""
@@ -158,12 +161,12 @@ class LogGridDensity(Distribution):
         return log_rho, u
 
     @validate_sample
-    def log_prob(self, value: jax.Array | float) -> jax.Array:
+    def log_prob(self, value: ArrayLike) -> jax.Array:
         """Log-density per unit ``x`` (``-inf`` outside the support)."""
         log_rho, u = self._log_rho_ln(jnp.asarray(value))
         return log_rho - u
 
-    def log_prob_ln(self, value: jax.Array | float) -> jax.Array:
+    def log_prob_ln(self, value: ArrayLike) -> jax.Array:
         """Log-density per unit ``ln x`` — unit-of-``x`` independent.
 
         Equals ``log_prob(value) + ln(value)`` inside the support and ``-inf``
@@ -173,7 +176,7 @@ class LogGridDensity(Distribution):
         log_rho, _ = self._log_rho_ln(jnp.asarray(value))
         return log_rho
 
-    def cdf(self, value: jax.Array | float) -> jax.Array:
+    def cdf(self, value: ArrayLike) -> jax.Array:
         """Cumulative distribution function (piecewise-quadratic in ``ln x``)."""
         value = jnp.asarray(value)
         positive = value > 0
@@ -187,7 +190,7 @@ class LogGridDensity(Distribution):
         above = positive & (u > self.ln_grid[-1])
         return jnp.where(below, 0.0, jnp.where(above, 1.0, out))
 
-    def icdf(self, q: jax.Array | float) -> jax.Array:
+    def icdf(self, q: ArrayLike) -> jax.Array:
         """Inverse CDF, in closed form per knot segment.
 
         Solves ``(b/2) t^2 + a t = r`` on the located segment using the
@@ -207,8 +210,15 @@ class LogGridDensity(Distribution):
         t = jnp.where(denom > 0, 2.0 * r / jnp.where(denom > 0, denom, 1.0), 0.0)
         return jnp.exp(u0 + jnp.clip(t, 0.0, du))
 
-    def sample(self, key: jax.Array, sample_shape: tuple[int, ...] = ()) -> jax.Array:
-        """Draw samples by inverse-CDF transform of uniform variates."""
+    def sample(  # ty: ignore[invalid-method-override]
+        self, key: jax.Array, sample_shape: tuple[int, ...] = ()
+    ) -> jax.Array:
+        """Draw samples by inverse-CDF transform of uniform variates.
+
+        ``key`` is annotated ``jax.Array`` rather than ``Distribution.sample``'s
+        ``jax.dtypes.prng_key | None``: the latter is a dtype class, not the
+        runtime type of a PRNG key, and beartype rejects real keys against it.
+        """
         if not is_prng_key(key):
             raise TypeError("key must be a JAX PRNG key")
         q = jax.random.uniform(key, shape=sample_shape + self.batch_shape)

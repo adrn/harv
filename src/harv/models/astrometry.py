@@ -177,4 +177,8 @@ class GaiaAstrometryModel(AbstractComponentModel):
         :class:`StandardGaiaAstrometry`, or the TI constants for
         :class:`ThieleInnesGaiaAstrometry`).
         """
-        return self.parameterization.sky_orbit(times, nl_values, linear_values)
+        # Not defined by FourierGaiaAstrometry: a Fourier fit has no Campbell
+        # elements, so there is no sky orbit ellipse to draw.
+        return self.parameterization.sky_orbit(  # ty: ignore[unresolved-attribute]
+            times, nl_values, linear_values
+        )

@@ -88,7 +88,7 @@ class PeriodogramResult(eqx.Module):
     @property
     def period(self) -> NTime:
         """Trial periods, ``1 / frequency`` (descending order)."""
-        return 1.0 / self.frequency
+        return cast("NTime", 1.0 / self.frequency)
 
     def max_period(self) -> ScalarQTime:
         """Trial period with the highest ``delta_ln_likelihood``."""
@@ -358,8 +358,7 @@ def periodogram(
     datasets = dict(data.items()) if is_container else {"data": data}
 
     per_dataset: dict[str, NFloatArray] = {}
-    total_delta = None
-    total_lnl0 = None
+    base_lnls: list[Float[jax.Array, ""]] = []
     eff_terms = 0
     for name, d in datasets.items():
         ds_prior = _resolve_per_dataset(prior, "prior", name, is_container)
@@ -368,9 +367,11 @@ def periodogram(
             d, ds_prior, tuple(ds_ext), frequency_grid, n_terms
         )
         per_dataset[name] = delta
-        total_delta = delta if total_delta is None else total_delta + delta
-        total_lnl0 = lnl0 if total_lnl0 is None else total_lnl0 + lnl0
+        base_lnls.append(lnl0)
         eff_terms = max(eff_terms, eff)
+
+    total_delta = jnp.sum(jnp.stack(list(per_dataset.values())), axis=0)
+    total_lnl0 = jnp.sum(jnp.stack(base_lnls))
 
     time_unit = str((1.0 / frequency_grid[:1]).unit)
     all_times = [ustrip(time_unit, d.time) for d in datasets.values()]
