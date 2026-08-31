@@ -597,6 +597,15 @@ This is the simplest sensible default for this parameterization; users wanting a
 matched prior should sample with `StandardRV` and convert (or override via
 `**kwargs`).
 
+**The default prior admits unbound orbits.** `default_prior` puts independent
+`Uniform(-1, 1)` priors on `ecosw` and `esinw`, whose support is a *square*, while a
+bound orbit requires the *unit disk* (`e = sqrt(ecosw² + esinw²) < 1`). About 21% of
+draws (`1 - π/4`) land outside it with `e >= 1`, where the default `rv_semiamp` prior's
+`(1 - e²)^(-1/2)` is `NaN`. Those draws must be rejected: pass
+`ignore_non_finite=True`, or a single `NaN` propagates through the `max` reduction and
+leaves `max_log_likelihood` and every evidence statistic `NaN`. See
+`docs/sharp-bits.md`.
+
 ### `StandardGaiaAstrometry`
 
 Standard Gaia epoch-astrometry parameterization:
@@ -976,8 +985,19 @@ The callable receives a **plain dict** keyed by bare parameter name and must ret
 `Normal` (bare, or wrapped in a `QuantityDistribution` to declare its unit). The dict
 contains:
 
-- every **nonlinear** parameter value sampled so far (`period`, `eccentricity`, …), and
-- every **explicit** (non-marginalized) **linear** parameter value sampled so far.
+- every **nonlinear** parameter value sampled so far (`period`, `eccentricity`, …),
+- every **explicit** (non-marginalized) **linear** parameter value sampled so far, and
+- `eccentricity`, even under a parameterization that does not carry it as a
+  parameter, when the parameterization can derive one.
+
+The third bullet exists because callables like `PeriodDependentKPrior` are written
+against the standard parameter names. `EcoswEsinwRV` carries `(ecosw, esinw)` instead,
+so without this the default `rv_semiamp` prior could not be evaluated at all. The value
+comes from `AbstractParameterization.derived_eccentricity(nl_values)`, which returns
+`None` by default -- covering both parameterizations that already carry `eccentricity`
+(nothing to derive) and the Kepler-free Fourier bases (no eccentricity exists) -- and is
+overridden by `EcoswEsinwRV`. Shared priors in a `JointModel` are the one exception:
+components need not agree on a parameterization, so no derivation is attempted there.
 
 The second bullet is why `parallax` is readable by callable priors: with the default
 `HalfNormal` prior it is classified non-Gaussian, so it is sampled explicitly rather

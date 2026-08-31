@@ -96,3 +96,29 @@ This rewrites the samples into the equivalent convention
 - `arg_peri` wrapped into $\[0, 2\\pi)$
 
 without changing the physical orbit.
+
+## `EcoswEsinwRV`'s default prior admits unbound orbits
+
+`EcoswEsinwRV().default_prior(...)` puts independent `Uniform(-1, 1)` priors on `ecosw`
+and `esinw`. That support is a square, but a bound orbit needs the unit disk:
+
+```
+e = sqrt(ecosw**2 + esinw**2) < 1
+```
+
+Roughly 21% of draws (`1 - pi/4`) fall outside it with `e >= 1`, which is not an orbit.
+The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns `NaN`
+there.
+
+`NaN` does not behave like a rejected sample. It propagates through the `max` reduction
+the rejection step normalizes by, so `max_log_likelihood`, `logZ_int`, and
+`logZ_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
+raised. Pass `ignore_non_finite=True` so those draws are treated as rejections:
+
+```python
+samples = sampler.run(data, n_prior_samples=1_000_000, ignore_non_finite=True)
+```
+
+This is not specific to `EcoswEsinwRV` -- any prior that can produce a non-finite
+likelihood needs the same flag -- but that parameterization's default prior guarantees
+it on about a fifth of all draws.
