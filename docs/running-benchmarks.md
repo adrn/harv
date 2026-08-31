@@ -9,12 +9,21 @@ are **not** part of the test suite and never run on CI.
 # One-time: install the benchmark tooling
 uv sync --group bench
 
-# Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline)
-HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench --bench-smoke \
-    --benchmark-json=benchmarks/results/smoke.json
-uv run --no-sync python benchmarks/report.py
+# Confirm JAX actually sees the GPU. If this prints only CpuDevice, the "gpu" run
+# below silently produces a SECOND CPU dataset -- see "Check the device first".
+uv run --no-sync python -c "import jax; print(jax.devices())"
 
-# The real thing, on the workstation (hours per device)
+# Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline).
+# Writes outside benchmarks/results/ so it cannot contaminate a real run, and
+# renders to its own file so it cannot overwrite the committed docs page.
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench --bench-smoke \
+    --benchmark-json=benchmarks/smoke/smoke.json
+uv run --no-sync python benchmarks/report.py \
+    --results benchmarks/smoke --out benchmarks/smoke/benchmarks.md --include-smoke
+
+# The real thing, on the workstation (hours per device).
+# report.py merges EVERY *.json in benchmarks/results/, so clear out old runs first.
+rm -f benchmarks/results/*.json
 HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest benchmarks/ --bench \
     --benchmark-json=benchmarks/results/cpu.json
 HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench \
@@ -26,8 +35,23 @@ uv run --no-sync python benchmarks/report.py
 git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
 ```
 
-Delete stale `benchmarks/results/*.json` before a fresh run — `report.py` merges
-**every** file it finds in that directory.
+## Check the device first
+
+`jax` falls back to CPU when a CUDA-enabled `jaxlib` is not installed, printing only
+a warning:
+
+```
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not
+installed. Falling back to cpu.
+```
+
+Nothing in the filename makes a run a GPU run — `report.py` labels each device from
+`jax.devices()[0]`. So a fallback means `gpu.json` is a second CPU dataset under the
+same device label as `cpu.json`, and one would overwrite the other. `report.py` now
+refuses that case by name rather than silently dropping half the data, but the fix is
+to install CUDA-enabled jaxlib (`jax[cuda12]`) before spending hours on the run.
+
+Run the one-liner above and check for a `CudaDevice` before starting.
 
 ## Why the incantation looks like that
 
