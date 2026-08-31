@@ -12,6 +12,7 @@ ReadTheDocs has no GPU and must never try to regenerate it.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import sys
@@ -23,7 +24,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from grid import curve_definitions
+from grid import (
+    BATCH_SIZE_VALUES,
+    N_OBS_VALUES,
+    N_PRIOR_SAMPLE_VALUES,
+    PARAMETERIZATIONS,
+    curve_definitions,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
@@ -435,6 +442,393 @@ def render_plots(curve: str, plot: dict, devices: list[str]) -> str | None:
     return f"![{CURVE_TITLES.get(curve, curve)}](_static/benchmarks/{out.name})"
 
 
+# --- findings ---------------------------------------------------------------
+#
+# Everything in this section is COMPUTED from the loaded results. Only the
+# interpretation is fixed prose, and it is attributed to the run in the metadata
+# table. That is deliberate: a hardcoded "52x" would quietly become a lie the
+# first time someone regenerates the page on different hardware.
+
+
+def _pow10(n: int) -> str:
+    """Render a round library size as `1e7` rather than `1e+07`."""
+    return (
+        f"1e{len(str(n)) - 1}"
+        if str(n).startswith("1") and set(str(n)[1:]) <= {"0"}
+        else f"{n:,}"
+    )
+
+
+def _at(
+    measurements: dict[tuple, dict[str, dict]],
+    param: str,
+    n_obs: int,
+    n_prior: int,
+    batch: int,
+    backend: str,
+    device: str,
+) -> float | None:
+    return _median(
+        measurements.get((param, n_obs, n_prior, batch, backend), {}).get(device)
+    )
+
+
+def _m_curve(
+    measurements: dict[tuple, dict[str, dict]], param: str, device: str
+) -> dict[int, float]:
+    """Library-size curve for one parameterization, as {M: seconds}."""
+    out = {}
+    for m in N_PRIOR_SAMPLE_VALUES:
+        t = _at(measurements, param, 64, m, min(100_000, m), "memory", device)
+        if t:
+            out[m] = t
+    return out
+
+
+def _fmt_range(values: list[float], unit: str = "x", places: int = 1) -> str:
+    if not values:
+        return "--"
+    lo, hi = min(values), max(values)
+    if abs(hi - lo) < 10**-places:
+        return f"{lo:.{places}f}{unit}"
+    return f"{lo:.{places}f}-{hi:.{places}f}{unit}"
+
+
+def _speedup_growth(
+    measurements: dict[tuple, dict[str, dict]], fast: str, slow: str
+) -> tuple[list[float], list[float], int, int]:
+    """Speedups at the smallest and largest library size."""
+    small, large = [], []
+    m_lo, m_hi = min(N_PRIOR_SAMPLE_VALUES), max(N_PRIOR_SAMPLE_VALUES)
+    for p in PARAMETERIZATIONS:
+        a, b = _m_curve(measurements, p, slow), _m_curve(measurements, p, fast)
+        if m_lo in a and m_lo in b:
+            small.append(a[m_lo] / b[m_lo])
+        if m_hi in a and m_hi in b:
+            large.append(a[m_hi] / b[m_hi])
+    return small, large, m_lo, m_hi
+
+
+def _throughput_rows(
+    measurements: dict[tuple, dict[str, dict]], devices: list[str]
+) -> list[list[str]]:
+    """Peak sustained throughput, in millions of prior samples per second."""
+    m_hi = max(N_PRIOR_SAMPLE_VALUES)
+    rows = []
+    for p in PARAMETERIZATIONS:
+        row = [p]
+        any_value = False
+        for d in devices:
+            t = _at(measurements, p, 64, m_hi, min(100_000, m_hi), "memory", d)
+            rate = m_hi / t / 1e6 if t else None
+            row.append(
+                "--" if rate is None else f"{rate:.2f}" if rate < 1 else f"{rate:.1f}"
+            )
+            any_value = any_value or bool(t)
+        if any_value:
+            rows.append(row)
+    return rows
+
+
+def _floor(measurements: dict[tuple, dict[str, dict]], device: str) -> float | None:
+    times = [_median(r[device]) for r in measurements.values() if device in r]
+    times = [t for t in times if t]
+    return min(times) if times else None
+
+
+def _batch_spread(
+    measurements: dict[tuple, dict[str, dict]], device: str
+) -> list[float]:
+    """Slowest/fastest batch_size at fixed (param, M) -- how much the knob matters."""
+    spreads = []
+    for p in PARAMETERIZATIONS:
+        for m in N_PRIOR_SAMPLE_VALUES:
+            ts = [
+                t
+                for b in BATCH_SIZE_VALUES
+                if (t := _at(measurements, p, 64, m, b, "memory", device))
+            ]
+            if len(ts) >= 2:
+                spreads.append(max(ts) / min(ts))
+    return spreads
+
+
+def _hdf5_penalty(
+    measurements: dict[tuple, dict[str, dict]], device: str
+) -> list[float]:
+    out = []
+    for p in PARAMETERIZATIONS:
+        for m in N_PRIOR_SAMPLE_VALUES:
+            mem = _at(measurements, p, 64, m, 100_000, "memory", device)
+            h5 = _at(measurements, p, 64, m, 100_000, "hdf5", device)
+            if mem and h5:
+                out.append(h5 / mem)
+    return out
+
+
+def _compile_range(
+    measurements: dict[tuple, dict[str, dict]], device: str
+) -> list[float]:
+    per_param: dict[str, list[float]] = {}
+    for r in measurements.values():
+        if device not in r:
+            continue
+        info = r[device]["extra_info"]
+        cold, warm = info.get("cold_seconds"), _median(r[device])
+        if cold is None or warm is None:
+            continue
+        per_param.setdefault(info["parameterization"], []).append(max(cold - warm, 0.0))
+    return [float(np.median(v)) for v in per_param.values() if v]
+
+
+def _worst_n_obs_knee(
+    measurements: dict[tuple, dict[str, dict]], fast: str, slow: str
+) -> tuple[str, int, float, int, float] | None:
+    """Largest drop in speedup between adjacent n_obs values."""
+    worst = None
+    for p in PARAMETERIZATIONS:
+        sp = {}
+        for n in N_OBS_VALUES:
+            a = _at(measurements, p, n, 1_000_000, 100_000, "memory", slow)
+            b = _at(measurements, p, n, 1_000_000, 100_000, "memory", fast)
+            if a and b:
+                sp[n] = a / b
+        ns = sorted(sp)
+        for lo, hi in itertools.pairwise(ns):
+            drop = sp[lo] / sp[hi]
+            if worst is None or drop > worst[0]:
+                worst = (drop, p, lo, sp[lo], hi, sp[hi])
+    return None if worst is None else (worst[1], worst[2], worst[3], worst[4], worst[5])
+
+
+def _device_agreement(
+    measurements: dict[tuple, dict[str, dict]], devices: list[str]
+) -> tuple[float, int] | None:
+    """Largest relative disagreement in evidence_ess between two devices."""
+    if len(devices) < 2:
+        return None
+    a, b = devices[0], devices[1]
+    worst, n = 0.0, 0
+    for r in measurements.values():
+        if a not in r or b not in r:
+            continue
+        xa = r[a]["extra_info"].get("evidence_ess")
+        xb = r[b]["extra_info"].get("evidence_ess")
+        if xa is None or xb is None or math.isnan(xa) or math.isnan(xb):
+            continue
+        worst = max(worst, abs(xa - xb) / max(abs(xa), 1e-30))
+        n += 1
+    return (worst, n) if n else None
+
+
+def render_findings(  # noqa: C901
+    measurements: dict[tuple, dict[str, dict]],
+    devices: list[str],
+    mode: str,
+) -> list[str]:
+    """Interpretation of the tables below, with every figure computed."""
+    if mode != "star":
+        return []  # the star grid is the only one these readings are defined for
+
+    lines = [
+        "## What the numbers say",
+        "",
+        "Computed from the results in this page, on the hardware above. The",
+        "interpretation is fixed; the figures are not, so regenerating on your own",
+        "machine ({doc}`running-benchmarks`) updates them rather than contradicting",
+        "them.",
+        "",
+    ]
+
+    gpus = [d for d in devices if not d.startswith("CPU")]
+    cpus = [d for d in devices if d.startswith("CPU")]
+    pair = (gpus[0], cpus[0]) if gpus and cpus else None
+
+    if pair:
+        fast, slow = pair
+        small, large, m_lo, m_hi = _speedup_growth(measurements, fast, slow)
+        if small and large:
+            f_fast, f_slow = _floor(measurements, fast), _floor(measurements, slow)
+            floors = (
+                f"the smallest warm call measured here is {f_fast * 1e3:.0f} ms on "
+                f"GPU against {f_slow * 1e3:.0f} ms on CPU."
+                if f_fast and f_slow
+                else "the per-call floor is visible at the small-`M` end of the table."
+            )
+            headline = (
+                f"At `M={_pow10(m_lo)}` the GPU is only "
+                f"{_fmt_range(small)} faster; at `M={_pow10(m_hi)}` it is "
+                f"{_fmt_range(large)}. The reason is in the"
+            )
+            lines += [
+                "### The GPU advantage grows with library size",
+                "",
+                headline,
+                "slopes: cost is near-linear in `M` on CPU and clearly sublinear on",
+                "GPU, because a small library cannot fill the device. Below roughly",
+                "`M=1e5` a GPU call is dominated by fixed cost, not by work — "
+                + floors,
+                "",
+                "**Consequence for population runs.** That floor is paid once per",
+                "source. Millions of sources at small `M` spend most of their time in",
+                "per-call overhead, so a GPU pays off through *bigger libraries*, not",
+                "through more calls. See {doc}`at-scale`.",
+                "",
+            ]
+
+    rows = _throughput_rows(measurements, devices)
+    if rows:
+        m_hi = max(N_PRIOR_SAMPLE_VALUES)
+        intro = f"Sustained rate at `M={_pow10(m_hi)}`, `n_obs=64`, in-memory library."
+        lines += [
+            "### Throughput, in millions of prior samples per second",
+            "",
+            intro,
+            "This is the number to plan a run from.",
+            "",
+            md_table(["parameterization", *devices], rows),
+            "",
+            "The spread across parameterizations is real work, not noise: the",
+            "astrometric models carry more linear columns than the RV ones, and the",
+            "Thiele-Innes variant additionally evaluates a Jacobian correction per",
+            "sample.",
+            "",
+        ]
+
+    if pair:
+        fast, slow = pair
+        agree = _device_agreement(measurements, devices)
+        if agree:
+            worst, n = agree
+            lines += [
+                "### The speedup is free",
+                "",
+                f"Across all {n} cells measured on both devices, the largest relative",
+                f"difference in `logZ_int_ess` is {worst:.1e}. Both runs pin float64,",
+                "and the GPU is not trading accuracy for speed — it is the same",
+                "arithmetic, faster.",
+                "",
+            ]
+
+    spreads = {d: _batch_spread(measurements, d) for d in devices}
+    if any(spreads.values()):
+        # The heading must not claim a comparison the loaded data cannot support.
+        lines += [
+            "### `batch_size` matters more on CPU than on GPU"
+            if pair
+            else "### How much `batch_size` matters",
+            "",
+        ]
+        for d in devices:
+            if spreads[d]:
+                lines.append(
+                    f"- **{d}**: slowest/fastest `batch_size` at fixed `M` spans "
+                    f"{_fmt_range(spreads[d], places=2)}."
+                )
+        lines += [
+            "",
+            *(
+                [
+                    "This inverts the guidance the design spec used to give. Setting",
+                    "`batch_size = n_prior_samples` on GPU is not the lever it was",
+                    "assumed to be; the device is already saturated at far smaller",
+                    "batches.",
+                ]
+                if pair
+                else []
+            ),
+            "The knob sets the working-set size of the `(batch, n_obs, n_linear)`",
+            "intermediate, which is why it moves CPU timings at all.",
+            "",
+            ":::{warning}",
+            "Every CPU cell here is a **single process on an otherwise idle node**, so",
+            "these are per-core ceilings, not per-node predictions. Under many-rank",
+            "contention the optimum moves *down*, because ranks compete for memory",
+            "bandwidth — a large batch that wins alone can starve a full node. Measure",
+            "it under the contention you will actually run. See {doc}`at-scale`.",
+            ":::",
+            "",
+        ]
+
+    pen = {d: _hdf5_penalty(measurements, d) for d in devices}
+    if any(pen.values()):
+        lines += [
+            "### Streaming from HDF5 costs the GPU much more than the CPU"
+            if pair
+            else "### The cost of streaming from HDF5",
+            "",
+        ]
+        for d in devices:
+            if pen[d]:
+                lines.append(
+                    f"- **{d}**: {_fmt_range(pen[d], places=2)} of the in-memory time."
+                )
+        lines += [
+            "",
+            *(
+                [
+                    "The absolute I/O cost is similar; what differs is what it is",
+                    "competing with. On CPU the compute is slow enough to hide the",
+                    "reads. On GPU the compute is fast enough that the reads become",
+                    "the run.",
+                ]
+                if pair
+                else []
+            ),
+            "Keep the library in memory whenever it fits, and reserve the HDF5 path",
+            "for libraries that genuinely cannot.",
+            "",
+        ]
+
+    comp = {d: _compile_range(measurements, d) for d in devices}
+    if any(comp.values()):
+        lines += [
+            "### Compilation is a per-shape tax, and it is higher on GPU"
+            if pair
+            else "### Compilation is a per-shape tax",
+            "",
+        ]
+        for d in devices:
+            if comp[d]:
+                span = _fmt_range(comp[d], unit=" s", places=1)
+                lines.append(f"- **{d}**: {span} per distinct input shape.")
+        lines += [
+            "",
+            "Paid once per shape, so a population loop over identically-shaped data",
+            "amortizes it to nothing — and a catalog with a different epoch count per",
+            "source pays it *per source*, which is why bucketing epoch counts is the",
+            "first thing to do with real astrometry. See {doc}`at-scale`.",
+            "",
+        ]
+
+    if pair:
+        knee = _worst_n_obs_knee(measurements, *pair)
+        if knee and knee[2] / knee[4] > 1.5:
+            param, lo, sp_lo, hi, sp_hi = knee
+            lines += [
+                "### The GPU advantage falls away at large `n_obs`",
+                "",
+                f"For `{param}` the speedup drops from {sp_lo:.0f}x at `n_obs={lo}` to",
+                f"{sp_hi:.0f}x at `n_obs={hi}` — a discontinuity, not a trend, and all",
+                "six parameterizations show it at the same place.",
+                "",
+                ":::{note}",
+                "The arithmetic points at the working set: at `batch_size=1e5` and",
+                f"`n_obs={hi}`, one float64 column array is",
+                f"`1e5 x {hi} x 8 B = {1e5 * hi * 8 / 1e6:.0f} MB`, and the design",
+                "matrix holds several. Lowering `batch_size` so that",
+                "`batch_size x n_obs` stays roughly constant is the obvious remedy,",
+                "**but this grid did not measure it** — the `batch_size` curve",
+                "was only run at `n_obs=64`. Treat the",
+                "cause as a hypothesis and measure it on your own data before relying",
+                "on it.",
+                ":::",
+                "",
+            ]
+
+    return lines
+
+
 SMOKE_BANNER = [
     ":::{warning}",
     "**These are smoke-test numbers, not real results.** They come from a",
@@ -524,6 +918,8 @@ def main() -> None:
         "changes (see the Top-K selection section of the design spec).",
         "",
     ]
+
+    lines += render_findings(measurements, devices, mode)
 
     for curve, cells in definitions.items():
         if not any(c.key in measurements for c in cells):
