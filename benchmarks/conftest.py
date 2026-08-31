@@ -61,6 +61,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Make the --benchmark-json destination usable before any measuring starts.
+
+    pytest-benchmark writes that file from ``pytest_sessionfinish`` -- after every
+    benchmark has run. So a missing directory or a typo'd path does not fail fast,
+    it discards the entire session, which on a real run is hours of compute. Create
+    the directory and prove it is writable now instead.
+    """
+    json_path = config.getoption("benchmark_json", None)
+    if not json_path:
+        return
+    parent = Path(json_path).parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        probe = parent / f".write-probe-{os.getpid()}"
+        probe.touch()
+        probe.unlink()
+    except OSError as exc:
+        msg = f"--benchmark-json path is not writable: {json_path} ({exc})"
+        raise pytest.UsageError(msg) from exc
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
