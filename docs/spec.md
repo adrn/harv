@@ -1658,14 +1658,26 @@ Errors: `ValueError` if `top_k` is combined with `max_posterior_samples`, if
 ### `batch_size` and GPU support
 
 The `batch_size` field controls how many samples are vmapped at once within a
-`fori_loop`. On CPU, the default of 100,000 is appropriate. On GPU, set
-`batch_size = n_prior_samples` to let XLA fully utilize the device.
+`fori_loop`. It sets the working-set size of the `(batch, n_obs, n_linear)`
+intermediate.
 
-This guidance is measured by the `batch_size` curve in `docs/benchmarks.md`; update
-it here if the measurement disagrees. Note that `batch_size` is currently the *only*
-device-related knob -- harv contains no device-placement or sharding code (see the
-`shard_map` TODO in `harv/samplers/rejection.py`), so the benchmark numbers are the
-single-device baseline any future multi-device work is measured against.
+**Measured, superseding earlier advice.** This section previously said to set
+`batch_size = n_prior_samples` on GPU "to let XLA fully utilize the device". The
+`batch_size` curve in `docs/benchmarks.md` does not support that: across the whole
+sweep the GPU spans only 1.04-1.13x between its best and worst batch size, and at
+`M = 1e7` the best measured GPU batch was `1e5`, not the largest. The device is
+already saturated at far smaller batches.
+
+The knob matters *more* on CPU (1.55-1.84x on a single core), and its optimum
+**inverts under many-rank contention** -- a large batch that wins on an idle core
+can starve a full node of memory bandwidth. The default of 100,000 remains a
+reasonable starting point on CPU; tune it under the contention you will actually
+run. See `docs/at-scale.md`.
+
+`batch_size` is currently the *only* device-related knob -- harv contains no
+device-placement or sharding code (see the `shard_map` TODO in
+`harv/samplers/rejection.py`), so the benchmark numbers are the single-device
+baseline any future multi-device work is measured against.
 
 ### `summary` method
 
