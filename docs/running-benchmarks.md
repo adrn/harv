@@ -6,11 +6,14 @@ are **not** part of the test suite and never run on CI.
 ## TL;DR
 
 ```bash
-# One-time: install the benchmark tooling
-uv sync --group bench
+# One-time: install the benchmark tooling. `bench-cuda` adds CUDA-enabled jaxlib and
+# is what makes the GPU run a GPU run; it is a no-op off Linux, so this one command
+# is correct everywhere. Drop it if you only want CPU numbers.
+uv sync --group bench --group bench-cuda
 
-# Confirm JAX actually sees the GPU. If this prints only CpuDevice, the "gpu" run
-# below silently produces a SECOND CPU dataset -- see "Check the device first".
+# Confirm JAX actually sees the GPU -- you want a CudaDevice here, not just
+# CpuDevice. `uv sync --group bench` alone can NEVER show one. See "Installing with
+# GPU support" if it does not.
 uv run --no-sync python -c "import jax; print(jax.devices())"
 
 # Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline).
@@ -35,23 +38,56 @@ uv run --no-sync python benchmarks/report.py
 git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
 ```
 
-## Check the device first
+## Installing with GPU support
 
-`jax` falls back to CPU when a CUDA-enabled `jaxlib` is not installed, printing only
-a warning:
+The base install is deliberately CPU-only. `jax` ships without CUDA, and the `bench`
+group does not add it, so:
 
+```bash
+uv sync --group bench      # -> [CpuDevice(id=0)], always
 ```
-An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not
-installed. Falling back to cpu.
+
+There is nothing wrong with that environment — it is the right one for the CPU half of
+the comparison — but it cannot produce a GPU number. The `bench-cuda` group adds
+CUDA-enabled jaxlib:
+
+```bash
+uv sync --group bench --group bench-cuda
+uv run --no-sync python -c "import jax; print(jax.devices())"
+# want: [CudaDevice(id=0)]  (or several)
 ```
 
-Nothing in the filename makes a run a GPU run — `report.py` labels each device from
-`jax.devices()[0]`. So a fallback means `gpu.json` is a second CPU dataset under the
-same device label as `cpu.json`, and one would overwrite the other. `report.py` now
-refuses that case by name rather than silently dropping half the data, but the fix is
-to install CUDA-enabled jaxlib (`jax[cuda12]`) before spending hours on the run.
+`bench-cuda` is `jax[cuda12]` behind a `sys_platform == 'linux'` marker, because the
+`jax-cuda12-plugin` wheels are only published for Linux and without the marker
+`uv lock` cannot resolve on macOS or Windows. On a Mac the group installs nothing and
+the command above is harmless, which is why the TL;DR includes it unconditionally. It
+is a separate group rather than part of `bench` so a CPU-only run does not pull
+several GB of NVIDIA wheels.
 
-Run the one-liner above and check for a `CudaDevice` before starting.
+It is a large download the first time. `uv sync` also *removes* anything not in the
+lockfile, so install this way rather than with a bare `uv pip install` — otherwise the
+next `uv sync` silently takes your GPU support away. (Every benchmark command here
+passes `--no-sync` precisely so a long run cannot be disturbed mid-flight.)
+
+### If it still says CpuDevice
+
+- `nvidia-smi` — if this fails, the driver is the problem, not JAX.
+- CUDA 12 wheels need a recent driver; a too-old driver shows up as an
+  initialization error or a silent CPU fallback.
+- Using a system CUDA install instead of the bundled wheels? That is
+  `jax[cuda12-local]`, which must match your local CUDA closely.
+- The fallback prints a warning and keeps going:
+
+  ```
+  An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not
+  installed. Falling back to cpu.
+  ```
+
+**Why this matters more than a warning suggests.** Nothing about a filename makes a run
+a GPU run — `report.py` labels each device from `jax.devices()[0]`. So on a fallback,
+`gpu.json` is a second *CPU* dataset carrying the same device label as `cpu.json`, and
+one would overwrite the other. `report.py` refuses that by name rather than silently
+dropping half the data, but it only finds out after the run. Check the device first.
 
 ## Why the incantation looks like that
 
