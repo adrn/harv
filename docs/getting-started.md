@@ -13,8 +13,8 @@ uv add 'harv[cuda12]'     # NVIDIA GPU, CUDA 12
 Or into a plain virtual environment, with `uv pip` or `pip`:
 
 ```shell
-uv pip install harv
-uv pip install 'harv[cuda13]'
+pip install harv
+pip install 'harv[cuda13]'
 ```
 
 Quote the extras: `zsh` (the default shell on macOS) treats the square brackets
