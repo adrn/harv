@@ -21,6 +21,111 @@ All cells use `top_k` selection, which gives a static output shape so that
 timings are not contaminated by recompilation as the accepted-sample count
 changes (see the Top-K selection section of the design spec).
 
+## What the numbers say
+
+Computed from the results in this page, on the hardware above. The
+interpretation is fixed; the figures are not, so regenerating on your own
+machine ({doc}`running-benchmarks`) updates them rather than contradicting
+them.
+
+### The GPU advantage grows with library size
+
+At `M=1e4` the GPU is only 3.1-8.3x faster; at `M=1e7` it is 29.6-52.1x. The reason is in the
+slopes: cost is near-linear in `M` on CPU and clearly sublinear on
+GPU, because a small library cannot fill the device. Below roughly
+`M=1e5` a GPU call is dominated by fixed cost, not by work — the smallest warm call measured here is 9 ms on GPU against 41 ms on CPU.
+
+**Consequence for population runs.** That floor is paid once per
+source. Millions of sources at small `M` spend most of their time in
+per-call overhead, so a GPU pays off through *bigger libraries*, not
+through more calls. See {doc}`at-scale`.
+
+### Throughput, in millions of prior samples per second
+
+Sustained rate at `M=1e7`, `n_obs=64`, in-memory library.
+This is the number to plan a run from.
+
+| parameterization | CPU (Intel(R) Xeon(R) w5-3435X) | GPU (NVIDIA RTX 6000 Ada Generation) |
+|---|---|---|
+| StandardRV | 0.50 | 26.0 |
+| EcoswEsinwRV | 0.50 | 25.9 |
+| FourierRV | 0.46 | 20.4 |
+| StandardGaiaAstrometry | 0.31 | 13.4 |
+| ThieleInnesGaiaAstrometry | 0.21 | 6.2 |
+| FourierGaiaAstrometry | 0.17 | 5.8 |
+
+The spread across parameterizations is real work, not noise: the
+astrometric models carry more linear columns than the RV ones, and the
+Thiele-Innes variant additionally evaluates a Jacobian correction per
+sample.
+
+### The speedup is free
+
+Across all 66 cells measured on both devices, the largest relative
+difference in `logZ_int_ess` is 1.4e-10. Both runs pin float64,
+and the GPU is not trading accuracy for speed — it is the same
+arithmetic, faster.
+
+### `batch_size` matters more on CPU than on GPU
+
+- **CPU (Intel(R) Xeon(R) w5-3435X)**: slowest/fastest `batch_size` at fixed `M` spans 1.55-1.84x.
+- **GPU (NVIDIA RTX 6000 Ada Generation)**: slowest/fastest `batch_size` at fixed `M` spans 1.04-1.13x.
+
+This inverts the guidance the design spec used to give. Setting
+`batch_size = n_prior_samples` on GPU is not the lever it was
+assumed to be; the device is already saturated at far smaller
+batches.
+The knob sets the working-set size of the `(batch, n_obs, n_linear)`
+intermediate, which is why it moves CPU timings at all.
+
+:::{warning}
+Every CPU cell here is a **single process on an otherwise idle node**, so
+these are per-core ceilings, not per-node predictions. Under many-rank
+contention the optimum moves *down*, because ranks compete for memory
+bandwidth — a large batch that wins alone can starve a full node. Measure
+it under the contention you will actually run. See {doc}`at-scale`.
+:::
+
+### Streaming from HDF5 costs the GPU much more than the CPU
+
+- **CPU (Intel(R) Xeon(R) w5-3435X)**: 1.05-1.22x of the in-memory time.
+- **GPU (NVIDIA RTX 6000 Ada Generation)**: 1.35-1.76x of the in-memory time.
+
+The absolute I/O cost is similar; what differs is what it is
+competing with. On CPU the compute is slow enough to hide the
+reads. On GPU the compute is fast enough that the reads become
+the run.
+Keep the library in memory whenever it fits, and reserve the HDF5 path
+for libraries that genuinely cannot.
+
+### Compilation is a per-shape tax, and it is higher on GPU
+
+- **CPU (Intel(R) Xeon(R) w5-3435X)**: 1.5-2.7 s per distinct input shape.
+- **GPU (NVIDIA RTX 6000 Ada Generation)**: 4.1-6.2 s per distinct input shape.
+
+Paid once per shape, so a population loop over identically-shaped data
+amortizes it to nothing — and a catalog with a different epoch count per
+source pays it *per source*, which is why bucketing epoch counts is the
+first thing to do with real astrometry. See {doc}`at-scale`.
+
+### The GPU advantage falls away at large `n_obs`
+
+For `EcoswEsinwRV` the speedup drops from 38x at `n_obs=128` to
+10x at `n_obs=256` — a discontinuity, not a trend, and all
+six parameterizations show it at the same place.
+
+:::{note}
+The arithmetic points at the working set: at `batch_size=1e5` and
+`n_obs=256`, one float64 column array is
+`1e5 x 256 x 8 B = 205 MB`, and the design
+matrix holds several. Lowering `batch_size` so that
+`batch_size x n_obs` stays roughly constant is the obvious remedy,
+**but this grid did not measure it** — the `batch_size` curve
+was only run at `n_obs=64`. Treat the
+cause as a hypothesis and measure it on your own data before relying
+on it.
+:::
+
 ## Scaling with number of observations
 
 Varying number of observations.
