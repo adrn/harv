@@ -79,7 +79,11 @@ class RVModel(AbstractComponentModel):
         """
         period = nl_values["period"]
         phase_peri = nl_values["phase_peri"]
-        eccentricity = self.parameterization.eccentricity(nl_values)
+        # Fourier parameterizations never reach here (dispatched in
+        # _base_design_matrix), so they need no eccentricity():
+        eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
+            nl_values
+        )
 
         t_peri = phase_peri * period
         dt = (data.time - data.t_ref) - t_peri

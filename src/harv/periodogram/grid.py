@@ -89,7 +89,10 @@ def frequency_grid(
         raise ValueError("period_min must be positive")
 
     span = (
-        float(ustrip(unit, t_span)) if t_span is not None else _data_t_span(data, unit)
+        _data_t_span(data, unit)
+        if data is not None
+        # t_span is not None here -- guaranteed by the exactly-one check above:
+        else float(ustrip(unit, t_span))  # ty: ignore[no-matching-overload]
     )
     if span <= 0:
         raise ValueError("The data time baseline (t_span) must be positive")
