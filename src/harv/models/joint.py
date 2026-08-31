@@ -108,6 +108,7 @@ def _sample_explicit_linear_prior(
     extra_values: dict[str, Any] | None = None,
     *,
     site_name: str | None = None,
+    parameterization: Any | None = None,
 ) -> jax.Array:
     """Sample one explicit (non-marginalized) linear prior in a numpyro model.
 
@@ -139,6 +140,11 @@ def _sample_explicit_linear_prior(
         values are needed (e.g. for shared explicit-linear priors).
     site_name
         Optional site name to use within numpyro.
+    parameterization
+        Parameterization the values came from, used to derive ``eccentricity`` for
+        callable priors that need it.  ``None`` for *shared* joint priors, where the
+        components need not agree on a parameterization and there is no unambiguous
+        answer; per-component priors pass their own.
 
     Returns
     -------
@@ -151,6 +157,7 @@ def _sample_explicit_linear_prior(
             nl_values,
             {name: target_unit},
             extra_values=extra_values,
+            parameterization=parameterization,
         )
         return cast(
             "jax.Array",
@@ -1177,13 +1184,19 @@ class JointModel(eqx.Module):
                         target_u,
                         nl_values,
                         site_name=f"{comp_name}.{name}",
+                        parameterization=joint.components[comp_name].parameterization,
                     )
                     nl_values[f"{comp_name}.{name}"] = raw
                     explicit_linear_q[name] = Q(raw, target_u) if target_u else raw
                 for name, p in _comp_explicit_callable_lp[comp_name].items():
                     target_u = pu.get(name, "")
                     raw = _sample_explicit_linear_prior(
-                        name, p, target_u, nl_values, extra_values=explicit_linear_q
+                        name,
+                        p,
+                        target_u,
+                        nl_values,
+                        extra_values=explicit_linear_q,
+                        parameterization=joint.components[comp_name].parameterization,
                     )
                     nl_values[f"{comp_name}.{name}"] = raw
                     explicit_linear_q[name] = Q(raw, target_u) if target_u else raw

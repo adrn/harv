@@ -71,6 +71,33 @@ class AbstractParameterization(eqx.Module):
         )
         raise NotImplementedError(msg)
 
+    def derived_eccentricity(self, nl_values: dict[str, Any]) -> Any | None:  # noqa: ARG002
+        """Eccentricity implied by this parameterization, if it is not a parameter.
+
+        ``LinearPriorCallable`` implementations such as
+        :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior` are written
+        against the standard parameter names, so a parameterization that encodes
+        eccentricity indirectly must say how to recover it or those priors cannot be
+        evaluated at all.
+
+        Returns ``None`` by default, which covers both parameterizations that carry
+        ``eccentricity`` directly as a nonlinear parameter (nothing to derive) and the
+        Kepler-free Fourier bases (no eccentricity exists). Override when the value is
+        derivable but absent -- see
+        :class:`~harv.models.parameterizations.rv.EcoswEsinwRV`.
+
+        Parameters
+        ----------
+        nl_values
+            Nonlinear parameter values keyed by bare parameter name.
+
+        Returns
+        -------
+            The derived eccentricity, or ``None`` when this parameterization does not
+            imply one.
+        """
+        return None
+
     def linear_log_prior_correction(
         self,
         linear_map: dict[str, jax.Array],  # noqa: ARG002

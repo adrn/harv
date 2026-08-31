@@ -143,6 +143,21 @@ nox = [
     "nox>=2026.4.10",
     "nox-uv>=0.8.0",
 ]
+bench-cuda = [
+    # CUDA-enabled jaxlib for the GPU benchmark run. Marked linux-only: the CUDA
+    # plugin wheels are only published for Linux:
+    "jax[cuda13]>=0.8.1; sys_platform == 'linux'",
+]
+bench = [
+    # Deliberately NOT included in `dev`, and CI installs only the `test` group
+    # (`uv sync --no-default-groups --group test`), so pytest-benchmark is never
+    # present on CI. That absence is one of the belts keeping benchmarks/ off CI;
+    # see docs/running-benchmarks.md.
+    "pytest",
+    "pytest-benchmark>=5.0",
+    "matplotlib>=3.10.7",
+    "h5py>=3.15.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/adrn/harv"
@@ -306,6 +321,24 @@ src = ["src"]
         "INP001",  # Insecure input ignored because we are testing.
         "ANN201",  # Missing type annotation for {return} ignored because all tests return `None`.
         "ANN204",
+    ]
+    "benchmarks/**/*.py" = [
+        "ARG002", # Unused argument
+        "ANN202", # Missing type annotation"
+        "D",  # documentation not important for benchmark harness
+        "S101",  # Use of assert detected' ignored because we are using pytest.
+        "INP001",  # benchmarks/ is a script directory, not an importable package.
+        "ANN201",  # Missing type annotation for {return}
+        "ANN204",
+        "T201",  # print() is the report generator's user interface
+        # Imports are deliberately deferred here. benchmarks/conftest.py must set
+        # jax_enable_x64 before anything pulls in harv, and report.py has no reason
+        # to import harv at all -- it only needs the grid definitions. Each such
+        # import carries a comment saying so.
+        "PLC0415",
+        # jax.config.update(..., True) and ax.grid(True, ...) are third-party APIs
+        # that take a positional bool by design.
+        "FBT003",
     ]
     "src/harv/samplers/*.py" = [
         "S101",  # 'Use of assert detected' — used for type narrowing of invariants from extract_data
