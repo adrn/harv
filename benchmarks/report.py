@@ -60,16 +60,32 @@ def device_label(record: dict[str, Any], machine: dict[str, Any]) -> str:
     return f"{platform.upper()} ({info.get('device_kind', '?')})"
 
 
+def _file_modes(path: Path, payload: dict) -> set[str]:
+    """Grid modes present in one result file."""
+    return {
+        r["extra_info"].get("grid_mode", "star")
+        for r in payload.get("benchmarks", [])
+        if "parameterization" in r.get("extra_info", {})
+    }
+
+
 def load_results(
     results_dir: Path,
+    *,
+    include_smoke: bool = False,
 ) -> tuple[dict[tuple, dict[str, dict]], dict[str, dict]]:
     """Return ``(measurements, device_meta)``.
 
     ``measurements`` maps a cell key to ``{device_label: record}``; ``device_meta``
     maps a device label to the run metadata that produced it.
+
+    Smoke-run files are skipped unless ``include_smoke``. A smoke file is never a
+    real result -- it exists to prove this generator works -- and leaving one in the
+    directory used to make the whole report unbuildable.
     """
     measurements: dict[tuple, dict[str, dict]] = defaultdict(dict)
     device_meta: dict[str, dict] = {}
+    label_sources: dict[str, str] = {}
 
     files = sorted(results_dir.glob("*.json"))
     if not files:
@@ -79,14 +95,55 @@ def load_results(
         )
         raise SystemExit(msg)
 
+    payloads: list[tuple[Path, dict]] = []
     for path in files:
         payload = json.loads(path.read_text())
+        modes = _file_modes(path, payload)
+        if modes == {"smoke"} and not include_smoke:
+            print(f"  skipping {path.name} (smoke run; --include-smoke to render it)")
+            continue
+        payloads.append((path, payload))
+
+    if not payloads:
+        msg = (
+            f"only smoke-run files in {results_dir}. Run the real grid, or pass "
+            f"--include-smoke to render the smoke results anyway."
+        )
+        raise SystemExit(msg)
+
+    modes = {m for path, payload in payloads for m in _file_modes(path, payload)}
+    if len(modes) > 1:
+        detail = "\n".join(
+            f"    {path.name}: {', '.join(sorted(_file_modes(path, payload)))}"
+            for path, payload in payloads
+        )
+        msg = (
+            f"results in {results_dir} mix grid modes {sorted(modes)}, whose cells "
+            f"are not comparable:\n{detail}\n"
+            f"  Keep one mode per directory -- delete the odd files out and re-run "
+            f"this script."
+        )
+        raise SystemExit(msg)
+
+    for path, payload in payloads:
         machine = payload.get("machine_info", {})
         for record in payload["benchmarks"]:
             info = record["extra_info"]
             if "parameterization" not in info:
                 continue  # not one of ours
             label = device_label(record, machine)
+            # Two files that resolve to the same label would silently overwrite each
+            # other. The usual cause is a "gpu" run that actually fell back to CPU
+            # because CUDA-enabled jaxlib was missing.
+            if label_sources.setdefault(label, path.name) != path.name:
+                msg = (
+                    f"{path.name} and {label_sources[label]} both describe device "
+                    f"{label!r}, so one would overwrite the other. If one was meant "
+                    f"to be a GPU run, check `python -c 'import jax; "
+                    f"print(jax.devices())'` -- jax falls back to CPU when "
+                    f"CUDA-enabled jaxlib is not installed."
+                )
+                raise SystemExit(msg)
             key = (
                 info["parameterization"],
                 info["n_obs"],
@@ -420,23 +477,23 @@ def main() -> None:
     parser.add_argument(
         "--no-plots", action="store_true", help="Skip figure generation."
     )
+    parser.add_argument(
+        "--include-smoke",
+        action="store_true",
+        help="Render smoke-run results, which are skipped by default.",
+    )
     args = parser.parse_args()
 
-    measurements, device_meta = load_results(Path(args.results))
+    measurements, device_meta = load_results(
+        Path(args.results), include_smoke=args.include_smoke
+    )
     devices = sorted(device_meta, key=lambda d: (not d.startswith("CPU"), d))
 
-    modes = {
+    mode = next(
         r["extra_info"].get("grid_mode", "star")
         for by_device in measurements.values()
         for r in by_device.values()
-    }
-    if len(modes) > 1:
-        msg = (
-            f"results mix grid modes {sorted(modes)}; their cells are not "
-            f"comparable. Keep one mode per results directory."
-        )
-        raise SystemExit(msg)
-    mode = modes.pop()
+    )
     definitions = curve_definitions(full=mode == "full", smoke=mode == "smoke")
 
     lines = [
@@ -512,7 +569,12 @@ def main() -> None:
     # Exactly one trailing newline: sections append a blank separator line, and
     # the repo's end-of-file-fixer hook rejects the doubled newline that leaves.
     out_path.write_text("\n".join(lines).rstrip("\n") + "\n")
-    print(f"wrote {out_path.relative_to(REPO_ROOT)}")
+    # relative_to raises for an --out outside the repo, so only prettify when it helps.
+    try:
+        shown = out_path.relative_to(REPO_ROOT)
+    except ValueError:
+        shown = out_path
+    print(f"wrote {shown}")
     print(f"  devices: {', '.join(devices)}")
     print(f"  cells:   {len(measurements)}")
 
