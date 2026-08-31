@@ -144,10 +144,9 @@ nox = [
     "nox-uv>=0.8.0",
 ]
 bench-cuda = [
-    # CUDA-enabled jaxlib for the GPU benchmark run. Marked linux-only: the
-    # jax-cuda12-plugin wheels are only published for Linux, and without the marker
-    # `uv lock` cannot resolve on macOS or Windows.
-    "jax[cuda12]>=0.8.1; sys_platform == 'linux'",
+    # CUDA-enabled jaxlib for the GPU benchmark run. Marked linux-only: the CUDA
+    # plugin wheels are only published for Linux:
+    "jax[cuda13]>=0.8.1; sys_platform == 'linux'",
 ]
 bench = [
     # Deliberately NOT included in `dev`, and CI installs only the `test` group

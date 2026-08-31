@@ -1091,7 +1091,7 @@ bench = [
     { name = "pytest-benchmark" },
 ]
 bench-cuda = [
-    { name = "jax", extra = ["cuda12"], marker = "sys_platform == 'linux'" },
+    { name = "jax", extra = ["cuda13"], marker = "sys_platform == 'linux'" },
 ]
 dev = [
     { name = "arviz" },
@@ -1210,7 +1210,7 @@ bench = [
     { name = "pytest" },
     { name = "pytest-benchmark", specifier = ">=5.0" },
 ]
-bench-cuda = [{ name = "jax", extras = ["cuda12"], marker = "sys_platform == 'linux'", specifier = ">=0.8.1" }]
+bench-cuda = [{ name = "jax", extras = ["cuda13"], marker = "sys_platform == 'linux'", specifier = ">=0.8.1" }]
 dev = [
     { name = "arviz", specifier = ">=1.0.0" },
     { name = "beartype" },
