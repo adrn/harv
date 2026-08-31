@@ -1,13 +1,24 @@
 """Tests for the EcoswEsinwRV parameterization and its use in RVModel."""
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
+import jax.random as jr
 import numpyro.distributions as dist
+import pytest
+
+# quaxed for anything touching Quantity: `Samples.__getitem__` returns Q, and
+# jax.numpy rejects it.
+import quaxed.numpy as qnp
 from unxt import Q
 
+import harv.models as hm
 from harv.data import RVData
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 from harv.models.rv import RVModel
+from harv.samplers.rejection import RejectionSampler
+from harv.simulate.rv import simulate_rv_sb1_data
 
 
 def _make_rv_data(n_obs=20):
@@ -283,3 +294,73 @@ class TestNumericalEquivalence:
         assert jnp.allclose(ll_std, ll_eco, atol=1e-6), (
             f"std={float(ll_std)}, eco={float(ll_eco)}"
         )
+
+
+class TestEcoswEsinwDefaultPriorIsEvaluable:
+    """The default prior must survive being *evaluated*, not just constructed.
+
+    ``EcoswEsinwRV.default_prior`` gives ``rv_semiamp`` a
+    :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior`, which reads
+    ``params["eccentricity"]`` -- a key this parameterization does not have, since it
+    carries ``(ecosw, esinw)``. The existing prior tests only inspect keys, so the
+    whole combination raised ``KeyError: 'eccentricity'`` on every sampler run.
+    """
+
+    @staticmethod
+    def _prior_and_model() -> tuple[Any, RVModel]:
+        param = hm.EcoswEsinwRV()
+        prior = param.default_prior(
+            period_min=Q(10.0, "day"),
+            period_max=Q(3000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        return prior, RVModel(parameterization=param)
+
+    def test_derived_eccentricity_matches_ecosw_esinw(self):
+        """The parameterization can recover eccentricity from its own params."""
+        param = hm.EcoswEsinwRV()
+        nl = {"ecosw": jnp.asarray(0.3), "esinw": jnp.asarray(0.4)}
+        assert param.derived_eccentricity(nl) == pytest.approx(0.5)
+
+    def test_base_parameterizations_derive_nothing(self):
+        """Parameterizations that carry eccentricity (or have none) return None."""
+        assert hm.StandardRV().derived_eccentricity({}) is None
+        assert hm.FourierRV(n_terms=2).derived_eccentricity({}) is None
+
+    @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
+    def test_rejection_sampler_runs(self):
+        """The regression: this raised KeyError('eccentricity') before the fix."""
+        data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
+        prior, model = self._prior_and_model()
+        sampler = RejectionSampler(prior, model, batch_size=2000)
+        # ignore_non_finite: independent Uniform(-1, 1) priors on ecosw/esinw put
+        # ~21% of draws outside the unit disk (e >= 1, an unbound orbit), where the
+        # K prior's (1 - e^2)^(-1/2) is NaN. Those draws must be rejected.
+        samples = sampler.run_with_samples(
+            data,
+            prior.sample(jr.key(0), 2000, model=model),
+            top_k=8,
+            seed=0,
+            ignore_non_finite=True,
+        )
+        assert samples.n_samples == 8
+        assert jnp.isfinite(samples.metadata["max_log_likelihood"])
+
+    @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
+    def test_unit_disk_violation_is_rejected_not_propagated(self):
+        """e >= 1 draws must not poison max_log_likelihood.
+
+        Without ignore_non_finite a single NaN propagates through the max
+        reduction, leaving every evidence statistic NaN. This pins the sharp edge
+        documented in docs/sharp-bits.md so a change in either direction is visible.
+        """
+        data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
+        prior, model = self._prior_and_model()
+        cache = prior.sample(jr.key(0), 2000, model=model)
+        ecc = qnp.sqrt(cache["ecosw"] ** 2 + cache["esinw"] ** 2)
+        assert qnp.any(ecc >= 1.0), "expected the square prior to escape the unit disk"
+
+        sampler = RejectionSampler(prior, model, batch_size=2000)
+        without = sampler.run_with_samples(data, cache, top_k=8, seed=0)
+        assert not jnp.isfinite(without.metadata["max_log_likelihood"])

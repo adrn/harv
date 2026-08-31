@@ -73,11 +73,42 @@ def _needs_explicit_sampling(d: PriorDist | LinearPriorCallable) -> bool:
     return not (callable(d) and not isinstance(d, dist.Distribution))
 
 
+def _with_derived_eccentricity(
+    param_values: dict[str, Any],
+    parameterization: Any | None,
+) -> dict[str, Any]:
+    """Add ``eccentricity`` when the parameterization implies one but does not carry it.
+
+    ``LinearPriorCallable`` implementations are written against the standard parameter
+    names, so ``EcoswEsinwRV`` -- which carries ``(ecosw, esinw)`` instead -- would
+    otherwise raise ``KeyError: 'eccentricity'`` for the default ``rv_semiamp`` prior.
+    The parameterization already owns the conversion; this only applies it.
+
+    Parameters
+    ----------
+    param_values
+        Values that will be handed to a callable prior.
+    parameterization
+        The parameterization the values came from, or ``None`` to skip.
+
+    Returns
+    -------
+        ``param_values`` unchanged, or a copy with ``eccentricity`` added.
+    """
+    if parameterization is None or "eccentricity" in param_values:
+        return param_values
+    ecc = parameterization.derived_eccentricity(param_values)
+    if ecc is None:
+        return param_values
+    return {**param_values, "eccentricity": ecc}
+
+
 def _resolve_prior_to_mvn(
     prior_dict: dict[str, PriorDist | LinearPriorCallable],
     nl_values: dict[str, Any],
     unit_dict: dict[str, str],
     extra_values: dict[str, Any] | None = None,
+    parameterization: Any | None = None,
 ) -> dist.MultivariateNormal:
     """Build diagonal MVN from per-parameter priors."""
     locs: list[Any] = []
@@ -88,6 +119,7 @@ def _resolve_prior_to_mvn(
     param_values = dict(nl_values)
     if extra_values:
         param_values.update(extra_values)
+    param_values = _with_derived_eccentricity(param_values, parameterization)
     for name, prior in prior_dict.items():
         target_u = unit_dict.get(name, "")
         resolved = None
