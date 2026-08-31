@@ -251,3 +251,6 @@ _version.py
 /data
 notebooks
 docs/_static/logo*
+
+# Benchmark smoke runs verify the harness; only real runs are committed.
+benchmarks/results/smoke.json
