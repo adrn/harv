@@ -76,3 +76,26 @@ def build_api_docs(s: nox.Session, /) -> None:
         "--force",
         "../src/harv",
     )
+
+
+@session(uv_groups=["test"], reuse_venv=True)
+def tests(s: nox.Session, /) -> None:
+    """Run the test suite on the CPU build of jax."""
+    s.run("pytest", *s.posargs)
+
+
+@session(uv_groups=["test"], uv_extras=["cuda13"], reuse_venv=True, default=False)
+def tests_gpu(s: nox.Session, /) -> None:
+    """Run the test suite on the CUDA 13 build of jax. Linux + NVIDIA only.
+
+    Not a default session: on any other platform the `cuda13` extra resolves to
+    nothing (see its marker in pyproject.toml) and this would quietly re-run the
+    CPU suite. The backend check below turns that into a failure rather than a
+    green run that proves nothing.
+    """
+    s.run(
+        "python",
+        "-c",
+        "import jax; assert jax.default_backend() == 'gpu', jax.devices()",
+    )
+    s.run("pytest", *s.posargs)

@@ -43,6 +43,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# GPU builds. jax ships CUDA support as extras of its own, so harv just forwards
+# them, pinned to the same jax floor as the CPU install: `pip install harv[cuda13]`
+# is `pip install harv jax[cuda13]`. Plain `harv` is the CPU build.
+# The linux marker is load-bearing: without it `uv lock` fails on macOS, where the
+# nvidia / jax-cuda*-plugin wheels do not exist.
+cuda12 = ["jax[cuda12]>=0.8.1; sys_platform == 'linux'"]
+cuda13 = ["jax[cuda13]>=0.8.1; sys_platform == 'linux'"]
 extra = [
     "gaiaunlimited>=0.3.2",
     "setuptools",  # needed for gaiaunlimited for pkg_resources...

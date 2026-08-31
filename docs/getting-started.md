@@ -1,5 +1,18 @@
 # Getting Started with harv
 
+### Installation
+
+```shell
+pip install harv           # CPU
+pip install harv[cuda13]   # NVIDIA GPU, CUDA 13
+pip install harv[cuda12]   # NVIDIA GPU, CUDA 12
+```
+
+The CUDA extras forward to jax's own (`harv[cuda13]` is `harv` plus
+`jax[cuda13]`) and pull the CUDA runtime in as wheels, so there is nothing to
+install system-wide. They are Linux-only and resolve to nothing on other
+platforms. harv itself is identical either way — jax picks the accelerator.
+
 ### Radial velocity modeling
 
 ```python
