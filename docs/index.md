@@ -11,6 +11,8 @@ concepts
 sharp-bits
 tutorials/index
 api/index
+benchmarks
+running-benchmarks
 :::
 
 **harv** (pronounced _harvey_) is a Python package for inferring Keplerian orbital

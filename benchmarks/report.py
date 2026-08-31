@@ -509,7 +509,9 @@ def main() -> None:
     ]
 
     out_path = Path(args.out)
-    out_path.write_text("\n".join(lines) + "\n")
+    # Exactly one trailing newline: sections append a blank separator line, and
+    # the repo's end-of-file-fixer hook rejects the doubled newline that leaves.
+    out_path.write_text("\n".join(lines).rstrip("\n") + "\n")
     print(f"wrote {out_path.relative_to(REPO_ROOT)}")
     print(f"  devices: {', '.join(devices)}")
     print(f"  cells:   {len(measurements)}")
