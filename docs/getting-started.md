@@ -2,16 +2,32 @@
 
 ### Installation
 
+With [uv](https://docs.astral.sh/uv/), adding harv to a project:
+
 ```shell
-pip install harv           # CPU
-pip install harv[cuda13]   # NVIDIA GPU, CUDA 13
-pip install harv[cuda12]   # NVIDIA GPU, CUDA 12
+uv add harv               # CPU
+uv add 'harv[cuda13]'     # NVIDIA GPU, CUDA 13
+uv add 'harv[cuda12]'     # NVIDIA GPU, CUDA 12
 ```
+
+Or into a plain virtual environment, with `uv pip` or `pip`:
+
+```shell
+uv pip install harv
+uv pip install 'harv[cuda13]'
+```
+
+Quote the extras: `zsh` (the default shell on macOS) treats the square brackets
+as a glob and will refuse the unquoted form.
+
+To try harv without installing anything, `uv run --with harv python` gives you
+a throwaway interpreter with it available.
 
 The CUDA extras forward to jax's own (`harv[cuda13]` is `harv` plus
 `jax[cuda13]`) and pull the CUDA runtime in as wheels, so there is nothing to
 install system-wide. They are Linux-only and resolve to nothing on other
-platforms. harv itself is identical either way — jax picks the accelerator.
+platforms — installing one on a Mac quietly gives you the CPU build. harv itself
+is identical either way; jax picks the accelerator at runtime.
 
 ### Radial velocity modeling
 
