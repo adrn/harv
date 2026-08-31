@@ -66,7 +66,23 @@ local development.
    git clone git@github.com:your_name_here/harv.git
    ```
 
-1. [Install hatch](https://hatch.pypa.io/latest/install/).
+1. [Install uv](https://docs.astral.sh/uv/getting-started/installation/), then
+   create the development environment:
+
+   ```shell
+   uv sync --group dev
+   ```
+
+   That gives you the CPU build of jax. On a Linux machine with an NVIDIA GPU,
+   this keeps a second GPU-enabled environment beside it for interactive work.
+   Both resolve from the same `uv.lock`, so they cannot drift:
+
+   ```shell
+   UV_PROJECT_ENVIRONMENT=.venv-gpu uv sync --group dev --extra cuda13
+   ```
+
+   Use `cuda12` in place of `cuda13` if the machine's driver predates CUDA 13.
+   For running the tests you do not need this — see the `nox` sessions below.
 
 1. Create a branch for local development using the default branch (typically `main`) as a starting point. Use `fix` or `feat` as a prefix for your branch name.
 
@@ -77,11 +93,18 @@ local development.
 
    Now you can make your changes locally.
 
-1. When you're done making changes, apply the quality assurance tools and check
-   that your changes pass our test suite. This is all included with tox
+1. When you're done making changes, check that they pass our test suite:
 
    ```shell
-   hatch run test:run
+   uv run pytest
+   ```
+
+   `nox` runs the same suite in its own throwaway environment, and is how you
+   test against the GPU build without managing a second venv by hand:
+
+   ```shell
+   nox -s tests       # CPU
+   nox -s tests_gpu   # CUDA 13; fails fast if jax cannot see a GPU
    ```
 
 1. Commit your changes and push your branch to GitHub. Please use [semantic
