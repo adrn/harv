@@ -24,7 +24,12 @@ from unxt.quantity import ustrip
 
 from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import PriorDist, _needs_explicit_sampling, _unwrap_dist
+from harv.models._helpers import (
+    PriorDist,
+    _is_callable_prior,
+    _needs_explicit_sampling,
+    _unwrap_dist,
+)
 from harv.models.component import (
     AbstractComponentModel,
     _MargBuildingBlocks,
@@ -87,17 +92,6 @@ def _priors_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     return bool(eqx.tree_equal(a, b))
-
-
-def _is_callable_prior(p: Any) -> bool:
-    """True iff ``p`` is a callable prior factory (e.g. ``PeriodDependentKPrior``).
-
-    Plain ``dist.Distribution`` and :class:`QuantityDistribution` instances are
-    *not* considered callable priors here even if their classes happen to be
-    callable: they are sampled directly without being resolved against
-    nonlinear parameter values first.
-    """
-    return callable(p) and not isinstance(p, dist.Distribution | QuantityDistribution)
 
 
 def _sample_explicit_linear_prior(

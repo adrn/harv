@@ -14,7 +14,9 @@ trial period ``1/f`` and ``lnL_base`` uses the same model with ``n_terms = 0``
 (RV: constant offset only; Gaia: the 5-parameter astrometric solution — so
 scan-law / parallax / proper-motion power cancels in Δ). Extensions that add
 linear columns (e.g. survey offsets, trends) participate in both models and
-work as usual.
+work as usual. ``lnL_base`` carries no Fourier columns, so it is normally
+period-independent and evaluated once; when one of its own linear priors is a
+``LinearPriorCallable`` it is evaluated across the grid like ``lnL(f)``.
 
 All priors are **explicit**: the required ``prior`` argument is a standard
 :class:`~harv.models.priors.HarvPrior` built from the Fourier
@@ -30,6 +32,7 @@ See ``docs/spec.md``, "Periodogram and interim period priors".
 
 __all__ = ("PeriodogramResult", "periodogram")
 
+import functools
 import warnings
 from collections.abc import Mapping
 from dataclasses import KW_ONLY
@@ -44,6 +47,7 @@ from unxt import Q, ustrip
 from harv.custom_types import NFloatArray, NFrequency, NTime, ScalarQTime
 from harv.data.containers import AbstractDatasetContainer
 from harv.data.datasets import AbstractData, GaiaAstrometryData, RVData
+from harv.models._helpers import _is_callable_prior
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions.base import AbstractExtension
 from harv.models.parameterizations.fourier import FourierGaiaAstrometry, FourierRV
@@ -74,11 +78,15 @@ class PeriodogramResult(eqx.Module):
     model, summed over datasets for container inputs. ``n_terms`` is the
     *effective* Fourier term count used (after the per-dataset overfitting
     cap; the maximum across datasets for container inputs).
+
+    ``ln_likelihood_base`` is a scalar for the usual period-independent base
+    model, and a per-frequency array when a base-column prior resolves against
+    the trial period (see :func:`periodogram`).
     """
 
     frequency: NFrequency
     delta_ln_likelihood: NFloatArray
-    ln_likelihood_base: Float[jax.Array, ""]
+    ln_likelihood_base: Float[jax.Array, ""] | NFloatArray
     t_span: ScalarQTime
     t_ref: ScalarQTime
     _: KW_ONLY
@@ -178,7 +186,7 @@ def _dataset_delta_lnl(
     extensions: tuple[AbstractExtension, ...],
     f_grid: NFrequency,
     n_terms: int,
-) -> tuple[NFloatArray, Float[jax.Array, ""], int]:
+) -> tuple[NFloatArray, Float[jax.Array, ""] | NFloatArray, int]:
     """Δ marginal log-likelihood over the grid for one dataset."""
     if type(dataset) not in _FOURIER_DISPATCH:
         raise NotImplementedError(
@@ -246,10 +254,18 @@ def _dataset_delta_lnl(
     period_unit = str(period_grid.unit)
     p_vals = jnp.asarray(ustrip(period_unit, period_grid))
 
-    # Base model is period-independent (no Fourier columns): one evaluation.
-    lnl0 = base_model.log_prob(
-        _nl(p_vals[0], period_unit), dataset, linear_priors=base_lp
-    )
+    def base_at(p: jax.Array) -> jax.Array:
+        return base_model.log_prob(_nl(p, period_unit), dataset, linear_priors=base_lp)
+
+    # The base model carries no Fourier columns, so it is period-independent and
+    # one evaluation suffices -- unless one of its own linear priors resolves
+    # against the trial period (a LinearPriorCallable such as
+    # PeriodDependentKPrior on v_sys). Then its baseline genuinely varies across
+    # the grid and subtracting a single value would tilt every Delta.
+    if any(_is_callable_prior(p) for p in base_lp.values()):
+        lnl0 = jax.jit(jax.vmap(base_at))(p_vals)
+    else:
+        lnl0 = base_at(p_vals[0])
 
     def lnl_at(p: jax.Array) -> jax.Array:
         return model.log_prob(_nl(p, period_unit), dataset, linear_priors=full_lp)
@@ -307,8 +323,9 @@ def periodogram(
     n_terms
         Number of Fourier terms (harmonics of the trial frequency).
         ``n_terms >= 2`` absorbs eccentricity distortion of the orbit shape.
-        Default: 2. Automatically capped per dataset to keep the trial model
-        overdetermined (at least two observations per linear column,
+        Must be at least 1. Default: 2. Automatically capped per dataset to
+        keep the trial model overdetermined (at least two observations per
+        linear column,
         including extension columns); a ``UserWarning`` is emitted when
         reduced. ``PeriodogramResult.n_terms`` reports the effective value.
     extensions
@@ -337,6 +354,12 @@ def periodogram(
     >>> result.delta_ln_likelihood.shape == result.frequency.shape
     True
     """
+    if n_terms < 1:
+        raise ValueError(
+            f"n_terms must be at least 1, got {n_terms}. A periodogram needs at "
+            "least one harmonic of the trial frequency; with none, the trial "
+            "model is the base model and every Delta would be zero."
+        )
     if frequency_grid is not None:
         if period_min is not None or period_max is not None or n_grid is not None:
             raise TypeError(
@@ -358,7 +381,7 @@ def periodogram(
     datasets = dict(data.items()) if is_container else {"data": data}
 
     per_dataset: dict[str, NFloatArray] = {}
-    base_lnls: list[Float[jax.Array, ""]] = []
+    base_lnls: list[Float[jax.Array, ""] | NFloatArray] = []
     eff_terms = 0
     for name, d in datasets.items():
         ds_prior = _resolve_per_dataset(prior, "prior", name, is_container)
@@ -371,7 +394,7 @@ def periodogram(
         eff_terms = max(eff_terms, eff)
 
     total_delta = jnp.sum(jnp.stack(list(per_dataset.values())), axis=0)
-    total_lnl0 = jnp.sum(jnp.stack(base_lnls))
+    total_lnl0 = functools.reduce(jnp.add, base_lnls)
 
     time_unit = str((1.0 / frequency_grid[:1]).unit)
     all_times = [ustrip(time_unit, d.time) for d in datasets.values()]
