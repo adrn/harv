@@ -11,4 +11,5 @@ Tutorials for modeling radial velocity (RV) time series with harv.
 3-mcmc-continue
 4-sb2
 5-gp-extension
+6-periodogram-prior
 ::::

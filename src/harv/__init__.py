@@ -6,9 +6,6 @@ aware via unxt, supports probabilistic modeling with numpyro, and provides flexi
 Keplerian orbit frameworks for single and multi-body systems.
 """
 
-# TODO: need to figure out what is available at top level. Gut feeling is we leave
-# harv.io things as harv.io.load_sampler and harv.plot.plot_rv, and Abstract classes
-# should be under harv.models, but what should be accessible at top level?
 __all__ = (
     # Data containers
     "GaiaAstrometryData",
@@ -31,6 +28,7 @@ __all__ = (
     "Samples",
     # Modules:
     "data",
+    "periodogram",
     "plot",
 )
 
@@ -63,5 +61,6 @@ from harv.samplers import (
     Samples,
 )
 from harv import data
+from harv import periodogram
 from harv import plot
 from harv._version import __version__

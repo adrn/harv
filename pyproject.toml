@@ -37,6 +37,8 @@ dependencies = [
     "jax>=0.8.1",
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
+    # Imported directly across the package; np.trapezoid is 2.0+ (1.x: trapz).
+    "numpy>=2.0",
     "numpyro>=0.15.0",
     "quaxed>=0.10.4",
     "unxt>=1.7.2",
@@ -203,6 +205,12 @@ filterwarnings = [
     # warning from the same module still fails the suite.
     "ignore:Non-Gaussian linear prior:UserWarning",       # samplers/_prior_resolution.py
     "ignore:BFGS did not converge:UserWarning",           # samplers/numpyro.py
+    # Fires on every small rejection run in the suite -- toy data with a few
+    # thousand prior samples really is under-resolved.  The warning's own
+    # behavior (fires when it should, stays quiet when it should not) is
+    # covered by tests/unit/test_samplers/test_acceptance_diagnostics.py,
+    # which uses pytest.warns / catch_warnings and so is unaffected by this.
+    "ignore:Under-resolved rejection run:UserWarning",    # samplers/rejection.py
     # -- third-party chatter ----------------------------------------------------
     "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
 ]
@@ -315,7 +323,13 @@ src = ["src"]
         "RUF002",  # ambiguous unicode
         "RUF003",  # ambiguous unicode
     ]
-    "src/harv/stats/*.py" = [
+    # Vendored from numpyro-ext -- not ours to lint. Scoped to the vendored
+    # modules by name so harv's own code under harv/stats (e.g. grid_density.py)
+    # is linted normally.
+    "src/harv/stats/numpyro_ext.py" = [
+        "ALL",
+    ]
+    "src/harv/stats/linear_op.py" = [
         "ALL",
     ]
     "docs/**/*" = [

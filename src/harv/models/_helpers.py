@@ -56,6 +56,17 @@ def _evaluate_nonlinear_log_prior(
     return total
 
 
+def _is_callable_prior(p: Any) -> bool:
+    """True iff ``p`` is a callable prior factory (e.g. ``PeriodDependentKPrior``).
+
+    Plain ``dist.Distribution`` and :class:`QuantityDistribution` instances are
+    *not* considered callable priors here even if their classes happen to be
+    callable: they are sampled directly without being resolved against
+    nonlinear parameter values first.
+    """
+    return callable(p) and not isinstance(p, dist.Distribution | QuantityDistribution)
+
+
 def _needs_explicit_sampling(d: PriorDist | LinearPriorCallable) -> bool:
     """True if a linear prior entry must be sampled explicitly by the sampler.
 
