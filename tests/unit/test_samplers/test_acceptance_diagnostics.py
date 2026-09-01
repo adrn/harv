@@ -2,6 +2,7 @@
 
 import warnings
 
+import jax
 import pytest
 from unxt import Q
 
@@ -216,3 +217,27 @@ class TestMinEvidenceEssIsConfigurable:
             RejectionSampler(_prior(), hm.RVModel(), min_evidence_ess=float("inf")).run(
                 _broad_data(), n_prior_samples=2_000_000, seed=0
             )
+
+
+class TestWarningAttribution:
+    def test_warning_points_at_the_callers_line(self):
+        """stacklevel must blame the run() call site, not harv's own module."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RejectionSampler(_prior(), hm.RVModel()).run(
+                _peaked_data(), n_prior_samples=500_000, seed=0
+            )
+        under = [w for w in caught if "Under-resolved" in str(w.message)]
+        assert under, "expected an under-resolution warning"
+        assert under[0].filename == __file__
+
+    def test_run_with_samples_is_attributed_too(self):
+        """The other entry point sits at a different depth; both must work."""
+        sampler = RejectionSampler(_prior(), hm.RVModel())
+        library = _prior().sample(jax.random.key(1), 200_000, model=hm.RVModel())
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sampler.run_with_samples(_peaked_data(), library, seed=0)
+        under = [w for w in caught if "Under-resolved" in str(w.message)]
+        assert under, "expected an under-resolution warning"
+        assert under[0].filename == __file__

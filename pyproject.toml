@@ -37,6 +37,8 @@ dependencies = [
     "jax>=0.8.1",
     "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
+    # Imported directly across the package; np.trapezoid is 2.0+ (1.x: trapz).
+    "numpy>=2.0",
     "numpyro>=0.15.0",
     "quaxed>=0.10.4",
     "unxt>=1.7.2",

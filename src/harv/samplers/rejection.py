@@ -670,7 +670,19 @@ class RejectionSampler(AbstractSampler):
             min_evidence_ess=self.min_evidence_ess,
         )
         if not well_resolved:
-            warnings.warn(resolution_msg, UserWarning, stacklevel=2)
+            # Attribute the warning to the caller's line rather than to harv.
+            # A fixed stacklevel cannot do it: this runs inside
+            # _finalize_posterior, under run() or run_with_samples(), with
+            # equinox's method wrappers interleaved, so the depth differs by
+            # entry point. Skip both packages' frames instead.
+            warnings.warn(
+                resolution_msg,
+                UserWarning,
+                skip_file_prefixes=(
+                    str(Path(__file__).parents[1]),
+                    str(Path(eqx.__file__).parent),
+                ),
+            )
         # ``top_k`` forces both on: ``Samples["weight"]`` is reconstructed from
         # ``ln_likelihood`` plus ``logZ_int`` / ``n_prior_samples``, so a
         # top-K result without them would carry samples whose weights cannot be

@@ -2173,10 +2173,11 @@ once for all sources.
 ```python
 periodogram(
     data,                     # RVData | GaiaAstrometryData | container
-    frequency_grid=None,      # explicit grid; exclusive with grid kwargs
+    frequency_grid=None,      # explicit grid; exclusive with every grid kwarg
+                              #   (period_min/period_max/samples_per_peak/n_grid)
     *,
     prior,                    # REQUIRED: HarvPrior (or {dataset_name: HarvPrior})
-    period_min=None, period_max=None, samples_per_peak=8, n_grid=None,
+    period_min=None, period_max=None, samples_per_peak=None, n_grid=None,
     n_terms=2,
     extensions=(),            # linear-column extensions (or per-dataset mapping)
 ) -> PeriodogramResult
