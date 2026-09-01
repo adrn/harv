@@ -53,6 +53,7 @@ from harv.models.extensions.base import AbstractExtension
 from harv.models.parameterizations.fourier import FourierGaiaAstrometry, FourierRV
 from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
+from harv.periodogram.grid import _data_t_span
 from harv.periodogram.grid import frequency_grid as get_frequency_grid
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
@@ -164,10 +165,12 @@ def _nl(period: Any, period_unit: str) -> dict[str, Any]:
     return {"period": Q(period, period_unit), "eccentricity": 0.0}
 
 
-def _resolve_per_dataset(
-    value: Any, name: str, ds_name: str, is_container: bool
-) -> Any:
-    """Resolve a per-dataset argument that may be a Mapping keyed by dataset name."""
+def _resolve_per_dataset(value: Any, name: str, ds_name: str) -> Any:
+    """Resolve a per-dataset argument that may be a Mapping keyed by dataset name.
+
+    Anything that is not such a Mapping -- including a single ``HarvPrior``
+    shared across same-type datasets -- is passed through unchanged.
+    """
     if isinstance(value, Mapping) and not isinstance(value, HarvPrior):
         try:
             return value[ds_name]
@@ -175,8 +178,6 @@ def _resolve_per_dataset(
             raise TypeError(
                 f"{name} mapping has no entry for dataset {ds_name!r}."
             ) from None
-    if is_container and name == "prior":
-        return value  # a single HarvPrior shared across (same-type) datasets
     return value
 
 
@@ -281,7 +282,7 @@ def periodogram(
     prior: HarvPrior | Mapping[str, HarvPrior],
     period_min: ScalarQTime | None = None,
     period_max: ScalarQTime | None = None,
-    samples_per_peak: int = 8,
+    samples_per_peak: int | None = None,
     n_grid: int | None = None,
     n_terms: int = 2,
     extensions: tuple[AbstractExtension, ...]
@@ -361,20 +362,26 @@ def periodogram(
             "model is the base model and every Delta would be zero."
         )
     if frequency_grid is not None:
-        if period_min is not None or period_max is not None or n_grid is not None:
+        conflicting = period_min, period_max, samples_per_peak, n_grid
+        if any(arg is not None for arg in conflicting):
             raise TypeError(
                 "Cannot specify both an explicit frequency grid and "
-                "period_min/period_max/n_grid"
+                "period_min/period_max/samples_per_peak/n_grid"
             )
     else:
         if period_min is None:
             raise TypeError("Must specify either a frequency grid or period_min")
+        # Forward samples_per_peak only when set, so frequency_grid owns its
+        # default rather than this signature carrying a second copy of it.
+        grid_kwargs: dict[str, Any] = {}
+        if samples_per_peak is not None:
+            grid_kwargs["samples_per_peak"] = samples_per_peak
         frequency_grid = get_frequency_grid(
             data,
             period_min=period_min,
             period_max=period_max,
-            samples_per_peak=samples_per_peak,
             n_grid=n_grid,
+            **grid_kwargs,
         )
 
     is_container = isinstance(data, AbstractDatasetContainer)
@@ -384,8 +391,8 @@ def periodogram(
     base_lnls: list[Float[jax.Array, ""] | NFloatArray] = []
     eff_terms = 0
     for name, d in datasets.items():
-        ds_prior = _resolve_per_dataset(prior, "prior", name, is_container)
-        ds_ext = _resolve_per_dataset(extensions, "extensions", name, is_container)
+        ds_prior = _resolve_per_dataset(prior, "prior", name)
+        ds_ext = _resolve_per_dataset(extensions, "extensions", name)
         delta, lnl0, eff = _dataset_delta_lnl(
             d, ds_prior, tuple(ds_ext), frequency_grid, n_terms
         )
@@ -397,9 +404,6 @@ def periodogram(
     total_lnl0 = functools.reduce(jnp.add, base_lnls)
 
     time_unit = str((1.0 / frequency_grid[:1]).unit)
-    all_times = [ustrip(time_unit, d.time) for d in datasets.values()]
-    t_min = min(float(jnp.min(t)) for t in all_times)
-    t_max = max(float(jnp.max(t)) for t in all_times)
 
     # t_ref is always set by AbstractData.__check_init__ / the containers:
     t_ref = cast("ScalarQTime", data.t_ref)
@@ -407,7 +411,7 @@ def periodogram(
         frequency=frequency_grid,
         delta_ln_likelihood=total_delta,
         ln_likelihood_base=total_lnl0,
-        t_span=Q(t_max - t_min, time_unit),
+        t_span=Q(_data_t_span(data, time_unit), time_unit),
         t_ref=t_ref,
         per_dataset=per_dataset if is_container else None,
         n_terms=eff_terms,
