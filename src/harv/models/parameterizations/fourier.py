@@ -16,7 +16,7 @@ TODO(default-amplitude-prior): ``default_prior`` requires explicit amplitude sca
 (``sigma_amp``) by design — there is deliberately no data-driven default. What scale
 guidance (or period-dependent form) to *recommend* is an open question: it needs a study
 against a converged period posterior across many seeds and regimes (see docs/spec.md,
-"Amplitude and nuisance priors").
+"Priors are explicit", under "Open question").
 """
 
 __all__ = ("FourierGaiaAstrometry", "FourierRV")
