@@ -2059,7 +2059,9 @@ but has nothing periodogram-specific in it:
 
 - `log_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
   normalization is trapezoid-exact. Zero density (`-inf` log-density) knots
-  are allowed.
+  are allowed, and `arg_constraints` admits them (`less_than(inf)`, not
+  `real_vector`, which rejects every non-finite value) so the class validates
+  under `numpyro.enable_validation()`.
 - `log_prob(x)` is the density **per unit x** (same convention as
   `dist.LogUniform`); `log_prob_ln(x) = log_prob(x) + ln x` is the density per
   unit `ln x` and is invariant under a change of x's unit.
@@ -2260,7 +2262,10 @@ peak_period_prior(result, *, height_drop=10.0, max_peaks=8, peak_width=None,
 Amplitude-agnostic alternative: strict local maxima of Δ **within `height_drop`
 nats of the global maximum** each get a top-hat in ln-period of full frequency
 width `peak_width` (default `1/t_span`) with **equal mass** `1/n_peaks`
-regardless of amplitude. The criterion is *relative to the best peak*, so it is
+regardless of amplitude. Each top-hat is normalized by its mass *as the knots
+sample it* (the measure `LogGridDensity` actually integrates), so the share is
+exact rather than approximate — including for a peak clipped by the domain edge
+or one whose width falls below the knot spacing. The criterion is *relative to the best peak*, so it is
 scale-invariant across data types — RV periodograms span hundreds of nats,
 while astrometry periodograms (the orbit is a small perturbation on the
 marginalized 5-parameter astrometric signal) span only a few; an absolute

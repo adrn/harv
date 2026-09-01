@@ -200,3 +200,35 @@ class TestPriorIntegration:
         assert samples.n_samples > 0
         med = ustrip("day", samples.median("period"))
         assert abs(float(med) - 100.0) < 20.0
+
+
+class TestArgConstraints:
+    """Zero-density knots are a documented input, so the constraint must pass them."""
+
+    def test_minus_inf_knots_pass_validation(self):
+        ln_grid = jnp.log(jnp.array([1.0, 2.0, 4.0, 8.0]))
+        log_density = jnp.array([-jnp.inf, 0.0, 0.5, -jnp.inf])
+        d = LogGridDensity(ln_grid, log_density, validate_args=True)
+        # The zero-density knots really are zero density.
+        assert np.isneginf(float(d.log_prob(1.0)))
+        assert np.isfinite(float(d.log_prob(2.0)))
+
+    @pytest.mark.parametrize("bad", [jnp.inf, jnp.nan])
+    def test_constraint_rejects_plus_inf_and_nan(self, bad):
+        constraint = LogGridDensity.arg_constraints["log_density"]
+        assert not bool(constraint(jnp.array([0.0, bad, 0.5])))
+
+    def test_constraint_accepts_minus_inf_and_keeps_event_dim(self):
+        constraint = LogGridDensity.arg_constraints["log_density"]
+        assert bool(constraint(jnp.array([0.0, -jnp.inf, 0.5])))
+        assert constraint.event_dim == 1
+
+    def test_builder_output_validates(self):
+        """peak_period_prior with floor=0 produces -inf knots; they must validate."""
+        ln_grid = jnp.log(jnp.geomspace(10.0, 1000.0, 64))
+        density = np.zeros(64)
+        density[20:30] = 1.0
+        with np.errstate(divide="ignore"):
+            log_density = jnp.asarray(np.log(density))
+        d = LogGridDensity(ln_grid, log_density, validate_args=True)
+        assert np.isfinite(float(d.log_prob(float(np.exp(ln_grid[25])))))

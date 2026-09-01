@@ -10,7 +10,7 @@ under ``jax.jit`` and ``jax.vmap``.
 
 __all__ = ("LogGridDensity",)
 
-from typing import Any
+from typing import Any, final
 
 import equinox as eqx
 import jax
@@ -21,6 +21,7 @@ from numpyro.distributions.util import validate_sample
 from numpyro.util import is_prng_key
 
 
+@final
 class LogGridDensity(Distribution):
     r"""Distribution over ``x > 0`` with a pdf piecewise-linear in ``ln(x)``.
 
@@ -74,7 +75,11 @@ class LogGridDensity(Distribution):
     # cannot be narrowed to ``ClassVar`` here (that would violate LSP).
     arg_constraints: dict[str, Any] = {  # noqa: RUF012
         "ln_grid": constraints.real_vector,
-        "log_density": constraints.real_vector,
+        # NOT real_vector: that rejects every non-finite value, but -inf is a
+        # documented, deliberately-produced input here (a zero-density knot --
+        # see harv.periodogram.priors._to_prior). less_than(inf) admits -inf
+        # while still rejecting +inf and NaN.
+        "log_density": constraints.independent(constraints.less_than(jnp.inf), 1),
     }
     reparametrized_params: list[str] = []  # noqa: RUF012
     pytree_data_fields: tuple[str, ...] = (
