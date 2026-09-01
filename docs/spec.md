@@ -2147,7 +2147,7 @@ frequency_grid(
     period_min,               # required; its unit sets the grid unit (1/unit)
     period_max=None,          # default: max_period_factor * t_span
     t_span=None,              # alternative to data (exactly one required)
-    samples_per_peak=5,       # oversampling per peak width 1/t_span
+    samples_per_peak=8,       # oversampling per peak width 1/t_span
     max_period_factor=1.0,
     n_grid=None,              # explicit grid size override
 ) -> Q["frequency"]           # uniform in frequency, ascending
@@ -2166,7 +2166,7 @@ periodogram(
     frequency_grid=None,      # explicit grid; exclusive with grid kwargs
     *,
     prior,                    # REQUIRED: HarvPrior (or {dataset_name: HarvPrior})
-    period_min=None, period_max=None, samples_per_peak=5, n_grid=None,
+    period_min=None, period_max=None, samples_per_peak=8, n_grid=None,
     n_terms=2,
     extensions=(),            # linear-column extensions (or per-dataset mapping)
 ) -> PeriodogramResult

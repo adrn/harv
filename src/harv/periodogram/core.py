@@ -265,7 +265,7 @@ def periodogram(
     prior: HarvPrior | Mapping[str, HarvPrior],
     period_min: ScalarQTime | None = None,
     period_max: ScalarQTime | None = None,
-    samples_per_peak: int = 5,
+    samples_per_peak: int = 8,
     n_grid: int | None = None,
     n_terms: int = 2,
     extensions: tuple[AbstractExtension, ...]
