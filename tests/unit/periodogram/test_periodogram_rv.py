@@ -11,7 +11,9 @@ from unxt import Q, ustrip
 import harv
 import harv.models as hm
 import harv.periodogram as hp
-from harv.data import RVData
+from harv.data import RVData, SourceData
+from harv.distributions import QD
+from harv.models.priors.custom_priors import PeriodDependentKPrior
 from harv.simulate import simulate_rv_sb1_data
 
 P_TRUE = Q(37.0, "day")
@@ -203,3 +205,96 @@ class TestHarmonicCap:
         r2 = hp.periodogram(data, prior=_prior(2), period_min=Q(5.0, "day"), n_terms=2)
         assert r2.n_terms == 2
         assert _peak_within_grid_steps(r2, P_TRUE)
+
+
+class TestNTermsValidation:
+    """A periodogram needs at least one harmonic (see docs/spec.md)."""
+
+    @pytest.mark.parametrize("n_terms", [0, -1, -5])
+    def test_rejects_fewer_than_one_term(self, n_terms):
+        data, _ = _sim()
+        with pytest.raises(ValueError, match="n_terms must be at least 1"):
+            hp.periodogram(
+                data, prior=_prior(), period_min=Q(5.0, "day"), n_terms=n_terms
+            )
+
+    def test_rejects_before_touching_the_prior(self):
+        """The error names n_terms, not linear-prior entries never asked for."""
+        data, _ = _sim()
+        with pytest.raises(ValueError, match="n_terms"):
+            hp.periodogram(
+                data,
+                prior=hm.FourierRV(n_terms=0).default_prior(
+                    period_min=Q(1.0, "day"),
+                    period_max=Q(5000.0, "day"),
+                    sigma_v0=Q(50.0, "km/s"),
+                ),
+                period_min=Q(5.0, "day"),
+                n_terms=0,
+            )
+
+
+class TestPeriodDependentBasePrior:
+    """The base model is only period-independent when its own priors are."""
+
+    @staticmethod
+    def _run(v_sys_prior) -> hp.PeriodogramResult:
+        data, _ = _sim()
+        return hp.periodogram(
+            data,
+            prior=_prior(v_sys=v_sys_prior),
+            period_min=Q(20.0, "day"),
+            period_max=Q(200.0, "day"),
+        )
+
+    def test_base_likelihood_is_per_frequency(self):
+        result = self._run(
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+        )
+        # A callable v_sys prior resolves per trial period, so the baseline
+        # varies across the grid and must be evaluated there.
+        assert result.ln_likelihood_base.shape == result.frequency.shape
+        assert (
+            float(
+                jnp.max(result.ln_likelihood_base) - jnp.min(result.ln_likelihood_base)
+            )
+            > 0.0
+        )
+
+    def test_plain_prior_keeps_the_scalar_fast_path(self):
+        result = self._run(QD(dist.Normal(0.0, 50.0), "km/s"))
+        assert result.ln_likelihood_base.shape == ()
+
+    def test_container_mixes_scalar_and_per_frequency_baselines(self):
+        """One dataset on the slow path, one on the fast path, must still add up."""
+        d1, _ = _sim(seed=3)
+        d2, _ = _sim(seed=4)
+        source = SourceData(a=d1, b=d2)
+        result = hp.periodogram(
+            source,
+            prior={
+                "a": _prior(
+                    v_sys=PeriodDependentKPrior(
+                        sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
+                    )
+                ),
+                "b": _prior(),
+            },
+            period_min=Q(20.0, "day"),
+            period_max=Q(200.0, "day"),
+        )
+        # Broadcast, not stack: a scalar and an (n,) baseline sum to (n,), and
+        # the total must not collapse over the grid axis.
+        assert result.ln_likelihood_base.shape == result.frequency.shape
+        assert result.delta_ln_likelihood.shape == result.frequency.shape
+
+    def test_delta_uses_the_matching_baseline(self):
+        """Delta must not be tilted by a baseline taken at one period."""
+        result = self._run(
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+        )
+        # Reconstructing lnL and subtracting a single-period baseline (the old
+        # behavior) gives a visibly different, tilted statistic.
+        lnl = result.delta_ln_likelihood + result.ln_likelihood_base
+        tilted = lnl - result.ln_likelihood_base[0]
+        assert not bool(jnp.allclose(tilted, result.delta_ln_likelihood, atol=1e-4))

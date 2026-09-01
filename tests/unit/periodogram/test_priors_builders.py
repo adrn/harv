@@ -71,19 +71,48 @@ class TestTempered:
         bound = floor / np.log(P_HI / P_LO)
         assert bool(jnp.all(density_ln >= bound * (1.0 - 1e-3)))
 
-    def test_domain_extension_is_floor_like(self):
-        floor = 0.1
-        p_max = Q(6000.0, "day")
+    @pytest.mark.parametrize(
+        ("period_min", "period_max"),
+        [
+            (None, Q(6000.0, "day")),  # above the grid
+            (Q(1.0, "day"), None),  # below the grid
+            (Q(1.0, "day"), Q(6000.0, "day")),  # both sides
+            (Q(2000.0, "day"), Q(5000.0, "day")),  # entirely above
+            (Q(0.1, "day"), Q(5.0, "day")),  # entirely below
+        ],
+    )
+    def test_domain_outside_the_grid_is_refused(self, period_min, period_max):
+        """The periodogram is evidence only where it was evaluated."""
+        with pytest.raises(ValueError, match="reaches outside the periodogram grid"):
+            hp.tempered_period_prior(
+                _fake_result(), period_min=period_min, period_max=period_max
+            )
+
+    def test_domain_equal_to_the_grid_bounds_is_accepted(self):
+        """The round trip through 1/f and log() must not trip the check."""
         prior = hp.tempered_period_prior(
-            _fake_result(), beta=1.0, floor=floor, period_max=p_max
+            _fake_result(), period_min=Q(P_LO, "day"), period_max=Q(P_HI, "day")
         )
-        # In the extension region (P > grid max), delta continues flat at 0,
-        # which is negligible after tempering against a 30-sigma peak:
-        expected = np.log(floor / np.log(6000.0 / P_LO))
-        got = float(prior.distribution.log_prob_ln(3000.0))
-        assert np.isclose(got, expected, atol=0.05)
-        assert np.isfinite(float(prior.distribution.log_prob(5999.0)))
-        assert np.isneginf(float(prior.distribution.log_prob(6001.0)))
+        assert np.isclose(float(prior.distribution.low), P_LO, rtol=1e-6)
+        assert np.isclose(float(prior.distribution.high), P_HI, rtol=1e-6)
+        # ... and matches the default (domain omitted) prior.
+        default = hp.tempered_period_prior(_fake_result())
+        assert np.isclose(
+            float(prior.distribution.log_prob(100.0)),
+            float(default.distribution.log_prob(100.0)),
+            rtol=1e-5,
+        )
+
+    def test_domain_subset_of_the_grid_is_supported(self):
+        """Narrowing the domain is still allowed, and renormalizes."""
+        prior = hp.tempered_period_prior(
+            _fake_result(), period_min=Q(50.0, "day"), period_max=Q(200.0, "day")
+        )
+        assert np.isclose(float(prior.distribution.low), 50.0, rtol=1e-6)
+        assert np.isclose(float(prior.distribution.high), 200.0, rtol=1e-6)
+        assert _mass_between(prior, 50.0, 200.0) == pytest.approx(1.0, abs=1e-6)
+        # The 100 d peak survives; the 300 d peak is outside the domain.
+        assert np.isneginf(float(prior.distribution.log_prob(300.0)))
 
     def test_invalid_args(self):
         result = _fake_result()

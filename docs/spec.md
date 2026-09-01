@@ -2104,7 +2104,12 @@ delta_ln_likelihood(f) = ln L(f) − ln L_base
   with `FourierX(n_terms=H)`.
 - `ln L_base` = the same call with `FourierX(n_terms=0)` — the null model (RV:
   the constant offset alone; Gaia: the 5-parameter astrometric solution
-  alone). It is period-independent, so it is evaluated **once**.
+  alone). It carries no Fourier columns, so it is period-independent and
+  evaluated **once** — *unless* one of its own linear priors is a
+  `LinearPriorCallable`, which resolves against the trial period and so makes
+  the baseline vary across the grid. That case is detected and the base model
+  is evaluated on the grid too; `PeriodogramResult.ln_likelihood_base` is a
+  scalar in the common case and a per-frequency array in that one.
 
 Δ is therefore a per-frequency log Bayes factor of "base + orbit harmonics" vs.
 the base model, **under exactly the priors supplied** by the required `prior`
@@ -2118,7 +2123,10 @@ eccentricity-dependent amplitude priors (e.g. `PeriodDependentKPrior`) resolve
 through the standard prior machinery. It is ignored by the Fourier design
 matrix.
 
-`n_terms` (default 2) is **capped per dataset** to keep the trial model
+`n_terms` must be at least 1 (`ValueError` otherwise — with no harmonic the
+trial model *is* the base model and every Δ would be zero; `n_terms = 0`
+remains valid on the parameterization itself). It defaults to 2 and is
+**capped per dataset** to keep the trial model
 overdetermined — at least two observations per linear column, floored at 1 —
 emitting a `UserWarning` when reduced. Column counts are derived from the
 parameterization and any linear extensions, so extension columns count against
@@ -2173,7 +2181,8 @@ periodogram(
 ```
 
 `PeriodogramResult` is an `eqx.Module` with fields `frequency`,
-`delta_ln_likelihood`, `ln_likelihood_base`, `t_span`, `t_ref`, optional
+`delta_ln_likelihood`, `ln_likelihood_base` (scalar, or per-frequency when the
+base model is period-dependent), `t_span`, `t_ref`, optional
 `per_dataset` (per-dataset Δ for container inputs), and static `n_terms`;
 plus `period` (property, `1/frequency`), `max_period()`, and `plot(ax=None,
 x="period" | "frequency")`.
@@ -2217,12 +2226,19 @@ the user to choose. See the `TODO` in
 
 Both builders map a `PeriodogramResult` onto ln-period knots on the requested
 domain `[period_min, period_max]`, returning a `QD`-wrapped
-[`LogGridDensity`](#loggriddensity) (defaults: the grid range; the domain may
-extend beyond the grid, where Δ continues flat at 0 so the tempered prior is
-floor-like there — a knot pinned just outside the grid keeps that extension
-flat instead of ramping across it), and both **mix in a log-uniform floor of
-weight `floor`**
-(λ, default 0.1). Since a log-uniform is constant in `ln P`, the mixture is
+[`LogGridDensity`](#loggriddensity), and both **mix in a log-uniform floor of
+weight `floor`** (λ, default 0.1).
+
+The domain defaults to the grid range and **must lie within it** — a domain
+reaching past the grid raises `ValueError`. The periodogram is evidence only
+where it was evaluated, so treating the un-evaluated region as Δ = 0 would let
+it outrank the grid whenever Δ is negative everywhere (the ordinary no-signal
+case, where the Occam factor beats the fit) and hand a no-signal source a prior
+concentrated on periods nobody looked at. A strict *subset* of the grid is
+supported and renormalized; to widen the domain, widen the periodogram. Bounds
+are compared with a small tolerance and then clipped, so passing back the exact
+`period_min` / `period_max` that built the grid is safe despite the round trip
+through `1/f`. Since a log-uniform is constant in `ln P`, the mixture is
 itself a grid density — one distribution class covers everything.
 
 ```python
@@ -2280,9 +2296,12 @@ interim prior is a fixed, exactly-normalized proposal that is divided out
 exactly (its data-dependence does not bias the estimator). Requirements:
 
 1. **Support** — `p_int,n(P) > 0` wherever the population prior can put mass.
-   The λ floor guarantees this and bounds the importance weights by `1/λ`
-   relative to a log-uniform interim prior. `floor=0` voids the guarantee
-   (a `UserWarning` is emitted).
+   The λ floor guarantees this *across the periodogram grid*, and bounds the
+   importance weights by `1/λ` relative to a log-uniform interim prior.
+   `floor=0` voids the guarantee (a `UserWarning` is emitted). Since the prior
+   domain cannot reach past the grid, the grid itself is what must span every
+   period the population prior can populate: set `period_min` / `period_max` on
+   `periodogram` (or `frequency_grid`) accordingly, not on the builder.
 1. **Per-source evaluability** — the reweighting needs `ln p_int,n` at each
    retained sample. `attach_interim_period_prior(samples, period_prior)`
    evaluates and stores it as the reserved extra column

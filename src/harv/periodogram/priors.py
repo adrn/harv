@@ -75,10 +75,16 @@ def _assemble_knots(
     knot, the time unit they are expressed in, and the domain endpoints.
 
     The periodogram grid is uniform in *frequency* and descending in period, so
-    it is reversed here to ascend in ln-period. Where the requested domain
-    extends beyond the computed grid, Δ is unknown and continues flat at 0, so
-    a tempered prior is floor-like out there. Host-side NumPy — builders run
-    once per source, eagerly.
+    it is reversed here to ascend in ln-period. The requested domain must lie
+    within the computed grid: the periodogram is evidence only where it was
+    evaluated, so a domain reaching past the grid would be shaped by a Δ nobody
+    computed. Host-side NumPy — builders run once per source, eagerly.
+
+    Raises
+    ------
+    ValueError
+        If ``period_max <= period_min``, or if the requested domain reaches
+        outside the periodogram grid.
     """
     unit = str(result.period.unit) if unit is None else unit
     p_grid = np.asarray(ustrip(unit, result.period), dtype=np.float64)[::-1]
@@ -98,30 +104,38 @@ def _assemble_knots(
     if ln_p_max <= ln_p_min:
         raise ValueError("period_max must be greater than period_min")
 
-    # Knots are joined by straight lines, so extending the domain past the grid
-    # without a transition knot would ramp Δ linearly across the entire
-    # extension, smearing the edge of the periodogram into a region where it
-    # says nothing. A knot pinned to Δ = 0 just outside the grid keeps the
-    # extension flat and confines the step to a negligible interval. Its offset
-    # only has to be far below the knot spacing to be invisible on the grid
-    # scale; a thousandth of the tightest spacing comfortably is.
-    eps = 1e-3 * float(np.min(np.diff(ln_grid)))
+    # The domain must sit inside the grid, but the natural call passes the same
+    # period_min/period_max that built the grid, and those round-trip through
+    # 1/f and log() -- landing within ~1e-7 of the request in float32, exactly
+    # on it in x64. So allow a slack far above that round-trip yet far below any
+    # real overreach (which misses by O(0.1-10) in ln-period), then clip.
+    tol = 1e-6
+    if ln_p_min < ln_grid[0] - tol or ln_p_max > ln_grid[-1] + tol:
+        raise ValueError(
+            f"The requested prior domain "
+            f"[{np.exp(ln_p_min):g}, {np.exp(ln_p_max):g}] {unit} reaches outside "
+            f"the periodogram grid "
+            f"[{np.exp(ln_grid[0]):g}, {np.exp(ln_grid[-1]):g}] {unit}, where the "
+            "periodogram provides no evidence. Recompute the periodogram over the "
+            "wider range, or narrow period_min/period_max to the grid."
+        )
+    ln_p_min = max(ln_p_min, ln_grid[0])
+    ln_p_max = min(ln_p_max, ln_grid[-1])
 
-    knots = [np.array([ln_p_min])]
-    vals = [np.array([np.interp(ln_p_min, ln_grid, delta, left=0.0, right=0.0)])]
-    if ln_p_min < ln_grid[0] - 2 * eps:
-        # Flat (Δ = 0) extension below the grid, transitioning at the edge:
-        knots.append(np.array([ln_grid[0] - eps]))
-        vals.append(np.array([0.0]))
-    interior = (ln_grid > ln_p_min) & (ln_grid < ln_p_max)
-    knots.append(ln_grid[interior])
-    vals.append(delta[interior])
-    if ln_p_max > ln_grid[-1] + 2 * eps:
-        knots.append(np.array([ln_grid[-1] + eps]))
-        vals.append(np.array([0.0]))
-    knots.append(np.array([ln_p_max]))
-    vals.append(np.array([np.interp(ln_p_max, ln_grid, delta, left=0.0, right=0.0)]))
-    return np.concatenate(knots), np.concatenate(vals), unit, (ln_p_min, ln_p_max)
+    # Endpoint knots are interpolated onto the domain edges; every other knot is
+    # a grid point. Both endpoints are inside the grid, so no extrapolation. The
+    # same tolerance excludes a grid knot sitting within a hair of an endpoint,
+    # which would otherwise duplicate it and break strict monotonicity.
+    interior = (ln_grid > ln_p_min + tol) & (ln_grid < ln_p_max - tol)
+    knots = np.concatenate([[ln_p_min], ln_grid[interior], [ln_p_max]])
+    vals = np.concatenate(
+        [
+            [np.interp(ln_p_min, ln_grid, delta)],
+            delta[interior],
+            [np.interp(ln_p_max, ln_grid, delta)],
+        ]
+    )
+    return knots, vals, unit, (ln_p_min, ln_p_max)
 
 
 def _to_prior(
@@ -161,8 +175,10 @@ def tempered_period_prior(
     floor
         Weight λ of the log-uniform mixture component (support guarantee).
     period_min, period_max
-        Domain of the prior. Defaults to the periodogram grid range; may
-        extend beyond it (delta-ln-likelihood continues flat at 0 there).
+        Domain of the prior. Defaults to the periodogram grid range, and must
+        lie within it — the periodogram is evidence only where it was
+        evaluated. Narrow the domain to focus the prior; to widen it, recompute
+        the periodogram over the wider range.
     unit
         Time unit of the returned prior. Defaults to the periodogram's unit.
 
