@@ -62,7 +62,7 @@ def frequency_grid(
     t_span
         Time baseline. Mutually exclusive with ``data``.
     samples_per_peak
-        Grid oversampling factor per periodogram peak width. Default: 5.
+        Grid oversampling factor per periodogram peak width. Default: 8.
     max_period_factor
         Sets the default ``period_max`` as a multiple of ``t_span``.
     n_grid
