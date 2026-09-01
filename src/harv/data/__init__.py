@@ -1,7 +1,4 @@
-"""Data classes for representing time series data.
-
-TODO: we could add support for metadata for the data type classes below.
-"""
+"""Data classes for representing time series data."""
 
 __all__ = (
     "AbstractAstrometryData",
