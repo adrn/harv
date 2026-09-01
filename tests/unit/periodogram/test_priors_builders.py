@@ -124,6 +124,23 @@ class TestTempered:
         # The 100 d peak survives; the 300 d peak is outside the domain.
         assert np.isneginf(float(prior.distribution.log_prob(300.0)))
 
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_non_finite_delta_is_refused(self, bad):
+        """A NaN/inf Delta must name itself, not surface from LogGridDensity."""
+        base = _fake_result()
+        delta = base.delta_ln_likelihood.at[17].set(bad)
+        result = PeriodogramResult(
+            frequency=base.frequency,
+            delta_ln_likelihood=delta,
+            ln_likelihood_base=base.ln_likelihood_base,
+            t_span=base.t_span,
+            t_ref=base.t_ref,
+        )
+        with pytest.raises(ValueError, match="non-finite at 1 of"):
+            hp.tempered_period_prior(result)
+        with pytest.raises(ValueError, match="non-finite at 1 of"):
+            hp.peak_period_prior(result)
+
     def test_invalid_args(self):
         result = _fake_result()
         with pytest.raises(ValueError, match="beta"):
