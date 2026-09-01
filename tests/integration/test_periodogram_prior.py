@@ -213,7 +213,7 @@ class TestReweightingConsistency:
     source with (a) a shared log-uniform interim period prior and (b) a
     per-source tempered periodogram prior, then estimates mu with the
     Hogg/Myers/Bovy importance-reweighting estimator using the per-sample
-    ``ln_pint_period`` column. The two estimates must agree within Monte Carlo
+    ``ln_interim_period_prior`` column. The two estimates must agree within Monte Carlo
     error — per-source interim priors do not bias the population inference.
     """
 
@@ -246,10 +246,10 @@ class TestReweightingConsistency:
         total = np.zeros_like(mu_grid)
         for s in samples_list:
             ln_p = jnp.log(ustrip("day", s["period"]))
-            ln_pint = ustrip("", s[hp.LN_PINT_PERIOD_KEY])
+            ln_interim = ustrip("", s[hp.LN_INTERIM_PERIOD_PRIOR_KEY])
             for k, mu in enumerate(mu_grid):
                 ln_pop = ndist.Normal(mu, sigma).log_prob(ln_p)
-                total[k] += float(logsumexp(ln_pop - ln_pint) - jnp.log(len(ln_p)))
+                total[k] += float(logsumexp(ln_pop - ln_interim) - jnp.log(len(ln_p)))
         return float(mu_grid[int(np.argmax(total))])
 
     def test_population_mu_agrees(self):
@@ -272,7 +272,7 @@ class TestReweightingConsistency:
                 data, n_prior_samples=600_000, max_posterior_samples=128, seed=i
             )
             assert s_a.n_samples > 5, "population setup must yield accepted samples"
-            samples_base.append(hp.attach_ln_pint(s_a, base_period_prior))
+            samples_base.append(hp.attach_interim_period_prior(s_a, base_period_prior))
 
             result = hp.periodogram(data, frequency, prior=_fourier_rv_prior())
             period_prior = hp.tempered_period_prior(result, beta=1.0, floor=0.1)
@@ -280,7 +280,7 @@ class TestReweightingConsistency:
             s_b = RejectionSampler(tailored, RVModel()).run(
                 data, n_prior_samples=100_000, max_posterior_samples=128, seed=i
             )
-            samples_tail.append(hp.attach_ln_pint(s_b, period_prior))
+            samples_tail.append(hp.attach_interim_period_prior(s_b, period_prior))
 
         mu_grid = np.linspace(np.log(30.0), np.log(300.0), 231)
         mu_a = self._mu_hat(samples_base, mu_grid, self.SIGMA_POP)
