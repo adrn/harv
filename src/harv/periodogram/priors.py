@@ -1,22 +1,33 @@
 """Builders mapping a periodogram onto an interim period prior.
 
-TODO: to review
+An **interim prior** is the prior actually used to generate a given source's
+samples. Here it is periodogram-informed, and therefore *different for every
+source*: mass is concentrated where that source's data say a period is
+plausible, which is what buys the rejection sampler its acceptance rate. The
+price is bookkeeping — population-level (hierarchical) inference must divide
+each source's interim prior back out, sample by sample, which is what
+:func:`attach_interim_period_prior` records.
 
 Both builders return a `~harv.distributions.QuantityDistribution` wrapping a
-:class:`~harv.periodogram.LogGridDensity`, which drops directly into the
-``period=`` override of any ``default_prior(...)`` (or into
+:class:`~harv.stats.LogGridDensity`, which drops directly into the ``period=``
+override of any ``default_prior(...)`` (or into
 ``HarvPrior.nonlinear_priors["period"]``).
 
-For probabilistic rigor in downstream hierarchical reweighting, both builders
-mix in a log-uniform "floor" of weight ``floor`` (λ): the interim prior then
-has full support on ``[period_min, period_max]`` and the importance weights
-relative to a log-uniform interim prior are bounded by ``1/floor``. See
+Both also mix in a log-uniform "floor" of weight ``floor`` (λ). That keeps the
+interim prior positive across the whole period domain, so no region the
+population prior cares about has zero proposal density, and it bounds the
+importance weights relative to a log-uniform interim prior by ``1/floor``. See
 ``docs/spec.md``, "Periodogram and interim period priors".
+
+Densities here are always **per unit ln-period** (``d(ln P)``), the measure in
+which a log-uniform prior is flat and which is invariant under a change of the
+time unit. :class:`~harv.stats.LogGridDensity` stores its knots in that measure
+too.
 """
 
 __all__ = (
-    "LN_PINT_PERIOD_KEY",
-    "attach_ln_pint",
+    "LN_INTERIM_PERIOD_PRIOR_KEY",
+    "attach_interim_period_prior",
     "peak_period_prior",
     "tempered_period_prior",
 )
@@ -30,14 +41,12 @@ from unxt import Q, ustrip
 from harv.custom_types import ScalarQFrequency, ScalarQTime
 from harv.distributions import QuantityDistribution
 from harv.periodogram.core import PeriodogramResult
-from harv.periodogram.distribution import LogGridDensity
 from harv.samplers.samples import Samples
+from harv.stats import LogGridDensity
 
-LN_PINT_PERIOD_KEY = "ln_pint_period"
+LN_INTERIM_PERIOD_PRIOR_KEY = "ln_interim_period_prior"
 # Reserved Samples column name for the per-sample interim period prior
-# log-density (per unit ln-period; see attach_ln_pint).
-
-_EDGE_EPS_FACTOR = 1e-3
+# log-density (per unit ln-period; see attach_interim_period_prior).
 
 
 def _validate_floor(floor: float) -> None:
@@ -61,46 +70,68 @@ def _assemble_knots(
 ) -> tuple[np.ndarray, np.ndarray, str, tuple[float, float]]:
     """Map the periodogram grid to ascending ln-period knots on the domain.
 
-    Returns ``(u_knots, delta_knots, unit, (u_lo, u_hi))``. Where the
-    requested domain extends beyond the computed grid, the delta-ln-likelihood values
-    continue flat at 0 (a short transition knot is inserted at the grid edge),
-    so a tempered prior is floor-like there. Host-side NumPy — builders run
+    Returns ``(ln_period, delta, unit, (ln_p_min, ln_p_max))``: the knot
+    positions in ``ln(P / unit)``, the ``delta_ln_likelihood`` value at each
+    knot, the time unit they are expressed in, and the domain endpoints.
+
+    The periodogram grid is uniform in *frequency* and descending in period, so
+    it is reversed here to ascend in ln-period. Where the requested domain
+    extends beyond the computed grid, Δ is unknown and continues flat at 0, so
+    a tempered prior is floor-like out there. Host-side NumPy — builders run
     once per source, eagerly.
     """
     unit = str(result.period.unit) if unit is None else unit
     p_grid = np.asarray(ustrip(unit, result.period), dtype=np.float64)[::-1]
     delta = np.asarray(result.delta_ln_likelihood, dtype=np.float64)[::-1]
-    u = np.log(p_grid)
+    ln_grid = np.log(p_grid)
 
-    u_lo = float(np.log(ustrip(unit, period_min))) if period_min is not None else u[0]
-    u_hi = float(np.log(ustrip(unit, period_max))) if period_max is not None else u[-1]
-    if u_hi <= u_lo:
+    ln_p_min = (
+        float(np.log(ustrip(unit, period_min)))
+        if period_min is not None
+        else ln_grid[0]
+    )
+    ln_p_max = (
+        float(np.log(ustrip(unit, period_max)))
+        if period_max is not None
+        else ln_grid[-1]
+    )
+    if ln_p_max <= ln_p_min:
         raise ValueError("period_max must be greater than period_min")
 
-    eps = _EDGE_EPS_FACTOR * float(np.min(np.diff(u)))
+    # Knots are joined by straight lines, so extending the domain past the grid
+    # without a transition knot would ramp Δ linearly across the entire
+    # extension, smearing the edge of the periodogram into a region where it
+    # says nothing. A knot pinned to Δ = 0 just outside the grid keeps the
+    # extension flat and confines the step to a negligible interval. Its offset
+    # only has to be far below the knot spacing to be invisible on the grid
+    # scale; a thousandth of the tightest spacing comfortably is.
+    eps = 1e-3 * float(np.min(np.diff(ln_grid)))
 
-    knots = [np.array([u_lo])]
-    vals = [np.array([np.interp(u_lo, u, delta, left=0.0, right=0.0)])]
-    if u_lo < u[0] - 2 * eps:
+    knots = [np.array([ln_p_min])]
+    vals = [np.array([np.interp(ln_p_min, ln_grid, delta, left=0.0, right=0.0)])]
+    if ln_p_min < ln_grid[0] - 2 * eps:
         # Flat (Δ = 0) extension below the grid, transitioning at the edge:
-        knots.append(np.array([u[0] - eps]))
+        knots.append(np.array([ln_grid[0] - eps]))
         vals.append(np.array([0.0]))
-    interior = (u > u_lo) & (u < u_hi)
-    knots.append(u[interior])
+    interior = (ln_grid > ln_p_min) & (ln_grid < ln_p_max)
+    knots.append(ln_grid[interior])
     vals.append(delta[interior])
-    if u_hi > u[-1] + 2 * eps:
-        knots.append(np.array([u[-1] + eps]))
+    if ln_p_max > ln_grid[-1] + 2 * eps:
+        knots.append(np.array([ln_grid[-1] + eps]))
         vals.append(np.array([0.0]))
-    knots.append(np.array([u_hi]))
-    vals.append(np.array([np.interp(u_hi, u, delta, left=0.0, right=0.0)]))
-    return np.concatenate(knots), np.concatenate(vals), unit, (u_lo, u_hi)
+    knots.append(np.array([ln_p_max]))
+    vals.append(np.array([np.interp(ln_p_max, ln_grid, delta, left=0.0, right=0.0)]))
+    return np.concatenate(knots), np.concatenate(vals), unit, (ln_p_min, ln_p_max)
 
 
-def _to_prior(u: np.ndarray, rho: np.ndarray, unit: str) -> QuantityDistribution:
-    with np.errstate(divide="ignore"):  # rho == 0 -> log_density == -inf is valid
-        log_density = np.log(rho)
+def _to_prior(
+    ln_period: np.ndarray, density: np.ndarray, unit: str
+) -> QuantityDistribution:
+    """Wrap knots and a density per unit ln-period as a period prior."""
+    with np.errstate(divide="ignore"):  # density == 0 -> log_density == -inf is valid
+        log_density = np.log(density)
     return QuantityDistribution(
-        LogGridDensity(jnp.asarray(u), jnp.asarray(log_density)), unit
+        LogGridDensity(jnp.asarray(ln_period), jnp.asarray(log_density)), unit
     )
 
 
@@ -157,17 +188,21 @@ def tempered_period_prior(
     if beta < 0:
         raise ValueError("beta must be non-negative")
 
-    u, delta, unit, (u_lo, u_hi) = _assemble_knots(result, period_min, period_max, unit)
+    ln_period, delta, unit, (ln_p_min, ln_p_max) = _assemble_knots(
+        result, period_min, period_max, unit
+    )
     w = np.exp(beta * (delta - np.max(delta)))
-    rho = (1.0 - floor) * w / np.trapezoid(w, u) + floor / (u_hi - u_lo)
-    return _to_prior(u, rho, unit)
+    density = (1.0 - floor) * w / np.trapezoid(w, ln_period) + floor / (
+        ln_p_max - ln_p_min
+    )
+    return _to_prior(ln_period, density, unit)
 
 
 def _select_peaks(
-    u: np.ndarray,
+    ln_period: np.ndarray,
     delta: np.ndarray,
     height_drop: float,
-    pw: float,
+    peak_width: float,
     max_peaks: int,
 ) -> np.ndarray:
     """Strict local maxima within ``height_drop`` of the best, after suppression.
@@ -178,21 +213,21 @@ def _select_peaks(
     reach hundreds of nats; astrometry, where the orbit is a small
     perturbation on the marginalized 5-parameter astrometric signal, only a
     few). Real periodograms carry many spurious local maxima riding on alias
-    and noise structure; candidates within one peak width (``pw``, in
-    frequency) of a stronger kept peak are suppressed, and at most the
-    ``max_peaks`` strongest survivors are returned. The global maximum always
-    qualifies, so at least one peak is always found (unless the periodogram is
-    perfectly flat).
+    and noise structure; candidates within one ``peak_width`` (in frequency) of
+    a stronger kept peak are suppressed, and at most the ``max_peaks``
+    strongest survivors are returned. The global maximum always qualifies, so
+    at least one peak is always found (unless the periodogram is perfectly
+    flat).
     """
     cut = float(np.max(delta)) - height_drop
     is_peak = (
         (delta[1:-1] > delta[:-2]) & (delta[1:-1] > delta[2:]) & (delta[1:-1] >= cut)
     )
-    candidates = np.arange(1, u.shape[0] - 1)[is_peak]
+    candidates = np.arange(1, ln_period.shape[0] - 1)[is_peak]
     kept: list[int] = []
-    f = np.exp(-u)
+    frequency = np.exp(-ln_period)
     for i in candidates[np.argsort(delta[candidates])[::-1]]:
-        if all(abs(f[i] - f[j]) > pw for j in kept):
+        if all(abs(frequency[i] - frequency[j]) > peak_width for j in kept):
             kept.append(int(i))
         if len(kept) == max_peaks:
             break
@@ -248,14 +283,16 @@ def peak_period_prior(
         raise ValueError("max_peaks must be at least 1")
     if height_drop <= 0:
         raise ValueError("height_drop must be positive")
-    u, delta, unit, (u_lo, u_hi) = _assemble_knots(result, period_min, period_max, unit)
+    ln_period, delta, unit, (ln_p_min, ln_p_max) = _assemble_knots(
+        result, period_min, period_max, unit
+    )
 
     if peak_width is None:
-        pw = 1.0 / float(ustrip(unit, result.t_span))
+        width = 1.0 / float(ustrip(unit, result.t_span))
     else:
-        pw = float(ustrip(f"1/({unit})", peak_width))
+        width = float(ustrip(f"1/({unit})", peak_width))
 
-    peak_idx = _select_peaks(u, delta, height_drop, pw, max_peaks)
+    peak_idx = _select_peaks(ln_period, delta, height_drop, width, max_peaks)
 
     if peak_idx.size == 0:
         warnings.warn(
@@ -265,53 +302,71 @@ def peak_period_prior(
             UserWarning,
             stacklevel=2,
         )
-        rho_peaks = np.full_like(u, 1.0 / (u_hi - u_lo))
+        peak_density = np.full_like(ln_period, 1.0 / (ln_p_max - ln_p_min))
     else:
-        rho_peaks = np.zeros_like(u)
+        peak_density = np.zeros_like(ln_period)
         for i in peak_idx:
-            u_p = u[i]
-            # |du| = |df| / f: a full width pw in frequency at f_p = exp(-u_p)
-            # is a half-width (pw/2) * exp(u_p) in ln-period. Clamp to the
-            # local knot spacing so every top-hat covers at least one segment.
-            h = 0.5 * pw * np.exp(u_p)
-            h = max(h, u[i] - u[i - 1], u[i + 1] - u[i])
-            rho_peaks += np.where(np.abs(u - u_p) <= h, 1.0 / (2.0 * h), 0.0)
-        rho_peaks /= peak_idx.size
+            ln_p_peak = ln_period[i]
+            # |d ln P| = |df| / f: a full width `width` in frequency at
+            # f_peak = exp(-ln_p_peak) is a half-width (width/2) * exp(ln_p_peak)
+            # in ln-period. Clamp to the local knot spacing so every top-hat
+            # covers at least one segment.
+            half_width = 0.5 * width * np.exp(ln_p_peak)
+            half_width = max(
+                half_width,
+                ln_period[i] - ln_period[i - 1],
+                ln_period[i + 1] - ln_period[i],
+            )
+            peak_density += np.where(
+                np.abs(ln_period - ln_p_peak) <= half_width,
+                1.0 / (2.0 * half_width),
+                0.0,
+            )
+        peak_density /= peak_idx.size
 
-    rho = (1.0 - floor) * rho_peaks + floor / (u_hi - u_lo)
-    return _to_prior(u, rho, unit)
+    density = (1.0 - floor) * peak_density + floor / (ln_p_max - ln_p_min)
+    return _to_prior(ln_period, density, unit)
 
 
-def attach_ln_pint(
+def attach_interim_period_prior(
     samples: Samples,
     period_prior: QuantityDistribution,
     *,
-    name: str = LN_PINT_PERIOD_KEY,
+    name: str = LN_INTERIM_PERIOD_PRIOR_KEY,
 ) -> Samples:
-    """Attach the per-sample interim period prior log-density to ``samples``.
+    """Record each sample's interim period prior log-density on ``samples``.
+
+    The *interim prior* is the period prior these samples were actually drawn
+    under. When it is periodogram-informed it differs from source to source, so
+    population-level (hierarchical) inference has to divide it back out per
+    sample: the per-source estimator is importance sampling with the interim
+    prior as its proposal. This function evaluates that proposal density at
+    every retained sample and stores it, so the population step can just read
+    the column.
 
     The stored value is the log-density **per unit ln-period**,
     ``period_prior.log_prob(P) + ln(P / unit)``, which is invariant under a
-    change of the prior's time unit. (Density per unit ``log10`` period adds
-    ``ln(ln 10)``; density per unit period in unit ``u`` subtracts
-    ``ln(P / u)``.)
+    change of the prior's time unit. Population densities must be converted to
+    the same measure before forming weight ratios: a density per unit ``log10``
+    period adds ``ln(ln 10)``; a density per unit period in unit ``u``
+    subtracts ``ln(P / u)``.
 
     The column is added to ``samples.nonlinear`` as a dimensionless extra
     parameter, so it flows through ``pad_and_stack_samples`` and
-    ``to_hdf5``/``from_hdf5`` unchanged — exactly what the population-level
-    reweighting step needs to divide out per-source interim priors.
+    ``to_hdf5``/``from_hdf5`` unchanged.
 
     Works with any scalar-unit period prior (e.g. ``QD(LogUniform, "day")``),
-    not only the grid priors built here. Returns a new ``Samples``; the input
-    is unchanged.
+    not only the grid priors built here — the classic shared-prior case is just
+    the special case where every source has the same interim prior. Returns a
+    new ``Samples``; the input is unchanged.
     """
     unit = period_prior.unit
     if not isinstance(unit, str):
         raise TypeError("period_prior must have a single scalar unit")
     p = ustrip(unit, samples["period"])
-    ln_pint = period_prior.distribution.log_prob(p) + jnp.log(p)
+    ln_interim = period_prior.distribution.log_prob(p) + jnp.log(p)
     return Samples(
-        nonlinear={**samples.nonlinear, name: Q(ln_pint, "")},
+        nonlinear={**samples.nonlinear, name: Q(ln_interim, "")},
         linear=samples.linear,
         data_type=samples.data_type,
         metadata=samples.metadata,

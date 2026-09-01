@@ -205,9 +205,12 @@ src/harv/
 ├── periodogram/             # Periodogram-informed interim period priors
 │   ├── grid.py              # frequency_grid
 │   ├── core.py              # periodogram(), PeriodogramResult
-│   ├── distribution.py      # LogGridDensity
-│   ├── priors.py            # tempered_period_prior, peak_period_prior, attach_ln_pint
-│   └── io.py                # save_period_prior / load_period_prior
+│   └── priors.py            # tempered_period_prior, peak_period_prior,
+│                            #   attach_interim_period_prior
+├── stats/                   # Statistical utilities
+│   ├── grid_density.py      # LogGridDensity
+│   ├── numpyro_ext.py       # vendored numpyro-ext (MarginalizedLinear, ...)
+│   └── linear_op.py         # vendored linear operators
 ├── plot.py                  # get_t_grid and plotting utilities
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
@@ -1441,6 +1444,7 @@ sampling efficient.
 | `model`              | `AbstractComponentModel \| JointModel` | Model template (no data or linear prior stored)              |
 | `marginalized_names` | `tuple[str, ...] \| None`              | Optional subset of linear params to analytically marginalize |
 | `batch_size`         | `int` (static)                         | Samples vmapped at once (default: 100,000)                   |
+| `min_evidence_ess`   | `float` (static)                       | Evidence-ESS bar for the under-resolution warning (default: 3.0; see "Interpreting acceptance") |
 
 `get_extensions()` walks the attached model: returns `model.extensions` for a
 single component model, or `dict[component_name, tuple[Extension, ...]]` for a
@@ -1556,12 +1560,23 @@ and the `max`-normalization — is dominated by a single draw, so the run is
 under-resolved.
 
 - `run(...)` and `run_with_samples(...)` emit a `UserWarning` when
-  `logZ_int_ess < 3` (the evidence is dominated by ≲3 effective draws),
-  regardless of `return_evidence_stats`. It is a filterable `UserWarning`;
-  silence it in population loops via `warnings.catch_warnings`.
-- `Samples.acceptance_diagnostics()` (requires `return_evidence_stats=True`)
-  returns `{n_prior_samples, n_accepted, evidence_ess, max_log_likelihood,
-  logZ_int, well_resolved, message}` for inspection.
+  `logZ_int_ess < RejectionSampler.min_evidence_ess` (the evidence is dominated
+  by that few effective draws), regardless of `return_evidence_stats`. It is a
+  filterable `UserWarning`; silence it in population loops via
+  `warnings.catch_warnings`.
+- `Samples.acceptance_diagnostics(*, min_evidence_ess=MIN_EVIDENCE_ESS)`
+  (requires `return_evidence_stats=True`) returns `{n_prior_samples,
+  n_accepted, evidence_ess, min_evidence_ess, max_log_likelihood, logZ_int,
+  well_resolved, message}` for inspection.
+
+**The threshold is a convention, and is user-controlled.** There is no sharp
+transition to calibrate against; `harv.samplers.samples.MIN_EVIDENCE_ESS = 3.0`
+is the default because it is where the delta-method MC error on `logZ_int`
+(`logZ_int_mcse = sqrt(1/ESS − 1/M)`) reaches ≈0.6 nats — the log-evidence
+uncertain at the factor-of-two level. Set it per sampler
+(`RejectionSampler(prior, model, min_evidence_ess=10.0)`, a static field) or
+per call (`samples.acceptance_diagnostics(min_evidence_ess=10.0)`); `0.0`
+silences the check and `float("inf")` always flags.
 
 **Recommended workflow for peaked likelihoods:** use the rejection sampler
 (ideally with a periodogram-informed period prior) to *locate* the mode — check
@@ -1907,10 +1922,11 @@ per-source `Samples` before stacking.
 
 Reserved extra-column names:
 
-- `ln_pint_period` — the per-sample interim period prior log-density (per unit
-  natural-log period), written by `harv.periodogram.attach_ln_pint` (see
-  "Periodogram and interim period priors"). The key is exported as
-  `harv.periodogram.LN_PINT_PERIOD_KEY`.
+- `ln_interim_period_prior` — the per-sample interim period prior log-density
+  (per unit natural-log period), written by
+  `harv.periodogram.attach_interim_period_prior` (see "Periodogram and interim
+  period priors"). The key is exported as
+  `harv.periodogram.LN_INTERIM_PERIOD_PRIOR_KEY`.
 
 Parameter arrays may carry one or more leading batch dimensions -- for example
 `(N_stars, K_max)` after [`pad_and_stack_samples`](#stacking-per-entity-samples).
@@ -1983,8 +1999,9 @@ sampling take the `data` object; all support single-component samples only
 
 - `map_sample(return_index=False) -> Samples` — the maximum a posteriori sample
   (highest `ln_posterior`), as a length-1 `Samples`. Requires `return_logprobs`.
-- `acceptance_diagnostics() -> dict` — whether the rejection run resolved the
-  posterior (see "Interpreting acceptance"). Requires `return_evidence_stats`.
+- `acceptance_diagnostics(*, min_evidence_ess=MIN_EVIDENCE_ESS) -> dict` —
+  whether the rejection run resolved the posterior (see "Interpreting
+  acceptance"). Requires `return_evidence_stats`.
 - `period_unimodal(data) -> bool` — whether the period samples lie in one mode.
 - `period_modes(data, n_clusters=2) -> (bool, Q, ndarray)` — K-means clustering
   of `log(period)` into modes (needs the optional `scikit-learn` dependency).
@@ -2021,6 +2038,44 @@ These wrap the pure functions in `harv.kepler.masses` (see "Mass functions").
   minimum companion mass); astrometry samples use the dark-companion astrometric
   mass function and ignore `sini`.
 - `minimum_companion_mass(m1) -> Q` — convenience for `companion_mass(m1, sini=1)`.
+
+______________________________________________________________________
+
+## Statistical utilities (`harv.stats`)
+
+Distributions and linear-algebra helpers that are not specific to any one
+model. `harv.stats.numpyro_ext` and `harv.stats.linear_op` are **vendored**
+from `numpyro-ext` (see "Why `MarginalizedLinear` from numpyro-ext?") and are
+exempt from linting and type checking as third-party code; harv's own
+statistical code lives in its own modules alongside them and is checked
+normally.
+
+### `LogGridDensity`
+
+`harv.stats.LogGridDensity` is a numpyro `Distribution` over `x > 0` whose pdf
+is **piecewise-linear in `u = ln x`** on fixed knots `(ln_grid, log_density)`.
+It is the backbone of the periodogram prior builders (see "Prior builders"),
+but has nothing periodogram-specific in it:
+
+- `log_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
+  normalization is trapezoid-exact. Zero density (`-inf` log-density) knots
+  are allowed.
+- `log_prob(x)` is the density **per unit x** (same convention as
+  `dist.LogUniform`); `log_prob_ln(x) = log_prob(x) + ln x` is the density per
+  unit `ln x` and is invariant under a change of x's unit.
+- `cdf` / `icdf` are closed-form per segment (piecewise-quadratic CDF;
+  "citardauq" quadratic inversion, stable as the slope → 0); `sample` is
+  inverse-CDF. All operations are shape-static and jit/vmap-safe; instances
+  with equal knot counts share a pytree structure.
+- `support` is `constraints.interval(exp(ln_grid[0]), exp(ln_grid[-1]))`, so
+  `biject_to` and hence `NumpyroSampler` MCMC continuation work. Caveat: the
+  gradient of `log_prob` is discontinuous at the knots (acceptable for NUTS
+  in practice).
+
+Wrapped in a `QD` (e.g. `QD(LogGridDensity(...), "day")`) it is a **drop-in
+period prior**: pass it via the `period=` override of any `default_prior(...)`
+or set `nonlinear_priors["period"]` directly. **No sampler changes are
+involved anywhere in this feature.**
 
 ______________________________________________________________________
 
@@ -2158,38 +2213,15 @@ rejection / MCMC) across many seeds and regimes. Until then the API requires
 the user to choose. See the `TODO` in
 `harv.models.parameterizations.fourier`.
 
-### `LogGridDensity`
-
-A numpyro `Distribution` over `x > 0` whose pdf is **piecewise-linear in
-`u = ln x`** on fixed knots `(ln_grid, log_density)` — the shared backbone of
-both prior builders:
-
-- `log_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
-  normalization is trapezoid-exact. Zero density (`-inf` log-density) knots
-  are allowed.
-- `log_prob(x)` is the density **per unit x** (same convention as
-  `dist.LogUniform`); `log_prob_ln(x) = log_prob(x) + ln x` is the density per
-  unit `ln x` and is invariant under a change of x's unit.
-- `cdf` / `icdf` are closed-form per segment (piecewise-quadratic CDF;
-  "citardauq" quadratic inversion, stable as the slope → 0); `sample` is
-  inverse-CDF. All operations are shape-static and jit/vmap-safe; instances
-  with equal knot counts share a pytree structure.
-- `support` is `constraints.interval(exp(ln_grid[0]), exp(ln_grid[-1]))`, so
-  `biject_to` and hence `NumpyroSampler` MCMC continuation work. Caveat: the
-  gradient of `log_prob` is discontinuous at the knots (acceptable for NUTS
-  in practice).
-
-Wrapped in a `QD` (e.g. `QD(LogGridDensity(...), "day")`) it is a **drop-in
-period prior**: pass it via the `period=` override of any `default_prior(...)`
-or set `nonlinear_priors["period"]` directly. **No sampler changes are
-involved anywhere in this feature.**
-
 ### Prior builders
 
 Both builders map a `PeriodogramResult` onto ln-period knots on the requested
-domain `[period_min, period_max]` (defaults: the grid range; the domain may
+domain `[period_min, period_max]`, returning a `QD`-wrapped
+[`LogGridDensity`](#loggriddensity) (defaults: the grid range; the domain may
 extend beyond the grid, where Δ continues flat at 0 so the tempered prior is
-floor-like there), and both **mix in a log-uniform floor of weight `floor`**
+floor-like there — a knot pinned just outside the grid keeps that extension
+flat instead of ramping across it), and both **mix in a log-uniform floor of
+weight `floor`**
 (λ, default 0.1). Since a log-uniform is constant in `ln P`, the mixture is
 itself a grid density — one distribution class covers everything.
 
@@ -2252,28 +2284,20 @@ exactly (its data-dependence does not bias the estimator). Requirements:
    relative to a log-uniform interim prior. `floor=0` voids the guarantee
    (a `UserWarning` is emitted).
 1. **Per-source evaluability** — the reweighting needs `ln p_int,n` at each
-   retained sample. `attach_ln_pint(samples, period_prior)` evaluates and
-   stores it as the reserved extra column `ln_pint_period` (see "Extra
-   parameter columns"), which flows through `pad_and_stack_samples` into the
-   population step. It works for any scalar-unit period prior, including
+   retained sample. `attach_interim_period_prior(samples, period_prior)`
+   evaluates and stores it as the reserved extra column
+   `ln_interim_period_prior` (see "Extra parameter columns"), which flows
+   through `pad_and_stack_samples` into the population step. It works for any scalar-unit period prior, including
    `QD(LogUniform, ...)` for the classic shared-prior case.
 1. **Interim evidence** — the per-source `Z_int,n` from
    `run(..., return_evidence_stats=True)` (`metadata["logZ_int"]`) enters the
    population likelihood as usual; nothing changes with per-source priors.
 
-**Measure convention:** the stored `ln_pint_period` is the log-density **per
-unit natural-log period** (`log_prob(P) + ln(P/unit)`), which is invariant
+**Measure convention:** the stored `ln_interim_period_prior` is the log-density
+**per unit natural-log period** (`log_prob(P) + ln(P/unit)`), which is invariant
 under the prior's time unit. Convert to a density in `log10 P` by adding
 `ln(ln 10)`; to a density in P (unit u) by subtracting `ln(P/u)`. Population
 densities must be expressed in the same measure before forming weight ratios.
-
-`save_period_prior(file, prior, *, group="interim_period_prior",
-metadata=None)` / `load_period_prior(file, *, group=...)` persist the prior
-spec (knots + log-densities + unit + scalar provenance attrs) as a small HDF5
-group. The group can live in the **same file** as `Samples.to_hdf5` output —
-`Samples.from_hdf5` reads only its own groups — so a per-source posterior file
-can carry its interim prior alongside the samples. The round trip is exact
-(the stored arrays are the constructor arguments).
 
 ### Per-source priors vs. the shared prior cache
 
@@ -2647,7 +2671,9 @@ prior = hm.StandardRV().default_prior(
     sigma_v0=Q(10, "km/s"),
 )
 samples = RejectionSampler(prior, RVModel()).run(data, n_prior_samples=100_000)
-samples = hp.attach_ln_pint(samples, prior.nonlinear_priors["period"])  # for reweighting
+samples = hp.attach_interim_period_prior(  # for population reweighting
+    samples, prior.nonlinear_priors["period"]
+)
 
 # --- Gaia astrometry only ---
 prior = hm.StandardGaiaAstrometry().default_prior(

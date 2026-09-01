@@ -35,17 +35,31 @@ except ImportError:
 
 __all__ = ("Samples", "pad_and_stack_samples")
 
-# Minimum evidence effective sample size (logZ_int_ess) below which a rejection
-# run is considered under-resolved: the marginal-likelihood evidence integral is
-# then dominated by a handful of prior draws, so max_log_likelihood may not have
-# converged and the accepted-sample count is not a reliable posterior size.
+# Default minimum evidence effective sample size (logZ_int_ess) below which a
+# rejection run is reported as under-resolved: the marginal-likelihood integral
+# is then dominated by a handful of prior draws, so max_log_likelihood may not
+# have converged and the accepted-sample count is not a reliable posterior size.
+#
+# There is no sharp transition to calibrate against, so this is a convention,
+# not a derived quantity: ESS = 3 is where the delta-method MC error on
+# logZ_int (``sqrt(1/ESS - 1/M)``, reported as ``logZ_int_mcse``) reaches ~0.6
+# nats, i.e. the log-evidence is uncertain at the factor-of-two level. Callers
+# who want a different bar set ``min_evidence_ess`` on
+# :class:`~harv.samplers.RejectionSampler` or pass it to
+# :meth:`Samples.acceptance_diagnostics`; ``0.0`` silences the check and
+# ``float("inf")`` always flags.
 MIN_EVIDENCE_ESS = 3.0
 
 _EVIDENCE_KEYS = ("logZ_int", "logZ_int_ess", "max_log_likelihood", "n_prior_samples")
 
 
 def _assess_resolution(
-    *, n_prior: int, n_accepted: int, evidence_ess: float, max_log_likelihood: float
+    *,
+    n_prior: int,
+    n_accepted: int,
+    evidence_ess: float,
+    max_log_likelihood: float,
+    min_evidence_ess: float = MIN_EVIDENCE_ESS,
 ) -> tuple[bool, str]:
     """Judge whether a rejection run resolved the posterior; return a message.
 
@@ -56,8 +70,11 @@ def _assess_resolution(
     size (see ``docs/spec.md``, "Interpreting acceptance"). Used by both
     :meth:`Samples.acceptance_diagnostics` and the sampler's under-resolution
     warning.
+
+    ``min_evidence_ess`` is the bar the run is held to (default
+    :data:`MIN_EVIDENCE_ESS`).
     """
-    well_resolved = evidence_ess >= MIN_EVIDENCE_ESS
+    well_resolved = evidence_ess >= min_evidence_ess
     if well_resolved:
         msg = (
             f"Resolved: ~{evidence_ess:.0f} effective prior samples (of {n_prior}) "
@@ -68,7 +85,8 @@ def _assess_resolution(
     else:
         msg = (
             f"Under-resolved rejection run: the evidence integral is dominated by "
-            f"~{evidence_ess:.1f} effective prior sample(s) of {n_prior}, so "
+            f"~{evidence_ess:.1f} effective prior sample(s) of {n_prior} "
+            f"(below min_evidence_ess={min_evidence_ess:g}), so "
             f"max_log_likelihood={max_log_likelihood:.1f} may not have converged and "
             f"the accepted-sample count ({n_accepted}) is not a reliable posterior "
             "size. Increase n_prior_samples (compare max_log_likelihood across runs "
@@ -1066,7 +1084,9 @@ class Samples(eqx.Module):
             return map_sample, idx
         return map_sample
 
-    def acceptance_diagnostics(self) -> dict[str, Any]:
+    def acceptance_diagnostics(
+        self, *, min_evidence_ess: float = MIN_EVIDENCE_ESS
+    ) -> dict[str, Any]:
         """Assess whether the rejection run resolved the posterior.
 
         The rejection step accepts each prior draw with probability
@@ -1082,11 +1102,20 @@ class Samples(eqx.Module):
         Requires the sampler to have been run with
         ``return_evidence_stats=True``.
 
+        Parameters
+        ----------
+        min_evidence_ess
+            Evidence ESS at or above which the run counts as resolved. Defaults
+            to :data:`MIN_EVIDENCE_ESS` (3.0), the same bar the sampler warns
+            at; see that constant for what the number means and how to pick
+            another. ``0.0`` always reports resolved, ``float("inf")`` never
+            does.
+
         Returns
         -------
             A dict with ``n_prior_samples``, ``n_accepted``, ``evidence_ess``,
-            ``max_log_likelihood``, ``logZ_int``, a boolean ``well_resolved``,
-            and a human-readable ``message``.
+            ``min_evidence_ess``, ``max_log_likelihood``, ``logZ_int``, a
+            boolean ``well_resolved``, and a human-readable ``message``.
 
         Raises
         ------
@@ -1110,11 +1139,13 @@ class Samples(eqx.Module):
             n_accepted=n_accepted,
             evidence_ess=ess,
             max_log_likelihood=max_ll,
+            min_evidence_ess=min_evidence_ess,
         )
         return {
             "n_prior_samples": n_prior,
             "n_accepted": n_accepted,
             "evidence_ess": ess,
+            "min_evidence_ess": min_evidence_ess,
             "max_log_likelihood": max_ll,
             "logZ_int": float(self.metadata["logZ_int"]),
             "well_resolved": well_resolved,

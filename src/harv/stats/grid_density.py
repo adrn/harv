@@ -1,13 +1,11 @@
 """Grid-based density distribution over a positive variable (e.g. period).
 
-TODO: review and move to harv.stats
-
 This module implements :class:`LogGridDensity`, the numpyro distribution that
 backs periodogram-informed interim period priors (see ``docs/spec.md``,
-"Periodogram and interim period priors"). The pdf is piecewise-linear in
-``u = ln(x)`` on a fixed knot grid, with exact (trapezoid) normalization and
-inverse-CDF sampling — all shape-static and safe under ``jax.jit`` and
-``jax.vmap``.
+"Statistical utilities" and "Periodogram and interim period priors"). The pdf
+is piecewise-linear in ``u = ln(x)`` on a fixed knot grid, with exact
+(trapezoid) normalization and inverse-CDF sampling — all shape-static and safe
+under ``jax.jit`` and ``jax.vmap``.
 """
 
 __all__ = ("LogGridDensity",)
@@ -58,7 +56,7 @@ class LogGridDensity(Distribution):
     --------
     >>> import jax
     >>> import jax.numpy as jnp
-    >>> from harv.periodogram import LogGridDensity
+    >>> from harv.stats import LogGridDensity
     >>> d = LogGridDensity(jnp.log(jnp.array([1.0, 10.0, 100.0])), jnp.zeros(3))
     >>> x = d.sample(jax.random.key(0), (4,))
     >>> bool(jnp.all((x >= 1.0) & (x <= 100.0)))

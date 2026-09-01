@@ -42,7 +42,7 @@ from harv.samplers._prior_resolution import (
     validate_extension_priors as _validate_extension_priors,
 )
 from harv.samplers.base import AbstractSampler, _validate_data
-from harv.samplers.samples import Samples, _assess_resolution
+from harv.samplers.samples import MIN_EVIDENCE_ESS, Samples, _assess_resolution
 
 __all__ = ("RejectionSampler",)
 
@@ -270,6 +270,12 @@ class RejectionSampler(AbstractSampler):
     batch_size
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
+    min_evidence_ess
+        Evidence effective sample size (``logZ_int_ess``) below which a run is
+        reported as under-resolved and :meth:`run` emits a ``UserWarning``.
+        Default: :data:`~harv.samplers.samples.MIN_EVIDENCE_ESS` (3.0); see
+        that constant for what the number means. Set ``0.0`` to silence the
+        check, or raise it to be told about marginal runs.
 
     Examples
     --------
@@ -293,6 +299,7 @@ class RejectionSampler(AbstractSampler):
     """
 
     batch_size: int = eqx.field(static=True, default=100_000)
+    min_evidence_ess: float = eqx.field(static=True, default=MIN_EVIDENCE_ESS)
 
     def summary(self) -> str:
         """Return a plain-ASCII summary of this sampler's model and parameters.
@@ -660,6 +667,7 @@ class RejectionSampler(AbstractSampler):
             n_accepted=n_accepted,
             evidence_ess=evidence_meta["logZ_int_ess"],
             max_log_likelihood=evidence_meta["max_log_likelihood"],
+            min_evidence_ess=self.min_evidence_ess,
         )
         if not well_resolved:
             warnings.warn(resolution_msg, UserWarning, stacklevel=2)

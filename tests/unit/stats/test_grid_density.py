@@ -1,4 +1,4 @@
-"""Unit tests for harv.periodogram.distribution.LogGridDensity."""
+"""Unit tests for harv.stats.grid_density.LogGridDensity."""
 
 import jax
 import jax.numpy as jnp
@@ -10,9 +10,9 @@ from unxt import Q, ustrip
 
 import harv.models as hm
 from harv.distributions import QD
-from harv.periodogram import LogGridDensity
 from harv.samplers import RejectionSampler
 from harv.simulate import simulate_rv_sb1_data
+from harv.stats import LogGridDensity
 
 
 def _random_grid_density(seed: int, n: int) -> LogGridDensity:

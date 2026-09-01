@@ -314,7 +314,13 @@ src = ["src"]
         "RUF002",  # ambiguous unicode
         "RUF003",  # ambiguous unicode
     ]
-    "src/harv/stats/*.py" = [
+    # Vendored from numpyro-ext -- not ours to lint. Scoped to the vendored
+    # modules by name so harv's own code under harv/stats (e.g. grid_density.py)
+    # is linted normally.
+    "src/harv/stats/numpyro_ext.py" = [
+        "ALL",
+    ]
+    "src/harv/stats/linear_op.py" = [
         "ALL",
     ]
     "docs/**/*" = [

@@ -152,3 +152,67 @@ class TestSamplerWarning:
                 _broad_data(), n_prior_samples=2_000_000, seed=0
             )
         assert not any("Under-resolved" in str(w.message) for w in caught)
+
+
+_ASSESS_KW = {"n_prior": 1000, "n_accepted": 5, "max_log_likelihood": -10.0}
+
+
+class TestMinEvidenceEssIsConfigurable:
+    """The under-resolution bar is a convention, so it is user-settable."""
+
+    def test_assess_resolution_respects_a_custom_bar(self):
+        # Resolved at the default bar of 3.0, under-resolved at 10.
+        assert _assess_resolution(evidence_ess=5.0, **_ASSESS_KW)[0]
+        assert not _assess_resolution(
+            evidence_ess=5.0, min_evidence_ess=10.0, **_ASSESS_KW
+        )[0]
+        # A bar of 0 always passes; an infinite bar never does.
+        assert _assess_resolution(evidence_ess=1.0, min_evidence_ess=0.0, **_ASSESS_KW)[
+            0
+        ]
+        assert not _assess_resolution(
+            evidence_ess=1e9, min_evidence_ess=float("inf"), **_ASSESS_KW
+        )[0]
+
+    def test_message_reports_the_bar_it_used(self):
+        _, msg = _assess_resolution(
+            evidence_ess=1.0, min_evidence_ess=10.0, **_ASSESS_KW
+        )
+        assert "min_evidence_ess=10" in msg
+
+    def test_acceptance_diagnostics_takes_the_bar(self):
+        s = Samples(
+            nonlinear={"period": Q([100.0, 101.0], "day")},
+            linear={},
+            data_type="RVModel",
+            metadata={
+                "t_ref": 0.0,
+                "t_ref_unit": "day",
+                "logZ_int": -12.0,
+                "logZ_int_ess": 5.0,
+                "max_log_likelihood": -10.0,
+                "n_prior_samples": 1000,
+            },
+        )
+        assert s.acceptance_diagnostics()["well_resolved"] is True
+        assert s.acceptance_diagnostics()["min_evidence_ess"] == MIN_EVIDENCE_ESS
+
+        strict = s.acceptance_diagnostics(min_evidence_ess=10.0)
+        assert strict["well_resolved"] is False
+        assert strict["min_evidence_ess"] == 10.0
+        assert "Under-resolved" in strict["message"]
+
+    def test_sampler_field_silences_the_warning(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            RejectionSampler(_prior(), hm.RVModel(), min_evidence_ess=0.0).run(
+                _peaked_data(), n_prior_samples=200_000, seed=0
+            )
+        assert not any("Under-resolved" in str(w.message) for w in caught)
+
+    def test_sampler_field_can_raise_the_bar(self):
+        # A run that is resolved at the default bar warns at a stricter one.
+        with pytest.warns(UserWarning, match="Under-resolved"):
+            RejectionSampler(_prior(), hm.RVModel(), min_evidence_ess=float("inf")).run(
+                _broad_data(), n_prior_samples=2_000_000, seed=0
+            )
