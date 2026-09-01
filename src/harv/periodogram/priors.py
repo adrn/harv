@@ -91,6 +91,20 @@ def _assemble_knots(
     delta = np.asarray(result.delta_ln_likelihood, dtype=np.float64)[::-1]
     ln_grid = np.log(p_grid)
 
+    # A non-finite Delta makes every downstream density meaningless, and would
+    # otherwise surface as an opaque "log_density must have positive total mass"
+    # from LogGridDensity. The usual cause is float32: on high-SNR data the
+    # marginal log-likelihoods reach O(1e4) nats and the periodogram overflows.
+    if not np.all(np.isfinite(delta)):
+        n_bad = int(np.count_nonzero(~np.isfinite(delta)))
+        raise ValueError(
+            f"delta_ln_likelihood is non-finite at {n_bad} of {delta.size} grid "
+            "points, so no interim prior can be built from it. This usually means "
+            "the periodogram was evaluated in float32 on data whose marginal "
+            "log-likelihoods overflow it; enable float64 with "
+            'jax.config.update("jax_enable_x64", True) and recompute.'
+        )
+
     ln_p_min = (
         float(np.log(ustrip(unit, period_min)))
         if period_min is not None
