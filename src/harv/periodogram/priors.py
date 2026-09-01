@@ -267,7 +267,10 @@ def peak_period_prior(
     of the global maximum each receive a top-hat in ln-period of full frequency
     width ``peak_width`` (default ``1/t_span``, the natural periodogram peak
     width) and **equal mass** ``1/n_peaks`` regardless of peak amplitude — the
-    amplitude-agnostic alternative to :func:`tempered_period_prior`. Candidate
+    amplitude-agnostic alternative to :func:`tempered_period_prior`. Each
+    top-hat is normalized by its mass on the knot grid, so the equal share is
+    exact even for a peak clipped by the domain edge or rendered on knots
+    coarser than its width. Candidate
     maxima within one peak width of a stronger peak are suppressed, and at most
     the ``max_peaks`` strongest peaks are kept (this bounds the mass dilution:
     each kept peak carries at least ``(1 - floor) / max_peaks``). The peak
@@ -326,18 +329,21 @@ def peak_period_prior(
             # |d ln P| = |df| / f: a full width `width` in frequency at
             # f_peak = exp(-ln_p_peak) is a half-width (width/2) * exp(ln_p_peak)
             # in ln-period. Clamp to the local knot spacing so every top-hat
-            # covers at least one segment.
+            # covers at least one segment (peak indices are interior, so the
+            # neighbours always exist and the clamped mass is never zero).
             half_width = 0.5 * width * np.exp(ln_p_peak)
             half_width = max(
                 half_width,
                 ln_period[i] - ln_period[i - 1],
                 ln_period[i + 1] - ln_period[i],
             )
-            peak_density += np.where(
-                np.abs(ln_period - ln_p_peak) <= half_width,
-                1.0 / (2.0 * half_width),
-                0.0,
-            )
+            top_hat = np.where(np.abs(ln_period - ln_p_peak) <= half_width, 1.0, 0.0)
+            # Normalize each top-hat by its mass *as the knots sample it*, not by
+            # its analytic width: LogGridDensity interpolates linearly between
+            # knots, so a top-hat rendered on a coarse grid -- or clipped by the
+            # domain edge -- otherwise carries less than its share, and the equal
+            # mass per peak is only approximate.
+            peak_density += top_hat / np.trapezoid(top_hat, ln_period)
         peak_density /= peak_idx.size
 
     density = (1.0 - floor) * peak_density + floor / (ln_p_max - ln_p_min)

@@ -39,6 +39,16 @@ def _mass_between(prior, p_lo: float, p_hi: float) -> float:
     return float(d.cdf(p_hi) - d.cdf(p_lo))
 
 
+def _peak_mass(prior, p: float, floor: float, half_width: float = 0.2) -> float:
+    """Mass of the top-hat at ``p``, with the log-uniform floor subtracted.
+
+    The window must be wide enough to contain the whole top-hat; the floor is
+    flat in ln-period, so its share of the window is exactly computable.
+    """
+    total = _mass_between(prior, p * np.exp(-half_width), p * np.exp(half_width))
+    return total - floor * (2.0 * half_width) / np.log(P_HI / P_LO)
+
+
 class TestTempered:
     def test_beta_zero_is_loguniform(self):
         prior = hp.tempered_period_prior(_fake_result(), beta=0.0, floor=0.1)
@@ -126,16 +136,18 @@ class TestTempered:
 
 class TestPeaks:
     def test_equal_mass_regardless_of_amplitude(self):
-        """Peaks with 30 vs 20 delta-ln-L get (approximately) equal mass."""
+        """Peaks with 30 vs 20 delta-ln-L get exactly equal mass."""
         floor = 0.1
         # height_drop=15 admits both peaks (global max 30, so keep delta >= 15):
         prior = hp.peak_period_prior(_fake_result(), height_drop=15.0, floor=floor)
-        m1 = _mass_between(prior, 100.0 * np.exp(-0.2), 100.0 * np.exp(0.2))
-        m2 = _mass_between(prior, 300.0 * np.exp(-0.2), 300.0 * np.exp(0.2))
         target = (1.0 - floor) / 2.0
-        assert m1 == pytest.approx(target, rel=0.25)
-        assert m2 == pytest.approx(target, rel=0.25)
-        assert m1 == pytest.approx(m2, rel=0.2)
+        m1 = _peak_mass(prior, 100.0, floor)
+        m2 = _peak_mass(prior, 300.0, floor)
+        # Each top-hat is normalized by its mass as the knots sample it, so the
+        # documented (1 - floor) / n_peaks share is exact, not approximate.
+        assert m1 == pytest.approx(target, rel=1e-4)
+        assert m2 == pytest.approx(target, rel=1e-4)
+        assert _mass_between(prior, P_LO, P_HI) == pytest.approx(1.0, abs=1e-6)
 
     def test_height_drop_excludes_weak_peaks(self):
         # global max 30, drop 5 -> keep delta >= 25 -> only the 30 peak:
@@ -172,8 +184,12 @@ class TestPeaks:
         # peak is dropped:
         m3 = _mass_between(prior, 300.0 * np.exp(-0.2), 300.0 * np.exp(0.2))
         assert m3 < 0.1
-        m1 = _mass_between(prior, 50.0 * np.exp(-0.2), 50.0 * np.exp(0.2))
-        assert m1 == pytest.approx((1.0 - floor) / 2.0, rel=0.25)
+        # Each kept peak carries exactly (1 - floor) / max_peaks -- the bound
+        # the docs state, which the max_peaks cap exists to guarantee.
+        m1 = _peak_mass(prior, 50.0, floor)
+        m2 = _peak_mass(prior, 100.0, floor)
+        assert m1 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
+        assert m2 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
 
     def test_flat_periodogram_falls_back_to_loguniform(self):
         result = _fake_result(peaks=())
