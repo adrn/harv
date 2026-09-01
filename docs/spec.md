@@ -1531,13 +1531,25 @@ component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
   `ln_prior` (the summed nonlinear-prior log-density). These enable
   `Samples.map_sample()` and the `Samples.ln_posterior` property. Default:
   `False`. Supported by both `RejectionSampler.run` and `NumpyroSampler.run`.
-- `return_evidence_stats` -- when `True`, the returned `Samples.metadata`
-  carries the prior-Monte-Carlo evidence statistics `logZ_int`,
-  `logZ_int_mcse`, `logZ_int_ess`, `max_log_likelihood`, and `n_prior_samples`
-  (used by the population-inference reweighting and by
-  `Samples.acceptance_diagnostics()`; see "Interpreting acceptance"). The
-  under-resolution warning is emitted regardless of this flag. Default:
-  `False`.
+  Forced on by `top_k`.
+- `return_evidence_stats` -- when `True`, add prior-Monte-Carlo evidence
+  statistics to `Samples.metadata`, estimated from the **full** `(M,)`
+  log-likelihood array before selection. Default: `False`. Forced on by
+  `top_k`. Keys:
+
+  | key | meaning |
+  | --- | --- |
+  | `logZ_int` | log-evidence, `logsumexp(ln L) - ln M` |
+  | `logZ_int_mcse` | delta-method MC standard error on `logZ_int`, `sqrt(max(0, 1/ESS - 1/M))` |
+  | `logZ_int_ess` | Kish effective sample size of the importance weights, `(Σ L)² / Σ L²` |
+  | `max_log_likelihood` | `max(ln L)` over the library |
+  | `n_prior_samples` | library size `M` |
+
+  `logZ_int_ess` is the diagnostic for whether the prior library resolved this
+  posterior at all: `ESS ≲ 10` means it did not, and the result is a
+  localization rather than a posterior. The under-resolution warning is
+  emitted regardless of this flag; see "Interpreting acceptance" below.
+
 
 ### Interpreting acceptance
 
@@ -1585,24 +1597,6 @@ seeds — then continue with `NumpyroSampler(prior, model).run(data,
 init_samples=...)` to draw the posterior. In this regime the rejection stage is
 a mode-finder, not a posterior sampler: even with the period pinned, the joint
 (eccentricity, phase, `arg_peri`) volume at high SNR is a tiny acceptance target.
-  Forced on by `top_k`.
-- `return_evidence_stats` -- when `True`, add prior-Monte-Carlo evidence
-  statistics to `Samples.metadata`, estimated from the **full** `(M,)`
-  log-likelihood array before selection. Default: `False`. Forced on by
-  `top_k`. Keys:
-
-  | key | meaning |
-  | --- | --- |
-  | `logZ_int` | log-evidence, `logsumexp(ln L) - ln M` |
-  | `logZ_int_mcse` | delta-method MC standard error on `logZ_int`, `sqrt(max(0, 1/ESS - 1/M))` |
-  | `logZ_int_ess` | Kish effective sample size of the importance weights, `(Σ L)² / Σ L²` |
-  | `max_log_likelihood` | `max(ln L)` over the library |
-  | `n_prior_samples` | library size `M` |
-
-  `logZ_int_ess` is the diagnostic for whether the prior library resolved this
-  posterior at all: `ESS ≲ 10` means it did not, and the result is a
-  localization rather than a posterior.
-
 ### Top-K selection (`top_k`)
 
 Rejection returns a data-dependent number of rows — ~1000 for an unconstrained
@@ -2283,7 +2277,19 @@ Usage:
 ```python
 import harv.periodogram as hp
 
-result = hp.periodogram(data, period_min=Q(2.0, "day"), period_max=Q(2000.0, "day"))
+# The Fourier trial model's own prior: required, and entirely explicit.
+fourier_prior = hm.FourierRV(n_terms=2).default_prior(
+    period_min=Q(2.0, "day"),
+    period_max=Q(2000.0, "day"),
+    sigma_amp=Q(30.0, "km/s"),
+    sigma_v0=Q(10.0, "km/s"),
+)
+result = hp.periodogram(
+    data,
+    prior=fourier_prior,
+    period_min=Q(2.0, "day"),
+    period_max=Q(2000.0, "day"),
+)
 prior = hm.StandardRV().default_prior(
     period=hp.tempered_period_prior(result, beta=1.0, floor=0.1),
     sigma_K0=Q(30.0, "km/s"),
