@@ -1,24 +1,22 @@
 """Kepler-free Fourier-series parameterizations.
 
-These parameterizations replace the Keplerian orbit with a truncated Fourier
-series in the mean longitude ``M = 2*pi*(t - t_ref)/P`` whose coefficients are
-all *linear*. The only nonlinear parameter is ``period``: the periastron phase
-is absorbed into each ``(cos, sin)`` amplitude pair, and eccentricity
-distortion of the orbit shape is absorbed by the higher harmonics. No Kepler
-solve occurs anywhere (models dispatch to a mean-longitude branch for these
-classes).
+These parameterizations replace the Keplerian orbit with a truncated Fourier series in
+the mean longitude ``M = 2*pi*(t - t_ref)/P``, and all coefficients are linear (so they
+can be marginalized). The only nonlinear parameter is ``period``: the periastron phase
+is absorbed into each ``(cos, sin)`` amplitude pair, and eccentricity distortion of the
+orbit shape is absorbed by the higher harmonics. No Kepler solve occurs here.
 
-They exist primarily to drive the periodogram (``harv.periodogram``) through
-the standard model/likelihood machinery — one ``model.log_prob`` per trial
-period with every amplitude analytically marginalized — but they are
-first-class parameterizations: extensions (survey offsets, trends), the
-rejection sampler, and joint models work as usual.
+This parameterization drives the Kepler periodogram functionality (``harv.periodogram``)
+through the standard model/likelihood machinery (one ``model.log_prob`` per trial period
+with every amplitude analytically marginalized). But these are also first-class
+parameterizations: extensions (survey offsets, trends), the rejection sampler, and joint
+models work as usual.
 
-TODO(default-amplitude-prior): ``default_prior`` requires explicit amplitude
-scales (``sigma_amp``) by design — there is deliberately no data-driven
-default. What scale guidance (or period-dependent form) to *recommend* is an
-open question: it needs a study against a converged period posterior across
-many seeds and regimes (see docs/spec.md, "Amplitude and nuisance priors").
+TODO(default-amplitude-prior): ``default_prior`` requires explicit amplitude scales
+(``sigma_amp``) by design — there is deliberately no data-driven default. What scale
+guidance (or period-dependent form) to *recommend* is an open question: it needs a study
+against a converged period posterior across many seeds and regimes (see docs/spec.md,
+"Amplitude and nuisance priors").
 """
 
 __all__ = ("FourierGaiaAstrometry", "FourierRV")

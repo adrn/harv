@@ -47,8 +47,7 @@ class AbstractData(eqx.Module):
     def __check_init__(self) -> None:
         """Compute t_ref from mean time if not provided."""
         if self.t_ref is None:
-            # TODO: This is ugly - do we really need a concrete numpy mean here?
-            # Use concrete NumPy mean so t_ref is a plain Python float wrapped in Q.
+            # We use np.mean so t_ref is a plain Python float wrapped in Q.
             # This avoids placing a JAX-traced array in a static metadata field
             # downstream.
             time_unit = str(self.time.unit)

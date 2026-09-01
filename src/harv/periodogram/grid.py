@@ -1,7 +1,5 @@
 """Frequency-grid construction for periodograms.
 
-TODO: to review
-
 See ``docs/spec.md``, "Periodogram and interim period priors".
 """
 
@@ -33,7 +31,7 @@ def frequency_grid(
     period_min: ScalarQTime,
     period_max: ScalarQTime | None = None,
     t_span: ScalarQTime | None = None,
-    samples_per_peak: int = 5,
+    samples_per_peak: int = 8,
     max_period_factor: float = 1.0,
     n_grid: int | None = None,
 ) -> NFrequency:
