@@ -207,6 +207,7 @@ src/harv/
 │   ├── rejection_prior.py   # HarvPrior
 │   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
 │   ├── rejection.py         # RejectionSampler
+│   ├── _peak.py             # likelihood-only peak refinement
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
 │   └── samples.py           # Samples container
 ├── periodogram/             # Periodogram-informed interim period priors
@@ -1559,6 +1560,7 @@ sampler.run(
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
     return_evidence_stats: bool = False,
+    refine_peak: int = 0,
 ) -> Samples
 ```
 
@@ -1596,6 +1598,11 @@ component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
   | `max_log_likelihood` | `max(ln L)` over the library |
   | `n_prior_samples` | library size `M` |
 
+  `run(..., refine_peak=N)` adds one further key, `refined_max_log_likelihood`
+  — the marginal-likelihood peak used as the acceptance threshold.
+  `max_log_likelihood` keeps its meaning (the library maximum) either way, since
+  `logZ_int*` and `acceptance_diagnostics` are defined in terms of the library.
+
   `logZ_int_ess` is the diagnostic for whether the prior library resolved this
   posterior at all: `ESS ≲ 10` means it did not, and the result is a
   localization rather than a posterior. The under-resolution warning is
@@ -1627,10 +1634,46 @@ under-resolved.
   by that few effective draws), regardless of `return_evidence_stats`. It is a
   filterable `UserWarning`; silence it in population loops via
   `warnings.catch_warnings`.
-- `Samples.acceptance_diagnostics(*, min_evidence_ess=MIN_EVIDENCE_ESS)`
-  (requires `return_evidence_stats=True`) returns `{n_prior_samples,
-  n_accepted, evidence_ess, min_evidence_ess, max_log_likelihood, logZ_int,
-  well_resolved, message}` for inspection.
+- `Samples.acceptance_diagnostics(*, min_evidence_ess=MIN_EVIDENCE_ESS,
+  sampler=None, data=None)` (requires `return_evidence_stats=True`) returns
+  `{n_prior_samples, n_accepted, evidence_ess, min_evidence_ess,
+  max_log_likelihood, logZ_int, well_resolved, message}` for inspection; pass
+  `sampler` **and** `data` to add the refined-peak keys below (passing only one
+  raises).
+
+**The library maximum is a property of the draw, not of the posterior.** Two
+consequences follow, and both are invisible until the accepted count is small:
+
+- The library's best row is accepted with probability **exactly 1**
+  (`exp(maxL − maxL) = 1`), so it is always in the output. Harmless when many
+  rows are accepted; when one is, that row *is* the output, and it is the
+  library argmax rather than a posterior draw.
+- Accept counts are not comparable across runs or priors, because each run
+  normalizes by its own maximum.
+
+`RejectionSampler.refine_peak(samples, data)` climbs from the returned samples
+to the **marginal-likelihood** peak `L*` and returns `(ln_likelihood, params)`.
+Each row seeds an independent BFGS run in the unconstrained space given by each
+prior's `biject_to(support)`, and the best result wins. With `sampler` and
+`data`, `acceptance_diagnostics` reports it as three further keys:
+
+| key | meaning |
+| --- | --- |
+| `max_log_likelihood_refined` | `L*`, the refined peak |
+| `peak_gap_nats` | `L* − max_log_likelihood`: how far short of the peak the library fell |
+| `n_accepted_at_refined_peak` | `exp(ln M + logZ_int − L*)`, the count a run-independent threshold would give |
+
+`peak_gap_nats` is a **single-run replacement** for checking that
+`max_log_likelihood` stops rising across budgets and seeds.
+
+**The objective is the likelihood alone, not the posterior.**
+`NumpyroSampler.optimize` maximizes `log_prior + marginal_log_likelihood`, which
+is right for seeding MCMC but wrong here: its likelihood value has no ordering
+relation to the library maximum, so under an informative prior — a
+periodogram-informed period prior, say — it can land *below* it and report a
+negative shortfall. Optimizing the likelihood makes the peak a property of the
+data: the same `L*` is recovered from a log-uniform prior and from a sharp
+period prior offset from it.
 
 **The threshold is a convention, and is user-controlled.** There is no sharp
 transition to calibrate against; `harv.samplers.samples.MIN_EVIDENCE_ESS = 3.0`
@@ -1641,13 +1684,39 @@ uncertain at the factor-of-two level. Set it per sampler
 per call (`samples.acceptance_diagnostics(min_evidence_ess=10.0)`); `0.0`
 silences the check and `float("inf")` always flags.
 
+**A refined threshold is available, and is usually not what you want.**
+`run(..., refine_peak=N)` normalizes by `max(library maximum, L*)` instead of
+the library maximum, using the `N` best library rows as starting points. It can
+only *lower* acceptance probabilities, so the accepted rows stay a valid draw
+from the `L`-weighted library — the same distribution, fewer rows — and the
+guaranteed-argmax property goes away. But the count collapses as `exp(−gap)`:
+measured on 16 epochs at P = 35 d with a log-uniform period prior, the gap is
+36.7 nats at 10⁶ draws and 10.9 nats at 4×10⁶, so an honest threshold would
+return `1e−16` and `2e−5` expected samples — zero, both times. When the library
+*is* well resolved the gap goes to zero and the option is a no-op. Since
+`n_accepted_at_refined_peak` reports the comparable count analytically, prefer
+the diagnostic and keep the samples. Incompatible with `top_k`, which never
+consults a threshold.
+
+**The threshold does not control which modes appear.** Acceptance is `∝ L` with
+a common normalizer, so the expected ratio between two modes is
+threshold-invariant: raising it thins every mode equally. A returned set spread
+over several modes when one dominates means the *library* under-sampled the
+dominant mode, which no threshold can repair. To tell "genuinely multimodal"
+from "one dominant mode the library under-sampled", run
+`NumpyroSampler.optimize` on the returned samples — each row is an independent
+BFGS start, so the optimized rows are the local modes those samples belong to,
+and their `ln_posterior` values give the mode census.
+
 **Recommended workflow for peaked likelihoods:** use the rejection sampler
 (ideally with a periodogram-informed period prior) to *locate* the mode — check
-that `max_log_likelihood` stops rising as `n_prior_samples` increases and across
-seeds — then continue with `NumpyroSampler(prior, model).run(data,
-init_samples=...)` to draw the posterior. In this regime the rejection stage is
-a mode-finder, not a posterior sampler: even with the period pinned, the joint
-(eccentricity, phase, `arg_peri`) volume at high SNR is a tiny acceptance target.
+`peak_gap_nats`, or that `max_log_likelihood` stops rising as `n_prior_samples`
+increases and across seeds — then continue with `NumpyroSampler(prior,
+model).run(data, init_samples=...)` to draw the posterior. In this regime the
+rejection stage is a mode-finder, not a posterior sampler: even with the period
+pinned, the joint (eccentricity, phase, `arg_peri`) volume at high SNR is a tiny
+acceptance target. `NumpyroSampler.optimize` (posterior MAP) gives the best warm
+start; `RejectionSampler.refine_peak` (likelihood peak) gives the diagnostic.
 ### Top-K selection (`top_k`)
 
 Rejection returns a data-dependent number of rows — ~1000 for an unconstrained
@@ -1684,8 +1753,10 @@ as equal-weight posterior draws is wrong, and `Σ w f / Σ w` over a truncated
 top-K set is biased whenever `weight_captured` is not close to 1 — however large
 `k` is in absolute terms. See `docs/sharp-bits.md`.
 
-Errors: `ValueError` if `top_k` is combined with `max_posterior_samples`, if
-`top_k < 1`, or if `top_k` exceeds the prior library size (returning fewer than
+Errors: `ValueError` if `top_k` is combined with `max_posterior_samples` or with
+`refine_peak` (top-K ranks by log-likelihood and normalizes its weights by
+`logZ_int`, so it never consults an acceptance threshold), if `top_k < 1`, or if
+`top_k` exceeds the prior library size (returning fewer than
 `top_k` rows would defeat the fixed-shape contract the caller depends on).
 
 ### `batch_size` and GPU support
@@ -1861,6 +1932,11 @@ Refines each input sample to the local posterior MAP using BFGS via
 `numpyro.optim.Minimize` (which wraps `jax.scipy.optimize.minimize`) with an
 `AutoDelta` guide. Each sample in *samples* is used as a warm start for an
 independent BFGS run that maximises `log_prior + marginal_log_likelihood`.
+That is the right objective for a **warm start** — you want the posterior mode —
+but the wrong one for measuring how far a prior library fell short of the
+*likelihood* peak, which is what `RejectionSampler.refine_peak` and the
+`peak_gap_nats` diagnostic use (see "Interpreting acceptance"): under an
+informative prior the MAP's likelihood can sit below the library maximum.
 Because `jax.scipy.optimize.minimize` BFGS often quits early when its line
 search fails, `optimize` restarts BFGS up to `max_passes` times from the
 previous result, breaking when the loss change falls below `tol` and emitting a

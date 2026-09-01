@@ -1078,7 +1078,11 @@ class Samples(eqx.Module):
         return map_sample
 
     def acceptance_diagnostics(
-        self, *, min_evidence_ess: float = MIN_EVIDENCE_ESS
+        self,
+        *,
+        min_evidence_ess: float = MIN_EVIDENCE_ESS,
+        sampler: Any = None,
+        data: Any = None,
     ) -> dict[str, Any]:
         """Assess whether the rejection run resolved the posterior.
 
@@ -1104,18 +1108,40 @@ class Samples(eqx.Module):
             another. ``0.0`` always reports resolved, ``float("inf")`` never
             does.
 
+        sampler, data
+            Supply both to also refine the peak. ``max_log_likelihood`` is the
+            best the *library* achieved, which only bounds the true peak from
+            below; the sampler climbs to the likelihood peak itself
+            (:meth:`~harv.samplers.RejectionSampler.refine_peak`) and three
+            further keys are returned. Costs one optimization, so it is opt-in.
+
         Returns
         -------
             A dict with ``n_prior_samples``, ``n_accepted``, ``evidence_ess``,
             ``min_evidence_ess``, ``max_log_likelihood``, ``logZ_int``, a
             boolean ``well_resolved``, and a human-readable ``message``.
 
+            With *sampler* and *data*, also ``max_log_likelihood_refined``,
+            ``peak_gap_nats`` (how many nats short of the peak the library fell
+            -- a single-run replacement for checking that
+            ``max_log_likelihood`` stops rising across budgets and seeds), and
+            ``n_accepted_at_refined_peak`` (the count a run-independent
+            threshold would have produced, ``exp(ln M + logZ_int - peak)``).
+
         Raises
         ------
         ValueError
             If evidence statistics were not stored (re-run with
-            ``return_evidence_stats=True``).
+            ``return_evidence_stats=True``), or if only one of *sampler* and
+            *data* is given.
         """
+        if (sampler is None) != (data is None):
+            msg = (
+                "Pass both sampler and data to refine the peak, or neither; "
+                f"got sampler={'set' if sampler is not None else 'None'}, "
+                f"data={'set' if data is not None else 'None'}."
+            )
+            raise ValueError(msg)
         missing = [k for k in _EVIDENCE_KEYS if k not in self.metadata]
         if missing:
             msg = (
@@ -1134,7 +1160,7 @@ class Samples(eqx.Module):
             max_log_likelihood=max_ll,
             min_evidence_ess=min_evidence_ess,
         )
-        return {
+        out: dict[str, Any] = {
             "n_prior_samples": n_prior,
             "n_accepted": n_accepted,
             "evidence_ess": ess,
@@ -1144,6 +1170,17 @@ class Samples(eqx.Module):
             "well_resolved": well_resolved,
             "message": message,
         }
+        if sampler is not None:
+            peak, _ = sampler.refine_peak(self, data)
+            peak = float(peak)
+            out["max_log_likelihood_refined"] = peak
+            out["peak_gap_nats"] = peak - max_ll
+            # The count a run-independent threshold would give:
+            # (sum L) / peak = exp(ln M + logZ_int - peak).
+            out["n_accepted_at_refined_peak"] = float(
+                np.exp(np.log(n_prior) + out["logZ_int"] - peak)
+            )
+        return out
 
     def period_unimodal(self, data: AbstractData) -> bool:
         """Whether the period samples lie within a single mode.

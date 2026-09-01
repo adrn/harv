@@ -26,6 +26,7 @@ from harv.models._helpers import (
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
+from harv.samplers._peak import maximize_log_likelihood
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior as _effective_linear_prior_from_prior,
 )
@@ -186,7 +187,7 @@ _top_k_indices = jax.jit(_top_k_indices_impl, static_argnames=("k",))
 
 
 def _validate_selection_policy(
-    max_posterior_samples: int | None, top_k: int | None
+    max_posterior_samples: int | None, top_k: int | None, refine_peak: int = 0
 ) -> None:
     """Reject conflicting output-shape policies at the entry point.
 
@@ -200,14 +201,29 @@ def _validate_selection_policy(
         The rejection-path cap.
     top_k : int | None
         The top-K-by-weight output length.
+    refine_peak : int
+        Number of starting points for the refined acceptance threshold.
 
     Raises
     ------
     ValueError
-        If both are set, or if ``top_k`` is not positive.
+        If both are set, if ``top_k`` is not positive, if ``refine_peak`` is
+        negative, or if ``refine_peak`` is combined with ``top_k``.
     """
+    if refine_peak < 0:
+        msg = f"refine_peak must be a non-negative integer, got {refine_peak}."
+        raise ValueError(msg)
     if top_k is None:
         return
+    if refine_peak:
+        msg = (
+            "refine_peak and top_k are mutually exclusive. top_k ranks by "
+            "log-likelihood and normalizes its weights by logZ_int, so it never "
+            "consults an acceptance threshold -- refining one would cost an "
+            "optimization and change nothing. To get the peak alongside a top_k "
+            "result, call sampler.refine_peak(samples, data) afterwards."
+        )
+        raise ValueError(msg)
     if max_posterior_samples is not None:
         msg = (
             "max_posterior_samples and top_k are mutually exclusive: the first "
@@ -457,6 +473,7 @@ class RejectionSampler(AbstractSampler):
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
+        refine_peak: int = 0,
     ) -> Samples:
         """Run rejection sampling, or top-K-by-weight selection.
 
@@ -513,6 +530,27 @@ class RejectionSampler(AbstractSampler):
             importance weights over the full prior library -- the diagnostic
             for whether the library resolved this posterior at all. Default
             ``False``.
+        refine_peak
+            When non-zero, refine the acceptance threshold by maximizing the
+            marginal log-likelihood from this many of the best library samples,
+            and normalize by ``max(library maximum, refined peak)`` instead of
+            the library maximum alone.
+
+            The default threshold is the maximum over the *drawn library*, so
+            it is a property of the draw: acceptance counts are not comparable
+            across runs or priors, and the library's best row is accepted with
+            probability exactly 1.  A refined threshold is run-independent, and
+            can only lower acceptance probabilities -- the accepted samples
+            stay a valid draw from the ``L``-weighted library, the same
+            distribution with fewer rows.
+
+            **Expect far fewer samples, often zero.** A library that fell 10
+            nats short of the peak accepts about ``e**-10`` of what it does
+            today, and one that fell 35 nats short accepts nothing at any
+            practical budget.  Use :meth:`refine_peak` or
+            :meth:`~harv.samplers.Samples.acceptance_diagnostics` to see the
+            shortfall without paying for it in samples.  Incompatible with
+            ``top_k``.  Default: 0 (off).
 
         Returns
         -------
@@ -525,7 +563,7 @@ class RejectionSampler(AbstractSampler):
             ``top_k`` is not positive.
         """
         _validate_data(data, self.model)
-        _validate_selection_policy(max_posterior_samples, top_k)
+        _validate_selection_policy(max_posterior_samples, top_k, refine_peak)
 
         prepared = _prepare_sampler_model(
             self.prior,
@@ -565,7 +603,122 @@ class RejectionSampler(AbstractSampler):
             top_k=top_k,
             return_logprobs=return_logprobs,
             return_evidence_stats=return_evidence_stats,
+            refine_peak=refine_peak,
         )
+
+    def _refine_peak(
+        self,
+        data: Any,
+        starts: dict[str, jax.Array],
+        *,
+        max_passes: int = 8,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """Maximize the marginal log-likelihood from unit-stripped *starts*.
+
+        Shared by :meth:`refine_peak` and the ``refine_peak=`` option of
+        :meth:`run`.  See :mod:`harv.samplers._peak` for why the objective is
+        the likelihood alone rather than the posterior.
+        """
+        prepared = _prepare_sampler_model(
+            self.prior, self.model, self.marginalized_names
+        )
+        model = prepared.model
+        base_names = model._base_nonlinear_names()
+        all_nl: dict[str, Any] = dict(self.prior.nonlinear_priors)
+        all_nl.update(prepared.nonlinear_extension_priors)
+        eff_linear = prepared.effective_linear_prior or {}
+        marg = prepared.effective_marginalized_names
+
+        def log_likelihood_fn(values: dict[str, Any]) -> jax.Array:
+            wrapped = _wrap_unit_values(values, all_nl, base_names)
+            if marg is None:
+                return model.log_prob(wrapped, data, linear_priors=eff_linear or None)
+            return model.log_prob(
+                wrapped,
+                data,
+                linear_priors=eff_linear or None,
+                marginalized_names=marg,
+            )
+
+        return maximize_log_likelihood(
+            log_likelihood_fn, starts, all_nl, max_passes=max_passes
+        )
+
+    def _refined_threshold(
+        self,
+        data: Any,
+        prior_samples: dict[str, jax.Array],
+        log_likelihoods: jax.Array,
+        refine_peak: int,
+    ) -> tuple[jax.Array | None, float | None]:
+        """Acceptance normalizer from the refined likelihood peak, if requested.
+
+        Returns ``(log_threshold, refined_peak)``, both ``None`` when
+        ``refine_peak`` is 0 or the optimization did not return a finite value.
+        """
+        if not refine_peak:
+            return None, None
+        n_starts = min(refine_peak, int(log_likelihoods.shape[0]))
+        idx = _top_k_indices(log_likelihoods, n_starts)
+        starts = {k: v[idx] for k, v in prior_samples.items()}
+        peak, _ = self._refine_peak(data, starts)
+        peak_f = float(peak)
+        if not np.isfinite(peak_f):
+            # Filtered host-side: an in-jit guard would silently zero every
+            # acceptance probability instead of saying anything.
+            warnings.warn(
+                "refine_peak: the likelihood optimization returned a non-finite "
+                f"peak ({peak_f}); falling back to the library maximum as the "
+                "acceptance threshold.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None, None
+        return jnp.asarray(peak_f, log_likelihoods.dtype), peak_f
+
+    def refine_peak(
+        self,
+        samples: Samples,
+        data: Any,
+        *,
+        max_passes: int = 8,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """Maximize the marginal log-likelihood, starting from *samples*.
+
+        The rejection step normalizes by the maximum log-likelihood **over the
+        drawn library**, which is a property of the draw rather than of the
+        posterior.  This climbs to the nearby likelihood peak, so that
+
+        * ``peak - samples.metadata["max_log_likelihood"]`` measures how far
+          short of it the library fell, and
+        * the peak is a run-independent acceptance threshold (see the
+          ``refine_peak`` option of :meth:`run`).
+
+        Every row of *samples* seeds an independent BFGS run and the best result
+        is returned, so passing several rows explores several modes.
+
+        Parameters
+        ----------
+        samples
+            Warm starts, e.g. the output of :meth:`run`.
+        data
+            Observed data, as passed to :meth:`run`.
+        max_passes
+            BFGS restarts per starting point.
+
+        Returns
+        -------
+            ``(ln_likelihood, params)`` at the peak, with *params* unit-stripped.
+
+        Examples
+        --------
+        >>> peak, params = sampler.refine_peak(samples, data)  # doctest: +SKIP
+        """
+        starts = {
+            name: jnp.asarray(ustrip(str(q.unit), q))
+            for name, q in samples.nonlinear.items()
+        }
+        return self._refine_peak(data, starts, max_passes=max_passes)
 
     def _finalize_posterior(
         self,
@@ -581,6 +734,7 @@ class RejectionSampler(AbstractSampler):
         top_k: int | None,
         return_logprobs: bool,
         return_evidence_stats: bool,
+        refine_peak: int = 0,
     ) -> Samples:
         """Shared downstream: select -> linear -> Samples assembly.
 
@@ -609,6 +763,10 @@ class RejectionSampler(AbstractSampler):
                 jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf
             )
 
+        log_threshold, refined_peak = self._refined_threshold(
+            data, prior_samples, log_likelihoods, refine_peak
+        )
+
         accepted_nonlinear, accepted_log_likelihood = self._select_posterior_samples(
             prior_samples=prior_samples,
             log_likelihoods=log_likelihoods,
@@ -616,6 +774,7 @@ class RejectionSampler(AbstractSampler):
             key=key,
             max_posterior_samples=max_posterior_samples,
             top_k=top_k,
+            log_threshold=log_threshold,
         )
 
         linear_key = jr.fold_in(key, 2)
@@ -691,6 +850,8 @@ class RejectionSampler(AbstractSampler):
         # recovered -- and the weights are what make the output usable.
         if return_evidence_stats or top_k is not None:
             metadata.update(evidence_meta)
+        if refined_peak is not None:
+            metadata["refined_max_log_likelihood"] = refined_peak
 
         if top_k is not None:
             # Fraction of total posterior mass the returned top_k capture:
@@ -734,6 +895,7 @@ class RejectionSampler(AbstractSampler):
         key: jax.Array,
         max_posterior_samples: int | None,
         top_k: int | None,
+        log_threshold: jax.Array | None = None,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Reduce the full prior library to the samples that will be returned.
 
@@ -759,6 +921,8 @@ class RejectionSampler(AbstractSampler):
             Rejection-path cap.
         top_k : int | None
             Top-K output length, or ``None`` for rejection.
+        log_threshold : jax.Array | None
+            Optional acceptance normalizer above the library maximum.
 
         Returns
         -------
@@ -790,7 +954,7 @@ class RejectionSampler(AbstractSampler):
                 log_likelihoods[idx],
             )
 
-        accepted_mask = self._rejection_step(rej_key, log_likelihoods)
+        accepted_mask = self._rejection_step(rej_key, log_likelihoods, log_threshold)
         accepted = {k: v[accepted_mask] for k, v in prior_samples.items()}
         accepted_ll = log_likelihoods[accepted_mask]
 
@@ -827,6 +991,7 @@ class RejectionSampler(AbstractSampler):
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
+        refine_peak: int = 0,
         randomize_prior_order: bool = True,
     ) -> Samples:
         """Run rejection (or top-K selection) against pre-computed prior samples.
@@ -864,6 +1029,8 @@ class RejectionSampler(AbstractSampler):
             See :meth:`run`.
         return_evidence_stats
             See :meth:`run`.
+        refine_peak
+            See :meth:`run`.
         randomize_prior_order
             Disk-streaming branch only: when ``True`` (default), batches are
             read from the HDF5 file in a random order (drawn from ``seed``).
@@ -884,7 +1051,7 @@ class RejectionSampler(AbstractSampler):
             ``top_k`` is not positive, or if ``prior_samples`` is empty.
         """
         _validate_data(data, self.model)
-        _validate_selection_policy(max_posterior_samples, top_k)
+        _validate_selection_policy(max_posterior_samples, top_k, refine_peak)
 
         prepared = _prepare_sampler_model(
             self.prior,
@@ -924,6 +1091,7 @@ class RejectionSampler(AbstractSampler):
             top_k=top_k,
             return_logprobs=return_logprobs,
             return_evidence_stats=return_evidence_stats,
+            refine_peak=refine_peak,
         )
 
     def _expected_prior_keys(
@@ -1256,9 +1424,25 @@ class RejectionSampler(AbstractSampler):
 
     @staticmethod
     @jax.jit
-    def _rejection_step(key: jax.Array, log_likelihoods: jax.Array) -> jax.Array:
-        """Compute rejection mask."""
+    def _rejection_step(
+        key: jax.Array,
+        log_likelihoods: jax.Array,
+        log_threshold: jax.Array | None = None,
+    ) -> jax.Array:
+        """Compute rejection mask.
+
+        ``log_threshold`` optionally raises the normalizing constant above the
+        library maximum.  It can only ever *lower* acceptance probabilities, so
+        the accepted set stays a valid draw from the library weighted by ``L``
+        -- the same distribution, fewer rows.  A threshold below the library
+        maximum would instead saturate the best rows at probability 1 and bias
+        the result, so it is clamped up.  ``None`` is a zero-leaf pytree, so the
+        default call traces exactly the jaxpr it did before this argument
+        existed.
+        """
         max_log_likelihood = jnp.max(log_likelihoods)
+        if log_threshold is not None:
+            max_log_likelihood = jnp.maximum(max_log_likelihood, log_threshold)
         weights = jnp.where(
             jnp.isfinite(max_log_likelihood),
             jnp.exp(log_likelihoods - max_log_likelihood),
