@@ -350,17 +350,29 @@ def periodogram(
     | Mapping[str, tuple[AbstractExtension, ...]] = (),
     prior_params: Mapping[str, Any] | None = None,
 ) -> PeriodogramResult:
-    """Compute a Lomb-Scargle-like periodogram of the data.
+    """Compute a periodogram of the data.
 
-    At each trial frequency this evaluates the marginal log-likelihood of a
-    Kepler-free ``n_terms``-harmonic Fourier model (every amplitude linear and
-    analytically marginalized under the supplied priors) minus that of the
-    ``n_terms = 0`` base model. Multiple harmonics capture non-sinusoidal
-    periodicity (e.g. eccentric orbits); the base model carries the
-    non-periodic structure (constant offset for RV; the 5-parameter
-    astrometric solution for Gaia, so scan-law/parallax/proper-motion power
-    cancels). For containers the per-dataset Δ are summed into one
-    periodogram per source.
+    At each trial frequency this evaluates the marginal log-likelihood of a Kepler-free
+    ``n_terms``-harmonic Fourier model (every amplitude linear and analytically
+    marginalized under the supplied priors) minus that of the ``n_terms = 0`` base
+    model. Multiple harmonics capture non-sinusoidal periodicity (e.g. eccentric
+    orbits); the base model carries the non-periodic structure (constant offset for RV;
+    the 5-parameter astrometric solution for Gaia, so scan-law/parallax/proper-motion
+    power cancels). For containers the per-dataset Δ are summed into one periodogram per
+    source.
+
+    Unlike a Lomb-Scargle periodogram, this is a (Bayesian) log-marginal-likelihood
+    periodogram: the trial model is fully marginalized over its linear parameters under
+    the supplied priors, and the base model is marginalized over its own linear
+    parameters. The statistic is a log Bayes factor under the priors you supplied.
+    Lomb-Scargle or other Keplerian periodograms are often instead computed from profile
+    likelihoods at the maximum-likelihood linear amplitudes, which is a different
+    statistic. It is related to the marginal likelihood only when the priors are flat
+    and unbounded. The recommended amplitude priors here scale with period the same way
+    harv's Keplerian priors do — ``sigma_K0``/``P0`` for RV (semi-amplitude, falling as
+    ``P^(-1/3)``) and ``sigma_a0``/``P0`` for astrometry (semi-major axis, rising as
+    ``P^(2/3)``). Pass ``sigma_amp`` instead for the constant-amplitude case, which is
+    the one comparable to a profile-likelihood periodogram.
 
     Parameters
     ----------
@@ -410,19 +422,67 @@ def periodogram(
 
     Examples
     --------
+    RV, period-dependent semi-amplitude prior (recommended). ``sigma_K0`` is the
+    semi-amplitude expected *at* ``P0`` for the companion being searched for, not a
+    global width — see :class:`~harv.models.priors.PeriodDependentKPrior`:
+
     >>> from unxt import Q
     >>> import harv.models as hm
     >>> import harv.periodogram as hp
     >>> from harv.simulate import simulate_rv_sb1_data
     >>> data, _ = simulate_rv_sb1_data(seed=1, n_obs=40, period=Q(30.0, "day"))
+    >>> rv_grid = dict(period_min=Q(5.0, "day"), period_max=Q(1000.0, "day"))
     >>> prior = hm.FourierRV(n_terms=2).default_prior(
-    ...     period_min=Q(5.0, "day"),
-    ...     period_max=Q(1000.0, "day"),
-    ...     sigma_amp=Q(30.0, "km/s"),
+    ...     **rv_grid,
+    ...     sigma_K0=Q(1.0, "km/s"),
+    ...     P0=Q(1.0, "yr"),
     ...     sigma_v0=Q(10.0, "km/s"),
     ... )
     >>> result = hp.periodogram(data, prior=prior, period_min=Q(5.0, "day"))
     >>> result.delta_ln_likelihood.shape == result.frequency.shape
+    True
+
+    RV, flat amplitude prior — swap ``sigma_K0``/``P0`` for a single ``sigma_amp``:
+
+    >>> flat = hm.FourierRV(n_terms=2).default_prior(
+    ...     **rv_grid, sigma_amp=Q(30.0, "km/s"), sigma_v0=Q(10.0, "km/s")
+    ... )
+    >>> flat_result = hp.periodogram(data, prior=flat, period_min=Q(5.0, "day"))
+    >>> bool(flat_result.delta_ln_likelihood.max() > 0)
+    True
+
+    Gaia astrometry, flat amplitude prior. Here ``sigma_amp`` is an *angle*, since the
+    Fourier amplitudes are angular:
+
+    >>> from harv.simulate import simulate_gaia_epoch_astrometry
+    >>> gaia, _ = simulate_gaia_epoch_astrometry(
+    ...     seed=3, n_obs=80, period=Q(100.0, "day"),
+    ...     semi_major_axis=Q(2.0, "mas"), parallax=Q(20.0, "mas"),
+    ...     al_error=Q(0.05, "mas"),
+    ... )
+    >>> gaia_grid = dict(
+    ...     period_min=Q(20.0, "day"), period_max=Q(2000.0, "day"),
+    ...     sigma_pos=Q(500.0, "mas"), sigma_pm=Q(500.0, "mas/yr"),
+    ...     sigma_parallax=Q(500.0, "mas"),
+    ... )
+    >>> gaia_flat = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
+    ...     **gaia_grid, sigma_amp=Q(20.0, "mas")
+    ... )
+    >>> res = hp.periodogram(gaia, prior=gaia_flat, period_min=Q(20.0, "day"))
+    >>> res.delta_ln_likelihood.shape == res.frequency.shape
+    True
+
+    Gaia astrometry, period-dependent prior. ``sigma_a0`` is a physical *length*, so the
+    prior needs a parallax to convert it to an angle — supply one via ``prior_params``:
+
+    >>> gaia_tilted = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
+    ...     **gaia_grid, sigma_a0=Q(0.1, "AU"), P0=Q(1.0, "yr")
+    ... )
+    >>> res = hp.periodogram(
+    ...     gaia, prior=gaia_tilted, period_min=Q(20.0, "day"),
+    ...     prior_params={"parallax": Q(20.0, "mas")},
+    ... )
+    >>> res.delta_ln_likelihood.shape == res.frequency.shape
     True
     """
     reserved = {"period", "eccentricity"}.intersection(prior_params or ())
