@@ -16,7 +16,13 @@ import harv.models as hm
 import harv.periodogram as hp
 from harv.data import SourceData
 from harv.distributions import QuantityDistribution as QD
-from harv.models.priors.custom_priors import PeriodDependentKPrior
+from harv.models.astrometry import GaiaAstrometryModel
+from harv.models.priors.custom_priors import (
+    PeriodDependentKPrior,
+    PeriodDependentSemiMajorAxisPrior,
+)
+from harv.periodogram.core import _bind_prior_params
+from harv.samplers._prior_resolution import effective_linear_prior_from_prior
 from harv.simulate import simulate_gaia_epoch_astrometry, simulate_rv_sb1_data
 
 RV_KW = {
@@ -194,3 +200,127 @@ class TestContainerPriors:
         priors = {"gaia": hm.FourierGaiaAstrometry(n_terms=2).default_prior(**GAIA_KW)}
         with pytest.raises(TypeError, match="no entry for dataset"):
             hp.periodogram(source, prior=priors, period_min=Q(20.0, "day"))
+
+
+GAIA_BASE = {k: v for k, v in GAIA_KW.items() if k != "sigma_amp"}
+
+
+def _gaia_tilted_prior(n_terms: int = 1, **extra: object):
+    """Gaia prior whose amplitudes need a parallax to resolve."""
+    return hm.FourierGaiaAstrometry(n_terms=n_terms).default_prior(
+        **GAIA_BASE, sigma_a0=Q(0.1, "AU"), P0=Q(1.0, "yr"), **extra
+    )
+
+
+class TestPriorParams:
+    """Values a callable prior needs but the periodogram does not scan over."""
+
+    def test_parallax_makes_the_gaia_tilted_prior_usable(self):
+        data = _gaia()
+        grid = hp.frequency_grid(data, period_min=Q(20.0, "day"))
+        result = hp.periodogram(
+            data,
+            grid,
+            prior=_gaia_tilted_prior(),
+            n_terms=1,
+            prior_params={"parallax": Q(20.0, "mas")},
+        )
+        assert jnp.all(jnp.isfinite(result.delta_ln_likelihood))
+
+    def test_missing_parallax_is_a_readable_error(self):
+        """Not a KeyError from inside a jit trace."""
+        data = _gaia()
+        grid = hp.frequency_grid(data, period_min=Q(20.0, "day"))
+        with pytest.raises(TypeError, match="prior_params"):
+            hp.periodogram(data, grid, prior=_gaia_tilted_prior(), n_terms=1)
+
+    def test_a_typo_is_caught_rather_than_ignored(self):
+        """Unrecognized keys are ignored downstream, so the probe must catch it."""
+        data = _gaia()
+        grid = hp.frequency_grid(data, period_min=Q(20.0, "day"))
+        with pytest.raises(TypeError, match="prior_params"):
+            hp.periodogram(
+                data,
+                grid,
+                prior=_gaia_tilted_prior(),
+                n_terms=1,
+                prior_params={"parralax": Q(20.0, "mas")},
+            )
+
+    @pytest.mark.parametrize("key", ["period", "eccentricity"])
+    def test_scan_owned_keys_are_rejected(self, key):
+        data = _rv()
+        grid = hp.frequency_grid(data, period_min=Q(5.0, "day"))
+        prior = hm.FourierRV(n_terms=1).default_prior(**RV_KW)
+        with pytest.raises(TypeError, match="may not contain"):
+            hp.periodogram(
+                data, grid, prior=prior, n_terms=1, prior_params={key: Q(1.0, "day")}
+            )
+
+    def test_parallax_column_stays_marginalized(self):
+        """The regression guard for the trap this design exists to avoid.
+
+        Routing prior_params through ``_nl`` would make ``log_prob``'s auto mode
+        reclassify ``parallax`` as an explicit, *fixed* column -- a different
+        model, silently, and invisible to any peak-location assertion.
+        """
+        model = GaiaAstrometryModel(
+            parameterization=hm.FourierGaiaAstrometry(n_terms=1)
+        )
+        flat = hm.FourierGaiaAstrometry(n_terms=1).default_prior(**GAIA_KW)
+        lp_flat = effective_linear_prior_from_prior(flat, model) or {}
+        lp_bound = _bind_prior_params(
+            effective_linear_prior_from_prior(_gaia_tilted_prior(), model) or {},
+            {"parallax": Q(20.0, "mas")},
+        )
+        marg_flat = set(model._auto_marginalized_names(lp_flat))
+        marg_bound = set(model._auto_marginalized_names(lp_bound))
+        assert "parallax" in marg_bound
+        assert marg_flat == marg_bound
+
+
+class TestAmplitudeScaleSelection:
+    """sigma_K0/P0 and sigma_amp are mutually exclusive alternatives."""
+
+    def test_period_dependent_is_available_for_rv(self):
+        prior = hm.FourierRV(n_terms=1).default_prior(
+            period_min=Q(1.0, "day"),
+            period_max=Q(5000.0, "day"),
+            sigma_K0=Q(0.15, "km/s"),
+            P0=Q(1.0, "yr"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        assert isinstance(prior.linear_priors["cos_amp_1"], PeriodDependentKPrior)
+
+    def test_period_dependent_is_available_for_gaia(self):
+        prior = _gaia_tilted_prior()
+        assert isinstance(
+            prior.linear_priors["ti_A_1"], PeriodDependentSemiMajorAxisPrior
+        )
+
+    def test_both_scales_is_an_error(self):
+        with pytest.raises(TypeError, match="Cannot specify both"):
+            hm.FourierRV(n_terms=1).default_prior(
+                **RV_KW, sigma_K0=Q(0.15, "km/s"), P0=Q(1.0, "yr")
+            )
+
+    def test_half_a_scale_is_an_error(self):
+        with pytest.raises(TypeError, match="must be given together"):
+            hm.FourierRV(n_terms=1).default_prior(
+                period_min=Q(1.0, "day"),
+                period_max=Q(5000.0, "day"),
+                sigma_K0=Q(0.15, "km/s"),
+                sigma_v0=Q(50.0, "km/s"),
+            )
+
+    def test_overriding_every_amplitude_needs_no_scale(self):
+        """A complete set of per-column overrides is a complete specification."""
+        kp = PeriodDependentKPrior(sigma_K0=Q(0.15, "km/s"), P0=Q(1.0, "yr"))
+        prior = hm.FourierRV(n_terms=1).default_prior(
+            period_min=Q(1.0, "day"),
+            period_max=Q(5000.0, "day"),
+            sigma_v0=Q(50.0, "km/s"),
+            cos_amp_1=kp,
+            sin_amp_1=kp,
+        )
+        assert prior.linear_priors["cos_amp_1"] is kp

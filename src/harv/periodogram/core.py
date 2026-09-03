@@ -165,6 +165,61 @@ def _nl(period: Any, period_unit: str) -> dict[str, Any]:
     return {"period": Q(period, period_unit), "eccentricity": 0.0}
 
 
+def _bind_prior_params(
+    linear_priors: dict[str, Any], prior_params: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Bind concrete values into every ``LinearPriorCallable`` in *linear_priors*.
+
+    Values are injected into the dict a callable prior is *resolved against*,
+    never into ``nl_values``. That distinction is load-bearing: ``parallax`` is
+    a linear parameter of :class:`~harv.models.FourierGaiaAstrometry`, and
+    ``log_prob``'s auto mode pulls any linear name out of ``nl_values`` and
+    reclassifies it as an explicit, *non-marginalized* column. Supplying a
+    parallax that way would silently fix the parallax column in both the trial
+    and base models -- a different model, not a resolved prior.
+
+    Non-callable priors pass through untouched, and the scan's own values
+    (``period``, ``eccentricity``) take precedence over *prior_params*.
+    """
+    if not prior_params:
+        return linear_priors
+    extra = dict(prior_params)
+
+    def bind(prior: Any) -> Any:
+        if not _is_callable_prior(prior):
+            return prior
+        # Still a plain callable, so _is_callable_prior and
+        # _needs_explicit_sampling classify the wrapper exactly as they did the
+        # prior: it stays analytically marginalized.
+        return lambda params, _p=prior: _p({**extra, **params})
+
+    return {name: bind(prior) for name, prior in linear_priors.items()}
+
+
+def _check_callable_priors(
+    linear_priors: dict[str, Any], probe: dict[str, Any]
+) -> None:
+    """Resolve callable priors once, eagerly, for a readable error.
+
+    Without this a missing (or misspelled -- unresolved keys are silently
+    ignored downstream) ``prior_params`` entry surfaces as a ``KeyError`` raised
+    inside a ``jax.jit(jax.vmap(...))`` trace.
+    """
+    for name, prior in linear_priors.items():
+        if not _is_callable_prior(prior):
+            continue
+        try:
+            prior(probe)
+        except KeyError as exc:
+            msg = (
+                f"Could not resolve the callable linear prior for {name!r}: "
+                f"{exc.args[0]} Pass any value the periodogram does not scan "
+                "over via prior_params, e.g. periodogram(..., "
+                'prior_params={"parallax": Q(10.0, "mas")}).'
+            )
+            raise TypeError(msg) from exc
+
+
 def _resolve_per_dataset(value: Any, name: str, ds_name: str) -> Any:
     """Resolve a per-dataset argument that may be a Mapping keyed by dataset name.
 
@@ -187,6 +242,7 @@ def _dataset_delta_lnl(
     extensions: tuple[AbstractExtension, ...],
     f_grid: NFrequency,
     n_terms: int,
+    prior_params: Mapping[str, Any] | None = None,
 ) -> tuple[NFloatArray, Float[jax.Array, ""] | NFloatArray, int]:
     """Δ marginal log-likelihood over the grid for one dataset."""
     if type(dataset) not in _FOURIER_DISPATCH:
@@ -248,12 +304,17 @@ def _dataset_delta_lnl(
             f"prior.linear_priors is missing entries for {missing} required by "
             f"{fourier_cls.__name__}(n_terms={eff_terms})."
         )
+    eff_lp = _bind_prior_params(eff_lp, prior_params)
     full_lp = {n: eff_lp[n] for n in model._all_linear_names()}
     base_lp = {n: eff_lp[n] for n in base_model._all_linear_names()}
 
     period_grid = 1.0 / f_grid
     period_unit = str(period_grid.unit)
     p_vals = jnp.asarray(ustrip(period_unit, period_grid))
+
+    # base_lp is a name-subset of full_lp sliced from the same dict, so probing
+    # full_lp covers both models.
+    _check_callable_priors(full_lp, _nl(p_vals[0], period_unit))
 
     def base_at(p: jax.Array) -> jax.Array:
         return base_model.log_prob(_nl(p, period_unit), dataset, linear_priors=base_lp)
@@ -287,6 +348,7 @@ def periodogram(
     n_terms: int = 2,
     extensions: tuple[AbstractExtension, ...]
     | Mapping[str, tuple[AbstractExtension, ...]] = (),
+    prior_params: Mapping[str, Any] | None = None,
 ) -> PeriodogramResult:
     """Compute a Lomb-Scargle-like periodogram of the data.
 
@@ -329,6 +391,14 @@ def periodogram(
         linear column,
         including extension columns); a ``UserWarning`` is emitted when
         reduced. ``PeriodogramResult.n_terms`` reports the effective value.
+    prior_params
+        Concrete values for parameters a ``LinearPriorCallable`` needs but the
+        periodogram does not scan over -- in practice the ``parallax`` that
+        :class:`~harv.models.priors.PeriodDependentSemiMajorAxisPrior` requires.
+        Bound into the callable priors themselves, so the corresponding *column*
+        (parallax included) stays in the design matrix and is still fitted and
+        marginalized; only the prior's *scale* uses the supplied value. May not
+        contain ``period`` or ``eccentricity``, which the scan owns.
     extensions
         Model extensions adding *linear* columns (e.g.
         :class:`~harv.models.MultiSurveyOffset`,
@@ -355,6 +425,13 @@ def periodogram(
     >>> result.delta_ln_likelihood.shape == result.frequency.shape
     True
     """
+    reserved = {"period", "eccentricity"}.intersection(prior_params or ())
+    if reserved:
+        raise TypeError(
+            f"prior_params may not contain {sorted(reserved)}: the periodogram "
+            "supplies 'period' from the trial grid and adopts eccentricity = 0 "
+            '(see docs/spec.md, "The Delta log-marginal-likelihood statistic").'
+        )
     if n_terms < 1:
         raise ValueError(
             f"n_terms must be at least 1, got {n_terms}. A periodogram needs at "
@@ -394,7 +471,7 @@ def periodogram(
         ds_prior = _resolve_per_dataset(prior, "prior", name)
         ds_ext = _resolve_per_dataset(extensions, "extensions", name)
         delta, lnl0, eff = _dataset_delta_lnl(
-            d, ds_prior, tuple(ds_ext), frequency_grid, n_terms
+            d, ds_prior, tuple(ds_ext), frequency_grid, n_terms, prior_params
         )
         per_dataset[name] = delta
         base_lnls.append(lnl0)

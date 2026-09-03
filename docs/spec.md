@@ -2199,6 +2199,7 @@ periodogram(
     period_min=None, period_max=None, samples_per_peak=None, n_grid=None,
     n_terms=2,
     extensions=(),            # linear-column extensions (or per-dataset mapping)
+    prior_params=None,        # values callable priors need but the scan does not
 ) -> PeriodogramResult
 ```
 
@@ -2221,10 +2222,15 @@ under exactly the priors given. Consequences:
 - The `v_sys` / `ra0` / `dec0` priors must suit the data's actual offsets
   (there is no centering). Δ becomes invariant to a constant offset only in the
   limit that the offset prior is wide enough to absorb it.
-- Amplitude priors may be `LinearPriorCallable`s (e.g. `PeriodDependentKPrior`)
-  — they resolve per trial period through the standard prior machinery, with
-  `e = 0` adopted, and so intentionally tilt Δ. The Occam factors are constant
-  across the grid only for period-independent amplitude priors.
+- Amplitude priors may be `LinearPriorCallable`s (e.g. `PeriodDependentKPrior`,
+  the primary path) — they resolve per trial period through the standard prior
+  machinery, with `e = 0` adopted, and so intentionally tilt Δ. Values such a
+  prior needs but the scan does not provide are passed as
+  `periodogram(..., prior_params={"parallax": ...})`; they are bound into the
+  callables, **not** merged into the nonlinear values, because `log_prob`'s auto
+  mode would reclassify a linear name like `parallax` as an explicit, fixed
+  column and silently change the model. `period` and `eccentricity` are rejected
+  there — the scan owns both.
 - Extensions adding linear columns (`MultiSurveyOffset`, `MonomialTrend`) are
   passed via `extensions=` and apply to both the trial and base models; their
   priors come from `prior.extension_priors` as usual. Extensions with nonlinear
@@ -2235,14 +2241,40 @@ under exactly the priors given. Consequences:
   For containers, `prior` may be a `{dataset_name: HarvPrior}` mapping (a
   single prior may be shared when all datasets are of one type).
 
-**Open question (deliberately unsettled).** What amplitude scale to *recommend*
-is not settled. A scale comparable to the data RMS under-estimates the true
-amplitude in the partial-arc regime (baseline < period) and biases the peak
-toward short periods; a broader or period-dependent prior mitigates it, but
-choosing a default needs a study against a converged period posterior (dense
-rejection / MCMC) across many seeds and regimes. Until then the API requires
-the user to choose. See the `TODO` in
-`harv.models.parameterizations.fourier`.
+**The amplitude prior: period-dependent is the primary path.** The Fourier
+amplitudes take the same physically-motivated priors harv's *Keplerian*
+parameterizations already default to, removing an asymmetry rather than adding a
+convention:
+
+| | period-dependent (primary) | flat (alternative) |
+| --- | --- | --- |
+| RV | `sigma_K0` + `P0` → `PeriodDependentKPrior`, `σ_K ∝ P^(-1/3)` | `sigma_amp` |
+| Gaia | `sigma_a0` + `P0` → `PeriodDependentSemiMajorAxisPrior`, `σ_a ∝ P^(2/3)` | `sigma_amp` |
+
+The opposite exponents are one Kepler law seen twice: `a ∝ P^(2/3)`, and RV
+measures a velocity — the same orbit differentiated, costing one power of `P`.
+The two forms are mutually exclusive (`TypeError` if both, or if a scale is
+given without its `P0`), and there is still **no data-driven default** for
+either scale.
+
+`sigma_0` is the amplitude expected for the companion being searched for **at
+`P0`**, not a global width. This is the one real behavioural difference from a
+flat prior, and it is a footgun: where too wide a flat prior is merely wasteful,
+too large a `sigma_0` tilts the periodogram toward long periods and can let a
+long-period alias outrank the true mode. The mechanism is that the Occam factor
+only reaches `d·ln σ(P)` once `σ²λ(P) ≫ 1`, so the scale sets how much of the
+grid feels the tilt.
+
+**Gaia needs a parallax, and that is a real limitation.** `σ_a` is a physical
+length until multiplied by a parallax, which the periodogram marginalizes rather
+than samples — so the value is supplied at scan time via `prior_params` (below).
+It sets the prior's *scale* only: the parallax column stays in the design matrix
+and is still fitted and marginalized. Supplying a point value restricts this
+path to sources with a well-measured parallax; see
+`TODO(parallax-marginalization)` in `harv.models.parameterizations.fourier` for
+the moment-matched and fully-marginalized routes and why the latter is not a
+drop-in. RV has no equivalent dependence — `PeriodDependentKPrior` needs only
+`period` and `eccentricity`, both of which the scan owns.
 
 ### Prior builders
 

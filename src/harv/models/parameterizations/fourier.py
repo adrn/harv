@@ -12,11 +12,31 @@ with every amplitude analytically marginalized). But these are also first-class
 parameterizations: extensions (survey offsets, trends), the rejection sampler, and joint
 models work as usual.
 
-TODO(default-amplitude-prior): ``default_prior`` requires explicit amplitude scales
-(``sigma_amp``) by design — there is deliberately no data-driven default. What scale
-guidance (or period-dependent form) to *recommend* is an open question: it needs a study
-against a converged period posterior across many seeds and regimes (see docs/spec.md,
-"Priors are explicit", under "Open question").
+Amplitude priors come in two forms, and the **period-dependent one is the primary
+path**: ``sigma_K0``/``P0`` for RV, ``sigma_a0``/``P0`` for Gaia, matching the priors
+harv's Keplerian parameterizations already default to. A flat ``sigma_amp`` remains one
+argument away. Both scales are always explicit — there is deliberately no data-driven
+default.
+
+``sigma_0`` is the amplitude expected for the companion being searched for **at P0**,
+not a global width. Unlike a flat prior, where too wide is merely wasteful, too large a
+``sigma_0`` tilts the periodogram toward long periods and can let a long-period alias
+outrank the true mode: the Occam factor only reaches ``d * ln sigma(P)`` once
+``sigma^2 lambda(P) >> 1``, so the scale sets how much of the grid feels the tilt.
+
+TODO(parallax-marginalization): the Gaia form needs a parallax, supplied as a point
+value via ``periodogram(..., prior_params={"parallax": ...})``. That restricts it to
+sources with a well-measured parallax; where the parallax is uncertain the prior is
+confidently the wrong width, and worst exactly where the data are weakest. Two routes,
+neither in scope yet:
+
+1. Moment-match, staying analytic: ``sigma_eff^2 = sigma_a0^2 (P/P0)^(4/3) (plx^2 +
+   sigma_plx^2)``. Still Normal, so the analytic linear marginalization is untouched.
+2. Marginalize numerically. ``p(a_0|P) = int N(a_0; 0, sigma_a(P, plx)) p(plx) d plx``
+   is a scale mixture of Gaussians and therefore *not* Gaussian, which
+   ``_resolve_prior_to_mvn`` rejects. Doing it properly means evaluating Delta on a
+   quadrature grid in parallax and logsumexp-ing, multiplying the periodogram cost by
+   the number of nodes.
 """
 
 __all__ = ("FourierGaiaAstrometry", "FourierRV")
@@ -32,6 +52,7 @@ from unxt.quantity import ustrip
 from harv.custom_types import (
     ScalarQAngle,
     ScalarQAngularSpeed,
+    ScalarQLength,
     ScalarQSpeed,
     ScalarQTime,
 )
@@ -40,6 +61,10 @@ from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations._base import AbstractParameterization
 from harv.models.priors import HarvPrior
+from harv.models.priors.custom_priors import (
+    PeriodDependentKPrior,
+    PeriodDependentSemiMajorAxisPrior,
+)
 from harv.models.priors.helpers import (
     _apply_overrides,
     _make_period_prior,
@@ -64,19 +89,49 @@ def _harmonic_columns(
     return out
 
 
+def _validate_amp_scale(sigma_amp: Any, sigma_0: Any, P0: Any, scale_name: str) -> None:
+    """Reject conflicting or half-given amplitude scales.
+
+    Checked unconditionally, even when every amplitude column is overridden by
+    name, so a contradictory pair is never silently ignored.
+    """
+    tilted = sigma_0 is not None or P0 is not None
+    if tilted and sigma_amp is not None:
+        raise TypeError(
+            f"Cannot specify both sigma_amp and {scale_name}/P0: the first is a "
+            "flat amplitude prior, the second a period-dependent one. Pass one."
+        )
+    if tilted and (sigma_0 is None or P0 is None):
+        raise TypeError(
+            f"{scale_name} and P0 must be given together: {scale_name} is the "
+            "amplitude scale *at* P0, so neither means anything alone."
+        )
+
+
 def _make_amp_prior(
-    name: str,
     override: LinearPriorDist | None,
+    tilted: LinearPriorDist | None,
     sigma_amp: Any,
+    scale_name: str,
     unit_error: str,
 ) -> LinearPriorDist:
-    """Per-amplitude prior: an explicit override, else ``Normal(0, sigma_amp)``."""
+    """Resolve one amplitude column's prior, in precedence order.
+
+    An explicit *override* by name wins; then *tilted*, the **period-dependent**
+    prior harv's Keplerian parameterizations already use and the primary path
+    for the periodogram; then a flat ``Normal(0, sigma_amp)``. There is
+    deliberately no data-driven default, so overriding every amplitude column by
+    name is the only way to supply neither scale.
+    """
     if override is not None:
         return override
+    if tilted is not None:
+        return tilted
     if sigma_amp is None:
         raise TypeError(
-            f"Must specify sigma_amp (or an explicit prior for {name!r}); there is "
-            f"deliberately no data-driven default amplitude scale. {unit_error}"
+            f"Must specify {scale_name} and P0 (period-dependent, recommended) or "
+            "sigma_amp (flat); there is deliberately no data-driven default "
+            f"amplitude scale. {unit_error}"
         )
     return QuantityDistribution(
         dist.Normal(0.0, ustrip(str(sigma_amp.unit), sigma_amp)),
@@ -168,6 +223,8 @@ class FourierRV(AbstractParameterization):
         *,
         period_min: ScalarQTime | None = None,
         period_max: ScalarQTime | None = None,
+        sigma_K0: ScalarQSpeed | None = None,
+        P0: ScalarQTime | None = None,
         sigma_amp: ScalarQSpeed | None = None,
         sigma_v0: ScalarQSpeed | None = None,
         **kwargs: PriorDist | LinearPriorDist,
@@ -181,11 +238,20 @@ class FourierRV(AbstractParameterization):
         ----------
         period_min, period_max
             Log-uniform period bounds (or pass an explicit ``period=`` prior).
+        sigma_K0, P0
+            **The primary path.** Period-dependent amplitude prior
+            ``sigma_K(P) = sigma_K0 (P/P0)^(-1/3) (1-e^2)^(-1/2)``
+            (:class:`~harv.models.priors.PeriodDependentKPrior`), applied to
+            every harmonic amplitude. ``sigma_K0`` is the semi-amplitude
+            expected for the companion you are searching for **at P0**, not a
+            global width: too large a value tilts the periodogram toward long
+            periods. Mutually exclusive with ``sigma_amp``.
         sigma_amp
-            Gaussian prior scale applied to every harmonic amplitude
-            (``cos_amp_k`` / ``sin_amp_k``); individual amplitudes can be
-            overridden by name. Required when ``n_terms > 0`` unless every
-            amplitude is overridden.
+            Flat, period-independent alternative: a Gaussian scale applied to
+            every harmonic amplitude (``cos_amp_k`` / ``sin_amp_k``). Mutually
+            exclusive with ``sigma_K0``/``P0``. Individual amplitudes can be
+            overridden by name; a scale is required when ``n_terms > 0`` unless
+            every amplitude is overridden.
         sigma_v0
             Systemic-velocity prior scale (or pass an explicit ``v_sys=``
             prior). Note there is no data centering anywhere: the prior must
@@ -200,6 +266,15 @@ class FourierRV(AbstractParameterization):
                 period=kwargs.pop("period", None),
             ),
         }
+        _validate_amp_scale(sigma_amp, sigma_K0, P0, "sigma_K0")
+        amp_tilted = (
+            None
+            # `or P0 is None` is unreachable after _validate_amp_scale; it is
+            # here so the narrowing is visible to the type checker.
+            if sigma_K0 is None or P0 is None
+            else PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0)
+        )
+
         linear_priors: dict[str, LinearPriorDist] = {}
         for pi in self.linear_params():
             if pi.name == "v_sys":
@@ -208,10 +283,11 @@ class FourierRV(AbstractParameterization):
                 )
             else:
                 linear_priors[pi.name] = _make_amp_prior(
-                    pi.name,
                     kwargs.pop(pi.name, None),  # type: ignore[arg-type]
+                    amp_tilted,
                     sigma_amp,
-                    "For RV data, sigma_amp is a speed (e.g. Q(30, 'km/s')).",
+                    "sigma_K0",
+                    "For RV data both are speeds (e.g. Q(30, 'km/s')).",
                 )
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
@@ -331,6 +407,8 @@ class FourierGaiaAstrometry(AbstractParameterization):
         *,
         period_min: ScalarQTime | None = None,
         period_max: ScalarQTime | None = None,
+        sigma_a0: ScalarQLength | None = None,
+        P0: ScalarQTime | None = None,
         sigma_amp: ScalarQAngle | None = None,
         sigma_pos: ScalarQAngle | None = None,
         sigma_pm: ScalarQAngularSpeed | None = None,
@@ -350,11 +428,29 @@ class FourierGaiaAstrometry(AbstractParameterization):
         ----------
         period_min, period_max
             Log-uniform period bounds (or pass an explicit ``period=`` prior).
+        sigma_a0, P0
+            **The primary path.** Period-dependent amplitude prior
+            ``sigma_a(P) = sigma_a0 (P/P0)^(2/3) * parallax``
+            (:class:`~harv.models.priors.PeriodDependentSemiMajorAxisPrior`),
+            applied to every ``ti_*_k``. ``sigma_a0`` is a *physical* length
+            (e.g. ``Q(1.0, "AU")``) -- the orbit size expected for the companion
+            you are searching for **at P0**.
+
+            Because it needs a parallax to become an angle, and the periodogram
+            marginalizes parallax rather than sampling it, the value must be
+            supplied at scan time via
+            ``periodogram(..., prior_params={"parallax": ...})``. That sets the
+            prior's *scale* only: the parallax column stays in the design matrix
+            and is still fitted and marginalized. This restricts the path to
+            sources with a well-measured parallax -- see the module
+            ``TODO(parallax-marginalization)``. Mutually exclusive with
+            ``sigma_amp``.
         sigma_amp
-            Gaussian prior scale for every harmonic amplitude (``ti_*_k``),
-            an angle (e.g. ``Q(1.0, "mas")``); individual amplitudes can be
-            overridden by name. Required when ``n_terms > 0`` unless every
-            amplitude is overridden.
+            Flat, period-independent alternative: a Gaussian scale for every
+            harmonic amplitude (``ti_*_k``), an angle (e.g. ``Q(1.0, "mas")``).
+            Mutually exclusive with ``sigma_a0``/``P0``. Individual amplitudes
+            can be overridden by name; a scale is required when ``n_terms > 0``
+            unless every amplitude is overridden.
         sigma_pos
             Position-offset (``ra0``/``dec0``) prior scale. Must be generous
             enough to absorb the reference-position offset.
@@ -386,6 +482,15 @@ class FourierGaiaAstrometry(AbstractParameterization):
                 dist.Normal(0.0, ustrip(str(sigma.unit), sigma)), str(sigma.unit)
             )
 
+        _validate_amp_scale(sigma_amp, sigma_a0, P0, "sigma_a0")
+        amp_tilted = (
+            None
+            # `or P0 is None` is unreachable after _validate_amp_scale; it is
+            # here so the narrowing is visible to the type checker.
+            if sigma_a0 is None or P0 is None
+            else PeriodDependentSemiMajorAxisPrior(sigma_a0=sigma_a0, P0=P0)
+        )
+
         linear_priors: dict[str, LinearPriorDist] = {}
         for pi in self.linear_params():
             if pi.name in ("ra0", "dec0"):
@@ -402,10 +507,12 @@ class FourierGaiaAstrometry(AbstractParameterization):
                 )
             else:
                 linear_priors[pi.name] = _make_amp_prior(
-                    pi.name,
                     kwargs.pop(pi.name, None),  # type: ignore[arg-type]
+                    amp_tilted,
                     sigma_amp,
-                    "For Gaia data, sigma_amp is an angle (e.g. Q(1.0, 'mas')).",
+                    "sigma_a0",
+                    "For Gaia data sigma_a0 is a length (e.g. Q(1.0, 'AU')) and "
+                    "sigma_amp an angle (e.g. Q(1.0, 'mas')).",
                 )
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)
