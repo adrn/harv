@@ -2168,6 +2168,54 @@ both models, as with any model).
 Other data types raise `NotImplementedError` (2-d absolute/relative astrometry
 is future work; see "Planned features").
 
+#### Profile mode (`prior=False`)
+
+Classical periodograms *maximize* over the linear amplitudes instead of
+integrating them out. `prior=False` computes that statistic, for comparison
+against Lomb-Scargle and kepmodel:
+
+```
+ln L_prof = -1/2 r̂ᵀ C⁻¹ r̂ - 1/2 ln|2πC|,  r̂ = y - X β̂  (β̂ the GLS solution)
+delta_ln_likelihood(f) = ln L_prof(f) - ln L_prof,base
+                       = 1/2 (χ²_base - χ²_trial(f))
+```
+
+Evaluated by `AbstractComponentModel._log_prob_profile`, which reuses the same
+design matrix and the same (extension-modified) covariance as the marginal path.
+`PeriodogramResult.statistic` is `"profile"`; `ln_likelihood_base` is the base
+model's profile log-likelihood.
+
+**It is not a limiting case of the marginal statistic.** As the amplitude priors
+widen, `Δ_marginal → Δ_profile - (1/2)(d_trial - d_base)·ln Λ → -∞`: the trial
+model has more columns than the base, so the Occam factor grows without bound
+rather than cancelling. The two statistics are computed by different code paths
+because they are different quantities.
+
+Consequences:
+
+- **Δ_profile ≥ 0 everywhere.** The trial model nests the base one, so extra
+  columns can only lower χ². A no-signal source still shows a few nats of
+  structure, where Δ_marginal goes negative once the Occam factor beats the fit.
+- **No priors are consulted at all**, so `prior_params` alongside `prior=False`
+  raises `TypeError` rather than being silently ignored, and Δ is exactly
+  invariant to a constant offset (the `v_sys` / `ra0` / `dec0` columns are
+  fitted, not shrunk) — where the marginal statistic is invariant only in the
+  wide-prior limit.
+- **The base model is evaluated once.** With no priors there is no
+  `LinearPriorCallable` to resolve against the trial period, and the `n_terms=0`
+  model carries no period dependence.
+- **The `n_terms` cap still applies and matters more.** The marginal likelihood
+  stays finite when columns outnumber observations because the prior
+  regularizes; the least-squares solve does not — χ² would hit zero at every
+  frequency and Δ would flatten at `(1/2)χ²_base`.
+- **`False` may not appear inside a per-dataset mapping** (`TypeError`): a log
+  Bayes factor and a `(1/2)Δχ²` are not commensurable, so summing them across a
+  container's datasets is meaningless. Pass `prior=False` for the whole
+  periodogram instead.
+- Extensions still apply to both models, but their columns are fitted rather
+  than shrunk — e.g. `MultiSurveyOffset` recovers each instrument's offset
+  exactly. That is the correct kepmodel-comparable behaviour.
+
 ### `frequency_grid`
 
 ```python
@@ -2195,7 +2243,8 @@ periodogram(
     frequency_grid=None,      # explicit grid; exclusive with every grid kwarg
                               #   (period_min/period_max/samples_per_peak/n_grid)
     *,
-    prior,                    # REQUIRED: HarvPrior (or {dataset_name: HarvPrior})
+    prior,                    # REQUIRED: HarvPrior (or {dataset_name: HarvPrior}),
+                              #   or False for profile mode (see above)
     period_min=None, period_max=None, samples_per_peak=None, n_grid=None,
     n_terms=2,
     extensions=(),            # linear-column extensions (or per-dataset mapping)
@@ -2206,14 +2255,16 @@ periodogram(
 `PeriodogramResult` is an `eqx.Module` with fields `frequency`,
 `delta_ln_likelihood`, `ln_likelihood_base` (scalar, or per-frequency when the
 base model is period-dependent), `t_span`, `t_ref`, optional
-`per_dataset` (per-dataset Δ for container inputs), and static `n_terms`;
-plus `period` (property, `1/frequency`), `max_period()`, and `plot(ax=None,
-x="period" | "frequency")`.
+`per_dataset` (per-dataset Δ for container inputs), and static `n_terms` and
+`statistic` (`"marginal"` | `"profile"`); plus `period` (property,
+`1/frequency`), `max_period()`, and `plot(ax=None, x="period" | "frequency")`.
 
 ### Priors are explicit
 
-`prior` is **required** and is an ordinary `HarvPrior` for the Fourier trial
-model, normally built by `FourierRV(n_terms=H).default_prior(...)` /
+`prior` is **required**. Passing `False` selects profile mode (above) — the one
+documented exception to everything in this section, since it consults no priors
+at all. Otherwise it is an ordinary `HarvPrior` for the Fourier trial model,
+normally built by `FourierRV(n_terms=H).default_prior(...)` /
 `FourierGaiaAstrometry(n_terms=H).default_prior(...)`. The periodogram makes
 **no data-driven prior choices** — it never inspects the data to set a scale,
 does no centering, and keeps no table of column names: Δ is a log Bayes factor
@@ -2371,6 +2422,12 @@ exactly (its data-dependence does not bias the estimator). Requirements:
    domain cannot reach past the grid, the grid itself is what must span every
    period the population prior can populate: set `period_min` / `period_max` on
    `periodogram` (or `frequency_grid`) accordingly, not on the builder.
+   A prior built from a **profile** periodogram (`prior=False`) is still a valid
+   proposal — the floor still guarantees support, and the estimator needs only a
+   fixed normalized proposal — but it is less principled: since Δ_profile ≥ 0, a
+   no-signal source still shows structure that tempering will concentrate on.
+   Prefer the marginal statistic for building priors, and profile mode for
+   comparison against classical periodograms.
 1. **Per-source evaluability** — the reweighting needs `ln p_int,n` at each
    retained sample. `attach_interim_period_prior(samples, period_prior)`
    evaluates and stores it as the reserved extra column

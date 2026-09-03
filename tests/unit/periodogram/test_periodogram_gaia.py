@@ -119,3 +119,12 @@ class TestJoint:
         joint_val = float(result.delta_ln_likelihood[i_true])
         for delta in result.per_dataset.values():
             assert joint_val >= float(delta[i_true]) - 1e-3
+
+
+def test_profile_mode_runs_on_gaia():
+    """The 5-column astrometric base model through the profile path."""
+    data, _ = _sim_gaia()
+    result = hp.periodogram(data, prior=False, period_min=Q(20.0, "day"))
+    assert result.statistic == "profile"
+    assert result.delta_ln_likelihood.shape == result.frequency.shape
+    assert bool(jnp.all(jnp.isfinite(result.delta_ln_likelihood)))

@@ -324,3 +324,30 @@ class TestAmplitudeScaleSelection:
             sin_amp_1=kp,
         )
         assert prior.linear_priors["cos_amp_1"] is kp
+
+
+class TestProfileModeValidation:
+    """``prior=False`` turns the prior machinery off; it must not half-apply."""
+
+    def test_prior_params_rejected(self):
+        data = _rv()
+        with pytest.raises(TypeError, match="prior_params cannot be used"):
+            hp.periodogram(
+                data,
+                prior=False,
+                period_min=Q(5.0, "day"),
+                prior_params={"parallax": Q(10.0, "mas")},
+            )
+
+    def test_false_rejected_inside_a_per_dataset_mapping(self):
+        """Summing a log Bayes factor and a 0.5*dchi2 has no meaning."""
+        source = SourceData(gaia=_gaia(), rv=_rv())
+        with pytest.raises(TypeError, match="cannot appear inside a per-dataset"):
+            hp.periodogram(
+                source,
+                prior={
+                    "gaia": False,
+                    "rv": hm.FourierRV(n_terms=2).default_prior(**RV_KW),
+                },
+                period_min=Q(20.0, "day"),
+            )

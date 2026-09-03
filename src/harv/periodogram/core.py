@@ -36,7 +36,7 @@ import functools
 import warnings
 from collections.abc import Mapping
 from dataclasses import KW_ONLY
-from typing import TYPE_CHECKING, Any, cast, final
+from typing import TYPE_CHECKING, Any, Literal, cast, final
 
 import equinox as eqx
 import jax
@@ -93,6 +93,7 @@ class PeriodogramResult(eqx.Module):
     _: KW_ONLY
     per_dataset: dict[str, NFloatArray] | None = None
     n_terms: int = eqx.field(static=True, default=2)
+    statistic: str = eqx.field(static=True, default="marginal")
 
     @property
     def period(self) -> NTime:
@@ -119,7 +120,10 @@ class PeriodogramResult(eqx.Module):
         if x == "period":
             ax.set_xscale("log")
         ax.set_xlabel(f"{x} [{xx.unit}]")
-        ax.set_ylabel(r"$\Delta \ln \mathcal{L}$")
+        if self.statistic == "profile":
+            ax.set_ylabel(r"$\Delta \ln \hat{\mathcal{L}}$")
+        else:
+            ax.set_ylabel(r"$\Delta \ln \mathcal{L}$")
         return ax
 
 
@@ -236,24 +240,13 @@ def _resolve_per_dataset(value: Any, name: str, ds_name: str) -> Any:
     return value
 
 
-def _dataset_delta_lnl(
-    dataset: AbstractData,
-    prior: HarvPrior,
+def _reject_unscannable(
+    prior: HarvPrior | Literal[False],
     extensions: tuple[AbstractExtension, ...],
-    f_grid: NFrequency,
-    n_terms: int,
-    prior_params: Mapping[str, Any] | None = None,
-) -> tuple[NFloatArray, Float[jax.Array, ""] | NFloatArray, int]:
-    """Δ marginal log-likelihood over the grid for one dataset."""
-    if type(dataset) not in _FOURIER_DISPATCH:
-        raise NotImplementedError(
-            f"No periodogram implementation for {type(dataset).__name__}; only "
-            f"{', '.join(cls.__name__ for cls in _FOURIER_DISPATCH)} are "
-            "currently supported."
-        )
-    fourier_cls, model_cls = _FOURIER_DISPATCH[type(dataset)]
-
-    nonlin_extra = set(prior.nonlinear_priors) - {"period"}
+    fourier_cls: type,
+) -> None:
+    """Reject inputs the periodogram can neither scan nor marginalize."""
+    nonlin_extra = set() if prior is False else set(prior.nonlinear_priors) - {"period"}
     if nonlin_extra:
         raise TypeError(
             f"The Fourier trial model has no nonlinear parameters besides 'period'; "
@@ -270,26 +263,23 @@ def _dataset_delta_lnl(
                 "MonomialTrend) are supported."
             )
 
-    n_obs = int(dataset.time.shape[0])
-    n_ext_linear = sum(1 for ext in extensions for p in ext.extra_params() if p.linear)
-    eff_terms = _effective_n_terms(fourier_cls, n_terms, n_obs, n_ext_linear)
 
-    # Catch typos / unusable prior entries against the *requested* term count,
-    # then subset to the (possibly capped) effective model.
-    requested_names = {p.name for p in fourier_cls(n_terms=n_terms).linear_params()}
-    model = cast(
-        "AbstractComponentModel",
-        model_cls(
-            parameterization=fourier_cls(n_terms=eff_terms), extensions=extensions
-        ),
-    )
-    base_model = cast(
-        "AbstractComponentModel",
-        model_cls(parameterization=fourier_cls(n_terms=0), extensions=extensions),
-    )
+def _resolve_linear_priors(
+    prior: HarvPrior,
+    model: "AbstractComponentModel",
+    fourier_cls: type,
+    n_terms: int,
+    eff_terms: int,
+    prior_params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate the supplied prior against the trial model and bind *prior_params*.
 
+    Typos are caught against the *requested* term count, so a prior built for
+    more harmonics than the cap allows still reports the name the user wrote.
+    """
     eff_lp = effective_linear_prior_from_prior(prior, model) or {}
     validate_extension_priors(prior, model, eff_lp)
+    requested_names = {p.name for p in fourier_cls(n_terms=n_terms).linear_params()}
     allowed = requested_names | (set(eff_lp) - set(prior.linear_priors))
     unknown = set(prior.linear_priors) - allowed
     if unknown:
@@ -304,33 +294,83 @@ def _dataset_delta_lnl(
             f"prior.linear_priors is missing entries for {missing} required by "
             f"{fourier_cls.__name__}(n_terms={eff_terms})."
         )
-    eff_lp = _bind_prior_params(eff_lp, prior_params)
-    full_lp = {n: eff_lp[n] for n in model._all_linear_names()}
-    base_lp = {n: eff_lp[n] for n in base_model._all_linear_names()}
+    return _bind_prior_params(eff_lp, prior_params)
+
+
+def _dataset_delta_lnl(
+    dataset: AbstractData,
+    prior: HarvPrior | Literal[False],
+    extensions: tuple[AbstractExtension, ...],
+    f_grid: NFrequency,
+    n_terms: int,
+    prior_params: Mapping[str, Any] | None = None,
+) -> tuple[NFloatArray, Float[jax.Array, ""] | NFloatArray, int]:
+    """Δ log-likelihood over the grid: marginal, or profile when ``prior is False``."""
+    if type(dataset) not in _FOURIER_DISPATCH:
+        raise NotImplementedError(
+            f"No periodogram implementation for {type(dataset).__name__}; only "
+            f"{', '.join(cls.__name__ for cls in _FOURIER_DISPATCH)} are "
+            "currently supported."
+        )
+    fourier_cls, model_cls = _FOURIER_DISPATCH[type(dataset)]
+
+    _reject_unscannable(prior, extensions, fourier_cls)
+
+    n_obs = int(dataset.time.shape[0])
+    n_ext_linear = sum(1 for ext in extensions for p in ext.extra_params() if p.linear)
+    eff_terms = _effective_n_terms(fourier_cls, n_terms, n_obs, n_ext_linear)
+
+    model = cast(
+        "AbstractComponentModel",
+        model_cls(
+            parameterization=fourier_cls(n_terms=eff_terms), extensions=extensions
+        ),
+    )
+    base_model = cast(
+        "AbstractComponentModel",
+        model_cls(parameterization=fourier_cls(n_terms=0), extensions=extensions),
+    )
 
     period_grid = 1.0 / f_grid
     period_unit = str(period_grid.unit)
     p_vals = jnp.asarray(ustrip(period_unit, period_grid))
 
-    # base_lp is a name-subset of full_lp sliced from the same dict, so probing
-    # full_lp covers both models.
-    _check_callable_priors(full_lp, _nl(p_vals[0], period_unit))
+    if prior is False:
+        # No priors at all, so every linear column is profiled and the base --
+        # which carries no Fourier columns and no callable prior to resolve --
+        # is period-independent by construction: one evaluation.
+        def lnl_at(p: jax.Array) -> jax.Array:
+            return model._log_prob_profile(_nl(p, period_unit), dataset)
 
-    def base_at(p: jax.Array) -> jax.Array:
-        return base_model.log_prob(_nl(p, period_unit), dataset, linear_priors=base_lp)
-
-    # The base model carries no Fourier columns, so it is period-independent and
-    # one evaluation suffices -- unless one of its own linear priors resolves
-    # against the trial period (a LinearPriorCallable such as
-    # PeriodDependentKPrior on v_sys). Then its baseline genuinely varies across
-    # the grid and subtracting a single value would tilt every Delta.
-    if any(_is_callable_prior(p) for p in base_lp.values()):
-        lnl0 = jax.jit(jax.vmap(base_at))(p_vals)
+        lnl0 = base_model._log_prob_profile(_nl(p_vals[0], period_unit), dataset)
     else:
-        lnl0 = base_at(p_vals[0])
+        eff_lp = _resolve_linear_priors(
+            prior, model, fourier_cls, n_terms, eff_terms, prior_params
+        )
+        full_lp = {n: eff_lp[n] for n in model._all_linear_names()}
+        base_lp = {n: eff_lp[n] for n in base_model._all_linear_names()}
 
-    def lnl_at(p: jax.Array) -> jax.Array:
-        return model.log_prob(_nl(p, period_unit), dataset, linear_priors=full_lp)
+        # base_lp is a name-subset of full_lp sliced from the same dict, so
+        # probing full_lp covers both models.
+        _check_callable_priors(full_lp, _nl(p_vals[0], period_unit))
+
+        def base_at(p: jax.Array) -> jax.Array:
+            return base_model.log_prob(
+                _nl(p, period_unit), dataset, linear_priors=base_lp
+            )
+
+        def lnl_at(p: jax.Array) -> jax.Array:
+            return model.log_prob(_nl(p, period_unit), dataset, linear_priors=full_lp)
+
+        # The base model carries no Fourier columns, so it is period-independent
+        # and one evaluation suffices -- unless one of its own linear priors
+        # resolves against the trial period (a LinearPriorCallable such as
+        # PeriodDependentKPrior on v_sys). Then its baseline genuinely varies
+        # across the grid and subtracting a single value would tilt every Delta.
+        if any(_is_callable_prior(p) for p in base_lp.values()):
+            lnl0 = jax.jit(jax.vmap(base_at))(p_vals)
+        else:
+            lnl0 = base_at(p_vals[0])
 
     lnl = jax.jit(jax.vmap(lnl_at))(p_vals)
     return lnl - lnl0, lnl0, eff_terms
@@ -340,7 +380,7 @@ def periodogram(
     data: AbstractData | AbstractDatasetContainer,
     frequency_grid: NFrequency | None = None,
     *,
-    prior: HarvPrior | Mapping[str, HarvPrior],
+    prior: HarvPrior | Mapping[str, HarvPrior | Literal[False]] | Literal[False],
     period_min: ScalarQTime | None = None,
     period_max: ScalarQTime | None = None,
     samples_per_peak: int | None = None,
@@ -367,12 +407,14 @@ def periodogram(
     parameters. The statistic is a log Bayes factor under the priors you supplied.
     Lomb-Scargle or other Keplerian periodograms are often instead computed from profile
     likelihoods at the maximum-likelihood linear amplitudes, which is a different
-    statistic. It is related to the marginal likelihood only when the priors are flat
-    and unbounded. The recommended amplitude priors here scale with period the same way
+    statistic -- and not a limiting case of this one: as the amplitude priors widen the
+    Occam factor grows without bound, so Delta diverges rather than approaching the
+    profile statistic. Pass ``prior=False`` to compute the profile statistic directly.
+    The recommended amplitude priors here scale with period the same way
     harv's Keplerian priors do — ``sigma_K0``/``P0`` for RV (semi-amplitude, falling as
     ``P^(-1/3)``) and ``sigma_a0``/``P0`` for astrometry (semi-major axis, rising as
     ``P^(2/3)``). Pass ``sigma_amp`` instead for the constant-amplitude case, which is
-    the one comparable to a profile-likelihood periodogram.
+    the one comparable *in shape* to a profile-likelihood periodogram.
 
     Parameters
     ----------
@@ -383,7 +425,15 @@ def periodogram(
         Explicit frequency grid. Mutually exclusive with the grid keywords
         (``period_min``, ``period_max``, ``n_grid``).
     prior
-        REQUIRED. A :class:`~harv.models.priors.HarvPrior` for the Fourier
+        REQUIRED. ``False`` selects **profile mode**: no priors at all, every
+        linear column fitted by generalized least squares, and
+        ``delta_ln_likelihood`` becomes ``0.5 * (chi2_base - chi2_trial)`` --
+        the statistic Lomb-Scargle and kepmodel report, provided for
+        comparison. It cannot be combined with ``prior_params`` and cannot
+        appear inside a per-dataset mapping (the two statistics are not
+        commensurable, so summing them across datasets is meaningless).
+        ``PeriodogramResult.statistic`` records which one was computed.
+        Otherwise a :class:`~harv.models.priors.HarvPrior` for the Fourier
         trial model — build it with
         ``FourierRV(n_terms=...).default_prior(...)`` /
         ``FourierGaiaAstrometry(n_terms=...).default_prior(...)`` — or, for
@@ -484,7 +534,31 @@ def periodogram(
     ... )
     >>> res.delta_ln_likelihood.shape == res.frequency.shape
     True
+
+    Profile mode, for comparison against a classical periodogram. Delta is
+    ``0.5 * dchi2``, hence non-negative everywhere: the trial model nests the base
+    one and there is no Occam factor to pay for the extra columns.
+
+    >>> z0 = hp.periodogram(data, prior=False, period_min=Q(5.0, "day"))
+    >>> z0.statistic
+    'profile'
+    >>> bool((z0.delta_ln_likelihood >= -1e-4).all())
+    True
     """
+    if prior is False and prior_params:
+        raise TypeError(
+            "prior_params cannot be used with prior=False: profile mode has no "
+            "priors to resolve, so the values would be silently ignored."
+        )
+    # The annotation admits False per dataset only so this guard, rather than an
+    # opaque type-check failure, is what reports the mistake.
+    if isinstance(prior, Mapping) and any(v is False for v in prior.values()):
+        raise TypeError(
+            "prior=False cannot appear inside a per-dataset mapping: the profile "
+            "statistic and the log Bayes factor are not commensurable, so summing "
+            "them across datasets is meaningless. Pass prior=False for the whole "
+            "periodogram instead."
+        )
     reserved = {"period", "eccentricity"}.intersection(prior_params or ())
     if reserved:
         raise TypeError(
@@ -552,4 +626,5 @@ def periodogram(
         t_ref=t_ref,
         per_dataset=per_dataset if is_container else None,
         n_terms=eff_terms,
+        statistic="profile" if prior is False else "marginal",
     )

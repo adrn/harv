@@ -173,6 +173,40 @@ class TestDesignMatrix:
         ).log_prob(y)
         assert jnp.allclose(lp, direct, atol=1e-8)
 
+    def test_profile_log_prob_equals_numpy_lstsq(self):
+        # _log_prob_profile maximizes over the linear columns instead of
+        # marginalizing them; the oracle is a whitened numpy least-squares fit
+        # on the same design matrix. In float64: chi2 here is O(1e4), and the
+        # file's usual float32 trig tolerance would swamp the comparison.
+        with jax.enable_x64(new_val=True):
+            data = _rv_data()
+            model = hm.RVModel(parameterization=hm.FourierRV(n_terms=2))
+            nl = {"period": Q(41.0, "day"), "eccentricity": 0.0}
+            got = model._log_prob_profile(nl, data)
+
+            X = np.asarray(model._base_design_matrix(nl, data), dtype=float)
+            y = np.asarray(ustrip("km/s", data.rv), dtype=float)
+            sigma = np.asarray(ustrip("km/s", data.rv_err), dtype=float)
+            coef, *_ = np.linalg.lstsq(X / sigma[:, None], y / sigma, rcond=None)
+            chi2 = np.sum(((y - X @ coef) / sigma) ** 2)
+            expected = (
+                -0.5 * chi2 - np.sum(np.log(sigma)) - 0.5 * y.size * np.log(2.0 * np.pi)
+            )
+            assert np.allclose(float(got), expected, atol=1e-8)
+
+    def test_profile_log_prob_under_jit_and_vmap(self):
+        data = _rv_data()
+        model = hm.RVModel(parameterization=hm.FourierRV(n_terms=2))
+
+        def at(p_day):
+            return model._log_prob_profile(
+                {"period": Q(p_day, "day"), "eccentricity": 0.0}, data
+            )
+
+        out = jax.jit(jax.vmap(at))(jnp.linspace(10.0, 400.0, 16))
+        assert out.shape == (16,)
+        assert bool(jnp.all(jnp.isfinite(out)))
+
 
 class TestDefaultPrior:
     def test_rv_prior_structure(self):

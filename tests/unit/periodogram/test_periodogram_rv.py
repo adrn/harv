@@ -4,6 +4,7 @@ import warnings
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import numpyro.distributions as dist
 import pytest
 from unxt import Q, ustrip
@@ -298,3 +299,117 @@ class TestPeriodDependentBasePrior:
         lnl = result.delta_ln_likelihood + result.ln_likelihood_base
         tilted = lnl - result.ln_likelihood_base[0]
         assert not bool(jnp.allclose(tilted, result.delta_ln_likelihood, atol=1e-4))
+
+
+class TestProfileMode:
+    """``prior=False``: the profile statistic classical periodograms report.
+
+    See ``docs/spec.md``, "Profile mode (``prior=False``)".
+    """
+
+    def test_recovers_period(self):
+        data, _ = _sim()
+        result = hp.periodogram(data, prior=False, period_min=Q(5.0, "day"))
+        assert result.statistic == "profile"
+        assert _peak_within_grid_steps(result, P_TRUE)
+
+    def test_delta_is_non_negative(self):
+        """The trial model nests the base one, so extra columns only lower chi2.
+
+        A structural invariant the *marginal* statistic deliberately violates
+        (its Occam factor can outweigh the fit). It fails the moment the two
+        models disagree on the design matrix, the noise model, or the
+        normalization constant.
+        """
+        data, _ = _sim()
+        result = hp.periodogram(data, prior=False, period_min=Q(5.0, "day"))
+        assert bool(jnp.all(result.delta_ln_likelihood >= -1e-4))
+
+    def test_constant_offset_invariance(self):
+        """The operational form of "there is no prior".
+
+        ``v_sys`` is profiled out exactly, so a constant shift leaves Delta
+        untouched. Contrast ``TestInvariance.test_constant_offset_invariance``,
+        where the marginal statistic is invariant only in the limit that the
+        ``v_sys`` prior is wide enough to absorb the shift.
+        """
+        with jax.enable_x64(new_val=True):
+            data, _ = _sim()
+            shifted = RVData(
+                time=data.time,
+                rv=data.rv + Q(500.0, "km/s"),
+                rv_err=data.rv_err,
+                t_ref=data.t_ref,
+            )
+            grid = hp.frequency_grid(data, period_min=Q(5.0, "day"))
+            a = hp.periodogram(data, grid, prior=False)
+            b = hp.periodogram(shifted, grid, prior=False)
+            assert jnp.allclose(a.delta_ln_likelihood, b.delta_ln_likelihood, atol=1e-6)
+
+    def test_finite_past_the_baseline(self):
+        """At P >> t_span the trial columns go collinear with the base ones.
+
+        The one place the least-squares solve could produce NaN; the rank-masked
+        pseudo-inverse is what keeps it finite.
+        """
+        data, _ = _sim()
+        result = hp.periodogram(
+            data,
+            prior=False,
+            period_min=Q(5.0, "day"),
+            period_max=Q(200_000.0, "day"),
+        )
+        assert bool(jnp.all(jnp.isfinite(result.delta_ln_likelihood)))
+
+    def test_marginal_equals_profile_minus_occam_and_shrinkage(self):
+        """The exact bridge between the two modes.
+
+        ``Delta_marginal = z0 - Occam - shrinkage``, from the whitened design
+        matrix both modes share. Ported from the numpy prototype in
+        ``docs/tutorials/data/scratch/periodogram-casestudy/proto_identity.py``.
+        This is the only check that the two modes see the *same* design matrix
+        and noise model.
+        """
+        with jax.enable_x64(new_val=True):
+            data, _ = _sim()
+            grid = hp.frequency_grid(data, period_min=Q(5.0, "day"), n_grid=32)
+            marg = hp.periodogram(data, grid, prior=_prior(), n_terms=2)
+            prof = hp.periodogram(data, grid, prior=False, n_terms=2)
+
+            model = harv.models.RVModel(
+                parameterization=hm.FourierRV(n_terms=2), extensions=()
+            )
+            names = model._all_linear_names()
+            scales = np.array(
+                [30.0 if n != "v_sys" else 50.0 for n in names], dtype=float
+            )
+            sigma = np.asarray(ustrip("km/s", data.rv_err), dtype=float)
+            y = np.asarray(ustrip("km/s", data.rv), dtype=float)
+
+            def bridge(period_day: float, n_terms: int) -> tuple[float, float]:
+                """(Occam, shrinkage) for one trial period."""
+                m = harv.models.RVModel(
+                    parameterization=hm.FourierRV(n_terms=n_terms), extensions=()
+                )
+                nl = {"period": Q(period_day, "day"), "eccentricity": 0.0}
+                X = np.asarray(m._full_design_matrix(nl, data), dtype=float)
+                s = scales[: X.shape[1]] if n_terms else scales[-1:]
+                Xw, yw = X / sigma[:, None], y / sigma
+                B = Xw @ np.diag(s)
+                M = np.eye(B.shape[1]) + B.T @ B
+                c = B.T @ yw
+                quad_marg = c @ np.linalg.solve(M, c)
+                coef, *_ = np.linalg.lstsq(Xw, yw, rcond=None)
+                quad_prof = yw @ yw - np.sum((yw - Xw @ coef) ** 2)
+                occam = 0.5 * np.linalg.slogdet(M)[1]
+                return occam, 0.5 * (quad_prof - quad_marg)
+
+            periods = np.asarray(ustrip("day", 1.0 / grid), dtype=float)
+            o_base, g_base = bridge(float(periods[0]), 0)
+            for i in (0, len(periods) // 2, len(periods) - 1):
+                o, g = bridge(float(periods[i]), 2)
+                expected = (o - o_base) + (g - g_base)
+                got = float(prof.delta_ln_likelihood[i]) - float(
+                    marg.delta_ln_likelihood[i]
+                )
+                assert abs(got - expected) < 1e-6
