@@ -52,7 +52,9 @@ repos:
     hooks:
       - id: nbstripout
         files: .ipynb
-        exclude: ^docs/tutorials/case-studies/population-binary-fraction\.ipynb$
+        # Case studies ship with stored outputs: docs/conf.py sets
+        # nb_execution_mode = "off", so a stripped notebook renders with no figures.
+        exclude: ^docs/tutorials/case-studies/(population-binary-fraction|kepler-periodogram)\.ipynb$
   - repo: local
     hooks:
       - id: ty
