@@ -247,12 +247,13 @@ class NumpyroSampler(AbstractSampler):
     ----------
     prior
         Prior distributions for nonlinear (and optionally linear) parameters.
-    parameterization
-        Orbital parameterization. For RV data defaults to
-        :class:`~harv.models.parameterizations.rv.StandardRV`. Ignored for Gaia
-        astrometry data.
-    extensions
-        Model extensions (jitter, trends, offsets, GP) supplied at construction time.
+    model
+        The component model or :class:`~harv.models.joint.JointModel` template.
+    marginalized_names
+        Optional subset of linear parameters to analytically marginalize.
+    verbose
+        Emit harv's advisory warnings (a non-Gaussian linear prior that cannot be
+        marginalized; BFGS non-convergence in :meth:`optimize`). Default ``False``.
 
     Examples
     --------
@@ -367,6 +368,7 @@ class NumpyroSampler(AbstractSampler):
             self.prior,
             self.model,
             self.marginalized_names if marginalized else None,
+            verbose=self.verbose,
         )
 
         model = prepared.model
@@ -514,7 +516,7 @@ class NumpyroSampler(AbstractSampler):
             raise ValueError(msg)
 
         prepared = _prepare_sampler_model(
-            self.prior, self.model, self.marginalized_names
+            self.prior, self.model, self.marginalized_names, verbose=self.verbose
         )
         model_obj = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors
@@ -575,7 +577,7 @@ class NumpyroSampler(AbstractSampler):
                     converged = True
                     break
                 prev_loss = loss
-            if not converged:
+            if not converged and self.verbose:
                 warnings.warn(
                     f"BFGS did not converge for sample {i} after "
                     f"{max_passes} restarts (last loss change={float(last_change):.3e},"

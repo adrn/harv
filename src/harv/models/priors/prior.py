@@ -149,6 +149,7 @@ class HarvPrior(eqx.Module):
         model: "AbstractComponentModel | JointModel",
         return_logprobs: bool = False,
         marginalized_names: tuple[str, ...] | None = None,
+        verbose: bool = False,
     ) -> "Samples":
         """Draw a complete prior sample for a given model.
 
@@ -195,6 +196,10 @@ class HarvPrior(eqx.Module):
             sampler so the explicit-linear keys agree.  ``None`` (default)
             marginalizes every linear param that can be (the Gaussian ones),
             leaving only non-Gaussian priors explicit.
+        verbose
+            If ``True``, warn when a non-Gaussian linear prior cannot be
+            analytically marginalized and is therefore drawn here.  Silent by
+            default: it is expected behaviour, not a defect.
 
         Returns
         -------
@@ -237,7 +242,7 @@ class HarvPrior(eqx.Module):
         effective_linear_prior = effective_linear_prior_from_prior(self, model) or {}
         validate_extension_priors(self, model, effective_linear_prior)
         effective_marginalized_names = resolve_effective_marginalized_names(
-            effective_linear_prior, marginalized_names
+            effective_linear_prior, marginalized_names, verbose=verbose
         )
 
         # 1. Base nonlinear orbital params (bare arrays).
