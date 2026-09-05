@@ -92,7 +92,7 @@ class PeriodogramResult(eqx.Module):
     t_ref: ScalarQTime
     _: KW_ONLY
     per_dataset: dict[str, NFloatArray] | None = None
-    n_terms: int = eqx.field(static=True, default=2)
+    n_terms: int = eqx.field(static=True, default=1)
     statistic: str = eqx.field(static=True, default="marginal")
 
     @property
