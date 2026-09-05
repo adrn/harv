@@ -54,11 +54,19 @@ class AbstractSampler(eqx.Module):
 
     Concrete subclasses are marked ``@final`` per the project's
     abstract-final pattern.
+
+    Set ``verbose=True`` to opt in to harv's *advisory* warnings -- notices about
+    normal, correctly-handled situations (a non-Gaussian linear prior that cannot
+    be analytically marginalized, BFGS failing to converge in
+    :meth:`~harv.samplers.NumpyroSampler.optimize`).  They are silent by default.
+    Warnings about arguments harv had to ignore are always emitted, regardless of
+    this flag.
     """
 
     prior: HarvPrior
     model: AbstractComponentModel | JointModel
     marginalized_names: tuple[str, ...] | None = None
+    verbose: bool = eqx.field(static=True, default=False)
 
     def get_extensions(
         self,
