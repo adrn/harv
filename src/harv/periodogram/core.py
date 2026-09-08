@@ -77,8 +77,9 @@ class PeriodogramResult(eqx.Module):
     ``delta_ln_likelihood[i]`` is the marginal log-likelihood of the
     trial-period model at ``frequency[i]`` minus that of the base (no-signal)
     model, summed over datasets for container inputs. ``n_terms`` is the
-    *effective* Fourier term count used (after the per-dataset overfitting
-    cap; the maximum across datasets for container inputs).
+    *effective* Fourier term count used (the maximum across datasets for
+    container inputs). It equals the requested value except in profile mode,
+    which reduces it per dataset to keep the trial model overdetermined.
 
     ``ln_likelihood_base`` is a scalar for the usual period-independent base
     model, and a per-frequency array when a base-column prior resolves against
@@ -132,27 +133,77 @@ def _effective_n_terms(
     n_requested: int,
     n_obs: int,
     n_ext_linear: int,
+    *,
+    profile: bool,
 ) -> int:
-    """Cap the Fourier term count so the trial model stays overdetermined.
+    """Warn when the trial model is not comfortably overdetermined.
 
-    Requires at least two observations per linear column (columns counted from
-    the parameterization itself plus linear extension columns), floored at 1.
-    On sparse data an overfit trial model fits almost any trial period, so
-    spurious alias peaks would dominate the periodogram.
+    "Comfortably" means at least two observations per linear column (columns
+    counted from the parameterization itself plus linear extension columns).
+    That bar is a convention, not a rank condition: it sits well above the
+    ``n_obs = n_cols`` point where the design matrix actually loses rank. It is
+    placed where recovery of the true period empirically starts to fall off,
+    which tracks the observations-per-column ratio rather than the absolute
+    column count. Below it a weakly-constrained trial model fits almost any
+    trial period, so spurious alias peaks come to dominate the periodogram.
+
+    What happens past that threshold differs by statistic, because the two
+    fail differently (see "Profile mode" in ``docs/spec.md``):
+
+    - **Profile** (``profile=True``): the least-squares solve is unregularized,
+      so once the columns outnumber the observations chi^2 hits zero at every
+      trial period and the statistic is *identically flat* -- a hard,
+      information-free failure. ``n_terms`` is reduced (floored at 1) to keep
+      the model overdetermined, and the reduction is warned about.
+    - **Marginal** (``profile=False``): the amplitude prior regularizes, so
+      ``M = I + BᵀB`` stays invertible however rank-deficient the design matrix
+      is and the statistic remains well-posed at any column count. There is no
+      breakdown point to key a cap to, so ``n_terms`` is returned unchanged and
+      the warning only reports that the scan is increasingly prior-driven.
     """
     n_base = len(fourier_cls(n_terms=0).linear_params()) + n_ext_linear
     n_per_term = len(fourier_cls(n_terms=1).linear_params()) - (n_base - n_ext_linear)
     h_max = int((n_obs / 2.0 - n_base) // n_per_term)
-    eff = max(1, min(n_requested, h_max))
-    if eff < n_requested:
-        warnings.warn(
-            f"n_terms={n_requested} overfits data with {n_obs} observations "
-            f"(trial model would have {n_base + n_per_term * n_requested} linear "
-            f"columns); reducing to n_terms={eff}. Spurious alias peaks would "
-            "dominate the periodogram. Pass a smaller n_terms to silence this.",
-            UserWarning,
-            stacklevel=4,
+    if n_requested <= h_max:
+        return n_requested
+
+    eff = n_requested if not profile else max(1, h_max)
+    n_cols = n_base + n_per_term * n_requested
+    # State the criterion the check actually applies. The requested model is
+    # usually still overdetermined here (n_cols < n_obs), so this is a
+    # weak-constraint warning, not an overfitting one.
+    head = (
+        f"n_terms={n_requested} leaves {n_obs / n_cols:.1f} observations per "
+        f"linear column ({n_cols} columns, {n_obs} observations), below the 2 "
+        "per column this check expects"
+    )
+    # "Pass a smaller n_terms" only helps when some n_terms >= 1 clears the bar.
+    silenceable = h_max >= 1 and n_requested > 1
+    advice = " Pass a smaller n_terms to silence this." if silenceable else ""
+
+    if not profile:
+        why = (
+            " The amplitude prior keeps the marginal statistic well-posed at "
+            "any column count, so n_terms is not reduced, but the periodogram "
+            "is increasingly prior-driven and spurious alias peaks may "
+            "dominate."
         )
+    elif eff < n_requested:
+        head += f"; reducing to n_terms={eff} ({n_base + n_per_term * eff} columns)"
+        why = (
+            " In profile mode the least-squares solve is not regularized, so "
+            "it degrades quickly here and goes identically flat once the "
+            "columns reach the observation count."
+        )
+    else:
+        why = (
+            " n_terms is already at its minimum and cannot be reduced further. "
+            "In profile mode the least-squares solve is not regularized, so "
+            "chi^2 may hit zero at every trial period and leave the "
+            "periodogram flat."
+        )
+
+    warnings.warn(head + "." + why + advice, UserWarning, stacklevel=4)
     return eff
 
 
@@ -269,13 +320,12 @@ def _resolve_linear_priors(
     model: "AbstractComponentModel",
     fourier_cls: type,
     n_terms: int,
-    eff_terms: int,
     prior_params: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Validate the supplied prior against the trial model and bind *prior_params*.
 
-    Typos are caught against the *requested* term count, so a prior built for
-    more harmonics than the cap allows still reports the name the user wrote.
+    Only reached on the marginal path, which never reduces ``n_terms``, so the
+    requested and effective term counts always agree here.
     """
     eff_lp = effective_linear_prior_from_prior(prior, model) or {}
     validate_extension_priors(prior, model, eff_lp)
@@ -292,7 +342,7 @@ def _resolve_linear_priors(
     if missing:
         raise TypeError(
             f"prior.linear_priors is missing entries for {missing} required by "
-            f"{fourier_cls.__name__}(n_terms={eff_terms})."
+            f"{fourier_cls.__name__}(n_terms={n_terms})."
         )
     return _bind_prior_params(eff_lp, prior_params)
 
@@ -318,7 +368,9 @@ def _dataset_delta_lnl(
 
     n_obs = int(dataset.time.shape[0])
     n_ext_linear = sum(1 for ext in extensions for p in ext.extra_params() if p.linear)
-    eff_terms = _effective_n_terms(fourier_cls, n_terms, n_obs, n_ext_linear)
+    eff_terms = _effective_n_terms(
+        fourier_cls, n_terms, n_obs, n_ext_linear, profile=prior is False
+    )
 
     model = cast(
         "AbstractComponentModel",
@@ -345,7 +397,7 @@ def _dataset_delta_lnl(
         lnl0 = base_model._log_prob_profile(_nl(p_vals[0], period_unit), dataset)
     else:
         eff_lp = _resolve_linear_priors(
-            prior, model, fourier_cls, n_terms, eff_terms, prior_params
+            prior, model, fourier_cls, n_terms, prior_params
         )
         full_lp = {n: eff_lp[n] for n in model._all_linear_names()}
         base_lp = {n: eff_lp[n] for n in base_model._all_linear_names()}
@@ -448,11 +500,15 @@ def periodogram(
     n_terms
         Number of Fourier terms (harmonics of the trial frequency).
         ``n_terms >= 2`` absorbs eccentricity distortion of the orbit shape.
-        Must be at least 1. Default: 2. Automatically capped per dataset to
-        keep the trial model overdetermined (at least two observations per
-        linear column,
-        including extension columns); a ``UserWarning`` is emitted when
-        reduced. ``PeriodogramResult.n_terms`` reports the effective value.
+        Must be at least 1. Default: 2. A ``UserWarning`` is emitted per
+        dataset when the trial model is not comfortably overdetermined (fewer
+        than two observations per linear column, including extension columns).
+        In profile mode ``n_terms`` is also *reduced* to restore that, since an
+        unregularized least-squares solve goes identically flat once the
+        columns outnumber the observations; in the default marginal mode the
+        amplitude prior keeps the statistic well-posed, so the requested value
+        is kept and only the warning fires.
+        ``PeriodogramResult.n_terms`` reports the effective value.
     prior_params
         Concrete values for parameters a ``LinearPriorCallable`` needs but the
         periodogram does not scan over -- in practice the ``parallax`` that

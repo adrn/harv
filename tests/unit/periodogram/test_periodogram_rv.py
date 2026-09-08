@@ -157,19 +157,36 @@ class TestApi:
 
 
 class TestHarmonicCap:
-    """The term count is capped to avoid overfitting sparse data.
+    """Sparse data warns in both modes, but only profile mode reduces n_terms.
 
     With too few observations per linear column the trial model fits almost
     any trial period, so spurious alias peaks dominate the periodogram and the
-    tailored prior can hurt acceptance. See harv.periodogram.core.
+    tailored prior can hurt acceptance. The marginal statistic stays well-posed
+    there (the amplitude prior regularizes) so it is only warned about; the
+    unregularized profile solve does not, so it is capped. See
+    harv.periodogram.core.
     """
 
-    def test_sparse_data_caps_and_warns(self):
+    def test_sparse_data_warns_but_keeps_terms_when_marginal(self):
         data, _ = _sim(n_obs=8, eccentricity=0.0)
-        with pytest.warns(UserWarning, match="overfits data"):
+        with pytest.warns(UserWarning, match="is not reduced"):
             result = hp.periodogram(
                 data,
                 prior=_prior(),
+                period_min=Q(5.0, "day"),
+                period_max=Q(2000.0, "day"),
+            )
+        # 8 obs supports only 4 columns, but the prior regularizes, so the
+        # requested H=2 (5 columns) is kept rather than silently rewritten.
+        assert result.n_terms == 2
+        assert jnp.all(jnp.isfinite(result.delta_ln_likelihood))
+
+    def test_sparse_data_caps_and_warns_when_profile(self):
+        data, _ = _sim(n_obs=8, eccentricity=0.0)
+        with pytest.warns(UserWarning, match="reducing to n_terms"):
+            result = hp.periodogram(
+                data,
+                prior=False,
                 period_min=Q(5.0, "day"),
                 period_max=Q(2000.0, "day"),
             )
@@ -187,9 +204,24 @@ class TestHarmonicCap:
             rv_semiamp=Q(10.0, "km/s"),
             rv_err=Q(0.3, "km/s"),
         )
-        with pytest.warns(UserWarning, match="overfits data"):
-            r_dense = hp.periodogram(dense, prior=_prior(), period_min=Q(5.0, "day"))
+        with pytest.warns(UserWarning, match="reducing to n_terms"):
+            r_dense = hp.periodogram(dense, prior=False, period_min=Q(5.0, "day"))
         assert _peak_within_grid_steps(r_dense, P_TRUE, n_steps=3)
+
+    def test_marginal_stays_finite_with_more_columns_than_observations(self):
+        # 4 observations, H=3 -> 7 linear columns. The design matrix is
+        # rank-deficient; M = I + B^T B is not, so Delta is still finite.
+        data, _ = _sim(n_obs=4, eccentricity=0.0)
+        with pytest.warns(UserWarning, match="is not reduced"):
+            result = hp.periodogram(
+                data,
+                prior=_prior(n_terms=3),
+                period_min=Q(5.0, "day"),
+                period_max=Q(2000.0, "day"),
+                n_terms=3,
+            )
+        assert result.n_terms == 3
+        assert jnp.all(jnp.isfinite(result.delta_ln_likelihood))
 
     def test_adequate_data_keeps_requested_terms(self):
         # Enough observations to support H=2: no cap, no warning.

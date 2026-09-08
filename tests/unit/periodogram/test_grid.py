@@ -1,5 +1,7 @@
 """Unit tests for harv.periodogram.grid.frequency_grid."""
 
+import warnings
+
 import jax.numpy as jnp
 import pytest
 from unxt import Q, ustrip
@@ -12,16 +14,28 @@ from harv.simulate import simulate_rv_sb1_data
 
 
 def _capped(fourier_cls, n_requested, n_obs, n_ext_linear):
-    """``_effective_n_terms``, asserting the overfit warning fires when capping."""
-    with pytest.warns(UserWarning, match="overfits"):
-        return _effective_n_terms(fourier_cls, n_requested, n_obs, n_ext_linear)
+    """Profile mode: assert the warning fires and return the reduced count."""
+    with pytest.warns(UserWarning, match="reducing to n_terms"):
+        return _effective_n_terms(
+            fourier_cls, n_requested, n_obs, n_ext_linear, profile=True
+        )
 
 
-class TestEffectiveNTerms:
-    """Overfitting cap: at least 2 observations per fitted linear column.
+def _warned(fourier_cls, n_requested, n_obs, n_ext_linear):
+    """Marginal mode: assert the warning fires and return the (uncapped) count."""
+    with pytest.warns(UserWarning, match="is not reduced"):
+        return _effective_n_terms(
+            fourier_cls, n_requested, n_obs, n_ext_linear, profile=False
+        )
 
-    Column counts are derived from the parameterization itself, so the cap
-    automatically accounts for extension-added linear columns.
+
+class TestEffectiveNTermsProfile:
+    """Profile mode caps: at least 2 observations per fitted linear column.
+
+    The unregularized least-squares solve goes identically flat once the
+    columns outnumber the observations, so the reduction is a correctness
+    safeguard. Column counts are derived from the parameterization itself, so
+    the cap automatically accounts for extension-added linear columns.
     """
 
     def test_rv_cap(self):
@@ -39,14 +53,92 @@ class TestEffectiveNTerms:
         assert _capped(FourierRV, 2, 2, 0) == 1
         assert _capped(FourierGaiaAstrometry, 2, 4, 0) == 1
 
-    def test_not_raised_above_request(self):
-        # No capping -> no warning.
-        assert _effective_n_terms(FourierRV, 2, 1000, 0) == 2
-
     def test_extension_columns_count_against_the_budget(self):
         # 3 linear extension columns eat into the same budget.
         assert _capped(FourierRV, 5, 10, 0) == 2
         assert _capped(FourierRV, 5, 10, 3) == 1
+
+
+class TestEffectiveNTermsMarginal:
+    """Marginal mode warns at the same threshold but never reduces n_terms.
+
+    The amplitude prior regularizes, so ``M = I + B^T B`` stays invertible at
+    any column count and there is no breakdown point to cap against.
+    """
+
+    def test_request_is_kept(self):
+        # Every case the profile path would have reduced.
+        assert _warned(FourierRV, 5, 8, 0) == 5
+        assert _warned(FourierRV, 5, 10, 0) == 5
+        assert _warned(FourierGaiaAstrometry, 5, 20, 0) == 5
+
+    def test_kept_even_with_more_columns_than_observations(self):
+        # 4 observations, 1 + 2*10 = 21 linear columns: still well-posed.
+        assert _warned(FourierRV, 10, 4, 0) == 10
+
+    def test_extension_columns_still_trigger_the_warning(self):
+        assert _warned(FourierRV, 5, 10, 3) == 5
+
+    def test_threshold_matches_the_profile_path(self):
+        # Same h_max in both modes; only the action past it differs.
+        for n_obs in (8, 10, 20, 40):
+            for n_req in (1, 2, 3, 5):
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    prof = _effective_n_terms(FourierRV, n_req, n_obs, 0, profile=True)
+                    n_prof = len(caught)
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    marg = _effective_n_terms(FourierRV, n_req, n_obs, 0, profile=False)
+                    n_marg = len(caught)
+                assert n_prof == n_marg  # same trigger condition
+                assert marg == n_req  # marginal never reduces
+                if n_marg == 0:
+                    assert prof == n_req  # below the bar, both pass through
+
+
+class TestWarningMessage:
+    """The message reports the observations-per-column ratio it measured.
+
+    The bar sits above the rank limit, so a flagged model is usually still
+    overdetermined (7 columns against 10 observations). Calling that
+    "overfitting" would be wrong and would not survive a reader checking the
+    arithmetic, so the message states the criterion instead.
+    """
+
+    @staticmethod
+    def _message(*, profile: bool) -> str:
+        with pytest.warns(UserWarning, match="observations per linear column") as rec:
+            _effective_n_terms(FourierRV, 3, 10, 0, profile=profile)
+        return str(rec[0].message)
+
+    @pytest.mark.parametrize("profile", [True, False])
+    def test_reports_the_ratio_and_its_inputs(self, profile):
+        msg = self._message(profile=profile)
+        # 1 + 2*3 = 7 columns against 10 observations -> 1.4 per column.
+        assert "1.4 observations per linear column" in msg
+        assert "7 columns, 10 observations" in msg
+        assert "2 per column" in msg  # states the bar being applied
+
+    @pytest.mark.parametrize("profile", [True, False])
+    def test_does_not_claim_overfitting(self, profile):
+        # The trial model here has fewer columns than data points.
+        assert "overfit" not in self._message(profile=profile).lower()
+
+    def test_marginal_says_n_terms_is_kept(self):
+        assert "is not reduced" in self._message(profile=False)
+
+    def test_profile_says_what_it_reduced_to(self):
+        # h_max = int((10/2 - 1) // 2) = 2.
+        assert "reducing to n_terms=2 (5 columns)" in self._message(profile=True)
+
+
+class TestEffectiveNTermsShared:
+    def test_no_warning_when_comfortably_overdetermined(self):
+        for profile in (True, False):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                assert _effective_n_terms(FourierRV, 2, 1000, 0, profile=profile) == 2
 
 
 class TestBounds:

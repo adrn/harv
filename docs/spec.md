@@ -2146,18 +2146,47 @@ matrix.
 
 `n_terms` must be at least 1 (`ValueError` otherwise — with no harmonic the
 trial model *is* the base model and every Δ would be zero; `n_terms = 0`
-remains valid on the parameterization itself). It defaults to 2 and is
-**capped per dataset** to keep the trial model
-overdetermined — at least two observations per linear column, floored at 1 —
-emitting a `UserWarning` when reduced. Column counts are derived from the
+remains valid on the parameterization itself). It defaults to 2.
+
+A trial model with fewer than **two observations per linear column** is not
+comfortably overdetermined, and `periodogram` emits a `UserWarning` per dataset
+when the request falls below that bar. Column counts are derived from the
 parameterization and any linear extensions, so extension columns count against
-the same budget. This is a correctness safeguard, not just an optimization: on
-sparse data an overfit trial model fits almost any trial period, so spurious
-alias peaks dominate the periodogram and a prior built from it can *hurt*
-acceptance. The cap engages only when the harmonics could not be reliably
-estimated anyway; where multi-term genuinely helps (eccentric orbits with
-adequate sampling) it does not engage. `PeriodogramResult.n_terms` reports the
-effective value used.
+the same budget.
+
+The bar is a convention, and deliberately sits well above the `n_obs = n_cols`
+point where the design matrix actually loses rank — a model flagged by it is
+usually still overdetermined. It is placed where recovery of the true period
+empirically begins to fall off, which tracks the observations-per-column ratio
+rather than the absolute column count: on simulated RV data, recovery drops by
+roughly 40% as the ratio crosses 2, at 10 epochs (H=2 → H=3) and again at 14
+(H=3 → H=4). Below the bar a weakly-constrained trial model fits almost any
+trial period, so spurious alias peaks come to dominate and a prior built from
+such a periodogram can *hurt* acceptance. The check engages only when the
+harmonics could not be reliably estimated anyway; where multi-term genuinely
+helps (eccentric orbits with adequate sampling) it does not.
+
+The warning states the ratio it measured rather than calling the model
+overfit, since at (say) 7 columns and 10 observations it is not.
+
+**Only profile mode also reduces `n_terms`**, and the asymmetry is the
+difference between the two statistics rather than a policy choice:
+
+- **Marginal** (the default): the amplitude prior regularizes, so `M = I + BᵀB`
+  is at least the identity and Δ stays finite and well-posed however
+  rank-deficient the design matrix is. Nothing distinguishes the point where
+  columns outnumber observations, so there is no breakdown point to key a cap
+  to. The requested `n_terms` is used unchanged and the warning stands alone.
+  Recovery does still degrade smoothly as harmonics are added on sparse data —
+  the warning is what says so, and the caller decides.
+- **Profile** (`prior=False`): the least-squares solve is unregularized, so once
+  the columns outnumber the observations χ² hits zero at every trial period and
+  the statistic is *identically flat*, carrying no period information for any
+  data. That is a hard failure rather than a degradation, so `n_terms` is
+  reduced (floored at 1) to keep the model overdetermined.
+
+`PeriodogramResult.n_terms` reports the effective value used, which equals the
+requested value in marginal mode.
 
 **Containers** (`SourceData`, `SystemData`): each dataset's Δ is evaluated on
 the shared grid and summed — one periodogram per source; per-dataset Δ are kept
@@ -2204,10 +2233,12 @@ Consequences:
 - **The base model is evaluated once.** With no priors there is no
   `LinearPriorCallable` to resolve against the trial period, and the `n_terms=0`
   model carries no period dependence.
-- **The `n_terms` cap still applies and matters more.** The marginal likelihood
-  stays finite when columns outnumber observations because the prior
-  regularizes; the least-squares solve does not — χ² would hit zero at every
-  frequency and Δ would flatten at `(1/2)χ²_base`.
+- **`n_terms` is capped here and only here.** The marginal likelihood stays
+  finite when columns outnumber observations because the prior regularizes; the
+  least-squares solve does not — χ² would hit zero at every frequency and Δ
+  would flatten at `(1/2)χ²_base`. Profile mode therefore reduces `n_terms` to
+  keep the trial model overdetermined, where marginal mode only warns. See
+  "The Δ log-marginal-likelihood statistic" above.
 - **`False` may not appear inside a per-dataset mapping** (`TypeError`): a log
   Bayes factor and a `(1/2)Δχ²` are not commensurable, so summing them across a
   container's datasets is meaningless. Pass `prior=False` for the whole
