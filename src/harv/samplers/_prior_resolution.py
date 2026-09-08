@@ -89,8 +89,16 @@ def extension_model_key(component_name: str, param_name: str) -> str:
 def resolve_effective_marginalized_names(
     effective_linear_prior: dict[str, Any] | None,
     marginalized_names: tuple[str, ...] | None,
+    *,
+    verbose: bool = False,
 ) -> tuple[str, ...] | None:
-    """Resolve and validate the effective marginalized linear parameter subset."""
+    """Resolve and validate the effective marginalized linear parameter subset.
+
+    Dropping non-Gaussian priors from the marginalized set is silent unless
+    ``verbose=True``: it is expected behaviour, not a defect, and
+    :meth:`~harv.samplers.RejectionSampler.summary` already reports the resulting
+    per-parameter classification.
+    """
     if effective_linear_prior is None:
         return marginalized_names
 
@@ -127,12 +135,13 @@ def resolve_effective_marginalized_names(
             name for name in marginalized_names if name not in explicit
         )
 
-    warnings.warn(
-        f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
-        f"marginalized and will be sampled explicitly. Marginalized parameters: "
-        f"{resolved_names}",
-        stacklevel=3,
-    )
+    if verbose:
+        warnings.warn(
+            f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
+            f"marginalized and will be sampled explicitly. Marginalized parameters: "
+            f"{resolved_names}",
+            stacklevel=3,
+        )
     return resolved_names
 
 

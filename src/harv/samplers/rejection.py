@@ -2,7 +2,6 @@
 
 import os
 import uuid
-import warnings
 from pathlib import Path
 from typing import Any, NamedTuple, cast, final
 
@@ -61,6 +60,8 @@ def _prepare_sampler_model(
     prior: HarvPrior,
     model: AbstractComponentModel | JointModel,
     marginalized_names: tuple[str, ...] | None,
+    *,
+    verbose: bool = False,
 ) -> _PreparedSamplerModel:
     """Prepare a normalized model/prior bundle for rejection or MCMC sampling.
 
@@ -76,6 +77,7 @@ def _prepare_sampler_model(
     effective_marginalized_names = _resolve_effective_marginalized_names(
         effective_linear_prior,
         marginalized_names,
+        verbose=verbose,
     )
     return _PreparedSamplerModel(
         model=model,
@@ -336,14 +338,12 @@ class RejectionSampler(AbstractSampler):
         >>> "rv_semiamp" in text and "period" in text
         True
         """
-        # Resolve the model/prior bundle the same way ``run`` does, but suppress
-        # the non-Gaussian-marginalization warning: introspection must be
-        # side-effect-free, and the table below already surfaces that fact.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            prepared = _prepare_sampler_model(
-                self.prior, self.model, self.marginalized_names
-            )
+        # Resolve the model/prior bundle the same way ``run`` does, but never in
+        # verbose mode: introspection must be side-effect-free, and the table
+        # below already surfaces the marginalization classification.
+        prepared = _prepare_sampler_model(
+            self.prior, self.model, self.marginalized_names
+        )
 
         # Nonlinear parameters: always sampled explicitly (base + extension).
         nl_rows: list[tuple[str, ...]] = []
@@ -523,6 +523,7 @@ class RejectionSampler(AbstractSampler):
             self.prior,
             self.model,
             self.marginalized_names,
+            verbose=self.verbose,
         )
 
         # if not specified, pick a different random seed each run:
@@ -854,6 +855,7 @@ class RejectionSampler(AbstractSampler):
             self.prior,
             self.model,
             self.marginalized_names,
+            verbose=self.verbose,
         )
 
         _seed: int = uuid.uuid4().int >> 96 if seed is None else seed

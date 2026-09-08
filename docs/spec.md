@@ -1322,6 +1322,7 @@ prior.sample(
     model: AbstractComponentModel | JointModel,
     return_logprobs: bool = False,
     marginalized_names: tuple[str, ...] | None = None,
+    verbose: bool = False,
 ) -> Samples
 ```
 
@@ -1340,6 +1341,9 @@ prior library (in memory or via `make_prior_cache`) for a sampler with a custom
 `marginalized_names`, pass the **same** value here so the explicit-linear keys
 match what `run_with_samples` expects.
 
+`verbose=True` warns when a non-Gaussian linear prior cannot be marginalized and
+is drawn here instead; see **Warnings and verbosity** below.
+
 Returns a `Samples` container (the same one produced by the rejection sampler
 for posteriors), with units restored from each `QuantityDistribution`. The
 `linear` field is empty in the common Gaussian-linear case. `ln_likelihood`
@@ -1356,7 +1360,7 @@ ______________________________________________________________________
 ## Sampler base (`harv.samplers.base.AbstractSampler`)
 
 Every sampler holds a prior and a model. `AbstractSampler` declares the shared
-fields (`prior`, `model`, `marginalized_names`) and `get_extensions()`. Concrete
+fields (`prior`, `model`, `marginalized_names`, `verbose`) and `get_extensions()`. Concrete
 samplers (`RejectionSampler`, `NumpyroSampler`) add algorithm-specific fields (e.g.
 `batch_size` on `RejectionSampler`) and implement their own `run()`. The
 concrete samplers are marked `@final` per the project's abstract-final pattern.
@@ -1367,6 +1371,25 @@ different datasets.
 
 Constructor: `Sampler(prior, model)` where `model` is a fully-built
 `AbstractComponentModel` or `JointModel`.
+
+### Warnings and verbosity
+
+harv splits its warnings into two classes:
+
+- **Advisory** warnings report a normal, correctly-handled situation. They are
+  **silent by default** and are emitted only when `verbose=True`. Two exist: a
+  non-Gaussian linear prior that cannot be analytically marginalized and is
+  therefore sampled explicitly (`samplers/_prior_resolution.py`, also reachable
+  via `HarvPrior.sample(..., verbose=True)`), and per-sample BFGS non-convergence
+  in `NumpyroSampler.optimize` (`samplers/numpyro.py`).
+- **Ignored-argument** warnings report that harv could not honour something the
+  user asked for (`plot_rv(show_signal_components=True)` with no RV data,
+  `n_samples` not divisible by `num_chains`, ...). These always fire; `verbose`
+  has no effect on them.
+
+`verbose` is a static field, so it is threaded down to the emission site as a
+plain Python flag rather than implemented with warning filters -- nothing in harv
+mutates the global `warnings` state.
 
 ______________________________________________________________________
 
@@ -1385,6 +1408,7 @@ sampling efficient.
 | `prior`              | `HarvPrior`                       | Prior distributions for sampling                             |
 | `model`              | `AbstractComponentModel \| JointModel` | Model template (no data or linear prior stored)              |
 | `marginalized_names` | `tuple[str, ...] \| None`              | Optional subset of linear params to analytically marginalize |
+| `verbose`            | `bool` (static)                        | Emit advisory warnings (default: `False`)                    |
 | `batch_size`         | `int` (static)                         | Samples vmapped at once (default: 100,000)                   |
 
 `get_extensions()` walks the attached model: returns `model.extensions` for a
@@ -1541,8 +1565,8 @@ The `batch_size` field controls how many samples are vmapped at once within a
 `summary() -> str` returns a plain-ASCII, sectioned-table description of how the
 configured sampler will treat each parameter — useful for inspecting a `(prior, model,
 marginalized_names)` setup before running. It performs **no sampling** and is
-side-effect-free (it suppresses the non-Gaussian-marginalization warning that `run`
-emits, since the table itself surfaces that information).
+side-effect-free (it never runs in verbose mode, since the table itself surfaces
+the marginalization classification that the advisory warning would report).
 
 The string contains:
 
@@ -1662,7 +1686,8 @@ mcmc_samples = mcmc_sampler.run(
 Both sampler classes own marginalization policy. Set
 `marginalized_names=(...)` on `RejectionSampler` or `NumpyroSampler` to request
 an explicit subset of linear parameters to marginalize. Any non-Gaussian linear
-priors are still sampled explicitly even if they appear in that tuple.
+priors are still sampled explicitly even if they appear in that tuple. Pass
+`verbose=True` to be warned when that happens.
 
 `NumpyroSampler.run` also accepts `return_logprobs` (default `False`). When
 `True` the returned `Samples` carries `ln_likelihood` (the marginal
@@ -1686,8 +1711,8 @@ Refines each input sample to the local posterior MAP using BFGS via
 independent BFGS run that maximises `log_prior + marginal_log_likelihood`.
 Because `jax.scipy.optimize.minimize` BFGS often quits early when its line
 search fails, `optimize` restarts BFGS up to `max_passes` times from the
-previous result, breaking when the loss change falls below `tol` and emitting
-`UserWarning` if it never does.
+previous result, breaking when the loss change falls below `tol` and emitting a
+per-sample `UserWarning` if it never does -- only when `verbose=True`.
 
 Linear parameters at the returned MAP are taken as the conditional posterior
 **mean** (equal to the conditional MAP since the conditional is Gaussian), not

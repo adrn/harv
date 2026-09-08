@@ -6,6 +6,8 @@ have higher posterior density than the warm-start input and that the joint
 model path is supported.
 """
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -869,3 +871,24 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             f"Campbell path: max |residual| = {max_resid:.3f} mas "
             f">> {10 * sigma:.3f} mas (10*sigma)."
         )
+
+
+class TestOptimizeConvergenceWarningVerbosity:
+    """The BFGS non-convergence warning is advisory: opt-in via ``verbose``.
+
+    ``max_passes=1`` guarantees non-convergence -- the loop compares against
+    ``prev_loss = inf`` on its only pass, so ``last_change`` is always ``inf``.
+    """
+
+    def test_silent_by_default(self, rv_sampler, rv_data_and_truth, off_mode_sample):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            refined = rv_sampler.optimize(
+                off_mode_sample, rv_data_and_truth, seed=0, max_passes=1
+            )
+        assert refined.n_samples == 1
+
+    def test_warns_when_verbose(self, rv_sampler, rv_data_and_truth, off_mode_sample):
+        loud = NumpyroSampler(rv_sampler.prior, rv_sampler.model, verbose=True)
+        with pytest.warns(UserWarning, match="BFGS did not converge"):
+            loud.optimize(off_mode_sample, rv_data_and_truth, seed=0, max_passes=1)

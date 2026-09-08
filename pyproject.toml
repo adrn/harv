@@ -196,13 +196,9 @@ markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.ma
 # delete it once upstream does.
 filterwarnings = [
     "error",
-    # -- harv's own advisory warnings -------------------------------------------
-    # Both fire on paths the suite deliberately exercises: a non-Gaussian linear
-    # prior that cannot be marginalized, and an optimizer given deliberately hard
-    # data. Advisory by design, not defects. Matched by message so that a *new*
-    # warning from the same module still fails the suite.
-    "ignore:Non-Gaussian linear prior:UserWarning",       # samplers/_prior_resolution.py
-    "ignore:BFGS did not converge:UserWarning",           # samplers/numpyro.py
+    # harv's own advisory warnings are opt-in via ``verbose=True`` on the samplers,
+    # so they never fire here unless a test asks for them (and then it asserts on
+    # them with pytest.warns).
     # -- third-party chatter ----------------------------------------------------
     "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
 ]
