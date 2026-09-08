@@ -8,6 +8,8 @@
 # - {name: parallax_factor, datatype: float64}
 # - {name: excess_noise, unit: mas, datatype: float64}
 # meta: !!omap
+# - {parallax_mas: .nan}
+# - {period_day: .nan}
 # - __serialized_columns__:
 #     excess_noise:
 #       __class__: astropy.units.quantity.Quantity
