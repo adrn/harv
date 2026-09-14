@@ -1,0 +1,14 @@
+{
+  "_comment": "Uses Renovate to update the patch version of Python in .python-version",
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["pyenv"],
+  "packageRules": [
+    {
+      "description": "Only update Python patch versions",
+      "matchManagers": ["pyenv"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    }
+  ]
+}
