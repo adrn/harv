@@ -137,6 +137,13 @@ path to the typechecker callable (not a direct import). This ensures that every 
 method in `harv.kepler` validates its argument shapes and dtypes at call time during
 tests.
 
+Setting the environment variable `HARV_NO_TYPECHECK` skips the hooks entirely. It
+exists for the benchmark harness (`benchmarks/`, see `docs/running-benchmarks.md`):
+beartype decorates Python-level functions, and the hot paths are called inside
+`jax.vmap` under `eqx.filter_jit`, so the checks run once at *trace* time. That does
+not affect warm timings, but it does inflate the first-call compile cost the
+benchmarks report. Leave it unset everywhere else -- the test suite wants the checks.
+
 ### Trace-friendly validation
 
 Runtime checks that guard field *values* (as opposed to types) inside `__check_init__`
@@ -1684,8 +1691,26 @@ Errors: `ValueError` if `top_k` is combined with `max_posterior_samples`, if
 ### `batch_size` and GPU support
 
 The `batch_size` field controls how many samples are vmapped at once within a
-`fori_loop`. On CPU, the default of 100,000 is appropriate. On GPU, set
-`batch_size = n_prior_samples` to let XLA fully utilize the device.
+`fori_loop`. It sets the working-set size of the `(batch, n_obs, n_linear)`
+intermediate.
+
+**Measured, superseding earlier advice.** This section previously said to set
+`batch_size = n_prior_samples` on GPU "to let XLA fully utilize the device". The
+`batch_size` curve in `docs/benchmarks.md` does not support that: across the whole
+sweep the GPU spans only 1.04-1.13x between its best and worst batch size, and at
+`M = 1e7` the best measured GPU batch was `1e5`, not the largest. The device is
+already saturated at far smaller batches.
+
+The knob matters *more* on CPU (1.55-1.84x on a single core), and its optimum
+**inverts under many-rank contention** -- a large batch that wins on an idle core
+can starve a full node of memory bandwidth. The default of 100,000 remains a
+reasonable starting point on CPU; tune it under the contention you will actually
+run. See `docs/at-scale.md`.
+
+`batch_size` is currently the *only* device-related knob -- harv contains no
+device-placement or sharding code (see the `shard_map` TODO in
+`harv/samplers/rejection.py`), so the benchmark numbers are the single-device
+baseline any future multi-device work is measured against.
 
 ### `summary` method
 
@@ -2910,9 +2935,14 @@ role is already filled by `v_sys` / `ra0` / `dec0`.
 
 ### JIT compile time (TTFX)
 
-First-call JIT compile time has not been systematically benchmarked or optimized.
-Potential approaches: smaller pytrees, pre-compilation of hot paths, compile-time
-caching.
+First-call JIT compile time is measured per parameterization by the benchmark
+harness (`docs/benchmarks.md`, "First-call compile cost") as `cold - warm` against a
+cleared JIT cache. It has not yet been *optimized*. Potential approaches: smaller
+pytrees, pre-compilation of hot paths, compile-time caching.
+
+Compile cost is paid once per distinct input shape, so it amortizes to nothing in a
+population loop over sources with identical data shapes, and can dominate a one-off
+fit.
 
 ______________________________________________________________________
 
