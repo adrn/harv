@@ -20,12 +20,6 @@ from unxt.quantity import ustrip
 
 from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity, ScalarQTime
 
-# Optional dependency:
-try:
-    import matplotlib.pyplot as plt
-except ImportError:
-    plt: Any = None
-
 
 class AbstractData(eqx.Module):
     """Abstract base class for observational data time series."""

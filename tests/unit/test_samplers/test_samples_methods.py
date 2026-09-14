@@ -1408,7 +1408,7 @@ class TestPlotCornerTruths:
             backend="matplotlib",
             viz={"plot": SimpleNamespace(values=fake_axes)},
         )
-        with patch("harv.samplers.samples.az.plot_pair", return_value=fake_plot_matrix):
+        with patch("arviz.plot_pair", return_value=fake_plot_matrix):
             result = samples.plot_corner(params=params, truths=truths)
         return result, fake_axes
 

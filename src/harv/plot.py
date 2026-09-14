@@ -17,17 +17,11 @@ import quaxed.numpy as jnp
 from unxt import Q, ustrip
 from unxt.quantity import AllowValue
 
+from harv._optional_deps import get_mpl
 from harv.custom_types import BatchQTime, NQAny, NTime, ScalarQTime
 from harv.data import GaiaAstrometryData, RVData, SourceData, SystemData
 from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.samplers import Samples
-
-try:
-    import matplotlib as mpl
-    import matplotlib.pyplot as plt
-except ImportError:
-    plt: Any = None
-
 
 # Default styles:
 _DEFAULT_ERRORBAR_STYLE: dict[str, Any] = {
@@ -93,6 +87,7 @@ def plot_timeseries_errorbar(
         Forwarded to ``ax.errorbar()``, overriding defaults.
     """
     if ax is None:
+        _, plt = get_mpl("plot_timeseries_errorbar")
         _, ax = plt.subplots()
 
     if time_unit is None:
@@ -455,9 +450,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     >>> ax = plot_rv(samples, rv_data, model=sampler.model)  # doctest: +SKIP
     >>> ax = plot_rv(samples, rv_data, phase_fold_median=True)  # doctest: +SKIP
     """
-    if plt is None:
-        msg = "matplotlib is required for plot_rv."
-        raise ImportError(msg)
+    mpl, plt = get_mpl("plot_rv")
 
     if model is None:
         from harv.models.rv import RVModel as _RVModel  # noqa: PLC0415
@@ -929,7 +922,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     return ax
 
 
-def plot_gaia_sky_orbit(  # noqa: C901 -- plotting code is inherently complex
+def plot_gaia_sky_orbit(
     model: Any,
     samples: Samples,
     *,
@@ -990,9 +983,7 @@ def plot_gaia_sky_orbit(  # noqa: C901 -- plotting code is inherently complex
     ValueError
         If *samples* does not contain exactly one posterior sample.
     """
-    if plt is None:
-        msg = "matplotlib is required for plot_gaia_sky_orbit."
-        raise ImportError(msg)
+    _, plt = get_mpl("plot_gaia_sky_orbit")
 
     if len(samples) != 1:
         msg = (
@@ -1184,9 +1175,7 @@ def plot_gaia_astrometry(
     ...     samples.map_sample(), data=gaia_data, model=sampler.model
     ... )
     """
-    if plt is None:
-        msg = "matplotlib is required for plot_gaia_astrometry."
-        raise ImportError(msg)
+    _, plt = get_mpl("plot_gaia_astrometry")
 
     if len(samples) != 1:
         msg = (
