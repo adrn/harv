@@ -1,13 +1,12 @@
 # Benchmarks
 
-Wall-clock scaling of harv's `RejectionSampler`
-across model parameterizations, dataset sizes, prior library sizes, and
-`batch_size`. Every number here is measured, not modelled.
+Wall-clock scaling of harv's `RejectionSampler` across model parameterizations, dataset
+sizes, prior library sizes, and `batch_size`. Every number here is measured, not
+modelled.
 
 :::{note}
-This page is generated from committed benchmark results and is **not**
-rebuilt when the docs build — ReadTheDocs has no GPU. To regenerate it, see
-{doc}`running-benchmarks`.
+This page is generated from committed benchmark results by Claude and is **not** rebuilt
+when the docs build. To regenerate it, see {doc}`running-benchmarks`.
 :::
 
 ## Run metadata
