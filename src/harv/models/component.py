@@ -27,8 +27,10 @@ from harv.models._helpers import (
     _needs_explicit_sampling,
     _resolve_prior_to_mvn,
     _unwrap_dist,
+    _with_derived_eccentricity,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
+from harv.models.parameterizations._base import AbstractParameterization
 from harv.stats import MarginalizedLinear
 from harv.stats.linear_op import to_linear_op
 
@@ -78,10 +80,13 @@ class AbstractComponentModel(eqx.Module):
 
     Concrete subclasses must also declare:
 
+    - ``parameterization``: the AbstractParameterization describing the
+      parameter set and design matrix.
     - ``extensions``: tuple of AbstractExtension (model modifiers).
     """
 
     # Concrete subclasses must declare:
+    parameterization: eqx.AbstractVar[AbstractParameterization]
     extensions: eqx.AbstractVar[tuple[AbstractExtension, ...]]
 
     # Subclass hooks
@@ -408,7 +413,11 @@ class AbstractComponentModel(eqx.Module):
             u = param_units.get(name, "")
             extra_q[name] = Q(val, u) if u else val
         lp = _resolve_prior_to_mvn(
-            prior_dict, nl_values, unit_dict, extra_values=extra_q
+            prior_dict,
+            nl_values,
+            unit_dict,
+            extra_values=extra_q,
+            parameterization=self.parameterization,
         )
 
         return _MargBuildingBlocks(
@@ -938,6 +947,7 @@ def _build_marginalized_component_model(
                 nl_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
+                parameterization=component.parameterization,
             )
             raw = numpyro.sample(
                 name,
@@ -1013,11 +1023,20 @@ def _build_full_component_model(  # noqa: C901
                 if callable(d) and not isinstance(
                     d, dist.Distribution | QuantityDistribution
                 ):
-                    resolved_lp[name] = d(nl_values)
+                    resolved_lp[name] = d(
+                        _with_derived_eccentricity(
+                            dict(nl_values), component.parameterization
+                        )
+                    )
                 else:
                     resolved_lp[name] = d
             gaussian_units = {n: param_units.get(n, "") for n in gaussian_names}
-            mvn = _resolve_prior_to_mvn(resolved_lp, nl_values, gaussian_units)
+            mvn = _resolve_prior_to_mvn(
+                resolved_lp,
+                nl_values,
+                gaussian_units,
+                parameterization=component.parameterization,
+            )
             linear_vec = jnp.atleast_1d(numpyro.sample("_linear", mvn))
             for i, lname in enumerate(gaussian_names):
                 numpyro.deterministic(lname, linear_vec[i])

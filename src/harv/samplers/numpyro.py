@@ -199,6 +199,7 @@ def _build_extra_numpyro_model(
                 nl_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
+                parameterization=component.parameterization,
             )
             raw = numpyro.sample(
                 name,
