@@ -248,6 +248,10 @@ cython_debug/
 # Hatch-VCS
 _version.py
 
+# LLMs
+.claude
+
+/scratch
 /data
 notebooks
 docs/_static/logo*
