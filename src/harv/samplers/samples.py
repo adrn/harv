@@ -16,6 +16,7 @@ import numpy as np
 import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
+from harv._optional_deps import get_arviz
 from harv.data.datasets import AbstractData
 from harv.kepler import masses
 from harv.models.parameterizations._base import AbstractParameterization
@@ -24,14 +25,6 @@ from harv.models.parameterizations.gaia import (
     ThieleInnesGaiaAstrometry,
 )
 from harv.samplers.conversion import convert_parameterization
-
-try:
-    import arviz as az
-    from arviz_base.labels import MapLabeller
-
-    HAS_ARVIZ = True
-except ImportError:
-    HAS_ARVIZ = False
 
 __all__ = ("Samples", "pad_and_stack_samples")
 
@@ -1665,9 +1658,7 @@ class Samples(eqx.Module):
         --------
         >>> idata = samples.to_arviz(["period", "eccentricity"])  # doctest: +SKIP
         """
-        if not HAS_ARVIZ:
-            msg = "arviz is required for to_arviz()."
-            raise ImportError(msg)
+        az, _ = get_arviz("to_arviz()")
 
         if params is None:
             params = self.keys()
@@ -1745,9 +1736,7 @@ class Samples(eqx.Module):
         ...     truths={"period": Q(100, "day"), "eccentricity": 0.3},
         ... )
         """
-        if not HAS_ARVIZ:
-            msg = "arviz is required for corner plots."
-            raise ImportError(msg)
+        az, MapLabeller = get_arviz("corner plots")
 
         # Select default parameters based on available params
         if params is None:
