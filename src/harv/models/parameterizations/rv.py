@@ -216,6 +216,17 @@ class EcoswEsinwRV(AbstractParameterization):
         esinw = nl_values["esinw"]
         return jnp.sqrt(ecosw**2 + esinw**2)
 
+    def derived_eccentricity(self, nl_values: dict[str, Any]) -> Any:
+        """Recover ``eccentricity`` for priors that expect the standard names.
+
+        This parameterization carries ``(ecosw, esinw)`` rather than
+        ``(eccentricity, arg_peri)``, so callable linear priors that depend on
+        eccentricity -- the default ``rv_semiamp`` prior among them -- have no
+        ``eccentricity`` key to read. See
+        :meth:`~harv.models.parameterizations._base.AbstractParameterization.derived_eccentricity`.
+        """
+        return self.eccentricity(nl_values)
+
     def strip_nl_for_design(self, nl_values: dict[str, Any]) -> dict[str, Any]:
         """Return nl_values with units stripped for ``design_matrix``."""
         d = dict(nl_values)
