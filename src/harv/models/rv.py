@@ -21,10 +21,11 @@ from harv.kepler.orbits import mean_anomaly, true_anomaly_from_mean
 from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.extensions.multi_survey import MultiSurveyOffset
+from harv.models.parameterizations.fourier import FourierRV
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 
 # Type alias for any RV parameterization
-RVParameterizationType = StandardRV | EcoswEsinwRV
+RVParameterizationType = StandardRV | EcoswEsinwRV | FourierRV
 
 
 @final
@@ -50,7 +51,7 @@ class RVModel(AbstractComponentModel):
     ['arg_peri', 'eccentricity', 'period', 'phase_peri']
     """
 
-    parameterization: StandardRV | EcoswEsinwRV = StandardRV()
+    parameterization: StandardRV | EcoswEsinwRV | FourierRV = StandardRV()
     extensions: tuple[AbstractExtension, ...] = ()
 
     def _param_infos(self) -> tuple[ParamInfo, ...]:
@@ -78,7 +79,11 @@ class RVModel(AbstractComponentModel):
         """
         period = nl_values["period"]
         phase_peri = nl_values["phase_peri"]
-        eccentricity = self.parameterization.eccentricity(nl_values)
+        # Fourier parameterizations never reach here (dispatched in
+        # _base_design_matrix), so they need no eccentricity():
+        eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
+            nl_values
+        )
 
         t_peri = phase_peri * period
         dt = (data.time - data.t_ref) - t_peri
@@ -86,8 +91,25 @@ class RVModel(AbstractComponentModel):
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
+    def _mean_longitude(
+        self, nl_values: dict[str, Any], data: RVData
+    ) -> tuple[jax.Array, jax.Array]:
+        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - t_ref)/P``.
+
+        Kepler-free path used by Fourier parameterizations: no periastron
+        phase (absorbed into the linear amplitude pairs) and no Kepler solve.
+        """
+        M = mean_anomaly(data.time - data.t_ref, nl_values["period"])
+        m_rad = ustrip(AllowValue, "rad", M)
+        return jnp.sin(m_rad), jnp.cos(m_rad)
+
     def _base_design_matrix(self, nl_values: dict[str, Any], data: RVData) -> jax.Array:
-        sin_f, cos_f = self._solve_kepler(nl_values, data)
+        # Fourier parameterizations are Kepler-free: their basis is the mean
+        # longitude, not the true anomaly (trace-time dispatch, no runtime cost).
+        if isinstance(self.parameterization, FourierRV):
+            sin_f, cos_f = self._mean_longitude(nl_values, data)
+        else:
+            sin_f, cos_f = self._solve_kepler(nl_values, data)
         nl_stripped = self.parameterization.strip_nl_for_design(nl_values)
         X = self.parameterization.design_matrix(sin_f, cos_f, nl_stripped)
         # Ensure the design matrix is a plain JAX array (rv_shape may return

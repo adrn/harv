@@ -35,6 +35,67 @@ except ImportError:
 
 __all__ = ("Samples", "pad_and_stack_samples")
 
+# Default minimum evidence effective sample size (logZ_int_ess) below which a
+# rejection run is reported as under-resolved: the marginal-likelihood integral
+# is then dominated by a handful of prior draws, so max_log_likelihood may not
+# have converged and the accepted-sample count is not a reliable posterior size.
+#
+# There is no sharp transition to calibrate against, so this is a convention,
+# not a derived quantity: ESS = 3 is where the delta-method MC error on
+# logZ_int (``sqrt(1/ESS - 1/M)``, reported as ``logZ_int_mcse``) reaches ~0.6
+# nats, i.e. the log-evidence is uncertain at the factor-of-two level. Callers
+# who want a different bar set ``min_evidence_ess`` on
+# :class:`~harv.samplers.RejectionSampler` or pass it to
+# :meth:`Samples.acceptance_diagnostics`; ``0.0`` silences the check and
+# ``float("inf")`` always flags.
+MIN_EVIDENCE_ESS = 3.0
+
+_EVIDENCE_KEYS = ("logZ_int", "logZ_int_ess", "max_log_likelihood", "n_prior_samples")
+
+
+def _assess_resolution(
+    *,
+    n_prior: int,
+    n_accepted: int,
+    evidence_ess: float,
+    max_log_likelihood: float,
+    min_evidence_ess: float = MIN_EVIDENCE_ESS,
+) -> tuple[bool, str]:
+    """Judge whether a rejection run resolved the posterior; return a message.
+
+    ``evidence_ess`` is the evidence effective sample size
+    (``(sum L)^2 / sum L^2``). When it is O(1) the evidence integral --- and
+    hence the ``max``-normalization used by the rejection step --- is dominated
+    by a single lucky draw, so the accepted count is not a reliable posterior
+    size (see ``docs/spec.md``, "Interpreting acceptance"). Used by both
+    :meth:`Samples.acceptance_diagnostics` and the sampler's under-resolution
+    warning.
+
+    ``min_evidence_ess`` is the bar the run is held to (default
+    :data:`MIN_EVIDENCE_ESS`).
+    """
+    well_resolved = evidence_ess >= min_evidence_ess
+    if well_resolved:
+        msg = (
+            f"Resolved: ~{evidence_ess:.0f} effective prior samples (of {n_prior}) "
+            f"contribute to the evidence integral, so max_log_likelihood="
+            f"{max_log_likelihood:.1f} is likely converged. Confirm across seeds "
+            "if it matters."
+        )
+    else:
+        msg = (
+            f"Under-resolved rejection run: the evidence integral is dominated by "
+            f"~{evidence_ess:.1f} effective prior sample(s) of {n_prior} "
+            f"(below min_evidence_ess={min_evidence_ess:g}), so "
+            f"max_log_likelihood={max_log_likelihood:.1f} may not have converged and "
+            f"the accepted-sample count ({n_accepted}) is not a reliable posterior "
+            "size. Increase n_prior_samples (compare max_log_likelihood across runs "
+            "to check it stops rising) and/or continue with "
+            "NumpyroSampler(prior, model).run(data, init_samples=...) to draw the "
+            "posterior."
+        )
+    return well_resolved, msg
+
 
 def _find_namespaced_keys(d: dict[str, Any], param_name: str) -> list[str]:
     """Return all keys in ``d`` that match ``param_name`` (bare or namespaced).
@@ -438,7 +499,11 @@ class Samples(eqx.Module):
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
-        derived_keys = ["log_period", "t_peri"]
+        derived_keys = ["log_period"]
+        # Kepler-free samples (e.g. Fourier parameterizations) have no
+        # periastron phase, so t_peri is only derivable when phase_peri exists.
+        if "phase_peri" in self.nonlinear:
+            derived_keys.append("t_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
         if "rv_semiamp" in self.linear:
@@ -1018,6 +1083,74 @@ class Samples(eqx.Module):
         if return_index:
             return map_sample, idx
         return map_sample
+
+    def acceptance_diagnostics(
+        self, *, min_evidence_ess: float = MIN_EVIDENCE_ESS
+    ) -> dict[str, Any]:
+        """Assess whether the rejection run resolved the posterior.
+
+        The rejection step accepts each prior draw with probability
+        ``exp(L - max L)``, so the accepted-sample count is only a meaningful
+        posterior size once ``max_log_likelihood`` has converged to the true
+        peak. When the evidence effective sample size (``logZ_int_ess``) is
+        O(1), the evidence integral is dominated by a single lucky draw:
+        ``max_log_likelihood`` is likely under-resolved and the count is
+        misleading (a broad prior can "accept" a poor fit simply because it
+        never sampled a good one). See ``docs/spec.md``, "Interpreting
+        acceptance".
+
+        Requires the sampler to have been run with
+        ``return_evidence_stats=True``.
+
+        Parameters
+        ----------
+        min_evidence_ess
+            Evidence ESS at or above which the run counts as resolved. Defaults
+            to :data:`MIN_EVIDENCE_ESS` (3.0), the same bar the sampler warns
+            at; see that constant for what the number means and how to pick
+            another. ``0.0`` always reports resolved, ``float("inf")`` never
+            does.
+
+        Returns
+        -------
+            A dict with ``n_prior_samples``, ``n_accepted``, ``evidence_ess``,
+            ``min_evidence_ess``, ``max_log_likelihood``, ``logZ_int``, a
+            boolean ``well_resolved``, and a human-readable ``message``.
+
+        Raises
+        ------
+        ValueError
+            If evidence statistics were not stored (re-run with
+            ``return_evidence_stats=True``).
+        """
+        missing = [k for k in _EVIDENCE_KEYS if k not in self.metadata]
+        if missing:
+            msg = (
+                "acceptance_diagnostics requires evidence statistics; re-run the "
+                f"sampler with return_evidence_stats=True (missing: {missing})."
+            )
+            raise ValueError(msg)
+        n_prior = int(self.metadata["n_prior_samples"])
+        ess = float(self.metadata["logZ_int_ess"])
+        max_ll = float(self.metadata["max_log_likelihood"])
+        n_accepted = self.n_samples
+        well_resolved, message = _assess_resolution(
+            n_prior=n_prior,
+            n_accepted=n_accepted,
+            evidence_ess=ess,
+            max_log_likelihood=max_ll,
+            min_evidence_ess=min_evidence_ess,
+        )
+        return {
+            "n_prior_samples": n_prior,
+            "n_accepted": n_accepted,
+            "evidence_ess": ess,
+            "min_evidence_ess": min_evidence_ess,
+            "max_log_likelihood": max_ll,
+            "logZ_int": float(self.metadata["logZ_int"]),
+            "well_resolved": well_resolved,
+            "message": message,
+        }
 
     def period_unimodal(self, data: AbstractData) -> bool:
         """Whether the period samples lie within a single mode.

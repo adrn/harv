@@ -96,3 +96,25 @@ This rewrites the samples into the equivalent convention
 - `arg_peri` wrapped into $\[0, 2\\pi)$
 
 without changing the physical orbit.
+
+## Periodograms batch over sources only with a fixed frequency grid
+
+`harv.periodogram.periodogram` works under `jax.jit` and `jax.vmap`, so you can compute
+periodograms for a whole population of sources in one traced call:
+
+```python
+batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
+grid = hp.frequency_grid(t_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
+results = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))(batched)
+```
+
+Two things have to hold. The grid must be shape-fixed, which means passing an explicit
+`frequency_grid` as above, or giving `period_min`, `period_max`, and `n_grid` together.
+Letting the grid size come from each source's own time baseline (i.e., omitting
+`n_grid`) cannot be traced, since the number of grid points is then an array shape that
+JAX needs to know at trace time. The stacked sources also need a common number of
+observations, for the same reason; sources with different epoch counts will retrace.
+
+Both conditions point the same way as the advice in `frequency_grid`: use one shared
+grid across a population so the results are directly comparable and the sampler compiles
+once.

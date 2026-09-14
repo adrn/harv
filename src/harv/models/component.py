@@ -30,6 +30,7 @@ from harv.models._helpers import (
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.stats import MarginalizedLinear
+from harv.stats.linear_op import to_linear_op
 
 
 class _MargComponents(NamedTuple):
@@ -666,6 +667,59 @@ class AbstractComponentModel(eqx.Module):
         if cov.ndim == 1:
             return jnp.sum(resid**2 / cov)
         return resid @ jnp.linalg.solve(cov, resid)
+
+    def _log_prob_profile(
+        self, nl_values: dict[str, Any], data: AbstractData
+    ) -> jax.Array:
+        r"""Profile log-likelihood: *maximized* over every linear parameter.
+
+        The counterpart to :meth:`_log_prob_marginalized`, which integrates the
+        linear parameters out instead. This is the statistic classical
+        periodograms report; harv reaches it via ``periodogram(..., prior=False)``.
+        See ``docs/spec.md``, "Profile mode (``prior=False``)", for the
+        definition and its consequences.
+
+        There are no linear priors here -- not a wide-prior limit of the
+        marginal likelihood, which diverges -- so *every* linear column is
+        profiled and ``parameterization.linear_log_prior_correction`` is
+        deliberately not applied: with no prior there is no measure to correct.
+
+        Parameters
+        ----------
+        nl_values
+            Nonlinear parameter values (unit-stripped scalars).
+        data
+            Runtime observation data.
+
+        Returns
+        -------
+            Scalar profile log-likelihood.
+        """
+        X = self._full_design_matrix(nl_values, data)
+        arr_obs, arr_obs_err = self._strip_obs(data)
+        cov = self._full_obs_err(arr_obs_err, nl_values, data)
+
+        if cov.ndim == 1:
+            data_dist = dist.Normal(0.0, jnp.sqrt(cov))
+        else:
+            data_dist = dist.MultivariateNormal(
+                loc=jnp.zeros(cov.shape[0]), covariance_matrix=cov
+            )
+        op = to_linear_op(data_dist)
+
+        # Column form throughout: solve_tril on a 1-d vector broadcasts to
+        # (n, n) instead of raising, and returns a plausible wrong answer.
+        # (positional flag: LinearOp is a NamedTuple of bare callables)
+        Xw = op.solve_tril(X, False)  # noqa: FBT003
+        yw = op.solve_tril(arr_obs[:, None], False)  # noqa: FBT003
+
+        # quaxed.numpy.linalg has no lstsq, and these are plain unit-stripped
+        # arrays. SVD-based, so it stays finite where the model columns go
+        # collinear with the base ones (trial periods past the baseline).
+        chi2 = jax.numpy.linalg.lstsq(Xw, yw)[1].sum()
+
+        n_obs = arr_obs.shape[0]
+        return -0.5 * chi2 - op.half_log_det() - 0.5 * n_obs * jnp.log(2.0 * jnp.pi)
 
     def sample_conditional_linear(
         self,
