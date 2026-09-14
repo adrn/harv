@@ -54,6 +54,13 @@ def _peak_within_grid_steps(result, p_true, n_steps: int = 2) -> bool:
     return abs(f_peak - f_true) < n_steps * df
 
 
+# Delta is lnL - lnL_base, a difference of two large numbers, so in float32 the
+# batched and per-source evaluations disagree by ulps of lnL rather than of
+# Delta -- noise that would swamp the thing TestJitVmap is testing. Those
+# comparisons run under x64, so a mismatch means a real batching error.
+_TOL = {"rtol": 1e-8, "atol": 1e-8}
+
+
 class TestRecovery:
     def test_circular_recovery(self):
         data, _ = _sim(eccentricity=0.0)
@@ -445,3 +452,102 @@ class TestProfileMode:
                     marg.delta_ln_likelihood[i]
                 )
                 assert abs(got - expected) < 1e-6
+
+
+class TestJitVmap:
+    """``periodogram`` under ``jax.jit`` / ``jax.vmap`` over a source population.
+
+    See ``docs/spec.md``, "``periodogram`` and ``PeriodogramResult``":
+    traceable given a shape-fixed grid and a common observation count.
+    """
+
+    GRID = hp.frequency_grid(
+        t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=96
+    )
+
+    @staticmethod
+    def _stack(sources: list) -> object:
+        return jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
+
+    def test_jit_single_source(self):
+        with jax.enable_x64(new_val=True):
+            data, _ = _sim()
+            run = jax.jit(lambda d: hp.periodogram(d, self.GRID, prior=_prior()))
+            got = run(data)
+            want = hp.periodogram(data, self.GRID, prior=_prior())
+            assert got.delta_ln_likelihood.shape == self.GRID.shape
+            np.testing.assert_allclose(
+                got.delta_ln_likelihood, want.delta_ln_likelihood, **_TOL
+            )
+
+    def test_vmap_over_sources(self):
+        with jax.enable_x64(new_val=True):
+            sources = [_sim(seed=s)[0] for s in range(3)]
+            run = jax.jit(
+                jax.vmap(lambda d: hp.periodogram(d, self.GRID, prior=_prior()))
+            )
+            got = run(self._stack(sources))
+
+            assert got.delta_ln_likelihood.shape == (3, self.GRID.shape[0])
+            assert got.t_span.shape == (3,)
+            assert got.ln_likelihood_base.shape == (3,)
+            # Static fields survive the trace unbatched.
+            assert got.n_terms == 2
+            assert got.statistic == "marginal"
+
+            for i, d in enumerate(sources):
+                want = hp.periodogram(d, self.GRID, prior=_prior())
+                np.testing.assert_allclose(
+                    got.delta_ln_likelihood[i], want.delta_ln_likelihood, **_TOL
+                )
+                np.testing.assert_allclose(
+                    ustrip("day", got.t_span[i]), ustrip("day", want.t_span), rtol=1e-5
+                )
+
+    def test_vmap_profile_mode(self):
+        with jax.enable_x64(new_val=True):
+            sources = [_sim(seed=s)[0] for s in range(3)]
+            run = jax.jit(jax.vmap(lambda d: hp.periodogram(d, self.GRID, prior=False)))
+            got = run(self._stack(sources))
+
+            assert got.statistic == "profile"
+            assert got.delta_ln_likelihood.shape == (3, self.GRID.shape[0])
+            for i, d in enumerate(sources):
+                want = hp.periodogram(d, self.GRID, prior=False)
+                np.testing.assert_allclose(
+                    got.delta_ln_likelihood[i], want.delta_ln_likelihood, **_TOL
+                )
+
+    def test_vmap_container(self):
+        with jax.enable_x64(new_val=True):
+            sources = [
+                SourceData(a=_sim(seed=s)[0], b=_sim(seed=s + 10)[0]) for s in range(3)
+            ]
+            run = jax.jit(
+                jax.vmap(lambda d: hp.periodogram(d, self.GRID, prior=_prior()))
+            )
+            got = run(self._stack(sources))
+
+            assert got.delta_ln_likelihood.shape == (3, self.GRID.shape[0])
+            assert set(got.per_dataset) == {"a", "b"}
+            for i, d in enumerate(sources):
+                want = hp.periodogram(d, self.GRID, prior=_prior())
+                np.testing.assert_allclose(
+                    got.delta_ln_likelihood[i], want.delta_ln_likelihood, **_TOL
+                )
+
+    def test_jit_with_grid_keywords(self):
+        """A fully specified grid never touches the data, so it traces too."""
+        with jax.enable_x64(new_val=True):
+            data, _ = _sim()
+            kw = {
+                "period_min": Q(5.0, "day"),
+                "period_max": Q(1000.0, "day"),
+                "n_grid": 96,
+            }
+            run = jax.jit(lambda d: hp.periodogram(d, prior=_prior(), **kw))
+            got = run(data)
+            want = hp.periodogram(data, prior=_prior(), **kw)
+            np.testing.assert_allclose(
+                got.delta_ln_likelihood, want.delta_ln_likelihood, **_TOL
+            )

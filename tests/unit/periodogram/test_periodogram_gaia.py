@@ -1,6 +1,8 @@
 """Unit tests for the Gaia astrometry and joint paths of harv.periodogram."""
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from unxt import Q, ustrip
 
 import harv.models as hm
@@ -128,3 +130,42 @@ def test_profile_mode_runs_on_gaia():
     assert result.statistic == "profile"
     assert result.delta_ln_likelihood.shape == result.frequency.shape
     assert bool(jnp.all(jnp.isfinite(result.delta_ln_likelihood)))
+
+
+class TestJitVmap:
+    """Gaia periodogram under ``jax.vmap`` over sources.
+
+    The callable-amplitude-prior path (``sigma_a0``/``P0`` plus
+    ``prior_params``) resolves priors inside the trace, so it is covered here
+    rather than only in the RV tests.
+    """
+
+    def test_vmap_callable_prior(self):
+        with jax.enable_x64(new_val=True):
+            grid = hp.frequency_grid(
+                t_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
+            )
+            prior = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
+                period_min=Q(20.0, "day"),
+                period_max=Q(2000.0, "day"),
+                sigma_a0=Q(0.1, "AU"),
+                P0=Q(1.0, "yr"),
+                sigma_pos=Q(500.0, "mas"),
+                sigma_pm=Q(500.0, "mas/yr"),
+                sigma_parallax=Q(500.0, "mas"),
+            )
+            kw = {"prior": prior, "prior_params": {"parallax": Q(20.0, "mas")}}
+
+            sources = [_sim_gaia(seed=s)[0] for s in range(3)]
+            run = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, **kw)))
+            got = run(jax.tree.map(lambda *xs: jnp.stack(xs), *sources))
+
+            assert got.delta_ln_likelihood.shape == (3, grid.shape[0])
+            for i, d in enumerate(sources):
+                want = hp.periodogram(d, grid, **kw)
+                np.testing.assert_allclose(
+                    got.delta_ln_likelihood[i],
+                    want.delta_ln_likelihood,
+                    rtol=1e-8,
+                    atol=1e-8,
+                )

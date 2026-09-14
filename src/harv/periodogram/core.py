@@ -600,6 +600,28 @@ def periodogram(
     'profile'
     >>> bool((z0.delta_ln_likelihood >= -1e-4).all())
     True
+
+    Many sources at once. ``periodogram`` is safe under ``jax.jit`` and
+    ``jax.vmap`` provided the frequency grid is *shape-fixed* -- an explicit
+    ``frequency_grid``, or ``period_min``/``period_max``/``n_grid`` all given.
+    A grid whose size is derived from each source's own baseline cannot be
+    traced, since ``n_grid`` is then an output shape. Batching also requires
+    one observation count across the stacked sources; differing counts retrace
+    (see ``docs/spec.md``, "Batch inference over many datasets"):
+
+    >>> import jax
+    >>> import jax.numpy as jnp
+    >>> sources = [
+    ...     simulate_rv_sb1_data(seed=s, n_obs=40, period=Q(30.0, "day"))[0]
+    ...     for s in range(3)
+    ... ]
+    >>> batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
+    >>> grid = hp.frequency_grid(
+    ...     t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=128
+    ... )
+    >>> run = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))
+    >>> run(batched).delta_ln_likelihood.shape
+    (3, 128)
     """
     if prior is False and prior_params:
         raise TypeError(

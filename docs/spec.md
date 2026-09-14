@@ -2266,6 +2266,13 @@ n_grid)` (or one precomputed grid) for every source in a population so the
 resulting prior pytree structure is identical and the sampler JIT-compiles
 once for all sources.
 
+Giving all three also makes the call **data-independent**: the time baseline is
+consulted only to size the grid, so it is computed only when `period_max` or
+`n_grid` is missing, and a fully specified grid never touches `data` at all.
+That is what makes `frequency_grid` — and `periodogram` through it — traceable.
+A grid whose size comes from the data cannot be traced under any arrangement,
+because `n_grid` is then an output *shape*.
+
 ### `periodogram` and `PeriodogramResult`
 
 ```python
@@ -2289,6 +2296,25 @@ base model is period-dependent), `t_span`, `t_ref`, optional
 `per_dataset` (per-dataset Δ for container inputs), and static `n_terms` and
 `statistic` (`"marginal"` | `"profile"`); plus `period` (property,
 `1/frequency`), `max_period()`, and `plot(ax=None, x="period" | "frequency")`.
+
+**`jax.jit` / `jax.vmap` over sources.** `periodogram` is traceable, and
+`jax.vmap` over a batched data pytree gives one periodogram per source, in
+every mode — marginal and profile, non-callable and `LinearPriorCallable`
+priors, single datasets and containers. Two conditions:
+
+1. **The grid must be shape-fixed** — an explicit `frequency_grid`, or
+   `period_min`/`period_max`/`n_grid` all supplied (see `frequency_grid`
+   above).
+1. **The stacked sources must share an observation count**, since `n_obs` is a
+   shape. Padding/masking to batch heterogeneous sources is separate future
+   work; see "Batch inference over many datasets".
+
+Everything else `periodogram` does in Python is static — `n_obs` and the
+`_effective_n_terms` column arithmetic are shape-level, units and `n_terms` are
+static fields, and prior validation happens once at trace time (its
+`UserWarning`s likewise fire once per trace, not per source). The whole
+`PeriodogramResult` returns from the trace: `n_terms` and `statistic` stay
+static, and `t_span` is a traced scalar rather than a concrete one.
 
 ### Priors are explicit
 

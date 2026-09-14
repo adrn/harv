@@ -7,7 +7,9 @@ __all__ = ("frequency_grid",)
 
 import math
 
+import jax
 import quaxed.numpy as jnp
+from jaxtyping import Float
 from unxt import Q, ustrip
 
 from harv.custom_types import NFrequency, ScalarQTime
@@ -15,14 +17,21 @@ from harv.data.containers import AbstractDatasetContainer
 from harv.data.datasets import AbstractData
 
 
-def _data_t_span(data: AbstractData | AbstractDatasetContainer, unit: str) -> float:
-    """Total time baseline spanned by all observations, in ``unit``."""
+def _data_t_span(
+    data: AbstractData | AbstractDatasetContainer, unit: str
+) -> Float[jax.Array, ""]:
+    """Total time baseline spanned by all observations, in ``unit``.
+
+    Returned as a JAX scalar rather than a Python ``float`` so that it stays
+    usable under ``jax.jit`` / ``jax.vmap``; callers that need a concrete value
+    (grid sizing) take ``float()`` themselves. Reduced with JAX rather than the
+    builtin ``min``/``max``, which would branch on a tracer.
+    """
     datasets = (
         list(data.values()) if isinstance(data, AbstractDatasetContainer) else [data]
     )
-    t_min = min(float(jnp.min(ustrip(unit, d.time))) for d in datasets)
-    t_max = max(float(jnp.max(ustrip(unit, d.time))) for d in datasets)
-    return t_max - t_min
+    t = jnp.concatenate([jnp.ravel(ustrip(unit, d.time)) for d in datasets])
+    return jnp.max(t) - jnp.min(t)
 
 
 def frequency_grid(
@@ -47,7 +56,10 @@ def frequency_grid(
     .. note:: To guarantee an identical prior pytree structure across a
        population of sources (so the sampler JIT-compiles once), pass the same
        ``period_min``, ``period_max``, and ``n_grid`` for every source instead
-       of deriving the grid size from each source's baseline.
+       of deriving the grid size from each source's baseline. Giving all three
+       also makes this call data-independent and so safe under ``jax.jit`` /
+       ``jax.vmap``; a grid whose size comes from the data cannot be traced,
+       since ``n_grid`` is then an output *shape*.
 
     Parameters
     ----------
@@ -86,19 +98,25 @@ def frequency_grid(
     if p_min <= 0:
         raise ValueError("period_min must be positive")
 
-    span = (
-        _data_t_span(data, unit)
-        if data is not None
-        # t_span is not None here -- guaranteed by the exactly-one check above:
-        else float(ustrip(unit, t_span))  # ty: ignore[no-matching-overload]
-    )
-    if span <= 0:
-        raise ValueError("The data time baseline (t_span) must be positive")
+    # The baseline is only consulted to *size* the grid, so it is computed on
+    # demand rather than up front. With period_max and n_grid both given the
+    # grid is fully specified and the data are never touched -- which is what
+    # lets periodogram(data, period_min=..., period_max=..., n_grid=...) trace.
+    def span() -> float:
+        value = (
+            float(_data_t_span(data, unit))
+            if data is not None
+            # t_span is not None here -- guaranteed by the exactly-one check above:
+            else float(ustrip(unit, t_span))  # ty: ignore[no-matching-overload]
+        )
+        if value <= 0:
+            raise ValueError("The data time baseline (t_span) must be positive")
+        return value
 
     p_max = (
         float(ustrip(unit, period_max))
         if period_max is not None
-        else max_period_factor * span
+        else max_period_factor * span()
     )
     if p_max <= p_min:
         raise ValueError("period_max must be greater than period_min")
@@ -106,7 +124,7 @@ def frequency_grid(
     f_min = 1.0 / p_max
     f_max = 1.0 / p_min
     if n_grid is None:
-        df = 1.0 / (samples_per_peak * span)
+        df = 1.0 / (samples_per_peak * span())
         n_grid = math.ceil((f_max - f_min) / df) + 1
     if n_grid < 2:
         raise ValueError("The frequency grid must have at least 2 points")

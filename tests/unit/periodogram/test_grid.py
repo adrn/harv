@@ -2,7 +2,9 @@
 
 import warnings
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from unxt import Q, ustrip
 
@@ -220,3 +222,33 @@ class TestErrors:
                 period_min=Q(100.0, "day"),
                 period_max=Q(50.0, "day"),
             )
+
+
+_FULL_GRID_KW = {
+    "period_min": Q(10.0, "day"),
+    "period_max": Q(1000.0, "day"),
+    "n_grid": 64,
+}
+
+
+class TestTraceable:
+    """A fully specified grid never consults the data, so it traces.
+
+    See ``docs/spec.md``, "``frequency_grid``": the baseline is computed only
+    when ``period_max`` or ``n_grid`` is missing.
+    """
+
+    def test_jit_with_full_grid_spec(self):
+        data, _ = simulate_rv_sb1_data(seed=0, n_obs=20)
+        got = jax.jit(lambda d: frequency_grid(d, **_FULL_GRID_KW))(data)
+        want = frequency_grid(data, **_FULL_GRID_KW)
+        assert got.shape == (64,)
+        np.testing.assert_allclose(
+            ustrip("1/day", got), ustrip("1/day", want), rtol=1e-6
+        )
+
+    def test_data_derived_size_is_not_traceable(self):
+        """Dropping n_grid makes the grid size data-dependent -- an output shape."""
+        data, _ = simulate_rv_sb1_data(seed=0, n_obs=20)
+        with pytest.raises(jax.errors.ConcretizationTypeError):
+            jax.jit(lambda d: frequency_grid(d, period_min=Q(10.0, "day")))(data)
