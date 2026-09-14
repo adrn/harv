@@ -4,8 +4,6 @@ One test, parametrized over the grid in :mod:`grid`. Run with ``--bench``; see
 ``docs/running-benchmarks.md``.
 """
 
-from __future__ import annotations
-
 import time
 from typing import Any
 

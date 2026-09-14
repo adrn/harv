@@ -8,8 +8,6 @@ cartesian product when an interaction is suspected.
 Axes and baselines are documented in ``docs/running-benchmarks.md``.
 """
 
-from __future__ import annotations
-
 __all__ = (
     "BASELINE",
     "BATCH_SIZE_VALUES",

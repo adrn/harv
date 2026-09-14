@@ -3,8 +3,6 @@
 Nothing here runs unless ``--bench`` is passed. See ``docs/running-benchmarks.md``.
 """
 
-from __future__ import annotations
-
 # x64 FIRST, before anything imports harv (and therefore JAX). harv deliberately
 # does not enable it -- docs/sharp-bits.md makes it the user's job -- and every
 # tutorial turns it on. float32 changes the sampler's *arithmetic*, not just its

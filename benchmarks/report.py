@@ -9,8 +9,6 @@ the results page plus its log-log figures. The page is committed because
 ReadTheDocs has no GPU and must never try to regenerate it.
 """
 
-from __future__ import annotations
-
 import argparse
 import itertools
 import json
