@@ -338,6 +338,7 @@ src = ["src"]
         "FBT003",  # boolean-positional-value-in-call
         "A004",  # astropy.io.ascii - shadows built-in ascii
         "RUF001",  # ambiguous en dash
+        "ANN202",  # missing type annotation
     ]
     "docs/_static/*" = ["ALL"]
 
