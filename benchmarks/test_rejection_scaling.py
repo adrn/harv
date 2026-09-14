@@ -47,7 +47,16 @@ def test_run_with_samples(
         # is an eqx.Module and therefore a pytree, so this blocks on every leaf.
         return jax.block_until_ready(
             sampler.run_with_samples(
-                data, prior_cache, top_k=TOP_K, seed=0, randomize_prior_order=False
+                data,
+                prior_cache,
+                top_k=TOP_K,
+                seed=0,
+                randomize_prior_order=False,
+                # Uniform across cells, so they stay comparable. Required for
+                # EcoswEsinwRV, whose default prior puts ~21% of draws outside the
+                # unit disk (e >= 1) where the K prior is NaN; without it the
+                # recorded evidence metadata is NaN. See docs/sharp-bits.md.
+                ignore_non_finite=True,
             )
         )
 
