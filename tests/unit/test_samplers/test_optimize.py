@@ -124,7 +124,7 @@ def rv_case(rv_data_and_truth):
         model_type="RVModel",
         metadata={"time_ref": 0.0},
     )
-    refined = sampler.optimize(warm, rv_data_and_truth, seed=0)
+    refined = sampler.optimize(warm, rv_data_and_truth, key=jax.random.key(0))
     return sampler, rv_data_and_truth, warm, refined
 
 
@@ -138,7 +138,9 @@ def rv_map_case(rv_data_and_truth, off_mode_sample):
         sigma_v0=Q(20.0, "km/s"),
     )
     sampler = NumpyroSampler(prior, RVModel())
-    refined = sampler.optimize(off_mode_sample, rv_data_and_truth, seed=0)
+    refined = sampler.optimize(
+        off_mode_sample, rv_data_and_truth, key=jax.random.key(0)
+    )
     return sampler, rv_data_and_truth, refined
 
 
@@ -353,7 +355,9 @@ class TestNumpyroSamplerOptimizeJoint:
     def test_optimize_jointmodel(self, joint_sampler_and_data, joint_off_mode_samples):
         """optimize() works for JointModel and populates logprobs."""
         sampler, data = joint_sampler_and_data
-        refined = sampler.optimize(joint_off_mode_samples, data, seed=0, max_passes=2)
+        refined = sampler.optimize(
+            joint_off_mode_samples, data, key=jax.random.key(0), max_passes=2
+        )
         assert refined.n_samples == 1
         assert refined.ln_likelihood is not None
         assert refined.ln_prior is not None
@@ -508,7 +512,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
     def ti_case(self, ti_sampler, ti_data_and_truth, ti_off_mode_samples):
         """Cached TI optimize result reused across assertions."""
         data, truth = ti_data_and_truth
-        refined = ti_sampler.optimize(ti_off_mode_samples, data, seed=0)
+        refined = ti_sampler.optimize(ti_off_mode_samples, data, key=jax.random.key(0))
         campbell = refined.thiele_innes_to_campbell()
         return ti_sampler, data, truth, refined, campbell
 
@@ -728,7 +732,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
     def bh3_case(self, bh3_ti_sampler, bh3_like_data_and_truth, bh3_warm_start):
         """Cached BH3-like optimize result reused by both regression paths."""
         data, truth = bh3_like_data_and_truth
-        refined = bh3_ti_sampler.optimize(bh3_warm_start, data, seed=0)
+        refined = bh3_ti_sampler.optimize(bh3_warm_start, data, key=jax.random.key(0))
         campbell = refined.thiele_innes_to_campbell()
         return data, truth, refined, campbell
 
@@ -885,11 +889,13 @@ class TestOptimizeConvergenceWarningVerbosity:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             refined = rv_sampler.optimize(
-                off_mode_sample, rv_data_and_truth, seed=0, max_passes=1
+                off_mode_sample, rv_data_and_truth, key=jax.random.key(0), max_passes=1
             )
         assert refined.n_samples == 1
 
     def test_warns_when_verbose(self, rv_sampler, rv_data_and_truth, off_mode_sample):
         loud = NumpyroSampler(rv_sampler.prior, rv_sampler.model, verbose=True)
         with pytest.warns(UserWarning, match="BFGS did not converge"):
-            loud.optimize(off_mode_sample, rv_data_and_truth, seed=0, max_passes=1)
+            loud.optimize(
+                off_mode_sample, rv_data_and_truth, key=jax.random.key(0), max_passes=1
+            )

@@ -1556,7 +1556,7 @@ sampler.run(
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
     top_k: int | None = None,
-    seed: int = 0,
+    key: jax.Array | None = None,
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
     return_evidence_stats: bool = False,
@@ -1753,7 +1753,7 @@ sampler.run_with_samples(
     *,
     max_posterior_samples: int | None = None,
     top_k: int | None = None,
-    seed: int | None = None,
+    key: jax.Array | None = None,
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
     return_evidence_stats: bool = False,
@@ -1773,7 +1773,7 @@ sampler.run_with_samples(
   branch: missing keys raise, extra keys are ignored.
 
 `randomize_prior_order` (HDF5 path only): when `True` (default), batch *order*
-is permuted via `np.random.default_rng(seed).permutation(n_batches)`. Each
+is permuted via `jax.random.permutation(key, n_batches)`. Each
 batch is still a single contiguous h5py slice — no random seeks, no read
 amplification. Set to `False` for strictly sequential reads (reproducibility /
 debugging).
@@ -1829,7 +1829,7 @@ mcmc_sampler = NumpyroSampler(prior, model)
 mcmc_samples = mcmc_sampler.run(
     data,
     init_samples=rej_samples,
-    seed=42,
+    key=jax.random.key(42),
     num_warmup=500,
     num_samples=1000,
     num_chains=4,
@@ -1856,7 +1856,7 @@ Two model variants are supported via `marginalized`:
   conditionally sampled afterward to populate the returned `Samples`.
 - `marginalized=False`: MCMC samples all parameters jointly (nonlinear + linear).
 
-### `NumpyroSampler.optimize(samples, data, *, seed=None, max_passes=10, tol=1e-4) -> Samples`
+### `NumpyroSampler.optimize(samples, data, *, key=None, max_passes=10, tol=1e-4) -> Samples`
 
 Refines each input sample to the local posterior MAP using BFGS via
 `numpyro.optim.Minimize` (which wraps `jax.scipy.optimize.minimize`) with an
@@ -2702,7 +2702,7 @@ save_sampler("sampler.pkl", sampler)
 
 # Later:
 sampler2 = load_sampler("sampler.pkl")
-samples = sampler2.run(data, seed=0)
+samples = sampler2.run(data, key=jax.random.key(0))
 ```
 
 ______________________________________________________________________
@@ -2955,6 +2955,7 @@ ______________________________________________________________________
 The intended user-facing interface for common use cases:
 
 ```python
+import jax
 import numpyro.distributions as dist
 from unxt import Q
 from harv.data import RVData
@@ -3039,7 +3040,8 @@ samples = sampler.run(
 # --- MCMC continuation ---
 mcmc_sampler = NumpyroSampler(prior, RVModel())
 mcmc_samples = mcmc_sampler.run(
-    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000, seed=42,
+    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000,
+    key=jax.random.key(42),
 )
 
 # --- Post-sampling analysis ---

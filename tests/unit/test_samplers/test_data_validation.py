@@ -6,6 +6,7 @@ an ``AbstractData`` (single-component) or ``AbstractDatasetContainer`` (joint),
 and ``time_ref`` is uniformly exposed on every container.
 """
 
+import jax
 import jax.numpy as jnp
 import pytest
 from unxt import Q
@@ -35,7 +36,7 @@ def _rv_prior() -> HarvPrior:
     )
 
 
-_RUN_KWARGS = {"n_prior_samples": 100, "seed": 0}
+_RUN_KWARGS = {"n_prior_samples": 100, "key": jax.random.key(0)}
 
 
 class TestSingleComponentValidation:

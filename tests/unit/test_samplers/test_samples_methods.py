@@ -8,6 +8,7 @@ using the constructor. NumpyroSampler.run() returns a Samples object.
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -306,7 +307,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=0,
+            key=jax.random.key(0),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -320,7 +321,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=1,
+            key=jax.random.key(1),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -335,7 +336,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=2,
+            key=jax.random.key(2),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -350,7 +351,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=3,
+            key=jax.random.key(3),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -364,7 +365,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=4,
+            key=jax.random.key(4),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -378,7 +379,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=5,
+            key=jax.random.key(5),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -397,7 +398,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=6,
+            key=jax.random.key(6),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -413,7 +414,7 @@ class TestNumpyroSamplerRun:
             sampler.run(
                 data,
                 init_samples=empty_rv_samples,
-                seed=5,
+                key=jax.random.key(5),
                 num_chains=2,
                 num_warmup=5,
                 num_samples=5,
@@ -425,7 +426,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=6,
+            key=jax.random.key(6),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -451,7 +452,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=7,
+            key=jax.random.key(7),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -472,7 +473,7 @@ class TestNumpyroSamplerRunFull:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=10,
+            key=jax.random.key(10),
             marginalized=False,
             num_chains=2,
             num_warmup=5,
@@ -487,7 +488,7 @@ class TestNumpyroSamplerRunFull:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=11,
+            key=jax.random.key(11),
             marginalized=False,
             num_chains=2,
             num_warmup=5,
@@ -524,7 +525,7 @@ class TestNumpyroSamplerRunExtraModel:
             sampler.run(
                 data,
                 init_samples=rv_samples,
-                seed=20,
+                key=jax.random.key(20),
                 extra_model=self._make_extra_model(),
                 num_chains=2,
                 num_warmup=5,
@@ -537,7 +538,7 @@ class TestNumpyroSamplerRunExtraModel:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=21,
+            key=jax.random.key(21),
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             num_chains=2,
@@ -553,7 +554,7 @@ class TestNumpyroSamplerRunExtraModel:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=22,
+            key=jax.random.key(22),
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             marginalized=True,
@@ -581,7 +582,7 @@ class TestNumpyroSamplerRunExtraModel:
             sampler.run(
                 data,
                 init_samples=rv_samples,
-                seed=23,
+                key=jax.random.key(23),
                 extra_model=bad_extra_model,
                 extra_init_params={"x": jnp.zeros(2)},
                 num_chains=2,
@@ -633,7 +634,7 @@ class TestNumpyroSamplerNonGaussianLinear:
         result = sampler.run(
             data,
             init_samples=astro_samples,
-            seed=30,
+            key=jax.random.key(30),
             num_chains=2,
             num_warmup=3,
             num_samples=3,
@@ -651,7 +652,7 @@ class TestNumpyroSamplerNonGaussianLinear:
         result = sampler.run(
             data,
             init_samples=astro_samples,
-            seed=31,
+            key=jax.random.key(31),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -783,7 +784,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=40,
+            key=jax.random.key(40),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -806,7 +807,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=43,
+            key=jax.random.key(43),
             num_chains=2,
             num_warmup=3,
             num_samples=3,
@@ -823,7 +824,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=41,
+            key=jax.random.key(41),
             num_chains=2,
             num_warmup=3,
             num_samples=4,
@@ -841,7 +842,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=44,
+            key=jax.random.key(44),
             num_chains=num_chains,
             num_warmup=3,
             num_samples=num_samples,
@@ -870,7 +871,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=42,
+            key=jax.random.key(42),
             marginalized=False,
             num_chains=1,
             num_warmup=3,

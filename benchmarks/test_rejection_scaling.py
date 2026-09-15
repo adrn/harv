@@ -48,7 +48,7 @@ def test_run_with_samples(
                 data,
                 prior_cache,
                 top_k=TOP_K,
-                seed=0,
+                key=jax.random.key(0),
                 randomize_prior_order=False,
                 # Uniform across cells, so they stay comparable. Required for
                 # EcoswEsinwRV, whose default prior puts ~21% of draws outside the

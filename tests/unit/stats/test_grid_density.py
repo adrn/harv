@@ -196,7 +196,7 @@ class TestPriorIntegration:
             sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior, hm.RVModel())
-        samples = sampler.run(data, n_prior_samples=20_000, seed=1)
+        samples = sampler.run(data, n_prior_samples=20_000, key=jax.random.key(1))
         assert samples.n_samples > 0
         med = ustrip("day", samples.median("period"))
         assert abs(float(med) - 100.0) < 20.0

@@ -242,7 +242,9 @@ class TestMonomialTrend:
         )
 
         with pytest.raises(ValueError, match="trend_2"):
-            sampler.run(data, n_prior_samples=8, max_posterior_samples=2, seed=0)
+            sampler.run(
+                data, n_prior_samples=8, max_posterior_samples=2, key=jax.random.key(0)
+            )
 
 
 # ======================================================================

@@ -5,6 +5,7 @@ mass-function / physical-orbit-size helpers and the optional per-sample
 log-probability storage.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -319,7 +320,9 @@ class TestRejectionSamplerLogProbs:
             sigma_v0=Q(50.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        s = sampler.run(rv_data, n_prior_samples=20_000, seed=7, return_logprobs=True)
+        s = sampler.run(
+            rv_data, n_prior_samples=20_000, key=jax.random.key(7), return_logprobs=True
+        )
         assert s.ln_likelihood is not None
         assert s.ln_prior is not None
         assert s.ln_likelihood.shape == (s.n_samples,)
@@ -334,7 +337,7 @@ class TestRejectionSamplerLogProbs:
             sigma_v0=Q(50.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        s = sampler.run(rv_data, n_prior_samples=5_000, seed=7)
+        s = sampler.run(rv_data, n_prior_samples=5_000, key=jax.random.key(7))
         assert s.ln_likelihood is None
         assert s.ln_prior is None
 

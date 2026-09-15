@@ -88,7 +88,7 @@ class TestAcceptanceDiagnostics:
             s = RejectionSampler(_prior(), hm.RVModel()).run(
                 _peaked_data(),
                 n_prior_samples=1_000_000,
-                seed=0,
+                key=jax.random.key(0),
                 return_evidence_stats=True,
             )
         diag = s.acceptance_diagnostics()
@@ -104,7 +104,7 @@ class TestAcceptanceDiagnostics:
             s = RejectionSampler(_prior(), hm.RVModel()).run(
                 _broad_data(),
                 n_prior_samples=2_000_000,
-                seed=0,
+                key=jax.random.key(0),
                 return_evidence_stats=True,
             )
         diag = s.acceptance_diagnostics()
@@ -115,7 +115,7 @@ class TestAcceptanceDiagnostics:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             s = RejectionSampler(_prior(), hm.RVModel()).run(
-                _peaked_data(), n_prior_samples=200_000, seed=0
+                _peaked_data(), n_prior_samples=200_000, key=jax.random.key(0)
             )
         with pytest.raises(ValueError, match="return_evidence_stats=True"):
             s.acceptance_diagnostics()
@@ -136,21 +136,21 @@ class TestSamplerWarning:
     def test_warns_when_under_resolved(self):
         with pytest.warns(UserWarning, match="Under-resolved rejection run"):
             RejectionSampler(_prior(), hm.RVModel()).run(
-                _peaked_data(), n_prior_samples=1_000_000, seed=0
+                _peaked_data(), n_prior_samples=1_000_000, key=jax.random.key(0)
             )
 
     def test_warning_fires_without_evidence_stats(self):
         # The warning must not depend on return_evidence_stats.
         with pytest.warns(UserWarning, match="Under-resolved"):
             RejectionSampler(_prior(), hm.RVModel()).run(
-                _peaked_data(), n_prior_samples=500_000, seed=0
+                _peaked_data(), n_prior_samples=500_000, key=jax.random.key(0)
             )
 
     def test_no_warning_when_resolved(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             RejectionSampler(_prior(), hm.RVModel()).run(
-                _broad_data(), n_prior_samples=2_000_000, seed=0
+                _broad_data(), n_prior_samples=2_000_000, key=jax.random.key(0)
             )
         assert not any("Under-resolved" in str(w.message) for w in caught)
 
@@ -207,7 +207,7 @@ class TestMinEvidenceEssIsConfigurable:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             RejectionSampler(_prior(), hm.RVModel(), min_evidence_ess=0.0).run(
-                _peaked_data(), n_prior_samples=200_000, seed=0
+                _peaked_data(), n_prior_samples=200_000, key=jax.random.key(0)
             )
         assert not any("Under-resolved" in str(w.message) for w in caught)
 
@@ -215,7 +215,7 @@ class TestMinEvidenceEssIsConfigurable:
         # A run that is resolved at the default bar warns at a stricter one.
         with pytest.warns(UserWarning, match="Under-resolved"):
             RejectionSampler(_prior(), hm.RVModel(), min_evidence_ess=float("inf")).run(
-                _broad_data(), n_prior_samples=2_000_000, seed=0
+                _broad_data(), n_prior_samples=2_000_000, key=jax.random.key(0)
             )
 
 
@@ -225,7 +225,7 @@ class TestWarningAttribution:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             RejectionSampler(_prior(), hm.RVModel()).run(
-                _peaked_data(), n_prior_samples=500_000, seed=0
+                _peaked_data(), n_prior_samples=500_000, key=jax.random.key(0)
             )
         under = [w for w in caught if "Under-resolved" in str(w.message)]
         assert under, "expected an under-resolution warning"
@@ -237,7 +237,7 @@ class TestWarningAttribution:
         library = _prior().sample(jax.random.key(1), 200_000, model=hm.RVModel())
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            sampler.run_with_samples(_peaked_data(), library, seed=0)
+            sampler.run_with_samples(_peaked_data(), library, key=jax.random.key(0))
         under = [w for w in caught if "Under-resolved" in str(w.message)]
         assert under, "expected an under-resolution warning"
         assert under[0].filename == __file__

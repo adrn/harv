@@ -1,5 +1,6 @@
 """Tests for dict-form linear prior (hybrid marginalization path)."""
 
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpyro.distributions as dist
@@ -88,7 +89,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(
             data,
             n_prior_samples=4,
-            seed=0,
+            key=jax.random.key(0),
             ignore_non_finite=True,
         )
 
@@ -157,7 +158,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(
             data,
             n_prior_samples=4,
-            seed=0,
+            key=jax.random.key(0),
         )
 
         assert samples.n_samples == 0
@@ -181,7 +182,9 @@ class TestDictLinearPriorRV:
             },
         )
         dict_sampler = RejectionSampler(dict_prior, RVModel())
-        dict_samples = dict_sampler.run(data, n_prior_samples=n_prior, seed=0)
+        dict_samples = dict_sampler.run(
+            data, n_prior_samples=n_prior, key=jax.random.key(0)
+        )
 
         assert dict_samples.n_samples >= 0
         assert dict_samples.model_type == "RVModel"
@@ -205,7 +208,7 @@ class TestDictLinearPriorRV:
             },
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=1)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(1))
 
         assert samples.n_samples >= 0
         assert samples.model_type == "RVModel"
@@ -233,7 +236,7 @@ class TestDictLinearPriorRV:
             },
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=2)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(2))
 
         assert samples.n_samples >= 0
         assert samples.model_type == "RVModel"
@@ -259,7 +262,7 @@ class TestDictLinearPriorRV:
             },
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=3)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(3))
 
         assert samples.n_samples >= 0
         assert samples.model_type == "RVModel"
@@ -281,7 +284,7 @@ class TestDictLinearPriorRV:
             },
         )
         sampler = RejectionSampler(prior, RVModel(), marginalized_names=("v_sys",))
-        samples = sampler.run(data, n_prior_samples=10_000, seed=30)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(30))
 
         assert samples.n_samples >= 0
         assert samples.model_type == "RVModel"
@@ -308,4 +311,4 @@ class TestDictLinearPriorRV:
         # When all linear params are Delta, build_gaussian_mvn raises ValueError.
         # This case is not yet supported -- just verify the error is clear.
         with pytest.raises(ValueError, match="No marginalized parameters remain"):
-            sampler.run(data, n_prior_samples=1_000, seed=4)
+            sampler.run(data, n_prior_samples=1_000, key=jax.random.key(4))

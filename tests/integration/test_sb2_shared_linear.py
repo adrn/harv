@@ -265,7 +265,10 @@ class TestRejectionSamplerFlattening:
         sampler = RejectionSampler(prior, joint)
         joint_data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         samples = sampler.run(
-            joint_data, seed=0, n_prior_samples=1_000, max_posterior_samples=4
+            joint_data,
+            key=jax.random.key(0),
+            n_prior_samples=1_000,
+            max_posterior_samples=4,
         )
 
         # v_sys must appear as a bare key (shared)

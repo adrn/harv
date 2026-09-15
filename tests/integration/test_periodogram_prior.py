@@ -6,6 +6,7 @@ period prior, and per-source interim priors remain valid for downstream
 hierarchical (Hogg/Myers/Bovy-style) importance reweighting.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as ndist
@@ -83,10 +84,10 @@ class TestRVAcceptance:
 
         n_prior = 100_000
         s_base = RejectionSampler(base, RVModel()).run(
-            data, n_prior_samples=n_prior, seed=0
+            data, n_prior_samples=n_prior, key=jax.random.key(0)
         )
         s_tail = RejectionSampler(tailored, RVModel()).run(
-            data, n_prior_samples=n_prior, seed=0
+            data, n_prior_samples=n_prior, key=jax.random.key(0)
         )
 
         # Same prior-sample budget: the tailored prior accepts far more.
@@ -134,10 +135,10 @@ class TestGaiaAcceptance:
         model = GaiaAstrometryModel(parameterization=param)
         n_prior = 100_000
         s_base = RejectionSampler(base, model).run(
-            data, n_prior_samples=n_prior, seed=1
+            data, n_prior_samples=n_prior, key=jax.random.key(1)
         )
         s_tail = RejectionSampler(tailored, model).run(
-            data, n_prior_samples=n_prior, seed=1
+            data, n_prior_samples=n_prior, key=jax.random.key(1)
         )
 
         assert s_tail.n_samples >= 5 * max(s_base.n_samples, 1)
@@ -199,7 +200,10 @@ class TestJointEndToEnd:
             components={"astro": GaiaAstrometryModel(), "rv": RVModel()}
         )
         samples = RejectionSampler(prior, joint).run(
-            source, n_prior_samples=100_000, seed=2, ignore_non_finite=True
+            source,
+            n_prior_samples=100_000,
+            key=jax.random.key(2),
+            ignore_non_finite=True,
         )
         assert samples.n_samples > 0
         p = ustrip("day", samples["period"])
@@ -269,7 +273,10 @@ class TestReweightingConsistency:
         samples_base, samples_tail = [], []
         for i, data in enumerate(sources):
             s_a = RejectionSampler(base_prior, RVModel()).run(
-                data, n_prior_samples=600_000, max_posterior_samples=128, seed=i
+                data,
+                n_prior_samples=600_000,
+                max_posterior_samples=128,
+                key=jax.random.key(i),
             )
             assert s_a.n_samples > 5, "population setup must yield accepted samples"
             samples_base.append(hp.attach_interim_period_prior(s_a, base_period_prior))
@@ -278,7 +285,10 @@ class TestReweightingConsistency:
             period_prior = hp.tempered_period_prior(result, beta=1.0, floor=0.1)
             tailored = hm.StandardRV().default_prior(period=period_prior, **RV_SCALES)
             s_b = RejectionSampler(tailored, RVModel()).run(
-                data, n_prior_samples=100_000, max_posterior_samples=128, seed=i
+                data,
+                n_prior_samples=100_000,
+                max_posterior_samples=128,
+                key=jax.random.key(i),
             )
             samples_tail.append(hp.attach_interim_period_prior(s_b, period_prior))
 

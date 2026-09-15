@@ -341,7 +341,7 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
             data,
             prior.sample(jr.key(0), 2000, model=model),
             top_k=8,
-            seed=0,
+            key=jax.random.key(0),
             ignore_non_finite=True,
         )
         assert samples.n_samples == 8
@@ -362,5 +362,5 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         assert qnp.any(ecc >= 1.0), "expected the square prior to escape the unit disk"
 
         sampler = RejectionSampler(prior, model, batch_size=2000)
-        without = sampler.run_with_samples(data, cache, top_k=8, seed=0)
+        without = sampler.run_with_samples(data, cache, top_k=8, key=jax.random.key(0))
         assert not jnp.isfinite(without.metadata["max_ln_likelihood"])

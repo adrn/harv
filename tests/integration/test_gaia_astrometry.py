@@ -145,7 +145,7 @@ class TestGaiaAstrometryRejectionSampler:
         """Rejection sampler completes and returns a valid Samples object."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=42)
+        samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(42))
 
         assert samples.n_samples > 0
         assert samples.model_type == "GaiaAstrometryModel"
@@ -154,7 +154,7 @@ class TestGaiaAstrometryRejectionSampler:
         """Samples object has all expected parameter keys."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=43)
+        samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(43))
 
         keys = samples.keys()
         for nl_key in (
@@ -181,8 +181,8 @@ class TestGaiaAstrometryRejectionSampler:
         """Same seed produces identical samples."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        s1 = sampler.run(data, n_prior_samples=20_000, seed=44)
-        s2 = sampler.run(data, n_prior_samples=20_000, seed=44)
+        s1 = sampler.run(data, n_prior_samples=20_000, key=jax.random.key(44))
+        s2 = sampler.run(data, n_prior_samples=20_000, key=jax.random.key(44))
 
         assert s1.n_samples == s2.n_samples
         np.testing.assert_array_equal(s1["period"].value, s2["period"].value)

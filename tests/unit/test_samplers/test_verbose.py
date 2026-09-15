@@ -70,13 +70,15 @@ class TestRejectionSamplerVerbose:
         sampler = RejectionSampler(_halfnormal_prior(), RVModel())
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            samples = sampler.run(_rv_data(), n_prior_samples=200, seed=0)
+            samples = sampler.run(
+                _rv_data(), n_prior_samples=200, key=jax.random.key(0)
+            )
         assert samples.n_samples >= 0
 
     def test_warns_when_verbose(self):
         sampler = RejectionSampler(_halfnormal_prior(), RVModel(), verbose=True)
         with pytest.warns(UserWarning, match=_MATCH):
-            sampler.run(_rv_data(), n_prior_samples=200, seed=0)
+            sampler.run(_rv_data(), n_prior_samples=200, key=jax.random.key(0))
 
     def test_summary_never_warns_even_when_verbose(self):
         """Introspection stays side-effect-free regardless of ``verbose``."""
@@ -92,8 +94,8 @@ class TestRejectionSamplerVerbose:
         data = _rv_data()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            a = quiet.run(data, n_prior_samples=200, seed=7)
-            b = loud.run(data, n_prior_samples=200, seed=7)
+            a = quiet.run(data, n_prior_samples=200, key=jax.random.key(7))
+            b = loud.run(data, n_prior_samples=200, key=jax.random.key(7))
         assert a.n_samples == b.n_samples
         # ``verbose`` is a static field, so it lives in the treedef, not the leaves.
         assert jax.tree_util.tree_structure(quiet) != jax.tree_util.tree_structure(loud)

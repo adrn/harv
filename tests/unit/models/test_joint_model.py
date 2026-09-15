@@ -373,7 +373,7 @@ class TestSB2RejectionSamplerLinearKeys:
         )
         sampler = RejectionSampler(prior, joint)
         joint_data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
-        samples = sampler.run(joint_data, seed=0, n_prior_samples=20)
+        samples = sampler.run(joint_data, key=jax.random.key(0), n_prior_samples=20)
         assert "primary.rv_semiamp" in samples.linear
         assert "secondary.rv_semiamp" in samples.linear
         # v_sys is shared: appears bare (not namespaced per component)

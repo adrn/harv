@@ -263,7 +263,7 @@ class TestSamplerIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             samples = harv.RejectionSampler(prior, hm.RVModel(parameterization=p)).run(
-                data, n_prior_samples=50_000, seed=0
+                data, n_prior_samples=50_000, key=jax.random.key(0)
             )
         assert samples.n_samples > 0
         assert "period" in samples.nonlinear

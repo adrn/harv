@@ -88,7 +88,7 @@ class TestHighSNRRVRecovery:
             sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=500_000, seed=42)
+        samples = sampler.run(data, n_prior_samples=500_000, key=jax.random.key(42))
         return samples, true
 
     def test_enough_accepted_samples(self, rv_samples_high_snr):
@@ -185,7 +185,7 @@ class TestMultiSurveyRVRecovery:
         # For from_model, we handle routing manually since _build_model is not called.
         model = RVModel(extensions=extensions)
         sampler = RejectionSampler(prior, model)
-        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
+        samples = sampler.run(stacked, n_prior_samples=500_000, key=jax.random.key(10))
         return samples, true
 
     def test_enough_accepted_samples(self, multisurv_samples):
@@ -257,7 +257,7 @@ class TestLowSNRBroadPosterior:
             sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=200_000, seed=7)
+        samples = sampler.run(data, n_prior_samples=200_000, key=jax.random.key(7))
         return samples, true
 
     def test_enough_accepted_samples(self, low_snr_samples):

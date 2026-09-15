@@ -185,7 +185,7 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
+        samples = sampler.run(stacked, n_prior_samples=500_000, key=jax.random.key(10))
 
         period_samples = uconvert("day", samples["period"])
         period_true = uconvert("day", truth["period"])
@@ -215,7 +215,7 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=50_000, seed=11)
+        samples = sampler.run(stacked, n_prior_samples=50_000, key=jax.random.key(11))
 
         keys = samples.keys()
         for nonlinear_key in (
@@ -241,7 +241,7 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=50_000, seed=12)
+        samples = sampler.run(stacked, n_prior_samples=50_000, key=jax.random.key(12))
         assert "keck" not in samples.keys()  # noqa: SIM118
 
     def test_reproducibility(self, low_snr_data):
@@ -255,8 +255,8 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        s1 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
-        s2 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
+        s1 = sampler.run(stacked, n_prior_samples=20_000, key=jax.random.key(20))
+        s2 = sampler.run(stacked, n_prior_samples=20_000, key=jax.random.key(20))
 
         assert s1.n_samples == s2.n_samples
         if s1.n_samples > 0:

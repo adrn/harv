@@ -230,7 +230,7 @@ class TestMakePriorCache:
             prior, RVModel(), batch_size=200, marginalized_names=("rv_semiamp",)
         )
         out = sampler.run_with_samples(
-            _rv_data(), path, seed=0, randomize_prior_order=False
+            _rv_data(), path, key=jax.random.key(0), randomize_prior_order=False
         )
         assert out.n_samples > 0
 
@@ -262,7 +262,7 @@ class TestRunWithSamplesInMemory:
         sampler = RejectionSampler(prior, model, batch_size=200)
         pri = prior.sample(jr.key(0), 1000, model=model)
 
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert isinstance(out, Samples)
         # Linear params get resampled from the conditional posterior.
         assert set(out.linear) == {"rv_semiamp", "v_sys"}
@@ -273,7 +273,9 @@ class TestRunWithSamplesInMemory:
         sampler = RejectionSampler(prior, model, batch_size=200)
         pri = prior.sample(jr.key(0), 1000, model=model)
 
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42, return_logprobs=True)
+        out = sampler.run_with_samples(
+            _rv_data(), pri, key=jax.random.key(42), return_logprobs=True
+        )
         assert out.ln_likelihood is not None
         assert out.ln_prior is not None
         assert out.ln_likelihood.shape == (out.n_samples,)
@@ -294,7 +296,7 @@ class TestRunWithSamplesInMemory:
             linear_extension_names=pri.linear_extension_names,
         )
         with pytest.raises(ValueError, match="Missing"):
-            sampler.run_with_samples(_rv_data(), broken, seed=42)
+            sampler.run_with_samples(_rv_data(), broken, key=jax.random.key(42))
 
     def test_extension_in_memory(self):
         """In-memory branch handles a Jitter extension."""
@@ -302,7 +304,7 @@ class TestRunWithSamplesInMemory:
         model = RVModel(extensions=(Jitter(param_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
         pri = prior.sample(jr.key(0), 1000, model=model)
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert "jitter" in out.nonlinear
 
     def test_superset_samples_extra_keys_ignored(self):
@@ -318,7 +320,7 @@ class TestRunWithSamplesInMemory:
 
         prior_nj = _rv_prior()
         sampler = RejectionSampler(prior_nj, RVModel(), batch_size=200)
-        out = sampler.run_with_samples(_rv_data(), pri, seed=0)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(0))
         assert out.n_samples > 0
         assert "jitter" not in out.nonlinear
 
@@ -338,7 +340,7 @@ class TestRunWithSamplesInMemory:
         sampler = RejectionSampler(
             prior, RVModel(), batch_size=200, marginalized_names=marg
         )
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert out.n_samples > 0
 
 
@@ -362,9 +364,9 @@ class TestRunWithSamplesFromHdf5:
 
         data = _rv_data()
         disk = sampler.run_with_samples(
-            data, path, seed=42, randomize_prior_order=False
+            data, path, key=jax.random.key(42), randomize_prior_order=False
         )
-        mem = sampler.run_with_samples(data, loaded, seed=42)
+        mem = sampler.run_with_samples(data, loaded, key=jax.random.key(42))
 
         # Same set of accepted samples (same seed, same sample order, same logL).
         assert disk.n_samples == mem.n_samples
@@ -389,9 +391,9 @@ class TestRunWithSamplesFromHdf5:
         )
 
         data = _rv_data()
-        disk_rand = sampler.run_with_samples(data, path, seed=42)
+        disk_rand = sampler.run_with_samples(data, path, key=jax.random.key(42))
         disk_seq = sampler.run_with_samples(
-            data, path, seed=42, randomize_prior_order=False
+            data, path, key=jax.random.key(42), randomize_prior_order=False
         )
         # Acceptance counts may differ (per-position uniforms hit different
         # rows), but should be within a reasonable factor of each other.
@@ -417,10 +419,10 @@ class TestRunWithSamplesFromHdf5:
 
         data = _rv_data()
         out_str = sampler.run_with_samples(
-            data, str(path), seed=7, randomize_prior_order=False
+            data, str(path), key=jax.random.key(7), randomize_prior_order=False
         )
         out_path = sampler.run_with_samples(
-            data, path, seed=7, randomize_prior_order=False
+            data, path, key=jax.random.key(7), randomize_prior_order=False
         )
         assert out_str.n_samples == out_path.n_samples
 
@@ -449,6 +451,6 @@ class TestRunWithSamplesFromHdf5:
         # Should succeed because the cache has *extra* keys (jitter), which
         # are unused. The expected_keys is a subset of available. Verify:
         out = sampler.run_with_samples(
-            _rv_data(), path, seed=0, randomize_prior_order=False
+            _rv_data(), path, key=jax.random.key(0), randomize_prior_order=False
         )
         assert out.n_samples > 0

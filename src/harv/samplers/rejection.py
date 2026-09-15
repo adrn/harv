@@ -1,7 +1,6 @@
 """Rejection sampler for orbital parameter inference."""
 
 import os
-import uuid
 import warnings
 from pathlib import Path
 from typing import Any, NamedTuple, cast, final
@@ -41,7 +40,7 @@ from harv.samplers._prior_resolution import (
 from harv.samplers._prior_resolution import (
     validate_extension_priors as _validate_extension_priors,
 )
-from harv.samplers.base import AbstractSampler, _validate_data
+from harv.samplers.base import AbstractSampler, _fresh_key, _validate_data
 from harv.samplers.samples import MIN_EVIDENCE_ESS, Samples, _assess_resolution
 
 __all__ = ("RejectionSampler",)
@@ -453,7 +452,7 @@ class RejectionSampler(AbstractSampler):
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
         top_k: int | None = None,
-        seed: int | None = None,
+        key: jax.Array | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
@@ -490,9 +489,9 @@ class RejectionSampler(AbstractSampler):
             ``return_logprobs=True`` and ``return_evidence_stats=True``,
             because the weight column is reconstructed from them. Default
             ``None`` (ordinary rejection).
-        seed
-            Random number seed. If not specified, picks a seed based on the
-            current time.
+        key
+            PRNG key (``jax.random.key(0)``).  If not specified, a fresh
+            unpredictable key is drawn, so each run differs.
         ignore_non_finite
             If ``True``, any ``NaN`` or infinite log-likelihood values are
             treated as rejected samples by replacing them with ``-inf`` before
@@ -534,10 +533,8 @@ class RejectionSampler(AbstractSampler):
             verbose=self.verbose,
         )
 
-        # if not specified, pick a different random seed each run:
-        _seed: int = uuid.uuid4().int >> 96 if seed is None else seed
-
-        key = jr.key(_seed)
+        # if not specified, draw a different key each run:
+        key = _fresh_key() if key is None else key
         sample_key, rej_key = jr.split(key)
 
         # generate prior samples and evaluate (marginalized) log likelihoods in batches
@@ -823,7 +820,7 @@ class RejectionSampler(AbstractSampler):
         *,
         max_posterior_samples: int | None = None,
         top_k: int | None = None,
-        seed: int | None = None,
+        key: jax.Array | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
@@ -856,7 +853,7 @@ class RejectionSampler(AbstractSampler):
             constraining that system's data are. Selection depends only on the
             log-likelihoods, so it is unaffected by
             ``randomize_prior_order``.
-        seed
+        key
             See :meth:`run`.
         ignore_non_finite
             See :meth:`run`.
@@ -866,7 +863,7 @@ class RejectionSampler(AbstractSampler):
             See :meth:`run`.
         randomize_prior_order
             Disk-streaming branch only: when ``True`` (default), batches are
-            read from the HDF5 file in a random order (drawn from ``seed``).
+            read from the HDF5 file in a random order (derived from ``key``).
             Each batch is still a single contiguous h5py slice, so disk I/O
             is unchanged. Set to ``False`` for strictly sequential reads
             (reproducibility / debugging). Ignored for the in-memory branch.
@@ -893,8 +890,7 @@ class RejectionSampler(AbstractSampler):
             verbose=self.verbose,
         )
 
-        _seed: int = uuid.uuid4().int >> 96 if seed is None else seed
-        key = jr.key(_seed)
+        key = _fresh_key() if key is None else key
         rej_key = jr.fold_in(key, 1)
 
         if isinstance(prior_samples, Samples):
@@ -908,7 +904,7 @@ class RejectionSampler(AbstractSampler):
                 prepared,
                 Path(os.fspath(prior_samples)),
                 data,
-                seed=_seed,
+                key=jr.fold_in(key, 2),
                 randomize_prior_order=randomize_prior_order,
             )
 
@@ -1033,7 +1029,7 @@ class RejectionSampler(AbstractSampler):
         path: Path,
         data: Any,
         *,
-        seed: int,
+        key: jax.Array,
         randomize_prior_order: bool,
     ) -> tuple[dict[str, jax.Array], jax.Array]:
         """Disk-streaming branch of :meth:`run_with_samples`.
@@ -1074,7 +1070,7 @@ class RejectionSampler(AbstractSampler):
             n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
 
             if randomize_prior_order:
-                batch_order = np.random.default_rng(seed).permutation(n_batches)
+                batch_order = np.asarray(jr.permutation(key, n_batches))
             else:
                 batch_order = np.arange(n_batches)
 
