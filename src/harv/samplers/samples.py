@@ -170,7 +170,7 @@ def _assemble_sample_params(
     *,
     i: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, jax.Array]]:
-    """Build ``(nl_values, linear_values)`` from ``samples`` in the form models expect.
+    """Build ``(nonlinear_values, linear_values)`` from ``samples``, as models expect.
 
     Matches the convention used by the sampler's ``log_prob`` calls:
     dimensioned base nonlinear parameters stay as Quantities, dimensionless
@@ -204,7 +204,7 @@ def _assemble_sample_params(
     def _pick(value: Any) -> Any:
         return value if i is None else value[i]
 
-    nl_for_model: dict[str, Any] = {
+    nonlinear_for_model: dict[str, Any] = {
         name: _pick(value)
         if base_nl_units.get(name, "")
         else ustrip(str(value.unit), _pick(value))
@@ -216,7 +216,7 @@ def _assemble_sample_params(
         for name, value in samples.linear.items()
         if name in linear_names
     }
-    return nl_for_model, linear_stripped
+    return nonlinear_for_model, linear_stripped
 
 
 class _MetadataView(Mapping[str, Any]):
@@ -1339,17 +1339,17 @@ class Samples(eqx.Module):
         """
         self._require_single_component("chi2")
 
-        nl_for_model, linear_stripped = _assemble_sample_params(
+        nonlinear_for_model, linear_stripped = _assemble_sample_params(
             self,
             model,
             data,
             i=None,
         )
 
-        def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
-            return model.chi_squared(nl_i, lin_i, data)
+        def _one(nonlinear_i: dict[str, Any], linear_i: dict[str, Any]) -> jax.Array:
+            return model.chi_squared(nonlinear_i, linear_i, data)
 
-        return jax.vmap(_one)(nl_for_model, linear_stripped)
+        return jax.vmap(_one)(nonlinear_for_model, linear_stripped)
 
     def reduced_chi2(
         self, data: AbstractData, model: Any, *, dof: int | None = None
@@ -1380,11 +1380,11 @@ class Samples(eqx.Module):
             n_params = len(model._all_nonlinear_names()) + len(
                 model._all_linear_names()
             )
-            dof = int(data.n_times) - n_params
+            dof = int(data.n_obs) - n_params
         if dof <= 0:
             msg = (
                 f"Degrees of freedom must be positive, got dof={dof} "
-                f"(n_obs={int(data.n_times)}). Pass an explicit dof= if needed."
+                f"(n_obs={int(data.n_obs)}). Pass an explicit dof= if needed."
             )
             raise ValueError(msg)
         return self.chi2(data, model) / dof
@@ -1442,20 +1442,20 @@ class Samples(eqx.Module):
             self.linear["semi_major_axis"], self.linear["parallax"]
         )
 
-    def companion_mass(self, m1: Q, *, sini: float | None = None) -> Q:
+    def companion_mass(self, m_primary: Q, *, sin_i: float | None = None) -> Q:
         """Companion mass :math:`m_2` given the primary mass.
 
         For RV samples the mass function is
-        :func:`~harv.kepler.masses.binary_mass_function`; ``sini`` defaults to 1
+        :func:`~harv.kepler.masses.binary_mass_function`; ``sin_i`` defaults to 1
         (the *minimum* companion mass).  For astrometry samples the dark-companion
-        astrometric mass function is used and ``sini`` is ignored (the inclination
+        astrometric mass function is used and ``sin_i`` is ignored (the inclination
         is already encoded in the physical orbit size).
 
         Parameters
         ----------
-        m1
+        m_primary
             Primary mass (a ``Q``).
-        sini
+        sin_i
             Sine of the inclination, for RV samples only. Default 1 (edge-on).
 
         Returns
@@ -1467,30 +1467,32 @@ class Samples(eqx.Module):
         if "rv_semiamp" in self.linear and not is_astrometry:
             mass_function = self.binary_mass_function()
             return masses.companion_mass_from_mass_function(
-                mass_function, m1, 1.0 if sini is None else sini
+                mass_function, m_primary, 1.0 if sin_i is None else sin_i
             )
         if is_astrometry:
             mass_function = masses.astrometric_mass_function(
                 self.semi_major_axis_AU(), self.nonlinear["period"]
             )
-            return masses.companion_mass_from_mass_function(mass_function, m1, 1.0)
+            return masses.companion_mass_from_mass_function(
+                mass_function, m_primary, 1.0
+            )
         msg = (
             "companion_mass() needs either RV ('rv_semiamp') or astrometry "
             "('semi_major_axis' + 'parallax') samples."
         )
         raise KeyError(msg)
 
-    def minimum_companion_mass(self, m1: Q) -> Q:
+    def minimum_companion_mass(self, m_primary: Q) -> Q:
         """Minimum companion mass (edge-on, ``sin i = 1``).
 
-        Convenience wrapper for :meth:`companion_mass` with ``sini=1``.
+        Convenience wrapper for :meth:`companion_mass` with ``sin_i=1``.
 
         Parameters
         ----------
-        m1
+        m_primary
             Primary mass (a ``Q``).
         """
-        return self.companion_mass(m1, sini=1.0)
+        return self.companion_mass(m_primary, sin_i=1.0)
 
     def to_hdf5(self, filename: str | Path) -> None:
         """Save samples to HDF5 file.
@@ -1513,15 +1515,15 @@ class Samples(eqx.Module):
 
         with h5py.File(filename, "w") as f:
             # Store nonlinear parameters -- each as a dataset with a unit attr.
-            nl_group = f.create_group("nonlinear")
+            nonlinear_group = f.create_group("nonlinear")
             for key, qty in self.nonlinear.items():
-                ds = nl_group.create_dataset(key, data=np.asarray(qty.value))
+                ds = nonlinear_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
             # Store linear parameters -- each as a dataset with a unit attr.
-            lin_group = f.create_group("linear")
+            linear_group = f.create_group("linear")
             for key, qty in self.linear.items():
-                ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
+                ds = linear_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
             # Store optional per-sample log-probabilities (dimensionless).

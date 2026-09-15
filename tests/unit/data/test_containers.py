@@ -61,7 +61,7 @@ class TestSystemData:
             {"primary": data["primary"], "secondary": data["secondary"]}
         )
         assert isinstance(stacked, RVData)
-        assert stacked.n_times == expected.n_times
+        assert stacked.n_obs == expected.n_obs
         assert jnp.allclose(stacked.time.value, expected.time.value)
         assert jnp.allclose(stacked.rv.value, expected.rv.value)
         assert jnp.allclose(stacked.rv_err.value, expected.rv_err.value)
@@ -185,7 +185,7 @@ class TestSourceData:
             }
         )
         assert isinstance(stacked, RVData)
-        assert stacked.n_times == expected.n_times
+        assert stacked.n_obs == expected.n_obs
         assert jnp.allclose(stacked.time.value, expected.time.value)
         assert jnp.allclose(stacked.rv.value, expected.rv.value)
 

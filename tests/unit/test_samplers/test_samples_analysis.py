@@ -231,7 +231,7 @@ class TestPhaseStatistics:
         s = _rv_samples(n=10, period=np.full(10, 1e5))
         counts = s.phase_coverage_per_period(rv_data)
         assert counts.shape == (10,)
-        assert np.all(counts == rv_data.n_times)
+        assert np.all(counts == rv_data.n_obs)
 
 
 class TestSingleComponentGuard:
@@ -281,9 +281,9 @@ class TestDerivedQuantities:
 
     def test_minimum_companion_mass_is_smallest(self):
         s = _rv_samples(n=20)
-        m1 = Q(1.0, "Msun")
-        m2_min = s.minimum_companion_mass(m1)
-        m2_incl = s.companion_mass(m1, sini=0.5)
+        m_primary = Q(1.0, "Msun")
+        m2_min = s.minimum_companion_mass(m_primary)
+        m2_incl = s.companion_mass(m_primary, sin_i=0.5)
         assert jnp.all(ustrip("Msun", m2_incl) >= ustrip("Msun", m2_min))
 
     def test_companion_mass_astrometry(self):
@@ -431,7 +431,7 @@ class TestChiSquared:
         _, samples_jit = _orbit_data_and_samples(n_obs=20, rv_offset=3.0, jitter=2.0)
         chi2_plain = samples_plain.chi2(data, RVModel())
         chi2_jit = samples_jit.chi2(
-            data, RVModel(extensions=(Jitter(param_unit="km/s"),))
+            data, RVModel(extensions=(Jitter(obs_unit="km/s"),))
         )
         assert np.all(np.asarray(chi2_jit) < np.asarray(chi2_plain))
         # chi2 = sum r^2 / (sigma^2 + jitter^2) = 20 * 3^2 / (1.5^2 + 2^2).

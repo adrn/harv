@@ -71,7 +71,7 @@ class AbstractParameterization(eqx.Module):
         )
         raise NotImplementedError(msg)
 
-    def derived_eccentricity(self, nl_values: dict[str, Any]) -> Any | None:  # noqa: ARG002
+    def derived_eccentricity(self, nonlinear_values: dict[str, Any]) -> Any | None:  # noqa: ARG002
         """Eccentricity implied by this parameterization, if it is not a parameter.
 
         ``LinearPriorCallable`` implementations such as
@@ -88,7 +88,7 @@ class AbstractParameterization(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values keyed by bare parameter name.
 
         Returns

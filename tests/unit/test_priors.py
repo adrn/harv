@@ -589,13 +589,13 @@ class TestDefaultSB2Prior:
 class TestPeriodDependentKPrior:
     """Direct tests of the ``LinearPriorCallable`` dict contract for sigma_K."""
 
-    prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(100.0, "day"))
+    prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(100.0, "day"))
 
     @pytest.mark.parametrize(
         ("period_day", "ecc"), [(100.0, 0.0), (400.0, 0.3), (25.0, 0.6)]
     )
     def test_scale_matches_closed_form(self, period_day, ecc):
-        """sigma_K(P, e) = sigma_K0 * (P/P0)**(-1/3) * (1 - e**2)**(-1/2)."""
+        """sigma_K(P, e) = sigma_K0 * (P/period_ref)**(-1/3) * (1 - e**2)**(-1/2)."""
         qd = self.prior({"period": Q(period_day, "day"), "eccentricity": ecc})
 
         expected = (
@@ -636,10 +636,12 @@ class TestPeriodDependentKPrior:
 class TestPeriodDependentSemiMajorAxisPrior:
     """Direct tests of the ``LinearPriorCallable`` dict contract for sigma_a."""
 
-    prior = PeriodDependentSemiMajorAxisPrior(sigma_a0=Q(5.0, "AU"), P0=Q(100.0, "day"))
+    prior = PeriodDependentSemiMajorAxisPrior(
+        sigma_a0=Q(5.0, "AU"), period_ref=Q(100.0, "day")
+    )
 
     def test_scale_matches_closed_form(self):
-        """sigma_a(P, plx) = sigma_a0 * (P/P0)**(2/3) * plx, in the parallax's unit."""
+        """sigma_a(P, plx) = sigma_a0 * (P/period_ref)**(2/3) * plx (parallax unit)."""
         qd = self.prior(
             {
                 "period": Q(400.0, "day"),

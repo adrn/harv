@@ -22,7 +22,7 @@ def load_population(path: pathlib.Path | str) -> tuple[list[RVData], dict]:
         Per-star and population-level truth values:
 
         - per-star arrays ``M1`` (Msun), ``M2`` (Msun, NaN for singles),
-          ``period`` (day, NaN), ``eccentricity`` (NaN), ``sini`` (NaN),
+          ``period`` (day, NaN), ``eccentricity`` (NaN), ``sin_i`` (NaN),
           ``arg_peri`` (rad, NaN), ``time_peri`` (day, NaN), ``K`` (km/s,
           0 for singles), ``v_sys`` (km/s), and boolean ``is_binary`` /
           ``is_close_binary``;

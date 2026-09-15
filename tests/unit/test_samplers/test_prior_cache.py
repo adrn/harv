@@ -88,7 +88,7 @@ class TestHarvPriorSample:
 
     def test_extension_nonlinear_drawn(self):
         """Jitter (extension nonlinear) appears in the sample dict."""
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         samples = _rv_prior_with_jitter().sample(jr.key(0), 50, model=model)
         assert "jitter" in samples.nonlinear
         assert samples.nonlinear["jitter"].shape == (50,)
@@ -177,7 +177,7 @@ class TestMakePriorCache:
     def test_with_extension(self, tmp_path: Path):
         """Extension nonlinear params (jitter) make it into the cache."""
         path = tmp_path / "cache.h5"
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         make_prior_cache(
             _rv_prior_with_jitter(),
             model,
@@ -301,7 +301,7 @@ class TestRunWithSamplesInMemory:
     def test_extension_in_memory(self):
         """In-memory branch handles a Jitter extension."""
         prior = _rv_prior_with_jitter()
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
         pri = prior.sample(jr.key(0), 1000, model=model)
         out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
@@ -314,7 +314,7 @@ class TestRunWithSamplesInMemory:
         sampler ignores the extra ``jitter`` key rather than raising.
         """
         prior_j = _rv_prior_with_jitter()
-        model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model_j = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         pri = prior_j.sample(jr.key(0), 1000, model=model_j)
         assert "jitter" in pri.nonlinear  # the extra key
 
@@ -348,7 +348,7 @@ class TestRunWithSamplesFromHdf5:
     def test_disk_matches_in_memory_sequential(self, tmp_path: Path):
         """With randomize_prior_order=False, disk path and in-memory must agree."""
         prior = _rv_prior_with_jitter()
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
 
         path = tmp_path / "cache.h5"
@@ -434,7 +434,7 @@ class TestRunWithSamplesFromHdf5:
         extra key is ignored and consumption succeeds.
         """
         prior_j = _rv_prior_with_jitter()
-        model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model_j = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         path = tmp_path / "cache.h5"
         make_prior_cache(
             prior_j,

@@ -214,7 +214,7 @@ class TestNumpyroSamplerOptimize:
         marginalized linear parameters.
         """
         rv_sampler, rv_data_and_truth, refined = rv_map_case
-        nl_values = {
+        nonlinear_values = {
             "period": refined.nonlinear["period"][0],
             "eccentricity": refined.nonlinear["eccentricity"][0].value,
             "phase_peri": refined.nonlinear["phase_peri"][0].value,
@@ -222,14 +222,14 @@ class TestNumpyroSamplerOptimize:
         }
 
         mean_a = rv_sampler.model.sample_conditional_linear(
-            nl_values,
+            nonlinear_values,
             jax.random.key(1),
             rv_data_and_truth,
             linear_priors=rv_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = rv_sampler.model.sample_conditional_linear(
-            nl_values,
+            nonlinear_values,
             jax.random.key(999),
             rv_data_and_truth,
             linear_priors=rv_sampler.prior.linear_priors,
@@ -537,21 +537,21 @@ class TestNumpyroSamplerOptimizeThieleInnes:
     def test_optimize_ti_linear_params_deterministic(self, ti_case):
         """TI constants returned by optimize are RNG-free (conditional mean)."""
         ti_sampler, data, _, refined, _ = ti_case
-        nl_values = {
+        nonlinear_values = {
             "period": refined.nonlinear["period"][0],
             "eccentricity": refined.nonlinear["eccentricity"][0].value,
             "phase_peri": refined.nonlinear["phase_peri"][0].value,
         }
 
         mean_a = ti_sampler.model.sample_conditional_linear(
-            nl_values,
+            nonlinear_values,
             jax.random.key(1),
             data,
             linear_priors=ti_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = ti_sampler.model.sample_conditional_linear(
-            nl_values,
+            nonlinear_values,
             jax.random.key(999),
             data,
             linear_priors=ti_sampler.prior.linear_priors,

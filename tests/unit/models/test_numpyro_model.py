@@ -137,7 +137,7 @@ class TestNumpyroModelWithExtensions:
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
             "jitter": QD(dist.HalfNormal(1.0), "km/s"),
         }
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         model_fn = model.numpyro_model(
             nonlinear_priors, rv_data, linear_priors, marginalized=True
         )

@@ -246,8 +246,10 @@ class HarvPrior(eqx.Module):
         )
 
         # 1. Base nonlinear orbital params (bare arrays).
-        key, nl_key = jr.split(key)
-        base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(nl_key, n_samples)
+        key, nonlinear_key = jr.split(key)
+        base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(
+            nonlinear_key, n_samples
+        )
 
         # 2. Extension nonlinear params (jitter, GP hypers, ...).
         extension_nonlinear: dict[str, jax.Array] = {}

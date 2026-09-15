@@ -18,7 +18,7 @@ import numpy as np
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
-from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity, ScalarQTime
+from harv.custom_types import NAngle, NFloatArray, NSpeed, NTime, ScalarQTime
 
 
 class AbstractData(eqx.Module):
@@ -49,7 +49,7 @@ class AbstractData(eqx.Module):
             object.__setattr__(self, "time_ref", Q(time_mean, time_unit))
 
     @property
-    def n_times(self) -> int:
+    def n_obs(self) -> int:
         """Number of times / epochs / observations."""
         return len(self.time)
 
@@ -78,9 +78,9 @@ class AbstractData(eqx.Module):
         ...     rv=Q([1.0, -2.0, 0.5], "km/s"),
         ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         ... )
-        >>> data[:2].n_times
+        >>> data[:2].n_obs
         2
-        >>> data[0].n_times
+        >>> data[0].n_obs
         1
         """
         idx = slice(key, key + 1) if isinstance(key, int) else key
@@ -122,7 +122,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
     ...     scan_angle=Q([0.5, 1.2, 2.8], "rad"),
     ...     parallax_factor=jnp.array([0.3, -0.1, 0.4]),
     ... )
-    >>> data.n_times
+    >>> data.n_obs
     3
     """
 
@@ -237,17 +237,17 @@ class RVData(AbstractData):
     ...     rv=Q([1.0, -2.0, 0.5], "km/s"),
     ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
     ... )
-    >>> data.n_times
+    >>> data.n_obs
     3
     """
 
     _obs_name: ClassVar[str] = "rv"
     _err_name: ClassVar[str] = "rv_err"
 
-    rv: NVelocity
+    rv: NSpeed
     """Radial velocities."""
 
-    rv_err: NVelocity
+    rv_err: NSpeed
     """Radial velocity uncertainties."""
 
     def plot(

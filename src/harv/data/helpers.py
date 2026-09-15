@@ -78,7 +78,7 @@ def stack_datasets[DT: AbstractData](
     ...     rv_err=Q([0.3, 0.3], "km/s"),
     ... )
     >>> stacked = stack_datasets({"instr1": rv1, "instr2": rv2})
-    >>> stacked.n_times
+    >>> stacked.n_obs
     4
     """
     # first make sure that all datasets have the same type:
@@ -154,7 +154,7 @@ def build_indicator_matrix[DT: AbstractData](
     >>> stacked, indicator, names = build_indicator_matrix(
     ...     {"survey1": rv1, "survey2": rv2}, reference="survey1",
     ... )
-    >>> stacked.n_times
+    >>> stacked.n_obs
     4
     >>> names
     ('survey2',)

@@ -157,7 +157,7 @@ class TestGaiaAstrometryRejectionSampler:
         samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(43))
 
         keys = samples.keys()
-        for nl_key in (
+        for nonlinear_key in (
             "period",
             "log10_period",
             "eccentricity",
@@ -166,7 +166,7 @@ class TestGaiaAstrometryRejectionSampler:
             "cos_i",
             "lon_asc_node",
         ):
-            assert nl_key in keys, f"Missing key: {nl_key}"
+            assert nonlinear_key in keys, f"Missing key: {nonlinear_key}"
         for lin_key in (
             "ra0",
             "dec0",

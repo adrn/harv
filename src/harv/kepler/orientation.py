@@ -7,7 +7,12 @@ import jax
 import quaxed.numpy as jnp
 from unxt import Q, ustrip
 
-from harv.custom_types import ScalarFloat, ScalarQAngle, ScalarQLength, float_converter
+from harv.custom_types import (
+    ScalarFloatLike,
+    ScalarQAngle,
+    ScalarQLength,
+    float_converter,
+)
 from harv.kepler.orbits import thiele_innes_ABFG
 
 
@@ -34,16 +39,20 @@ class KeplerianOrientation(eqx.Module):
     """
 
     # sin/cos of argument of pericenter (omega)
-    sin_arg_peri: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
-    cos_arg_peri: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
+    sin_arg_peri: ScalarFloatLike = eqx.field(default=0.0, converter=float_converter)
+    cos_arg_peri: ScalarFloatLike = eqx.field(default=1.0, converter=float_converter)
 
     # sin/cos of longitude of ascending node (Omega)
-    sin_lon_asc_node: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
-    cos_lon_asc_node: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
+    sin_lon_asc_node: ScalarFloatLike = eqx.field(
+        default=0.0, converter=float_converter
+    )
+    cos_lon_asc_node: ScalarFloatLike = eqx.field(
+        default=1.0, converter=float_converter
+    )
 
     # sin/cos of inclination (i)
-    sin_i: ScalarFloat = eqx.field(default=0.0, converter=float_converter)
-    cos_i: ScalarFloat = eqx.field(default=1.0, converter=float_converter)
+    sin_i: ScalarFloatLike = eqx.field(default=0.0, converter=float_converter)
+    cos_i: ScalarFloatLike = eqx.field(default=1.0, converter=float_converter)
 
     def __check_init__(self) -> None:
         x = jnp.array(self.sin_arg_peri**2 + self.cos_arg_peri**2)

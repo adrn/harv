@@ -73,7 +73,7 @@ class AbstractComponentModel(eqx.Module):
     Concrete subclasses must implement:
 
     - ``_param_infos``: all parameter descriptors.
-    - ``_base_design_matrix(nl_values, data)``: the base design matrix from
+    - ``_base_design_matrix(nonlinear_values, data)``: the base design matrix from
       runtime data + nonlinear values.
     - ``_strip_obs(data)``: return (obs, obs_err) as unit-stripped JAX arrays.
     - ``_obs_unit(data)``: the physical unit string of the observations.
@@ -101,7 +101,9 @@ class AbstractComponentModel(eqx.Module):
     # A narrowed override of an ``AbstractData`` param would be an LSP violation;
     # ``Any`` lets each model declare its concrete data contract.
     @abstractmethod
-    def _base_design_matrix(self, nl_values: dict[str, Any], data: Any) -> jax.Array:
+    def _base_design_matrix(
+        self, nonlinear_values: dict[str, Any], data: Any
+    ) -> jax.Array:
         """Build the base design matrix from data and nonlinear values.
 
         Columns correspond to the *base* linear parameters only (no
@@ -151,16 +153,20 @@ class AbstractComponentModel(eqx.Module):
 
     def _extract_explicit_linear_values(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
     ) -> tuple[dict[str, Any], dict[str, jax.Array]]:
         """Split explicit linear values out of a flat parameter dict."""
         explicit_name_set = set(self._all_linear_names()) - set(marginalized_names)
         explicit_linear = {
-            key: nl_values[key] for key in list(nl_values) if key in explicit_name_set
+            key: nonlinear_values[key]
+            for key in list(nonlinear_values)
+            if key in explicit_name_set
         }
         stripped_nonlinear = {
-            key: value for key, value in nl_values.items() if key not in explicit_linear
+            key: value
+            for key, value in nonlinear_values.items()
+            if key not in explicit_linear
         }
         return stripped_nonlinear, explicit_linear
 
@@ -211,19 +217,19 @@ class AbstractComponentModel(eqx.Module):
 
     def _full_design_matrix(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         data: AbstractData,
     ) -> jax.Array:
         """Base design matrix + extension columns."""
-        X = self._base_design_matrix(nl_values, data)
+        X = self._base_design_matrix(nonlinear_values, data)
         for ext in self.extensions:
-            X = ext.modify_design_matrix(X, data, nl_values)
+            X = ext.modify_design_matrix(X, data, nonlinear_values)
         return X
 
     def _full_obs_err(
         self,
         obs_err: jax.Array,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         data: AbstractData,
     ) -> jax.Array:
         """Observation errors modified by extensions (jitter, GP, ...).
@@ -233,7 +239,7 @@ class AbstractComponentModel(eqx.Module):
         """
         cov = obs_err**2  # start with variances (diagonal)
         for ext in self.extensions:
-            cov = ext.modify_covariance(cov, data, nl_values)
+            cov = ext.modify_covariance(cov, data, nonlinear_values)
         return cov
 
     # Marginalization internals
@@ -328,7 +334,7 @@ class AbstractComponentModel(eqx.Module):
 
     def _build_marg_blocks(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
         data: AbstractData,
@@ -345,7 +351,7 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values (unit-stripped scalars).
         marginalized_names
             Which linear params to marginalize.
@@ -360,19 +366,19 @@ class AbstractComponentModel(eqx.Module):
         -------
             Marginalization building blocks for this component.
         """
-        X = self._full_design_matrix(nl_values, data)
+        X = self._full_design_matrix(nonlinear_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
         obs_unit = self._obs_unit(data)
 
         # Apply extension covariance modifications
-        cov = self._full_obs_err(arr_obs_err, nl_values, data)
+        cov = self._full_obs_err(arr_obs_err, nonlinear_values, data)
 
         all_cols, explicit_names, marg_names = self._classify_columns(
             marginalized_names, explicit_linear
         )
 
         prior_dict, unit_dict = self._assemble_prior(
-            marg_names, nl_values, data, linear_priors
+            marg_names, nonlinear_values, data, linear_priors
         )
 
         # Handle Delta priors
@@ -414,7 +420,7 @@ class AbstractComponentModel(eqx.Module):
             extra_q[name] = Q(val, u) if u else val
         lp = _resolve_prior_to_mvn(
             prior_dict,
-            nl_values,
+            nonlinear_values,
             unit_dict,
             extra_values=extra_q,
             parameterization=self.parameterization,
@@ -432,7 +438,7 @@ class AbstractComponentModel(eqx.Module):
 
     def _build_marginalized_linear(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
         data: AbstractData,
@@ -442,7 +448,7 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values (unit-stripped scalars).
         marginalized_names
             Which linear params to marginalize.
@@ -459,7 +465,7 @@ class AbstractComponentModel(eqx.Module):
             into a joint marginalization.
         """
         blocks = self._build_marg_blocks(
-            nl_values, marginalized_names, explicit_linear, data, linear_priors
+            nonlinear_values, marginalized_names, explicit_linear, data, linear_priors
         )
 
         # Build data distribution from covariance
@@ -491,7 +497,7 @@ class AbstractComponentModel(eqx.Module):
 
     def log_prob(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         data: AbstractData,
         *,
         linear_priors: dict[str, Any] | None = None,
@@ -504,7 +510,7 @@ class AbstractComponentModel(eqx.Module):
 
         1. **Auto mode** (recommended): pass ``linear_prior`` and let the
            model classify which linear params to marginalize. Non-Gaussian
-           linear priors are expected as entries in ``nl_values``.
+           linear priors are expected as entries in ``nonlinear_values``.
         2. **Manual marginalization**: pass ``marginalized_names`` (and
            optionally ``linear_values``) to control exactly which linear
            params are marginalized.
@@ -514,7 +520,7 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Parameter values.  In auto mode this may contain explicit
             linear parameter values alongside the nonlinear ones.
         data
@@ -541,24 +547,30 @@ class AbstractComponentModel(eqx.Module):
             marginalized_names = self._auto_marginalized_names(linear_priors)
             all_linear = set(self._all_linear_names())
             linear_values = {
-                k: nl_values[k] for k in list(nl_values) if k in all_linear
+                k: nonlinear_values[k]
+                for k in list(nonlinear_values)
+                if k in all_linear
             }
-            nl_values = {k: v for k, v in nl_values.items() if k not in all_linear}
+            nonlinear_values = {
+                k: v for k, v in nonlinear_values.items() if k not in all_linear
+            }
             return self._log_prob_marginalized(
-                nl_values, marginalized_names, linear_values, data, linear_priors
+                nonlinear_values, marginalized_names, linear_values, data, linear_priors
             )
 
         # Manual marginalization mode
         if marginalized_names is not None and linear_priors is not None:
             if linear_values is None:
-                nl_values, linear_values = self._extract_explicit_linear_values(
-                    nl_values,
+                nonlinear_values, linear_values = self._extract_explicit_linear_values(
+                    nonlinear_values,
                     marginalized_names,
                 )
             if len(marginalized_names) == 0:
-                return self._log_prob_explicit(nl_values, linear_values or {}, data)
+                return self._log_prob_explicit(
+                    nonlinear_values, linear_values or {}, data
+                )
             return self._log_prob_marginalized(
-                nl_values,
+                nonlinear_values,
                 marginalized_names,
                 linear_values or {},
                 data,
@@ -566,18 +578,18 @@ class AbstractComponentModel(eqx.Module):
             )
 
         # Explicit evaluation
-        return self._log_prob_explicit(nl_values, linear_values or {}, data)
+        return self._log_prob_explicit(nonlinear_values, linear_values or {}, data)
 
     def _log_prob_marginalized(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         marginalized_names: tuple[str, ...],
         explicit_linear: dict[str, jax.Array],
         data: AbstractData,
         linear_priors: dict[str, Any] | None,
     ) -> jax.Array:
         c = self._build_marginalized_linear(
-            nl_values, marginalized_names, explicit_linear, data, linear_priors
+            nonlinear_values, marginalized_names, explicit_linear, data, linear_priors
         )
         base_lp: jax.Array = c.dist.log_prob(c.obs)
 
@@ -598,7 +610,7 @@ class AbstractComponentModel(eqx.Module):
 
     def predict(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         data: AbstractData,
     ) -> jax.Array:
@@ -610,7 +622,7 @@ class AbstractComponentModel(eqx.Module):
         Used by :meth:`_log_prob_explicit`, :meth:`chi_squared`, and the plot
         functions so that every prediction path shares the same construction.
         """
-        X = self._full_design_matrix(nl_values, data)
+        X = self._full_design_matrix(nonlinear_values, data)
         y = jnp.array(
             [linear_values.get(name, 0.0) for name in self._all_linear_names()]
         )
@@ -618,14 +630,14 @@ class AbstractComponentModel(eqx.Module):
 
     def _log_prob_explicit(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         data: AbstractData,
     ) -> jax.Array:
         """Explicit Gaussian log-likelihood (no marginalization)."""
         arr_obs, arr_obs_err = self._strip_obs(data)
-        cov = self._full_obs_err(arr_obs_err, nl_values, data)
-        y_pred = self.predict(nl_values, linear_values, data)
+        cov = self._full_obs_err(arr_obs_err, nonlinear_values, data)
+        y_pred = self.predict(nonlinear_values, linear_values, data)
 
         if cov.ndim == 1:
             return dist.Normal(y_pred, jnp.sqrt(cov)).log_prob(arr_obs).sum()
@@ -635,7 +647,7 @@ class AbstractComponentModel(eqx.Module):
 
     def chi_squared(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         data: AbstractData,
     ) -> jax.Array:
@@ -656,7 +668,7 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values (orbital + any extension parameters), in
             the same form accepted by :meth:`log_prob`.
         linear_values
@@ -670,15 +682,15 @@ class AbstractComponentModel(eqx.Module):
             Scalar :math:`\chi^2`.
         """
         arr_obs, arr_obs_err = self._strip_obs(data)
-        cov = self._full_obs_err(arr_obs_err, nl_values, data)
-        resid = arr_obs - self.predict(nl_values, linear_values, data)
+        cov = self._full_obs_err(arr_obs_err, nonlinear_values, data)
+        resid = arr_obs - self.predict(nonlinear_values, linear_values, data)
 
         if cov.ndim == 1:
             return jnp.sum(resid**2 / cov)
         return resid @ jnp.linalg.solve(cov, resid)
 
     def _log_prob_profile(
-        self, nl_values: dict[str, Any], data: AbstractData
+        self, nonlinear_values: dict[str, Any], data: AbstractData
     ) -> jax.Array:
         r"""Profile log-likelihood: *maximized* over every linear parameter.
 
@@ -695,7 +707,7 @@ class AbstractComponentModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values (unit-stripped scalars).
         data
             Runtime observation data.
@@ -704,9 +716,9 @@ class AbstractComponentModel(eqx.Module):
         -------
             Scalar profile log-likelihood.
         """
-        X = self._full_design_matrix(nl_values, data)
+        X = self._full_design_matrix(nonlinear_values, data)
         arr_obs, arr_obs_err = self._strip_obs(data)
-        cov = self._full_obs_err(arr_obs_err, nl_values, data)
+        cov = self._full_obs_err(arr_obs_err, nonlinear_values, data)
 
         if cov.ndim == 1:
             data_dist = dist.Normal(0.0, jnp.sqrt(cov))
@@ -732,7 +744,7 @@ class AbstractComponentModel(eqx.Module):
 
     def sample_conditional_linear(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         key: jax.Array,
         data: AbstractData,
         *,
@@ -745,7 +757,7 @@ class AbstractComponentModel(eqx.Module):
 
         In auto mode (both ``marginalized_names`` and ``explicit_linear``
         are ``None``), the method classifies from ``linear_prior`` and
-        extracts explicit linear values from ``nl_values``.
+        extracts explicit linear values from ``nonlinear_values``.
 
         Returns all linear parameter values (both sampled and explicit),
         unit-stripped.
@@ -767,11 +779,13 @@ class AbstractComponentModel(eqx.Module):
             all_linear = set(self._all_linear_names())
             explicit_lin_names = all_linear - set(marginalized_names)
             explicit_linear = {
-                k: nl_values[k] for k in list(nl_values) if k in explicit_lin_names
+                k: nonlinear_values[k]
+                for k in list(nonlinear_values)
+                if k in explicit_lin_names
             }
         elif marginalized_names is not None and explicit_linear is None:
-            nl_values, explicit_linear = self._extract_explicit_linear_values(
-                nl_values,
+            nonlinear_values, explicit_linear = self._extract_explicit_linear_values(
+                nonlinear_values,
                 marginalized_names,
             )
 
@@ -780,7 +794,7 @@ class AbstractComponentModel(eqx.Module):
 
         marg_names = marginalized_names or self._all_linear_names()
         c = self._build_marginalized_linear(
-            nl_values, marg_names, explicit_linear or {}, data, linear_priors
+            nonlinear_values, marg_names, explicit_linear or {}, data, linear_priors
         )
         cond = c.dist.conditional(c.obs)
         sample = cond.mean if use_mean else cond.sample(key)
@@ -928,7 +942,7 @@ def _build_marginalized_component_model(
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(nonlinear_priors)
-        nl_values = _apply_unit_conversions(values, nonlinear_priors, component)
+        nonlinear_values = _apply_unit_conversions(values, nonlinear_priors, component)
         explicit_linear_values: dict[str, Any] = {}
         explicit_linear_q: dict[str, Any] = {}
 
@@ -944,7 +958,7 @@ def _build_marginalized_component_model(
             target_unit = param_units.get(name, "")
             resolved_prior = _resolve_prior_to_mvn(
                 {name: prior_dist},
-                nl_values,
+                nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
@@ -959,7 +973,7 @@ def _build_marginalized_component_model(
         numpyro.factor(
             "ln_lik",
             component.log_prob(
-                nl_values,
+                nonlinear_values,
                 data,
                 linear_priors=linear_priors,
                 linear_values=explicit_linear_values,
@@ -1001,7 +1015,7 @@ def _build_full_component_model(  # noqa: C901
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(nonlinear_priors)
-        nl_values = _apply_unit_conversions(values, nonlinear_priors, component)
+        nonlinear_values = _apply_unit_conversions(values, nonlinear_priors, component)
 
         # Sample non-Gaussian linear params individually
         linear_values: dict[str, Any] = {}
@@ -1025,7 +1039,7 @@ def _build_full_component_model(  # noqa: C901
                 ):
                     resolved_lp[name] = d(
                         _with_derived_eccentricity(
-                            dict(nl_values), component.parameterization
+                            dict(nonlinear_values), component.parameterization
                         )
                     )
                 else:
@@ -1033,7 +1047,7 @@ def _build_full_component_model(  # noqa: C901
             gaussian_units = {n: param_units.get(n, "") for n in gaussian_names}
             mvn = _resolve_prior_to_mvn(
                 resolved_lp,
-                nl_values,
+                nonlinear_values,
                 gaussian_units,
                 parameterization=component.parameterization,
             )
@@ -1045,7 +1059,7 @@ def _build_full_component_model(  # noqa: C901
         # Evaluate explicit log-likelihood
         numpyro.factor(
             "ln_lik",
-            component._log_prob_explicit(nl_values, linear_values, data),
+            component._log_prob_explicit(nonlinear_values, linear_values, data),
         )
 
     return model_fn

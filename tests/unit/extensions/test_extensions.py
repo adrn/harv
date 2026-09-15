@@ -28,7 +28,7 @@ class TestJitter:
         assert isinstance(Jitter(), AbstractExtension)
 
     def test_extra_params(self):
-        j = Jitter(param_unit="km/s")
+        j = Jitter(obs_unit="km/s")
         params = j.extra_params()
         assert len(params) == 1
         assert params[0].name == "jitter"
@@ -62,7 +62,7 @@ class TestJitter:
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
-        jitter_ext = Jitter(param_unit="km/s")
+        jitter_ext = Jitter(obs_unit="km/s")
         linear_priors = {
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -108,7 +108,7 @@ class TestJitter:
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
         }
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": jnp.float32(0.3),
@@ -389,7 +389,7 @@ class TestCombinedExtensions:
         }
         model = RVModel(
             extensions=(
-                Jitter(param_unit="km/s"),
+                Jitter(obs_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
             ),
         )
@@ -432,7 +432,7 @@ class TestCombinedExtensions:
         }
         model = RVModel(
             extensions=(
-                Jitter(param_unit="km/s"),
+                Jitter(obs_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
                 MultiSurveyOffset(indicator, ("other_surv",), "km/s"),
             ),

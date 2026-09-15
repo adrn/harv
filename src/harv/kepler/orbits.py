@@ -35,7 +35,7 @@ from harv.custom_types import (
     BatchQDimless,
     BatchQSpeed,
     BatchQTime,
-    ScalarFloat,
+    ScalarFloatLike,
     ScalarQAngle,
     ScalarQSpeed,
     ScalarQTime,
@@ -60,7 +60,7 @@ def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
 
 
 def true_anomaly_from_mean(
-    M: BatchQAngle, eccentricity: ScalarFloat
+    M: BatchQAngle, eccentricity: ScalarFloatLike
 ) -> tuple[BatchFloat, BatchFloat]:
     """Solve Kepler's equation: mean anomaly -> (sin f, cos f).
 
@@ -79,8 +79,8 @@ def true_anomaly_from_mean(
 def rv_shape(
     sin_f: BatchFloat,
     cos_f: BatchFloat,
-    eccentricity: ScalarFloat,
-    arg_peri: ScalarQAngle | ScalarFloat,
+    eccentricity: ScalarFloatLike,
+    arg_peri: ScalarQAngle | ScalarFloatLike,
 ) -> BatchFloat:
     """RV shape function: cos(omega + f) + e*cos(omega).
 
@@ -327,7 +327,7 @@ def ecosw_esinw_from_ecc_omega(
 def compute_true_anomaly_components(
     time: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
+    eccentricity: ScalarFloatLike,
     time_peri: ScalarQTime,
 ) -> tuple[BatchFloat, BatchFloat]:
     """Compute true anomaly at given times.
@@ -365,7 +365,7 @@ def compute_true_anomaly_components(
 def rv_at_times(
     times: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
+    eccentricity: ScalarFloatLike,
     time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
     rv_semiamp: ScalarQSpeed,
@@ -423,10 +423,10 @@ def rv_at_times(
 def astrometric_orbit_at_times(
     times: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
+    eccentricity: ScalarFloatLike,
     time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
-    cos_i: ScalarFloat,
+    cos_i: ScalarFloatLike,
     lon_asc_node: ScalarQAngle,
     semi_major_axis: ScalarQAngle,
 ) -> tuple[BatchQAngle, BatchQAngle]:

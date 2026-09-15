@@ -158,20 +158,20 @@ class TestPeaks:
         # height_drop=15 admits both peaks (global max 30, so keep delta >= 15):
         prior = hp.peak_period_prior(_fake_result(), height_drop=15.0, floor=floor)
         target = (1.0 - floor) / 2.0
-        m1 = _peak_mass(prior, 100.0, floor)
+        m_primary = _peak_mass(prior, 100.0, floor)
         m2 = _peak_mass(prior, 300.0, floor)
         # Each top-hat is normalized by its mass as the knots sample it, so the
         # documented (1 - floor) / n_peaks share is exact, not approximate.
-        assert m1 == pytest.approx(target, rel=1e-4)
+        assert m_primary == pytest.approx(target, rel=1e-4)
         assert m2 == pytest.approx(target, rel=1e-4)
         assert _mass_between(prior, P_LO, P_HI) == pytest.approx(1.0, abs=1e-6)
 
     def test_height_drop_excludes_weak_peaks(self):
         # global max 30, drop 5 -> keep delta >= 25 -> only the 30 peak:
         prior = hp.peak_period_prior(_fake_result(), height_drop=5.0, floor=0.1)
-        m1 = _mass_between(prior, 100.0 * np.exp(-0.2), 100.0 * np.exp(0.2))
+        m_primary = _mass_between(prior, 100.0 * np.exp(-0.2), 100.0 * np.exp(0.2))
         m2 = _mass_between(prior, 300.0 * np.exp(-0.2), 300.0 * np.exp(0.2))
-        assert m1 > 0.5
+        assert m_primary > 0.5
         assert m2 < 0.1
 
     def test_relative_criterion_is_scale_invariant(self):
@@ -203,9 +203,9 @@ class TestPeaks:
         assert m3 < 0.1
         # Each kept peak carries exactly (1 - floor) / max_peaks -- the bound
         # the docs state, which the max_peaks cap exists to guarantee.
-        m1 = _peak_mass(prior, 50.0, floor)
+        m_primary = _peak_mass(prior, 50.0, floor)
         m2 = _peak_mass(prior, 100.0, floor)
-        assert m1 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
+        assert m_primary == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
         assert m2 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
 
     def test_flat_periodogram_falls_back_to_loguniform(self):

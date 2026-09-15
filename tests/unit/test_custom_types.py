@@ -17,8 +17,8 @@ from harv.custom_types import (
     NAngle,
     NFloatArray,
     NQAny,
+    NSpeed,
     NTime,
-    NVelocity,
     ScalarQAny,
     ScalarQTime,
 )
@@ -62,7 +62,7 @@ def test_scalar_qany_is_distinct_from_nqany():
     [
         (NAngle, Q(jnp.array([0.1, 0.2]), "rad")),
         (NTime, Q(jnp.array([0.1, 0.2]), "day")),
-        (NVelocity, Q(jnp.array([0.1, 0.2]), "km/s")),
+        (NSpeed, Q(jnp.array([0.1, 0.2]), "km/s")),
         (NFloatArray, jnp.array([0.1, 0.2])),
         (NQAny, Q(jnp.array([0.1, 0.2]), "mas")),
     ],

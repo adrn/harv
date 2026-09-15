@@ -716,7 +716,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         }
 
         astro_model = GaiaAstrometryModel()
-        rv_model_inst = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        rv_model_inst = RVModel(extensions=(Jitter(obs_unit="km/s"),))
 
         joint = JointModel.for_rv_and_gaia(
             components={"astro": astro_model, "rv": rv_model_inst}
@@ -964,7 +964,7 @@ class TestPlotRV:
         ax_jitter = plot_rv(
             jitter_samples,
             rv_data,
-            model=RVModel(extensions=(Jitter(param_unit="km/s"),)),
+            model=RVModel(extensions=(Jitter(obs_unit="km/s"),)),
             n_samples=1,
         )
 
@@ -1543,7 +1543,7 @@ class TestPlotGaiaAstrometry:
 
     def test_astrometry_jitter_widens_error_bars(self, astro_samples, gaia_data):
         """Jitter on the astrometry model widens the residual-panel error bars."""
-        jitter = Jitter(param_unit="mas")
+        jitter = Jitter(obs_unit="mas")
         sample = astro_samples[0]
         sample_with_jitter = Samples(
             nonlinear={**sample.nonlinear, "jitter": Q(jnp.array([0.5]), "mas")},

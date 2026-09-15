@@ -68,7 +68,7 @@ class MonomialTrend(AbstractExtension):
         self,
         X: jax.Array,
         data: Any,
-        nl_values: dict[str, Any],  # noqa: ARG002
+        nonlinear_values: dict[str, Any],  # noqa: ARG002
     ) -> jax.Array:
         """Append trend columns to the design matrix.
 

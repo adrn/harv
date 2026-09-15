@@ -291,7 +291,7 @@ def _component_sample_params(
             samples_dict[qualified] if qualified in samples_dict else samples_dict[name]
         )
 
-    nl_for_model: dict[str, Any] = {}
+    nonlinear_for_model: dict[str, Any] = {}
     for name in comp_model._all_nonlinear_names():
         if (
             name not in samples.nonlinear
@@ -299,7 +299,7 @@ def _component_sample_params(
         ):
             continue
         value = _lookup(samples.nonlinear, name)[i]
-        nl_for_model[name] = (
+        nonlinear_for_model[name] = (
             value if base_nl_units.get(name, "") else ustrip(str(value.unit), value)
         )
 
@@ -310,7 +310,7 @@ def _component_sample_params(
         value = _lookup(samples.linear, name)[i]
         linear_stripped[name] = jnp.asarray(ustrip(linear_units[name], value))
 
-    return nl_for_model, linear_stripped
+    return nonlinear_for_model, linear_stripped
 
 
 def _strip_multisurvey_offsets(model: Any) -> Any:
@@ -574,10 +574,10 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             ds_err = jnp.asarray(ustrip(rv_unit, ds.rv_err))
             per_sample_eff_err: list[Any] = []
             for i in draw_indices:
-                nl_i, _lin_i = _component_sample_params(
+                nonlinear_i, _lin_i = _component_sample_params(
                     samples, comp_model, ds, ds_name, i
                 )
-                cov = comp_model._full_obs_err(ds_err, nl_i, ds)
+                cov = comp_model._full_obs_err(ds_err, nonlinear_i, ds)
                 eff = jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov))
                 per_sample_eff_err.append(eff)
             if per_sample_eff_err:
@@ -614,7 +614,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             # Subtract the reference sample's structured extension contribution
             # (trend at data times + GP conditional mean at data times) so the
             # observed RV folds cleanly onto the Keplerian orbit overlay.
-            nl_ref, lin_ref = _component_sample_params(
+            nonlinear_ref, linear_ref = _component_sample_params(
                 samples, comp_model_for_instr, rv_data, instr_name, ref_idx
             )
             curve_model = _strip_multisurvey_offsets(comp_model_for_instr)
@@ -636,14 +636,14 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             kepler_only_model = eqx.tree_at(lambda m: m.extensions, curve_model, ())
             y_full = trend_only_model.predict_at_times(
                 rv_data.time,
-                nl_ref,
-                lin_ref,
+                nonlinear_ref,
+                linear_ref,
                 time_ref=rv_data.time_ref,
             )
             y_kepler = kepler_only_model.predict_at_times(
                 rv_data.time,
-                nl_ref,
-                lin_ref,
+                nonlinear_ref,
+                linear_ref,
                 time_ref=rv_data.time_ref,
             )
             trend_contrib = y_full - y_kepler  # bare jax array in rv_unit
@@ -775,7 +775,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
         Both arrays are in rv_unit, bare jax arrays of shape len(time_grid).
         """
-        nl_i, lin_i = _component_sample_params(
+        nonlinear_i, linear_i = _component_sample_params(
             samples, comp_model, rv_data_ref, instr_name, i
         )
         curve_model = _strip_multisurvey_offsets(comp_model)
@@ -783,8 +783,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         kepler_only = eqx.tree_at(lambda m: m.extensions, curve_model, ())
         y_kepler = kepler_only.predict_at_times(
             time_grid,
-            nl_i,
-            lin_i,
+            nonlinear_i,
+            linear_i,
             time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
@@ -792,8 +792,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         # design-matrix extension).
         y_full = curve_model.predict_at_times(
             time_grid,
-            nl_i,
-            lin_i,
+            nonlinear_i,
+            linear_i,
             time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
@@ -808,7 +808,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 if isinstance(ext, GP):
                     # Residuals against the *full* deterministic prediction at
                     # the data times.
-                    y_at_data = curve_model.predict(nl_i, lin_i, rv_data_ref)
+                    y_at_data = curve_model.predict(nonlinear_i, linear_i, rv_data_ref)
                     residuals = jnp.asarray(
                         ustrip(rv_unit, rv_data_ref.rv) - jnp.asarray(y_at_data)
                     )
@@ -892,13 +892,13 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         comp_model_for_curve = model if isinstance(model, _RVModel) else _RVModel()
         curve_model = _strip_multisurvey_offsets(comp_model_for_curve)
         for i in draw_indices:
-            nl_i, lin_i = _component_sample_params(
+            nonlinear_i, linear_i = _component_sample_params(
                 samples, curve_model, dummy_data, "data", i
             )
             y_model = curve_model.predict_at_times(
                 time_grid,
-                nl_i,
-                lin_i,
+                nonlinear_i,
+                linear_i,
                 time_ref=time_ref,
                 obs_unit=rv_unit,
             )

@@ -76,22 +76,24 @@ class StandardRV(AbstractParameterization):
             ParamInfo("v_sys", "speed", linear=True),
         )
 
-    def eccentricity(self, nl_values: dict[str, Any]) -> Any:
+    def eccentricity(self, nonlinear_values: dict[str, Any]) -> Any:
         """Return the orbital eccentricity from nonlinear values."""
-        return nl_values["eccentricity"]
+        return nonlinear_values["eccentricity"]
 
-    def strip_nl_for_design(self, nl_values: dict[str, Any]) -> dict[str, Any]:
-        """Return nl_values with units stripped for ``design_matrix``."""
-        d = dict(nl_values)
-        d["eccentricity"] = ustrip(AllowValue, "", nl_values["eccentricity"])
-        d["arg_peri"] = ustrip(AllowValue, "rad", nl_values["arg_peri"])
+    def strip_nonlinear_for_design(
+        self, nonlinear_values: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return nonlinear_values with units stripped for ``design_matrix``."""
+        d = dict(nonlinear_values)
+        d["eccentricity"] = ustrip(AllowValue, "", nonlinear_values["eccentricity"])
+        d["arg_peri"] = ustrip(AllowValue, "rad", nonlinear_values["arg_peri"])
         return d
 
     def design_matrix(
         self,
         sin_f: jax.Array,
         cos_f: jax.Array,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Build (n_obs, 2) design matrix: columns [rv_shape, 1].
 
@@ -101,7 +103,7 @@ class StandardRV(AbstractParameterization):
             Sine of true anomaly (unit-stripped).
         cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values
+        nonlinear_values
             Must contain ``"eccentricity"`` and ``"arg_peri"`` (both unit-stripped
             scalars).
 
@@ -110,7 +112,7 @@ class StandardRV(AbstractParameterization):
             Design matrix block, shape ``(n_obs, 2)``.
         """
         rv_col = rv_shape(
-            sin_f, cos_f, nl_values["eccentricity"], nl_values["arg_peri"]
+            sin_f, cos_f, nonlinear_values["eccentricity"], nonlinear_values["arg_peri"]
         )
         return jnp.column_stack([rv_col, jnp.ones_like(rv_col)])
 
@@ -121,7 +123,7 @@ class StandardRV(AbstractParameterization):
         period_max: ScalarQTime | None = None,
         sigma_K0: ScalarQSpeed | None = None,
         sigma_v0: ScalarQSpeed | None = None,
-        P0: ScalarQTime = Q(1.0, "yr"),
+        period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
@@ -134,10 +136,10 @@ class StandardRV(AbstractParameterization):
         period_min, period_max
             Log-uniform period bounds.
         sigma_K0
-            RV semi-amplitude scale at reference period ``P0``.
+            RV semi-amplitude scale at reference period ``period_ref``.
         sigma_v0
             Systemic-velocity prior scale.
-        P0
+        period_ref
             Reference period for the period-dependent ``rv_semiamp`` prior.
         **kwargs
             Per-parameter prior overrides or extension priors.
@@ -156,7 +158,7 @@ class StandardRV(AbstractParameterization):
             "rv_semiamp": _make_rv_semiamp_prior(
                 rv_semiamp=kwargs.pop("rv_semiamp", None),
                 sigma_K0=sigma_K0,
-                P0=P0,
+                period_ref=period_ref,
             ),
             "v_sys": _make_vsys_prior(
                 v_sys=kwargs.pop("v_sys", None),
@@ -210,13 +212,13 @@ class EcoswEsinwRV(AbstractParameterization):
             ParamInfo("v_sys", "speed", linear=True),
         )
 
-    def eccentricity(self, nl_values: dict[str, Any]) -> Any:
+    def eccentricity(self, nonlinear_values: dict[str, Any]) -> Any:
         """Return the orbital eccentricity derived from ecosw/esinw."""
-        ecosw = nl_values["ecosw"]
-        esinw = nl_values["esinw"]
+        ecosw = nonlinear_values["ecosw"]
+        esinw = nonlinear_values["esinw"]
         return jnp.sqrt(ecosw**2 + esinw**2)
 
-    def derived_eccentricity(self, nl_values: dict[str, Any]) -> Any:
+    def derived_eccentricity(self, nonlinear_values: dict[str, Any]) -> Any:
         """Recover ``eccentricity`` for priors that expect the standard names.
 
         This parameterization carries ``(ecosw, esinw)`` rather than
@@ -225,20 +227,22 @@ class EcoswEsinwRV(AbstractParameterization):
         ``eccentricity`` key to read. See
         :meth:`~harv.models.parameterizations._base.AbstractParameterization.derived_eccentricity`.
         """
-        return self.eccentricity(nl_values)
+        return self.eccentricity(nonlinear_values)
 
-    def strip_nl_for_design(self, nl_values: dict[str, Any]) -> dict[str, Any]:
-        """Return nl_values with units stripped for ``design_matrix``."""
-        d = dict(nl_values)
-        d["ecosw"] = ustrip(AllowValue, "", nl_values["ecosw"])
-        d["esinw"] = ustrip(AllowValue, "", nl_values["esinw"])
+    def strip_nonlinear_for_design(
+        self, nonlinear_values: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return nonlinear_values with units stripped for ``design_matrix``."""
+        d = dict(nonlinear_values)
+        d["ecosw"] = ustrip(AllowValue, "", nonlinear_values["ecosw"])
+        d["esinw"] = ustrip(AllowValue, "", nonlinear_values["esinw"])
         return d
 
     def design_matrix(
         self,
         sin_f: jax.Array,
         cos_f: jax.Array,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Build (n_obs, 2) design matrix from ecosw/esinw.
 
@@ -248,7 +252,7 @@ class EcoswEsinwRV(AbstractParameterization):
             Sine of true anomaly (unit-stripped).
         cos_f
             Cosine of true anomaly (unit-stripped).
-        nl_values
+        nonlinear_values
             Must contain ``"ecosw"`` and ``"esinw"`` (dimensionless scalars). The
             eccentricity and arg_peri are derived internally.
 
@@ -256,8 +260,8 @@ class EcoswEsinwRV(AbstractParameterization):
         -------
             Design matrix block, shape ``(n_obs, 2)``.
         """
-        ecosw = nl_values["ecosw"]
-        esinw = nl_values["esinw"]
+        ecosw = nonlinear_values["ecosw"]
+        esinw = nonlinear_values["esinw"]
         ecc = jnp.sqrt(ecosw**2 + esinw**2)
         arg_peri = jnp.arctan2(esinw, ecosw)
         rv_col = rv_shape(sin_f, cos_f, ecc, arg_peri)
@@ -270,7 +274,7 @@ class EcoswEsinwRV(AbstractParameterization):
         period_max: ScalarQTime | None = None,
         sigma_K0: ScalarQSpeed | None = None,
         sigma_v0: ScalarQSpeed | None = None,
-        P0: ScalarQTime = Q(1.0, "yr"),
+        period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
@@ -304,7 +308,7 @@ class EcoswEsinwRV(AbstractParameterization):
             "rv_semiamp": _make_rv_semiamp_prior(
                 rv_semiamp=kwargs.pop("rv_semiamp", None),
                 sigma_K0=sigma_K0,
-                P0=P0,
+                period_ref=period_ref,
             ),
             "v_sys": _make_vsys_prior(
                 v_sys=kwargs.pop("v_sys", None),

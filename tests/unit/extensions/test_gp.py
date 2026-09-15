@@ -42,8 +42,8 @@ class _MockKernel:
         return self.evaluate(X, Xp)
 
 
-def _mock_kernel_builder(nl_values: dict[str, Any]) -> _MockKernel:
-    return _MockKernel(amp=nl_values["gp_amp"])
+def _mock_kernel_builder(nonlinear_values: dict[str, Any]) -> _MockKernel:
+    return _MockKernel(amp=nonlinear_values["gp_amp"])
 
 
 def _make_gp(time_unit: str = "day") -> GP:
@@ -255,9 +255,9 @@ class TestGPWithRVModel:
         }
         model = RVModel(extensions=(jitter, gp))
         # Both jitter and gp_amp should be nonlinear params
-        nl_names = model._all_nonlinear_names()
-        assert "jitter" in nl_names
-        assert "gp_amp" in nl_names
+        nonlinear_names = model._all_nonlinear_names()
+        assert "jitter" in nonlinear_names
+        assert "gp_amp" in nonlinear_names
 
         nl = {
             "period": Q(100.0, "day"),

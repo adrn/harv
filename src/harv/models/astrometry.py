@@ -93,12 +93,12 @@ class GaiaAstrometryModel(AbstractComponentModel):
         return arr_obs, arr_obs_err
 
     def _solve_kepler(
-        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+        self, nonlinear_values: dict[str, Any], data: GaiaAstrometryData
     ) -> tuple[jax.Array, jax.Array]:
         """Solve Kepler's equation from nonlinear parameter values."""
-        period = nl_values["period"]
-        phase_peri = nl_values["phase_peri"]
-        eccentricity = nl_values["eccentricity"]
+        period = nonlinear_values["period"]
+        phase_peri = nonlinear_values["phase_peri"]
+        eccentricity = nonlinear_values["eccentricity"]
 
         time_peri = phase_peri * period
         dt = (data.time - data.time_ref) - time_peri
@@ -107,26 +107,26 @@ class GaiaAstrometryModel(AbstractComponentModel):
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
     def _mean_longitude(
-        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+        self, nonlinear_values: dict[str, Any], data: GaiaAstrometryData
     ) -> tuple[jax.Array, jax.Array]:
         """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - time_ref)/P``.
 
         Kepler-free path used by Fourier parameterizations: no periastron
         phase (absorbed into the linear amplitude pairs) and no Kepler solve.
         """
-        M = mean_anomaly(data.time - data.time_ref, nl_values["period"])
+        M = mean_anomaly(data.time - data.time_ref, nonlinear_values["period"])
         m_rad = ustrip(AllowValue, "rad", M)
         return jnp.sin(m_rad), jnp.cos(m_rad)
 
     def _base_design_matrix(
-        self, nl_values: dict[str, Any], data: GaiaAstrometryData
+        self, nonlinear_values: dict[str, Any], data: GaiaAstrometryData
     ) -> jax.Array:
         # Fourier parameterizations are Kepler-free: their basis is the mean
         # longitude, not the true anomaly (trace-time dispatch, no runtime cost).
         if isinstance(self.parameterization, FourierGaiaAstrometry):
-            sin_f, cos_f = self._mean_longitude(nl_values, data)
+            sin_f, cos_f = self._mean_longitude(nonlinear_values, data)
         else:
-            sin_f, cos_f = self._solve_kepler(nl_values, data)
+            sin_f, cos_f = self._solve_kepler(nonlinear_values, data)
 
         # Prepare auxiliary data arrays
         dt = jnp.array(ustrip(self.pm_time_unit, data.time - data.time_ref))
@@ -142,26 +142,30 @@ class GaiaAstrometryModel(AbstractComponentModel):
         # through if the parameterization also requests them (no-op for the design
         # matrix, but harmless).
         _strip_target: dict[str, str] = {"angle": "rad", "time": self.pm_time_unit}
-        nl_stripped: dict[str, Any] = {}
+        nonlinear_stripped: dict[str, Any] = {}
         for pi in self.parameterization.nonlinear_params():
             name = pi.name
-            if name not in nl_values:
+            if name not in nonlinear_values:
                 continue
             target = _strip_target.get(pi.unit, "")
             if target:
-                nl_stripped[name] = ustrip(AllowValue, target, nl_values[name])
+                nonlinear_stripped[name] = ustrip(
+                    AllowValue, target, nonlinear_values[name]
+                )
             else:
-                nl_stripped[name] = ustrip(AllowValue, "", nl_values[name])
+                nonlinear_stripped[name] = ustrip(
+                    AllowValue, "", nonlinear_values[name]
+                )
 
         X = self.parameterization.design_matrix(
-            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nl_stripped
+            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nonlinear_stripped
         )
         # Ensure plain JAX array (quax dispatch may return Quantity)
         return jnp.asarray(ustrip(AllowValue, "", X))
 
     def predict_orbit_sky(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         times: Any,
     ) -> tuple[jax.Array, jax.Array]:
@@ -180,5 +184,5 @@ class GaiaAstrometryModel(AbstractComponentModel):
         # Not defined by FourierGaiaAstrometry: a Fourier fit has no Campbell
         # elements, so there is no sky orbit ellipse to draw.
         return self.parameterization.sky_orbit(  # ty: ignore[unresolved-attribute]
-            times, nl_values, linear_values
+            times, nonlinear_values, linear_values
         )

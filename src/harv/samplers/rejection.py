@@ -238,7 +238,7 @@ def _describe_prior(d: Any) -> tuple[str, str]:
 def _describe_extension(ext: Any) -> str:
     """Short label for an extension, e.g. ``"Jitter(km/s)"``."""
     name = type(ext).__name__
-    unit = getattr(ext, "param_unit", None)
+    unit = getattr(ext, "obs_unit", None)
     return f"{name}({unit})" if unit else name
 
 
@@ -353,20 +353,20 @@ class RejectionSampler(AbstractSampler):
         )
 
         # Nonlinear parameters: always sampled explicitly (base + extension).
-        nl_rows: list[tuple[str, ...]] = []
+        nonlinear_rows: list[tuple[str, ...]] = []
         for name, d in self.prior.nonlinear_priors.items():
             dist_name, unit = _describe_prior(d)
-            nl_rows.append((name, dist_name, unit))
+            nonlinear_rows.append((name, dist_name, unit))
         for name, d in prepared.nonlinear_extension_priors.items():
             dist_name, unit = _describe_prior(d)
-            nl_rows.append((f"{name} (ext)", dist_name, unit))
+            nonlinear_rows.append((f"{name} (ext)", dist_name, unit))
 
         # Linear parameters: classify marginalized vs explicitly sampled.
         eff_linear = prepared.effective_linear_prior or {}
         explicit = set(
             _explicit_linear_names(eff_linear, prepared.effective_marginalized_names)
         )
-        lin_rows: list[tuple[str, ...]] = []
+        linear_rows: list[tuple[str, ...]] = []
         n_marginalized = 0
         for name, d in eff_linear.items():
             dist_name, unit = _describe_prior(d)
@@ -377,10 +377,10 @@ class RejectionSampler(AbstractSampler):
                 status = "sampled"
             else:
                 status = "sampled (could marg.)"
-            lin_rows.append((name, status, dist_name, unit))
+            linear_rows.append((name, status, dist_name, unit))
 
         # Sampled = all nonlinear params + the linear params not marginalized.
-        n_sampled = len(nl_rows) + (len(lin_rows) - n_marginalized)
+        n_sampled = len(nonlinear_rows) + (len(linear_rows) - n_marginalized)
 
         bar = "=" * 60
         lines: list[str] = [bar, type(self).__name__, bar]
@@ -392,12 +392,12 @@ class RejectionSampler(AbstractSampler):
 
         lines.append("")
         lines.append("Nonlinear parameters (sampled)")
-        lines.extend(_fmt_table(("name", "prior", "unit"), nl_rows))
+        lines.extend(_fmt_table(("name", "prior", "unit"), nonlinear_rows))
 
-        if lin_rows:
+        if linear_rows:
             lines.append("")
             lines.append("Linear parameters")
-            lines.extend(_fmt_table(("name", "status", "prior", "unit"), lin_rows))
+            lines.extend(_fmt_table(("name", "status", "prior", "unit"), linear_rows))
 
         lines.append("")
         lines.append("status legend: marginalized = integrated out analytically;")
@@ -1044,13 +1044,13 @@ class RejectionSampler(AbstractSampler):
         expected_keys = expected_nl | expected_lin
 
         with h5py.File(path, "r") as f:
-            nl_group = f["nonlinear"]
+            nonlinear_group = f["nonlinear"]
             # ``Samples.to_hdf5`` always writes both groups (linear may be empty);
             # ``make_prior_cache`` matches that layout.
-            lin_group = f["linear"]
+            linear_group = f["linear"]
 
-            available_nl = set(nl_group)
-            available_lin = set(lin_group)
+            available_nl = set(nonlinear_group)
+            available_lin = set(linear_group)
             available = available_nl | available_lin
             missing = expected_keys - available
             if missing:
@@ -1062,7 +1062,7 @@ class RejectionSampler(AbstractSampler):
 
             # All datasets share a common length.
             first_key = next(iter(expected_keys))
-            src_group = nl_group if first_key in available_nl else lin_group
+            src_group = nonlinear_group if first_key in available_nl else linear_group
             n_prior_samples = int(src_group[first_key].shape[0])
             if n_prior_samples <= 0:
                 raise ValueError(f"Prior cache at {path} contains zero samples.")
@@ -1084,7 +1084,7 @@ class RejectionSampler(AbstractSampler):
 
                 batch: dict[str, jax.Array] = {}
                 for k in expected_keys:
-                    grp = nl_group if k in available_nl else lin_group
+                    grp = nonlinear_group if k in available_nl else linear_group
                     arr = np.asarray(grp[k][start:stop])
                     # Pad the final batch to ``batch_size`` so the JIT cache
                     # is reused (single static shape).
@@ -1132,8 +1132,8 @@ class RejectionSampler(AbstractSampler):
         n_batches = (n_prior_samples + self.batch_size - 1) // self.batch_size
         n_total = n_batches * self.batch_size
 
-        key, nl_key = jr.split(key)
-        prior_samples = prior.sample_nonlinear(nl_key, n_total)
+        key, nonlinear_key = jr.split(key)
+        prior_samples = prior.sample_nonlinear(nonlinear_key, n_total)
 
         # Sample explicit linear params (those not analytically marginalized).
         # ``_explicit_linear_names`` honors the effective marginalize_names computed

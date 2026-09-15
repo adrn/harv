@@ -13,7 +13,7 @@ from harv.custom_types import (
     BatchQTime,
     BatchVec3QLength,
     BatchVec3QSpeed,
-    ScalarFloat,
+    ScalarFloatLike,
     ScalarQLength,
     ScalarQMass,
     ScalarQTime,
@@ -72,12 +72,12 @@ class KeplerianBody(eqx.Module):
     """
 
     period: ScalarQTime
-    eccentricity: ScalarFloat = eqx.field(converter=float_converter)
+    eccentricity: ScalarFloatLike = eqx.field(converter=float_converter)
     semi_major_axis: ScalarQLength
     time_peri: ScalarQTime
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
-    ecc_zero_tol: ScalarFloat = jnp.finfo(float).eps * 10.0
+    ecc_zero_tol: ScalarFloatLike = jnp.finfo(float).eps * 10.0
 
     def __check_init__(self) -> None:
         # Trace-friendly eccentricity bounds check (works inside jit/vmap)
@@ -107,7 +107,7 @@ class KeplerianBody(eqx.Module):
     def from_masses(
         cls,
         period: ScalarQTime,
-        eccentricity: ScalarFloat,
+        eccentricity: ScalarFloatLike,
         m_total: ScalarQMass,
         m_body: ScalarQMass,
         time_peri: ScalarQTime,

@@ -64,14 +64,14 @@ class TestRejectionSamplerGetExtensions:
         assert sampler.get_extensions() == ()
 
     def test_with_jitter(self):
-        ext = Jitter(param_unit="km/s")
+        ext = Jitter(obs_unit="km/s")
         sampler = RejectionSampler(_jitter_prior(), RVModel(extensions=(ext,)))
         result = sampler.get_extensions()
         assert isinstance(result, tuple)
         assert result == (ext,)
 
     def test_constructor_with_component_model(self):
-        ext = Jitter(param_unit="km/s")
+        ext = Jitter(obs_unit="km/s")
         model = RVModel(extensions=(ext,))
         sampler = RejectionSampler(_jitter_prior(), model)
         result = sampler.get_extensions()
@@ -109,8 +109,8 @@ class TestRejectionSamplerGetExtensions:
 
     def test_constructor_with_joint_model_returns_dict(self):
         """Per-component association is preserved as a dict[name, tuple]."""
-        primary_ext = Jitter(param_unit="km/s")
-        secondary_ext = Jitter(param_unit="km/s")
+        primary_ext = Jitter(obs_unit="km/s")
+        secondary_ext = Jitter(obs_unit="km/s")
 
         prior = default_sb2_prior(
             period_min=Q(2.0, "day"),
@@ -138,14 +138,14 @@ class TestRejectionSamplerGetExtensions:
 
 class TestNumpyroSamplerGetExtensions:
     def test_with_jitter(self):
-        ext = Jitter(param_unit="km/s")
+        ext = Jitter(obs_unit="km/s")
         sampler = NumpyroSampler(_jitter_prior(), RVModel(extensions=(ext,)))
         result = sampler.get_extensions()
         assert isinstance(result, tuple)
         assert result == (ext,)
 
     def test_constructor_with_component_model(self):
-        ext = Jitter(param_unit="km/s")
+        ext = Jitter(obs_unit="km/s")
         model = RVModel(extensions=(ext,))
         sampler = NumpyroSampler(_jitter_prior(), model)
         result = sampler.get_extensions()

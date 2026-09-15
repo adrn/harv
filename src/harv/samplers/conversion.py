@@ -77,18 +77,18 @@ def convert_parameterization(
         )
         raise NotImplementedError(msg)
 
-    nl_names = tuple(p.name for p in source.nonlinear_params())
-    lin_names = tuple(p.name for p in source.linear_params())
-    missing = [n for n in nl_names if n not in nonlinear]
-    missing += [n for n in lin_names if n not in linear]
+    nonlinear_names = tuple(p.name for p in source.nonlinear_params())
+    linear_names = tuple(p.name for p in source.linear_params())
+    missing = [n for n in nonlinear_names if n not in nonlinear]
+    missing += [n for n in linear_names if n not in linear]
     if missing:
         msg = f"Missing required source parameters for conversion: {missing!r}"
         raise ValueError(msg)
 
     # Anything not declared by the source parameterization (e.g. extension
     # parameters) is carried through to the converted output unchanged.
-    extra_nl = {k: v for k, v in nonlinear.items() if k not in nl_names}
-    extra_lin = {k: v for k, v in linear.items() if k not in lin_names}
+    extra_nl = {k: v for k, v in nonlinear.items() if k not in nonlinear_names}
+    extra_lin = {k: v for k, v in linear.items() if k not in linear_names}
 
     if type(source) is type(target):
         base_nl, base_lin = dict(nonlinear), dict(linear)

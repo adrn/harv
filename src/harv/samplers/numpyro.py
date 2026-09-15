@@ -124,7 +124,7 @@ def _build_extra_numpyro_model(
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(all_priors)
-        nl_values = _apply_unit_conversions(values, all_priors, component)
+        nonlinear_values = _apply_unit_conversions(values, all_priors, component)
 
         fixed_linear: dict[str, Any] = extra_model_fn(values)
 
@@ -195,7 +195,7 @@ def _build_extra_numpyro_model(
             target_unit = param_units.get(name, "")
             resolved_prior = _resolve_prior_to_mvn(
                 {name: prior_dist},
-                nl_values,
+                nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
@@ -211,7 +211,7 @@ def _build_extra_numpyro_model(
             numpyro.factor(
                 "ln_lik",
                 component.log_prob(
-                    nl_values,
+                    nonlinear_values,
                     data,
                     linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
@@ -222,7 +222,7 @@ def _build_extra_numpyro_model(
             numpyro.factor(
                 "ln_lik",
                 component.log_prob(
-                    nl_values,
+                    nonlinear_values,
                     data,
                     linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
@@ -720,17 +720,17 @@ class NumpyroSampler(AbstractSampler):
                 if sample_name is not None
             ]
             if gaussian_name_pairs:
-                lin_arr = np.column_stack(
+                linear_arr = np.column_stack(
                     [
                         np.asarray(samples.linear[sample_name].value)
                         for _, sample_name in gaussian_name_pairs
                     ]
                 )
                 if _scalar_init:
-                    init_params["_linear"] = jnp.asarray(lin_arr[0])
+                    init_params["_linear"] = jnp.asarray(linear_arr[0])
                 else:
                     init_params["_linear"] = jnp.stack(
-                        [jnp.asarray(lin_arr[i]) for i in indices]
+                        [jnp.asarray(linear_arr[i]) for i in indices]
                     )
 
         return init_params
@@ -875,11 +875,13 @@ class NumpyroSampler(AbstractSampler):
                 if name in posterior
             ]
 
-        nl_keys = [k for k in prior.nonlinear_priors if k in posterior]
-        nl_keys += [
-            k for k in nonlinear_extension_priors if k in posterior and k not in nl_keys
+        nonlinear_keys = [k for k in prior.nonlinear_priors if k in posterior]
+        nonlinear_keys += [
+            k
+            for k in nonlinear_extension_priors
+            if k in posterior and k not in nonlinear_keys
         ]
-        filtered = {k: posterior[k] for k in (*nl_keys, *explicit_keys)}
+        filtered = {k: posterior[k] for k in (*nonlinear_keys, *explicit_keys)}
 
         def _one(sample: dict[str, jax.Array]) -> jax.Array:
             wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
@@ -970,20 +972,20 @@ class NumpyroSampler(AbstractSampler):
 
         # Collect all keys the model needs: base nonlinear, extension nonlinear
         # (using model key convention), and explicitly-sampled linear params.
-        nl_keys = list(prior.nonlinear_priors.keys())
+        nonlinear_keys = list(prior.nonlinear_priors.keys())
 
         for model_key in nonlinear_extension_priors:
-            if model_key in posterior and model_key not in nl_keys:
-                nl_keys.append(model_key)
+            if model_key in posterior and model_key not in nonlinear_keys:
+                nonlinear_keys.append(model_key)
 
         for pkey in explicit_posterior_keys:
-            if pkey in posterior and pkey not in nl_keys:
-                nl_keys.append(pkey)
+            if pkey in posterior and pkey not in nonlinear_keys:
+                nonlinear_keys.append(pkey)
 
-        n_samples = len(posterior[nl_keys[0]])
+        n_samples = len(posterior[nonlinear_keys[0]])
         keys = jr.split(jr.fold_in(rng_key, 3), n_samples)
 
-        filtered = {k: posterior[k] for k in nl_keys if k in posterior}
+        filtered = {k: posterior[k] for k in nonlinear_keys if k in posterior}
 
         def _sample_one(
             key: jax.Array,

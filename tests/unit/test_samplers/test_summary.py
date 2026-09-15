@@ -85,7 +85,7 @@ class TestRVSummary:
         assert "5 sampled, 1 marginalized" in _row(text, "parameters")
 
     def test_jitter_extension_marked(self):
-        ext = Jitter(param_unit="km/s")
+        ext = Jitter(obs_unit="km/s")
         prior = _rv_prior(jitter=QD(dist.HalfNormal(1.0), "km/s"))
         sampler = RejectionSampler(prior, RVModel(extensions=(ext,)))
         text = sampler.summary()

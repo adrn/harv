@@ -289,7 +289,7 @@ class TestPeriodDependentBasePrior:
 
     def test_base_likelihood_is_per_frequency(self):
         result = self._run(
-            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
         )
         # A callable v_sys prior resolves per trial period, so the baseline
         # varies across the grid and must be evaluated there.
@@ -315,7 +315,7 @@ class TestPeriodDependentBasePrior:
             prior={
                 "a": _prior(
                     v_sys=PeriodDependentKPrior(
-                        sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
+                        sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr")
                     )
                 ),
                 "b": _prior(),
@@ -331,7 +331,7 @@ class TestPeriodDependentBasePrior:
     def test_delta_uses_the_matching_baseline(self):
         """Delta must not be tilted by a baseline taken at one period."""
         result = self._run(
-            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
         )
         # Reconstructing lnL and subtracting a single-period baseline (the old
         # behavior) gives a visibly different, tilted statistic.

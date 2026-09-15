@@ -81,7 +81,7 @@ class TestEcoswEsinwRVParameterization:
     def test_strip_nl_for_design(self):
         p = EcoswEsinwRV()
         nl = {"ecosw": 0.3, "esinw": 0.1, "other": "kept"}
-        stripped = p.strip_nl_for_design(nl)
+        stripped = p.strip_nonlinear_for_design(nl)
         assert "ecosw" in stripped
         assert "esinw" in stripped
         assert "other" in stripped
@@ -92,8 +92,8 @@ class TestEcoswEsinwRVParameterization:
         key = jax.random.key(42)
         sin_f = jax.random.normal(key, (n_obs,))
         cos_f = jax.random.normal(key, (n_obs,))
-        nl_values = {"ecosw": _ECOSW, "esinw": _ESINW}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"ecosw": _ECOSW, "esinw": _ESINW}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         assert X.shape == (n_obs, 2)
 
     def test_design_matrix_second_col_ones(self):
@@ -101,8 +101,8 @@ class TestEcoswEsinwRVParameterization:
         n_obs = 5
         sin_f = jnp.zeros(n_obs)
         cos_f = jnp.ones(n_obs)
-        nl_values = {"ecosw": 0.0, "esinw": 0.0}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"ecosw": 0.0, "esinw": 0.0}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         assert jnp.allclose(X[:, 1], 1.0)
 
     def test_design_matrix_matches_standard(self):
@@ -129,11 +129,11 @@ class TestEcoswEsinwRVParameterization:
         p = EcoswEsinwRV()
         sin_f = jnp.array([0.1, 0.2, 0.3])
         cos_f = jnp.array([0.9, 0.8, 0.7])
-        nl_values = {"ecosw": 0.2, "esinw": 0.1}
+        nonlinear_values = {"ecosw": 0.2, "esinw": 0.1}
 
         @jax.jit
         def fn(sf, cf):
-            return p.design_matrix(sf, cf, nl_values)
+            return p.design_matrix(sf, cf, nonlinear_values)
 
         X = fn(sin_f, cos_f)
         assert X.shape == (3, 2)
@@ -154,7 +154,7 @@ class TestStandardRVHelpers:
             "arg_peri": Q(1.0, "rad"),
             "period": Q(100.0, "day"),
         }
-        stripped = p.strip_nl_for_design(nl)
+        stripped = p.strip_nonlinear_for_design(nl)
         # Should be plain floats after stripping
         assert not hasattr(stripped["eccentricity"], "unit")
         assert not hasattr(stripped["arg_peri"], "unit")

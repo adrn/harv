@@ -226,9 +226,9 @@ def _bind_prior_params(
     """Bind concrete values into every ``LinearPriorCallable`` in *linear_priors*.
 
     Values are injected into the dict a callable prior is *resolved against*,
-    never into ``nl_values``. That distinction is load-bearing: ``parallax`` is
+    never into ``nonlinear_values``. That distinction is load-bearing: ``parallax`` is
     a linear parameter of :class:`~harv.models.FourierGaiaAstrometry`, and
-    ``log_prob``'s auto mode pulls any linear name out of ``nl_values`` and
+    ``log_prob``'s auto mode pulls any linear name out of ``nonlinear_values`` and
     reclassifies it as an explicit, *non-marginalized* column. Supplying a
     parallax that way would silently fix the parallax column in both the trial
     and base models -- a different model, not a resolved prior.
@@ -463,10 +463,11 @@ def periodogram(
     Occam factor grows without bound, so Delta diverges rather than approaching the
     profile statistic. Pass ``prior=False`` to compute the profile statistic directly.
     The recommended amplitude priors here scale with period the same way
-    harv's Keplerian priors do — ``sigma_K0``/``P0`` for RV (semi-amplitude, falling as
-    ``P^(-1/3)``) and ``sigma_a0``/``P0`` for astrometry (semi-major axis, rising as
-    ``P^(2/3)``). Pass ``sigma_amp`` instead for the constant-amplitude case, which is
-    the one comparable *in shape* to a profile-likelihood periodogram.
+    harv's Keplerian priors do — ``sigma_K0``/``period_ref`` for RV (semi-amplitude,
+    falling as ``P^(-1/3)``) and ``sigma_a0``/``period_ref`` for astrometry
+    (semi-major axis, rising as ``P^(2/3)``). Pass ``sigma_amp`` instead for the
+    constant-amplitude case, which is the one comparable *in shape* to a
+    profile-likelihood periodogram.
 
     Parameters
     ----------
@@ -529,7 +530,8 @@ def periodogram(
     Examples
     --------
     RV, period-dependent semi-amplitude prior (recommended). ``sigma_K0`` is the
-    semi-amplitude expected *at* ``P0`` for the companion being searched for, not a
+    semi-amplitude expected *at* ``period_ref`` for the companion being searched
+    for, not a
     global width — see :class:`~harv.models.priors.PeriodDependentKPrior`:
 
     >>> from unxt import Q
@@ -541,14 +543,15 @@ def periodogram(
     >>> prior = hm.FourierRV(n_terms=2).default_prior(
     ...     **rv_grid,
     ...     sigma_K0=Q(1.0, "km/s"),
-    ...     P0=Q(1.0, "yr"),
+    ...     period_ref=Q(1.0, "yr"),
     ...     sigma_v0=Q(10.0, "km/s"),
     ... )
     >>> result = hp.periodogram(data, prior=prior, period_min=Q(5.0, "day"))
     >>> result.delta_ln_likelihood.shape == result.frequency.shape
     True
 
-    RV, flat amplitude prior — swap ``sigma_K0``/``P0`` for a single ``sigma_amp``:
+    RV, flat amplitude prior — swap ``sigma_K0``/``period_ref`` for a single
+    ``sigma_amp``:
 
     >>> flat = hm.FourierRV(n_terms=2).default_prior(
     ...     **rv_grid, sigma_amp=Q(30.0, "km/s"), sigma_v0=Q(10.0, "km/s")
@@ -582,7 +585,7 @@ def periodogram(
     prior needs a parallax to convert it to an angle — supply one via ``prior_params``:
 
     >>> gaia_tilted = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
-    ...     **gaia_grid, sigma_a0=Q(0.1, "AU"), P0=Q(1.0, "yr")
+    ...     **gaia_grid, sigma_a0=Q(0.1, "AU"), period_ref=Q(1.0, "yr")
     ... )
     >>> res = hp.periodogram(
     ...     gaia, prior=gaia_tilted, period_min=Q(20.0, "day"),

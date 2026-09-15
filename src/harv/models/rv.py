@@ -71,18 +71,18 @@ class RVModel(AbstractComponentModel):
         return arr_obs, arr_obs_err
 
     def _solve_kepler(
-        self, nl_values: dict[str, Any], data: RVData
+        self, nonlinear_values: dict[str, Any], data: RVData
     ) -> tuple[jax.Array, jax.Array]:
         """Solve Kepler's equation from nonlinear parameter values.
 
         Returns (sin_f, cos_f) as unit-stripped arrays.
         """
-        period = nl_values["period"]
-        phase_peri = nl_values["phase_peri"]
+        period = nonlinear_values["period"]
+        phase_peri = nonlinear_values["phase_peri"]
         # Fourier parameterizations never reach here (dispatched in
         # _base_design_matrix), so they need no eccentricity():
         eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
-            nl_values
+            nonlinear_values
         )
 
         time_peri = phase_peri * period
@@ -92,26 +92,30 @@ class RVModel(AbstractComponentModel):
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
     def _mean_longitude(
-        self, nl_values: dict[str, Any], data: RVData
+        self, nonlinear_values: dict[str, Any], data: RVData
     ) -> tuple[jax.Array, jax.Array]:
         """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - time_ref)/P``.
 
         Kepler-free path used by Fourier parameterizations: no periastron
         phase (absorbed into the linear amplitude pairs) and no Kepler solve.
         """
-        M = mean_anomaly(data.time - data.time_ref, nl_values["period"])
+        M = mean_anomaly(data.time - data.time_ref, nonlinear_values["period"])
         m_rad = ustrip(AllowValue, "rad", M)
         return jnp.sin(m_rad), jnp.cos(m_rad)
 
-    def _base_design_matrix(self, nl_values: dict[str, Any], data: RVData) -> jax.Array:
+    def _base_design_matrix(
+        self, nonlinear_values: dict[str, Any], data: RVData
+    ) -> jax.Array:
         # Fourier parameterizations are Kepler-free: their basis is the mean
         # longitude, not the true anomaly (trace-time dispatch, no runtime cost).
         if isinstance(self.parameterization, FourierRV):
-            sin_f, cos_f = self._mean_longitude(nl_values, data)
+            sin_f, cos_f = self._mean_longitude(nonlinear_values, data)
         else:
-            sin_f, cos_f = self._solve_kepler(nl_values, data)
-        nl_stripped = self.parameterization.strip_nl_for_design(nl_values)
-        X = self.parameterization.design_matrix(sin_f, cos_f, nl_stripped)
+            sin_f, cos_f = self._solve_kepler(nonlinear_values, data)
+        nonlinear_stripped = self.parameterization.strip_nonlinear_for_design(
+            nonlinear_values
+        )
+        X = self.parameterization.design_matrix(sin_f, cos_f, nonlinear_stripped)
         # Ensure the design matrix is a plain JAX array (rv_shape may return
         # dimensionless Quantity via quax dispatch)
         return jnp.asarray(ustrip(AllowValue, "", X))
@@ -119,7 +123,7 @@ class RVModel(AbstractComponentModel):
     def predict_at_times(
         self,
         times: BatchQTime,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         *,
         time_ref: ScalarQTime,
@@ -154,4 +158,4 @@ class RVModel(AbstractComponentModel):
             rv_err=Q(jnp.ones(n), obs_unit),
             time_ref=time_ref,
         )
-        return self.predict(nl_values, linear_values, dummy)
+        return self.predict(nonlinear_values, linear_values, dummy)
