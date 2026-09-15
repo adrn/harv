@@ -1138,7 +1138,7 @@ qd = QD(
 
 ### `PeriodDependentKPrior`
 
-`PeriodDependentKPrior` (in `harv.models.priors.custom_priors`) implements `LinearPriorCallable`.
+`PeriodDependentKPrior` (in `harv.models.priors.callables`) implements `LinearPriorCallable`.
 It computes a period- and eccentricity-dependent scale for the RV semi-amplitude
 prior, following the Joker's default:
 
@@ -1158,7 +1158,7 @@ Fields:
 
 ### `PeriodDependentSemiMajorAxisPrior`
 
-`PeriodDependentSemiMajorAxisPrior` (in `harv.models.priors.custom_priors`) implements
+`PeriodDependentSemiMajorAxisPrior` (in `harv.models.priors.callables`) implements
 `LinearPriorCallable`. It computes a period- and parallax-dependent scale for the
 astrometric semi-major axis prior:
 
@@ -1186,7 +1186,7 @@ Fields:
 
 ### `ParallaxDependentProperMotionPrior`
 
-`ParallaxDependentProperMotionPrior` (in `harv.models.priors.custom_priors`) implements
+`ParallaxDependentProperMotionPrior` (in `harv.models.priors.callables`) implements
 `LinearPriorCallable`. It computes a parallax-dependent scale for the proper motion
 prior, keeping the prior fixed in velocity space:
 

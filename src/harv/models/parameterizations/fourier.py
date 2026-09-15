@@ -62,17 +62,17 @@ from harv.custom_types import (
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
-from harv.models.priors.custom_priors import (
-    PeriodDependentKPrior,
-    PeriodDependentSemiMajorAxisPrior,
-)
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_period_prior,
     _make_pos_prior,
     _make_vsys_prior,
+)
+from harv.models.priors.callables import (
+    PeriodDependentKPrior,
+    PeriodDependentSemiMajorAxisPrior,
 )
 
 

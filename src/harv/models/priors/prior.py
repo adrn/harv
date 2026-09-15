@@ -26,7 +26,7 @@ from harv.models._helpers import (
 if TYPE_CHECKING:
     from harv.models.component import AbstractComponentModel
     from harv.models.joint import JointModel
-    from harv.models.parameterizations._base import AbstractParameterization
+    from harv.models.parameterizations.base import AbstractParameterization
     from harv.samplers.samples import Samples
 
 __all__ = ("HarvPrior",)

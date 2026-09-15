@@ -17,7 +17,7 @@ import harv.periodogram as hp
 from harv.data import SourceData
 from harv.distributions import QuantityDistribution as QD
 from harv.models.astrometry import GaiaAstrometryModel
-from harv.models.priors.custom_priors import (
+from harv.models.priors.callables import (
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
 )

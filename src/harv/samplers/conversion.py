@@ -21,7 +21,7 @@ from harv.kepler.orbits import (
     ecosw_esinw_from_ecc_omega,
     thiele_innes_from_campbell,
 )
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,

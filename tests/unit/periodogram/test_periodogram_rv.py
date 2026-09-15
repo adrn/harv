@@ -14,7 +14,7 @@ import harv.models as hm
 import harv.periodogram as hp
 from harv.data import RVData, SourceData
 from harv.distributions import QD
-from harv.models.priors.custom_priors import PeriodDependentKPrior
+from harv.models.priors.callables import PeriodDependentKPrior
 from harv.simulate import simulate_rv_sb1_data
 
 P_TRUE = Q(37.0, "day")

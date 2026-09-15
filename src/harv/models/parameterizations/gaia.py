@@ -30,9 +30,9 @@ from harv.kepler.orbits import (
 )
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_parallax_prior,
     _make_period_prior,
@@ -596,7 +596,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         - ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``: same defaults as
           :meth:`StandardGaiaAstrometry.default_prior`.
         - ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G``: each uses
-          :class:`~harv.models.priors.custom_priors.PeriodDependentSemiMajorAxisPrior`,
+          :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`,
           the same scaling as ``semi_major_axis`` in
           :class:`StandardGaiaAstrometry`.
 

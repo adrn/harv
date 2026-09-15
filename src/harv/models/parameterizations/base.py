@@ -75,7 +75,7 @@ class AbstractParameterization(eqx.Module):
         """Eccentricity implied by this parameterization, if it is not a parameter.
 
         ``LinearPriorCallable`` implementations such as
-        :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior` are written
+        :class:`~harv.models.priors.callables.PeriodDependentKPrior` are written
         against the standard parameter names, so a parameterization that encodes
         eccentricity indirectly must say how to recover it or those priors cannot be
         evaluated at all.

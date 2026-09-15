@@ -19,7 +19,7 @@ from unxt import AbstractQuantity, Q, ustrip
 from harv._optional_deps import get_arviz
 from harv.data.datasets import AbstractData
 from harv.kepler import masses
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,

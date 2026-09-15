@@ -11,7 +11,7 @@ from unxt.quantity import ustrip
 
 import harv.models as hm
 from harv.distributions import QD
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 from harv.models.priors import (
     HarvPrior,
@@ -19,7 +19,7 @@ from harv.models.priors import (
     PeriodDependentSemiMajorAxisPrior,
     default_sb2_prior,
 )
-from harv.models.priors.custom_priors import PeriodDependentKPrior
+from harv.models.priors.callables import PeriodDependentKPrior
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = {

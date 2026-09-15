@@ -11,7 +11,7 @@ from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
 )
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_period_prior,
     _make_rv_semiamp_prior,

@@ -25,9 +25,9 @@ from harv.distributions import QuantityDistribution
 from harv.kepler.orbits import rv_shape
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_period_prior,
     _make_rv_semiamp_prior,
@@ -225,7 +225,7 @@ class EcoswEsinwRV(AbstractParameterization):
         ``(eccentricity, arg_peri)``, so callable linear priors that depend on
         eccentricity -- the default ``rv_semiamp`` prior among them -- have no
         ``eccentricity`` key to read. See
-        :meth:`~harv.models.parameterizations._base.AbstractParameterization.derived_eccentricity`.
+        :meth:`~harv.models.parameterizations.base.AbstractParameterization.derived_eccentricity`.
         """
         return self.eccentricity(nonlinear_values)
 

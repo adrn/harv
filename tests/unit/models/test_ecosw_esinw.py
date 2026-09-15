@@ -300,7 +300,7 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
     """The default prior must survive being *evaluated*, not just constructed.
 
     ``EcoswEsinwRV.default_prior`` gives ``rv_semiamp`` a
-    :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior`, which reads
+    :class:`~harv.models.priors.callables.PeriodDependentKPrior`, which reads
     ``params["eccentricity"]`` -- a key this parameterization does not have, since it
     carries ``(ecosw, esinw)``. The existing prior tests only inspect keys, so the
     whole combination raised ``KeyError: 'eccentricity'`` on every sampler run.

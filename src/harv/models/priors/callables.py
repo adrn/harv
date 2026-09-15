@@ -51,7 +51,7 @@ class PeriodDependentKPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import PeriodDependentKPrior
+    >>> from harv.models.priors.callables import PeriodDependentKPrior
     >>> prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
     >>> prior.sigma_K0.unit
     Unit("km / s")
@@ -133,7 +133,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import PeriodDependentSemiMajorAxisPrior
+    >>> from harv.models.priors.callables import PeriodDependentSemiMajorAxisPrior
     >>> prior = PeriodDependentSemiMajorAxisPrior(
     ...     sigma_a0=Q(5.0, "AU"), period_ref=Q(1.0, "yr"),
     ... )
@@ -222,7 +222,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import ParallaxDependentProperMotionPrior
+    >>> from harv.models.priors.callables import ParallaxDependentProperMotionPrior
     >>> prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
     >>> prior.sigma_v0.unit
     Unit("km / s")

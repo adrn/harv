@@ -11,7 +11,7 @@ from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
 )
-from harv.models.priors.custom_priors import (
+from harv.models.priors.callables import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,

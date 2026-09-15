@@ -30,7 +30,7 @@ from harv.models._helpers import (
     _with_derived_eccentricity,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.stats import MarginalizedLinear
 from harv.stats.linear_op import to_linear_op
 
