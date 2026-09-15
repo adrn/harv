@@ -1321,7 +1321,7 @@ Fields:
 
 ______________________________________________________________________
 
-## Prior (`harv.samplers.HarvPrior`)
+## Prior (`harv.models.priors.HarvPrior`)
 
 `HarvPrior` holds numpyro distributions over all nonlinear parameters and a
 per-parameter linear prior. It is an `eqx.Module`.

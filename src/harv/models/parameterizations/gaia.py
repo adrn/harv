@@ -227,10 +227,49 @@ class StandardGaiaAstrometry(AbstractParameterization):
         period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
-        Same defaults as :meth:`harv.samplers.HarvPrior.default_gaia_astrometry`
-        (and ``default_gaia_astrometry`` is a thin wrapper around this method).
+        Nonlinear priors:
+
+        - ``period``: log-uniform on ``[period_min, period_max]``.
+        - ``eccentricity``: Kipping (2013) Beta prior.
+        - ``phase_peri``: ``Uniform(0, 1)``.
+        - ``arg_peri``, ``lon_asc_node``: ``Uniform(0, 2*pi)``.
+        - ``cos_i``: ``Uniform(-1, 1)`` -- isotropic orbit orientations.
+
+        Linear priors:
+
+        - ``ra0``, ``dec0``: ``Normal(0, sigma_pos)`` in mas.
+        - ``pmra``, ``pmdec``:
+          :class:`~harv.models.priors.callables.ParallaxDependentProperMotionPrior`,
+          which holds the prior fixed in velocity space.
+        - ``parallax``: ``HalfNormal(sigma_parallax)`` in mas.  Non-Gaussian, so
+          it is *sampled explicitly* rather than analytically marginalized --
+          the catalog parallax is derived from the same epoch data.
+        - ``semi_major_axis``:
+          :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`.
+
+        Parameters
+        ----------
+        period_min, period_max
+            Log-uniform period bounds.
+        sigma_a0
+            Angular semi-major axis scale at reference period ``period_ref``,
+            given as a physical length (e.g. ``Q(5.0, "AU")``).
+        sigma_parallax
+            Parallax prior scale (an angle).
+        sigma_pos
+            Reference-position (``ra0``/``dec0``) prior scale (an angle).
+        sigma_vtan
+            Tangential-velocity scale for the proper-motion prior (a speed, e.g.
+            ``Q(50.0, "km/s")``) -- *not* an angular speed; see
+            ``ParallaxDependentProperMotionPrior``.
+        period_ref
+            Reference period for the period-dependent ``semi_major_axis`` prior.
+        **kwargs
+            Per-parameter prior overrides or extension priors.  Supplying a
+            linear prior by name (e.g. ``parallax=QD(...)``) means its scale
+            argument must be omitted.
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
@@ -583,7 +622,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 

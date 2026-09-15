@@ -45,7 +45,7 @@ class AbstractParameterization(eqx.Module):
         return tuple(p for p in self.params() if p.linear)
 
     def default_prior(self, **kwargs: Any) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Each concrete parameterization overrides this with its own type-narrow
         signature for the required scale arguments (e.g. ``sigma_K0`` for RV,

@@ -126,10 +126,7 @@ class StandardRV(AbstractParameterization):
         period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
-
-        Same defaults as :meth:`harv.samplers.HarvPrior.default_rv` (and
-        ``default_rv`` is a thin wrapper around this method).
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Parameters
         ----------
@@ -277,7 +274,7 @@ class EcoswEsinwRV(AbstractParameterization):
         period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 
