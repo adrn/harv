@@ -345,11 +345,11 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
             ignore_non_finite=True,
         )
         assert samples.n_samples == 8
-        assert jnp.isfinite(samples.metadata["max_log_likelihood"])
+        assert jnp.isfinite(samples.metadata["max_ln_likelihood"])
 
     @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
     def test_unit_disk_violation_is_rejected_not_propagated(self):
-        """e >= 1 draws must not poison max_log_likelihood.
+        """e >= 1 draws must not poison max_ln_likelihood.
 
         Without ignore_non_finite a single NaN propagates through the max
         reduction, leaving every evidence statistic NaN. This pins the sharp edge
@@ -363,4 +363,4 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
 
         sampler = RejectionSampler(prior, model, batch_size=2000)
         without = sampler.run_with_samples(data, cache, top_k=8, seed=0)
-        assert not jnp.isfinite(without.metadata["max_log_likelihood"])
+        assert not jnp.isfinite(without.metadata["max_ln_likelihood"])

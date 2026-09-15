@@ -354,10 +354,8 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_priors=lp)
-        assert jnp.isfinite(log_lik), (
-            f"log_prob at true params is not finite: {log_lik}"
-        )
+        ln_lik = model.log_prob(nl, data, linear_priors=lp)
+        assert jnp.isfinite(ln_lik), f"log_prob at true params is not finite: {ln_lik}"
 
     def test_true_params_better_than_prior_median(self, astro_model_and_truth):
         """log_prob at true params >> median log_prob under the prior.

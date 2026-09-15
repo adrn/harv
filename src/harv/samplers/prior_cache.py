@@ -130,7 +130,7 @@ def make_prior_cache(
         nl_group = f.create_group("nonlinear")
         lin_group = f.create_group("linear")
         meta_group = f.create_group("metadata")
-        meta_group.attrs["data_type"] = type(model).__name__
+        meta_group.attrs["model_type"] = type(model).__name__
         meta_group.attrs["linear_extension_names"] = ",".join(
             probe.linear_extension_names
         )

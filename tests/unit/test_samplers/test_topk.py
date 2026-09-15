@@ -5,10 +5,10 @@ Covers:
 - :func:`harv.samplers.rejection._top_k_indices` — descending order, static
   output shape, non-finite handling, behaviour under ``jit`` / ``vmap``.
 - :attr:`Samples.weight` and ``samples["weight"]`` — reconstruction from
-  ``ln_likelihood`` plus the ``logZ_int`` / ``n_prior_samples`` evidence
+  ``ln_likelihood`` plus the ``ln_Z_int`` / ``n_prior_samples`` evidence
   metadata, and the guards for missing metadata and batched ``Samples``.
 - :func:`harv.samplers.rejection._prior_monte_carlo_evidence_stats` — the
-  ``logZ_int_ess`` Kish effective sample size against a direct computation.
+  ``ln_Z_int_ess`` Kish effective sample size against a direct computation.
 - :meth:`RejectionSampler.run` / :meth:`RejectionSampler.run_with_samples`
   with ``top_k=`` — fixed output length across datasets (vs. rejection's
   data-dependent length), ``weight_captured``, invariance to
@@ -72,9 +72,9 @@ def _weighted_samples(ln_lik: np.ndarray, *, n_prior: int | None = None) -> Samp
     return Samples(
         nonlinear={"period": Q(jnp.arange(len(ln_lik), dtype=ln_lik_arr.dtype), "day")},
         linear={},
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={
-            "logZ_int": float(stats["logZ_int"]),
+            "ln_Z_int": float(stats["ln_Z_int"]),
             "n_prior_samples": int(n_prior if n_prior is not None else len(ln_lik)),
         },
         ln_likelihood=ln_lik_arr,
@@ -134,29 +134,29 @@ class TestTopKIndices:
 
 
 class TestEvidenceStats:
-    """``logZ_int_ess`` is the Kish ESS of the importance weights."""
+    """``ln_Z_int_ess`` is the Kish ESS of the importance weights."""
 
     def test_ess_matches_direct_computation(self):
-        """``logZ_int_ess`` equals a plain ``(sum w)^2 / sum w^2`` on weights."""
+        """``ln_Z_int_ess`` equals a plain ``(sum w)^2 / sum w^2`` on weights."""
         with jax.enable_x64(new_val=True):
             ll = np.asarray(jr.normal(jr.key(3), (500,), dtype=jnp.float64)) * 3.0
             stats = _prior_monte_carlo_evidence_stats(jnp.asarray(ll))
             w = np.exp(ll - ll.max())
             expected = w.sum() ** 2 / (w**2).sum()
             np.testing.assert_allclose(
-                float(stats["logZ_int_ess"]), expected, rtol=1e-10
+                float(stats["ln_Z_int_ess"]), expected, rtol=1e-10
             )
 
     def test_flat_likelihood_gives_ess_equal_to_m(self):
         """Equal weights are the maximally efficient case: ESS == M."""
         stats = _prior_monte_carlo_evidence_stats(jnp.zeros(64))
-        np.testing.assert_allclose(float(stats["logZ_int_ess"]), 64.0, rtol=1e-5)
+        np.testing.assert_allclose(float(stats["ln_Z_int_ess"]), 64.0, rtol=1e-5)
 
     def test_delta_likelihood_gives_ess_of_one(self):
         """One sample dominating everything is the worst case: ESS == 1."""
         ll = jnp.asarray([0.0, *([-200.0] * 99)])
         stats = _prior_monte_carlo_evidence_stats(ll)
-        np.testing.assert_allclose(float(stats["logZ_int_ess"]), 1.0, rtol=1e-5)
+        np.testing.assert_allclose(float(stats["ln_Z_int_ess"]), 1.0, rtol=1e-5)
 
 
 class TestWeightDerivedKey:
@@ -184,7 +184,7 @@ class TestWeightDerivedKey:
             nonlinear={"period": Q(jnp.arange(50.0), "day")},
             linear={},
             metadata={
-                "logZ_int": float(stats["logZ_int"]),
+                "ln_Z_int": float(stats["ln_Z_int"]),
                 "n_prior_samples": 100,
             },
             ln_likelihood=jnp.asarray(ll),
@@ -222,7 +222,7 @@ class TestWeightDerivedKey:
         samples = Samples(
             nonlinear={"period": Q(jnp.arange(4.0), "day")},
             linear={},
-            metadata={"logZ_int": -1.0, "n_prior_samples": 4},
+            metadata={"ln_Z_int": -1.0, "n_prior_samples": 4},
         )
         with pytest.raises(ValueError, match="requires ln_likelihood"):
             _ = samples.weight
@@ -331,7 +331,7 @@ class TestRunWithTopK:
         )
         assert samples.ln_likelihood is not None
         assert samples.ln_prior is not None
-        for key in ("logZ_int", "logZ_int_ess", "n_prior_samples", "weight_captured"):
+        for key in ("ln_Z_int", "ln_Z_int_ess", "n_prior_samples", "weight_captured"):
             assert key in samples.metadata
 
     def test_weight_captured_equals_weight_sum(self):
@@ -363,7 +363,7 @@ class TestRunWithTopK:
         # Few, noisy observations -> broad likelihood -> large ESS.
         data = _rv_data(4, seed=7, noise=10.0)
         samples = sampler.run_with_samples(data, library, top_k=16, seed=0)
-        assert samples.metadata["logZ_int_ess"] > 100.0
+        assert samples.metadata["ln_Z_int_ess"] > 100.0
         assert samples.metadata["weight_captured"] < 0.5
 
     def test_selection_is_invariant_to_prior_order(self, tmp_path: Path):

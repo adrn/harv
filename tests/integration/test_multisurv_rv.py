@@ -53,8 +53,8 @@ class TestMultiSurveyModel:
             "phase_peri": 0.5,
             "arg_peri": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, stacked, linear_priors=linear_priors)
-        assert jnp.isfinite(log_lik)
+        ln_lik = model.log_prob(nl, stacked, linear_priors=linear_priors)
+        assert jnp.isfinite(ln_lik)
 
     def test_log_prob_higher_than_single_instrument(self):
         """Multi-survey model with correct offset is higher than without."""
@@ -202,7 +202,7 @@ class TestMultiSurveyRejectionSampler:
         assert jnp.all(jnp.abs(K_samples - K_true).value < 1.0)
 
         assert samples.n_samples > 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
 
     def test_samples_have_correct_keys(self, low_snr_data):
         """Samples object has all expected parameter keys, including offset."""
@@ -220,7 +220,7 @@ class TestMultiSurveyRejectionSampler:
         keys = samples.keys()
         for nonlinear_key in (
             "period",
-            "log_period",
+            "log10_period",
             "eccentricity",
             "phase_peri",
             "arg_peri",

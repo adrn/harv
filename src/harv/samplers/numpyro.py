@@ -210,7 +210,7 @@ def _build_extra_numpyro_model(
 
         if marginalized and requested_marginalized_names:
             numpyro.factor(
-                "log_lik",
+                "ln_lik",
                 component.log_prob(
                     nl_values,
                     data,
@@ -221,7 +221,7 @@ def _build_extra_numpyro_model(
             )
         else:
             numpyro.factor(
-                "log_lik",
+                "ln_lik",
                 component.log_prob(
                     nl_values,
                     data,
@@ -466,7 +466,7 @@ class NumpyroSampler(AbstractSampler):
         Uses :func:`numpyro.optim.Minimize` (BFGS via
         :func:`jax.scipy.optimize.minimize`) with an
         :class:`~numpyro.infer.autoguide.AutoDelta` guide to find the local mode of
-        ``log_prior + marginal_log_likelihood`` starting from each sample in
+        ``ln_prior + marginal ln_likelihood`` starting from each sample in
         *samples*. The returned :class:`~harv.samplers.samples.Samples` has the
         refined nonlinear values, linear values set to the conditional posterior
         **mean** (equal to the conditional MAP since the conditional is Gaussian)
@@ -815,7 +815,7 @@ class NumpyroSampler(AbstractSampler):
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_q),
-            data_type=type(model).__name__,
+            model_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
             ln_likelihood=ln_likelihood_arr,

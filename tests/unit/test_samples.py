@@ -34,7 +34,7 @@ def _make_astro_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="gaia_astro",
+        model_type="GaiaAstrometryModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -47,7 +47,7 @@ class TestSamplesCreation:
         samples = _make_astro_samples()
 
         assert samples.n_samples == 3
-        assert samples.data_type == "gaia_astro"
+        assert samples.model_type == "GaiaAstrometryModel"
 
     def test_n_samples_property(self):
         """Test that n_samples returns correct value."""
@@ -65,7 +65,7 @@ class TestSamplesCreation:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
 
@@ -95,14 +95,14 @@ class TestSamplesAccess:
         assert parallax.shape == (3,)
 
     def test_getitem_period_and_log_period(self, astrometry_samples):
-        """Test period (stored) and log_period (derived)."""
+        """Test period (stored) and log10_period (derived)."""
         period = astrometry_samples["period"]
         assert isinstance(period, Q)
         assert jnp.allclose(period.value, jnp.array([10.0, 100.0, 1000.0]))
 
-        log_period = astrometry_samples["log_period"]
+        log10_period = astrometry_samples["log10_period"]
         expected = jnp.array([1.0, 2.0, 3.0])
-        assert jnp.allclose(log_period, expected)
+        assert jnp.allclose(log10_period, expected)
 
     def test_getitem_invalid_key(self, astrometry_samples):
         """Test that invalid key raises KeyError."""
@@ -152,12 +152,12 @@ class TestSamplesAccess:
         keys = astrometry_samples.keys()
         assert isinstance(keys, list)
         assert "period" in keys
-        assert "log_period" in keys
+        assert "log10_period" in keys
         assert "eccentricity" in keys
         assert "parallax" in keys
         assert "semi_major_axis_AU" in keys
         # 6 nonlinear + 6 linear + 4 derived
-        # (log_period, time_peri, inclination, semi_major_axis_AU) = 16
+        # (log10_period, time_peri, inclination, semi_major_axis_AU) = 16
         assert len(keys) == 16
 
     def test_unit_conversion_angles(self):
@@ -177,7 +177,7 @@ class TestSamplesAccess:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
 
@@ -249,7 +249,7 @@ class TestMetadataView:
                 "rv_semiamp": Q(jnp.array([1.0]), "km/s"),
                 "v_sys": Q(jnp.array([2.0]), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={"time_ref": 50.0, "time_ref_unit": "day", "num_chains": 1},
         )
         time_ref = samples.meta["time_ref"]
@@ -277,13 +277,13 @@ class TestSamplesRepr:
         samples = Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
 
         repr_str = repr(samples)
         assert "n_samples=2" in repr_str
-        assert "data_type='rv'" in repr_str
+        assert "model_type='RVModel'" in repr_str
         assert "parameters=" in repr_str
 
 
@@ -318,7 +318,7 @@ class TestSamplesToArviz:
                 "rv_semiamp": Q(jnp.array([10.0, 11.0, 9.5, 10.5]), "km/s"),
                 "v_sys": Q(jnp.array([5.0, 5.1, 4.9, 5.2]), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
         idata = samples.to_arviz(["period", "eccentricity"])
@@ -340,7 +340,7 @@ class TestSamplesToArviz:
                 "rv_semiamp": Q(jnp.full(6, 10.0), "km/s"),
                 "v_sys": Q(jnp.full(6, 0.0), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={"num_chains": 2},
         )
         idata = samples.to_arviz(["period"])
@@ -361,7 +361,7 @@ class TestSamplesToArviz:
                 "rv_semiamp": Q(jnp.full(3, 10.0), "km/s"),
                 "v_sys": Q(jnp.full(3, 0.0), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={"num_chains": 2},  # 3 % 2 != 0
         )
         with pytest.warns(UserWarning, match="not divisible by num_chains"):
@@ -384,7 +384,7 @@ def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
             "rv_semiamp": Q(jnp.asarray(K_values), "km/s"),
             "v_sys": Q(jnp.full(n, 5.0), "km/s"),
         },
-        data_type="rv",
+        model_type="RVModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
@@ -409,7 +409,7 @@ def _make_astro_samples_with_signs(a_values: list[float]) -> Samples:
             "parallax": Q(jnp.full(n, 5.0), "mas"),
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
-        data_type="gaia_astro",
+        model_type="GaiaAstrometryModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
@@ -439,7 +439,7 @@ def _make_joint_samples_with_signs(
             "parallax": Q(jnp.full(n, 5.0), "mas"),
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
-        data_type="joint",
+        model_type="JointModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
@@ -569,7 +569,7 @@ class TestSamplesWrapAngles:
                 "rv_semiamp": Q(jnp.array([-1.0, 3.0]), "km/s"),
                 "v_sys": Q(jnp.array([2.0, 4.0]), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
         wrapped = samples.wrap_angles()
@@ -589,7 +589,7 @@ class TestSamplesWrapAngles:
                 "rv_semiamp": Q(jnp.array([-1.0, -1.0]), "km/s"),
                 "v_sys": Q(jnp.array([0.0, 0.0]), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={},
         )
         wrapped = samples.wrap_angles()
@@ -617,7 +617,7 @@ class TestSamplesWrapAngles:
                 "secondary.rv_semiamp": Q(jnp.array([+5.0, -3.0, +4.0, -2.0]), "km/s"),
                 "v_sys": Q(jnp.zeros(4), "km/s"),
             },
-            data_type="joint",
+            model_type="JointModel",
             metadata={},
         )
         wrapped = samples.wrap_angles()
@@ -661,7 +661,7 @@ class TestSamplesWrapAngles:
                 "semi_major_axis": Q(jnp.array([1.5, -2.0, 0.5]), "mas"),
                 "v_sys": Q(jnp.zeros(3), "km/s"),
             },
-            data_type="joint",
+            model_type="JointModel",
             metadata={},
         )
         wrapped = samples.wrap_angles()
@@ -762,7 +762,7 @@ class TestSamplesWrapAngles:
                 "secondary.rv_semiamp": Q(jnp.array([4.0, -3.0]), "km/s"),
                 "v_sys": Q(jnp.zeros(2), "km/s"),
             },
-            data_type="joint",
+            model_type="JointModel",
             metadata={},
         )
         with pytest.raises(NotImplementedError, match="multiple per-component"):
@@ -800,7 +800,7 @@ def _make_ti_samples(n: int = 4) -> Samples:
                 "pmdec": Q(jnp.zeros(n), "mas/yr"),
                 "parallax": Q(jnp.ones(n), "mas"),
             },
-            data_type="gaia_astro",
+            model_type="GaiaAstrometryModel",
             metadata={},
         ),
         a0,
@@ -894,7 +894,7 @@ def _make_rv_samples(
     K,
     *,
     with_logprobs: bool = False,
-    data_type: str = "rv",
+    model_type: str = "RVModel",
     linear_extension_names: tuple[str, ...] = (),
 ) -> Samples:
     """RV Samples with a given period vector and constant K."""
@@ -916,7 +916,7 @@ def _make_rv_samples(
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type=data_type,
+        model_type=model_type,
         metadata={"time_ref": 0.0},
         linear_extension_names=linear_extension_names,
         **kw,
@@ -943,7 +943,7 @@ class TestBatchedSamples:
                 "rv_semiamp": Q(jnp.zeros((3, 7)) + 5.0, "km/s"),
                 "v_sys": Q(jnp.zeros((3, 7)), "km/s"),
             },
-            data_type="rv",
+            model_type="RVModel",
             metadata={"time_ref": 0.0},
         )
         assert s.n_samples == 7
@@ -986,7 +986,7 @@ class TestPadAndStackSamples:
 
         assert str(stacked.nonlinear["period"].unit) == "d"
         assert str(stacked.linear["rv_semiamp"].unit) == "km / s"
-        assert stacked.data_type == "rv"
+        assert stacked.model_type == "RVModel"
         assert stacked.linear_extension_names == ("offset",)
         assert stacked.metadata == s1.metadata
 
@@ -1014,10 +1014,10 @@ class TestPadAndStackSamples:
         assert stacked.ln_likelihood is None
         assert stacked.ln_prior is None
 
-    def test_mismatched_data_type_raises(self):
-        s1 = _make_rv_samples([10.0], 5.0, data_type="rv")
-        s2 = _make_rv_samples([20.0], 6.0, data_type="gaia_astro")
-        with pytest.raises(ValueError, match="data_type"):
+    def test_mismatched_model_type_raises(self):
+        s1 = _make_rv_samples([10.0], 5.0, model_type="RVModel")
+        s2 = _make_rv_samples([20.0], 6.0, model_type="GaiaAstrometryModel")
+        with pytest.raises(ValueError, match="model_type"):
             pad_and_stack_samples([s1, s2])
 
     def test_mismatched_keys_raise(self):
@@ -1027,7 +1027,7 @@ class TestPadAndStackSamples:
         bad = Samples(
             nonlinear={k: v for k, v in s2.nonlinear.items() if k != "arg_peri"},
             linear=s2.linear,
-            data_type=s2.data_type,
+            model_type=s2.model_type,
             metadata=s2.metadata,
             linear_extension_names=s2.linear_extension_names,
         )
@@ -1043,7 +1043,7 @@ class TestPadAndStackSamples:
         bad = Samples(
             nonlinear=bad_nonlinear,
             linear=s2.linear,
-            data_type=s2.data_type,
+            model_type=s2.model_type,
             metadata=s2.metadata,
             linear_extension_names=s2.linear_extension_names,
         )

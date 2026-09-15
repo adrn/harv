@@ -606,7 +606,7 @@ bound orbit requires the *unit disk* (`e = sqrt(ecosw² + esinw²) < 1`). About 
 draws (`1 - π/4`) land outside it with `e >= 1`, where the default `rv_semiamp` prior's
 `(1 - e²)^(-1/2)` is `NaN`. Those draws must be rejected: pass
 `ignore_non_finite=True`, or a single `NaN` propagates through the `max` reduction and
-leaves `max_log_likelihood` and every evidence statistic `NaN`. See
+leaves `max_ln_likelihood` and every evidence statistic `NaN`. See
 `docs/sharp-bits.md`.
 
 ### `StandardGaiaAstrometry`
@@ -811,7 +811,7 @@ converts two parameter dictionaries and returns new `(nonlinear, linear)`
 dictionaries in the target representation.
 
 `Samples.convert_parameterization(source=..., target=...)` wraps the same logic and
-returns a new `Samples`, preserving `metadata`, `data_type`, and
+returns a new `Samples`, preserving `metadata`, `model_type`, and
 `linear_extension_names`.
 
 The first implementation supports **single-component** parameterizations only:
@@ -1591,13 +1591,13 @@ component name (e.g. `SourceData(rv=rv_data, astro=astro_data)`). Passing a bare
 
   | key | meaning |
   | --- | --- |
-  | `logZ_int` | log-evidence, `logsumexp(ln L) - ln M` |
-  | `logZ_int_mcse` | delta-method MC standard error on `logZ_int`, `sqrt(max(0, 1/ESS - 1/M))` |
-  | `logZ_int_ess` | Kish effective sample size of the importance weights, `(Σ L)² / Σ L²` |
-  | `max_log_likelihood` | `max(ln L)` over the library |
+  | `ln_Z_int` | log-evidence, `logsumexp(ln L) - ln M` |
+  | `ln_Z_int_mcse` | delta-method MC standard error on `ln_Z_int`, `sqrt(max(0, 1/ESS - 1/M))` |
+  | `ln_Z_int_ess` | Kish effective sample size of the importance weights, `(Σ L)² / Σ L²` |
+  | `max_ln_likelihood` | `max(ln L)` over the library |
   | `n_prior_samples` | library size `M` |
 
-  `logZ_int_ess` is the diagnostic for whether the prior library resolved this
+  `ln_Z_int_ess` is the diagnostic for whether the prior library resolved this
   posterior at all: `ESS ≲ 10` means it did not, and the result is a
   localization rather than a posterior. The under-resolution warning is
   emitted regardless of this flag; see "Interpreting acceptance" below.
@@ -1615,28 +1615,28 @@ poor fits simply because it never saw a good one. Concentrating the prior (e.g.
 a periodogram-informed period prior) then *finds* the peak, raising `max L` — so
 it can report **fewer** accepted samples against the correct (higher) bar even
 though it resolved the posterior far better. **Comparing raw accept counts
-across priors is misleading until `max_log_likelihood` has converged.**
+across priors is misleading until `max_ln_likelihood` has converged.**
 
 The reliable diagnostic is the evidence effective sample size
-(`logZ_int_ess = (Σ L)² / Σ L²`): the number of prior draws that effectively
+(`ln_Z_int_ess = (Σ L)² / Σ L²`): the number of prior draws that effectively
 contribute to the marginal-likelihood integral. When it is O(1), the integral —
 and the `max`-normalization — is dominated by a single draw, so the run is
 under-resolved.
 
 - `run(...)` and `run_with_samples(...)` emit a `UserWarning` when
-  `logZ_int_ess < RejectionSampler.min_evidence_ess` (the evidence is dominated
+  `ln_Z_int_ess < RejectionSampler.min_evidence_ess` (the evidence is dominated
   by that few effective draws), regardless of `return_evidence_stats`. It is a
   filterable `UserWarning`; silence it in population loops via
   `warnings.catch_warnings`.
 - `Samples.acceptance_diagnostics(*, min_evidence_ess=MIN_EVIDENCE_ESS)`
   (requires `return_evidence_stats=True`) returns `{n_prior_samples,
-  n_accepted, evidence_ess, min_evidence_ess, max_log_likelihood, logZ_int,
+  n_accepted, evidence_ess, min_evidence_ess, max_ln_likelihood, ln_Z_int,
   well_resolved, message}` for inspection.
 
 **The threshold is a convention, and is user-controlled.** There is no sharp
 transition to calibrate against; `harv.samplers.samples.MIN_EVIDENCE_ESS = 3.0`
-is the default because it is where the delta-method MC error on `logZ_int`
-(`logZ_int_mcse = sqrt(1/ESS − 1/M)`) reaches ≈0.6 nats — the log-evidence
+is the default because it is where the delta-method MC error on `ln_Z_int`
+(`ln_Z_int_mcse = sqrt(1/ESS − 1/M)`) reaches ≈0.6 nats — the log-evidence
 uncertain at the factor-of-two level. Set it per sampler
 (`RejectionSampler(prior, model, min_evidence_ess=10.0)`, a static field) or
 per call (`samples.acceptance_diagnostics(min_evidence_ess=10.0)`); `0.0`
@@ -1644,7 +1644,7 @@ silences the check and `float("inf")` always flags.
 
 **Recommended workflow for peaked likelihoods:** use the rejection sampler
 (ideally with a periodogram-informed period prior) to *locate* the mode — check
-that `max_log_likelihood` stops rising as `n_prior_samples` increases and across
+that `max_ln_likelihood` stops rising as `n_prior_samples` increases and across
 seeds — then continue with `NumpyroSampler(prior, model).run(data,
 init_samples=...)` to draw the posterior. In this regime the rejection stage is
 a mode-finder, not a posterior sampler: even with the period pinned, the joint
@@ -1666,7 +1666,7 @@ gather is by index, so the `jax.vmap` in the linear-parameter step sees one shap
 forever.
 
 `top_k` forces `return_logprobs=True` and `return_evidence_stats=True`, because
-`Samples["weight"]` is reconstructed from `ln_likelihood` plus the `logZ_int` and
+`Samples["weight"]` is reconstructed from `ln_likelihood` plus the `ln_Z_int` and
 `n_prior_samples` metadata. It adds one further metadata key:
 
 | key | meaning |
@@ -1676,7 +1676,7 @@ forever.
 Two diagnostics are reported because they answer different questions, and a
 system can pass one while failing the other:
 
-- `logZ_int_ess` — *did the library sample this posterior?*
+- `ln_Z_int_ess` — *did the library sample this posterior?*
 - `weight_captured` — *was `k` big enough?* ~1.0 means ample; 0.1 means 90% of
   the posterior mass was truncated away.
 
@@ -1897,7 +1897,7 @@ Stores the posterior samples returned by `RejectionSampler.run()` or
 | `linear`                 | `dict[str, Q]`             | Linear parameter samples with units                          |
 | `metadata`               | `dict[str, Any]` (static)  | JSON-friendly scalars only — see invariant below             |
 | `linear_extension_names` | `tuple[str, ...]` (static) | Linear extension param names (offsets, trends, etc.)         |
-| `data_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
+| `model_type`              | `str` (static)             | Model class name (e.g. `"RVModel"`, `"GaiaAstrometryModel"`) |
 | `ln_likelihood`          | `jax.Array \| None`        | Per-sample marginal log-likelihood (see `return_logprobs`)   |
 | `ln_prior`               | `jax.Array \| None`        | Per-sample nonlinear-prior log-density (see `return_logprobs`) |
 
@@ -1924,7 +1924,7 @@ shape, `to_hdf5` writes the dict entries one-for-one as HDF5 attrs, and
 - `time_ref` (`float`) + `time_ref_unit` (`str`) -- the reference epoch in the
   source data's time unit.
 - `num_chains` (`int`) -- written by `NumpyroSampler.run()`.
-- `logZ_int`, `logZ_int_mcse`, `logZ_int_ess`, `max_log_likelihood` (`float`)
+- `ln_Z_int`, `ln_Z_int_mcse`, `ln_Z_int_ess`, `max_ln_likelihood` (`float`)
   and `n_prior_samples` (`int`) -- written by `RejectionSampler` when
   `return_evidence_stats=True` or `top_k` is set. See §`run` method.
 - `weight_captured` (`float`) -- written by `RejectionSampler` when `top_k` is
@@ -1951,7 +1951,7 @@ to construct a new `Samples` with the same metadata).
   with units
 - Linear params (`"rv_semiamp"`, `"v_sys"`, `"ra0"`, etc.) → `Q` with units
 - Derived keys:
-  - `"log_period"` → dimensionless array (`log10(period in data time units)`)
+  - `"log10_period"` → dimensionless array (`log10(period in data time units)`)
   - `"time_peri"` → `Q` (derived from `phase_peri * period + time_ref`)
   - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
   - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
@@ -1972,7 +1972,7 @@ samples[mask]    # boolean mask
 ```
 
 Integer keys are promoted to length-1 slices so all arrays remain at least 1-d.
-Static fields (`data_type`, `metadata`, `linear_extension_names`) are passed
+Static fields (`model_type`, `metadata`, `linear_extension_names`) are passed
 through unchanged.
 
 ### Extra parameter columns
@@ -2005,7 +2005,7 @@ the leading shape is exposed via `batch_shape`.
 combines a sequence of per-entity `Samples` (each with 1-D parameter arrays of
 possibly differing length) into one batched `Samples` of shape `(N, K_max)`
 plus a `(N, K_max)` boolean mask that is `True` at non-padded positions. All
-inputs must share `data_type`, `linear_extension_names`, and the set of
+inputs must share `model_type`, `linear_extension_names`, and the set of
 nonlinear / linear keys with matching units per key (mismatches raise
 `ValueError`). `ln_likelihood` and `ln_prior` are stacked iff every input
 carries them, with `-inf` as the log-space padding sentinel; otherwise the
@@ -2047,7 +2047,7 @@ the first entry.
 - `weight -> jax.Array` — per-sample importance weight,
   `exp(ln_likelihood - logsumexp(ln L))`, normalized over the **full** prior
   library. Reconstructed rather than stored: the normalization is
-  `logZ_int + ln(n_prior_samples)`, both from the evidence metadata that `top_k`
+  `ln_Z_int + ln(n_prior_samples)`, both from the evidence metadata that `top_k`
   / `return_evidence_stats=True` writes. Because the normalization spans the
   whole library, `weight.sum()` is the posterior mass these samples capture and
   is **less than 1** whenever samples were truncated, so expectations need
@@ -2118,17 +2118,17 @@ normally.
 ### `LogGridDensity`
 
 `harv.stats.LogGridDensity` is a numpyro `Distribution` over `x > 0` whose pdf
-is **piecewise-linear in `u = ln x`** on fixed knots `(ln_grid, log_density)`.
+is **piecewise-linear in `u = ln x`** on fixed knots `(ln_grid, ln_density)`.
 It is the backbone of the periodogram prior builders (see "Prior builders"),
 but has nothing periodogram-specific in it:
 
-- `log_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
+- `ln_density` is the *unnormalized* log-density w.r.t. `d(ln x)`;
   normalization is trapezoid-exact. Zero density (`-inf` log-density) knots
   are allowed, and `arg_constraints` admits them (`less_than(inf)`, not
   `real_vector`, which rejects every non-finite value) so the class validates
   under `numpyro.enable_validation()`.
 - `log_prob(x)` is the density **per unit x** (same convention as
-  `dist.LogUniform`); `log_prob_ln(x) = log_prob(x) + ln x` is the density per
+  `dist.LogUniform`); `ln_prob_ln(x) = log_prob(x) + ln x` is the density per
   unit `ln x` and is invariant under a change of x's unit.
 - `cdf` / `icdf` are closed-form per segment (piecewise-quadratic CDF;
   "citardauq" quadratic inversion, stable as the slope → 0); `sample` is
@@ -2538,7 +2538,7 @@ exactly (its data-dependence does not bias the estimator). Requirements:
    through `pad_and_stack_samples` into the population step. It works for any scalar-unit period prior, including
    `QD(LogUniform, ...)` for the classic shared-prior case.
 1. **Interim evidence** — the per-source `Z_int,n` from
-   `run(..., return_evidence_stats=True)` (`metadata["logZ_int"]`) enters the
+   `run(..., return_evidence_stats=True)` (`metadata["ln_Z_int"]`) enters the
    population likelihood as usual; nothing changes with per-source priors.
 
 **Measure convention:** the stored `ln_interim_period_prior` is the log-density
@@ -2794,12 +2794,12 @@ There are two consequences:
    `M = 1e7` that is roughly 2.1M dead draws.
 1. The default `rv_semiamp` prior (`PeriodDependentKPrior`) scales as
    `(1 - e**2)**(-1/2)`, which is `NaN` for `e >= 1`. That `NaN` propagates through
-   the `max` reduction the rejection step normalizes by, so `max_log_likelihood`,
-   `logZ_int`, and `logZ_int_ess` all return `NaN` and no samples are accepted, with
+   the `max` reduction the rejection step normalizes by, so `max_ln_likelihood`,
+   `ln_Z_int`, and `ln_Z_int_ess` all return `NaN` and no samples are accepted, with
    no error raised.
 
 `ignore_non_finite=True` converts those draws into ordinary rejections and restores
-finite evidence statistics: measured, `max_log_likelihood` is `nan` without the flag
+finite evidence statistics: measured, `max_ln_likelihood` is `nan` without the flag
 and `-1709.60` with it. See §`EcoswEsinwRV` and `docs/sharp-bits.md`. The flag removes
 the silent-`NaN` behavior, not the wasted 21%.
 

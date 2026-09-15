@@ -114,7 +114,7 @@ posterior samples.
 
 ### ESS is a resolution diagnostic, not a quality metric
 
-`logZ_int_ess` is the effective sample size of the importance weights.
+`ln_Z_int_ess` is the effective sample size of the importance weights.
 It counts how many library draws actually contribute to the evidence integral, which
 answers one question: did the library resolve this posterior?
 It does not say whether the orbit is well determined itself.

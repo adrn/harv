@@ -64,7 +64,7 @@ def rv_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -91,7 +91,7 @@ def astro_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
+        model_type="GaiaAstrometryModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -120,7 +120,7 @@ def combined_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="JointModel",
+        model_type="JointModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -139,7 +139,7 @@ def empty_rv_samples() -> Samples:
             "rv_semiamp": Q(jnp.array([]), "km/s"),
             "v_sys": Q(jnp.array([]), "km/s"),
         },
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={},
     )
 
@@ -359,7 +359,7 @@ class TestNumpyroSamplerRun:
         assert result.n_samples == 10  # 2 chains x 5 samples
 
     def test_data_type_preserved(self, rv_samples, rv_sampler_and_data):
-        """Output data_type matches the model's data_type."""
+        """Output model_type matches the model's model_type."""
         sampler, data = rv_sampler_and_data
         result = sampler.run(
             data,
@@ -370,7 +370,7 @@ class TestNumpyroSamplerRun:
             num_samples=5,
             chain_method="sequential",
         )
-        assert result.data_type == "RVModel"
+        assert result.model_type == "RVModel"
 
     def test_return_logprobs(self, rv_samples, rv_sampler_and_data):
         """return_logprobs populates ln_likelihood / ln_prior on the output."""
@@ -771,7 +771,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         return Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="combined",
+            model_type="combined",
             metadata={"time_ref": 0.0},
         )
 
@@ -955,7 +955,7 @@ class TestPlotRV:
         jitter_samples = Samples(
             nonlinear={**rv_samples.nonlinear, "jitter": Q(jnp.ones(N), "km/s")},
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
 
@@ -999,7 +999,7 @@ class TestPlotRV:
         samples = Samples(
             nonlinear=rv_samples.nonlinear,
             linear=linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         ax = plot_rv(samples, SystemData(**rv_datasets), n_samples=1)
@@ -1021,7 +1021,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1070,7 +1070,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1114,7 +1114,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1159,7 +1159,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1194,7 +1194,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1251,7 +1251,7 @@ class TestPlotRV:
                 "gp_sigma": Q(jnp.ones(N) * 1.0, "km/s"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1321,7 +1321,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
 
@@ -1525,7 +1525,7 @@ class TestPlotGaiaAstrometry:
                 "trend_ra_1": Q(jnp.array([0.5]), "mas"),
                 "trend_dec_1": Q(jnp.array([-0.3]), "mas"),
             },
-            data_type=sample.data_type,
+            model_type=sample.model_type,
             metadata=sample.metadata,
         )
         fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
@@ -1547,7 +1547,7 @@ class TestPlotGaiaAstrometry:
         sample_with_jitter = Samples(
             nonlinear={**sample.nonlinear, "jitter": Q(jnp.array([0.5]), "mas")},
             linear=sample.linear,
-            data_type=sample.data_type,
+            model_type=sample.model_type,
             metadata=sample.metadata,
         )
         fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
@@ -1647,7 +1647,7 @@ def ti_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
+        model_type="GaiaAstrometryModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -1723,7 +1723,7 @@ class TestThieleInnesToCampbell:
                 "ti_A": Q(jnp.zeros(3), "mas"),
                 "ti_B": Q(jnp.zeros(3), "mas"),
             },
-            data_type="GaiaAstrometryModel",
+            model_type="GaiaAstrometryModel",
         )
         with pytest.raises(RuntimeError, match="ti_"):
             samples.thiele_innes_to_campbell()

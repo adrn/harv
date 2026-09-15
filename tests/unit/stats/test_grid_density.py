@@ -18,8 +18,8 @@ from harv.stats import LogGridDensity
 def _random_grid_density(seed: int, n: int) -> LogGridDensity:
     rng = np.random.default_rng(seed)
     ln_grid = jnp.asarray(np.sort(rng.uniform(-1.0, 6.0, size=n)))
-    log_density = jnp.asarray(rng.normal(0.0, 2.0, size=n))
-    return LogGridDensity(ln_grid, log_density)
+    ln_density = jnp.asarray(rng.normal(0.0, 2.0, size=n))
+    return LogGridDensity(ln_grid, ln_density)
 
 
 class TestConstruction:
@@ -65,14 +65,14 @@ class TestDensity:
         hi = float(d.high)
         vals = jnp.array([-1.0, 0.0, lo * 0.5, hi * 2.0])
         assert bool(jnp.all(jnp.isneginf(d.log_prob(vals))))
-        assert bool(jnp.all(jnp.isneginf(d.log_prob_ln(vals))))
+        assert bool(jnp.all(jnp.isneginf(d.ln_prob_ln(vals))))
         assert jnp.allclose(d.cdf(jnp.array([0.0, lo * 0.5])), 0.0)
         assert jnp.allclose(d.cdf(jnp.array([hi * 2.0])), 1.0)
 
     def test_log_prob_ln_identity(self):
         d = _random_grid_density(3, 16)
         x = jnp.exp(jnp.linspace(d.ln_grid[0] + 1e-3, d.ln_grid[-1] - 1e-3, 57))
-        assert jnp.allclose(d.log_prob_ln(x), d.log_prob(x) + jnp.log(x), atol=1e-6)
+        assert jnp.allclose(d.ln_prob_ln(x), d.log_prob(x) + jnp.log(x), atol=1e-6)
 
     def test_knot_values(self):
         """log_prob at the knots equals the normalized knot density."""
@@ -189,9 +189,9 @@ class TestPriorIntegration:
         )
         # Grid prior peaked near the true period, with broad support:
         ln_grid = jnp.log(jnp.geomspace(20.0, 500.0, 101))
-        log_density = -0.5 * ((ln_grid - jnp.log(100.0)) / 0.1) ** 2
+        ln_density = -0.5 * ((ln_grid - jnp.log(100.0)) / 0.1) ** 2
         prior = hm.StandardRV().default_prior(
-            period=QD(LogGridDensity(ln_grid, log_density), "day"),
+            period=QD(LogGridDensity(ln_grid, ln_density), "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
@@ -207,19 +207,19 @@ class TestArgConstraints:
 
     def test_minus_inf_knots_pass_validation(self):
         ln_grid = jnp.log(jnp.array([1.0, 2.0, 4.0, 8.0]))
-        log_density = jnp.array([-jnp.inf, 0.0, 0.5, -jnp.inf])
-        d = LogGridDensity(ln_grid, log_density, validate_args=True)
+        ln_density = jnp.array([-jnp.inf, 0.0, 0.5, -jnp.inf])
+        d = LogGridDensity(ln_grid, ln_density, validate_args=True)
         # The zero-density knots really are zero density.
         assert np.isneginf(float(d.log_prob(1.0)))
         assert np.isfinite(float(d.log_prob(2.0)))
 
     @pytest.mark.parametrize("bad", [jnp.inf, jnp.nan])
     def test_constraint_rejects_plus_inf_and_nan(self, bad):
-        constraint = LogGridDensity.arg_constraints["log_density"]
+        constraint = LogGridDensity.arg_constraints["ln_density"]
         assert not bool(constraint(jnp.array([0.0, bad, 0.5])))
 
     def test_constraint_accepts_minus_inf_and_keeps_event_dim(self):
-        constraint = LogGridDensity.arg_constraints["log_density"]
+        constraint = LogGridDensity.arg_constraints["ln_density"]
         assert bool(constraint(jnp.array([0.0, -jnp.inf, 0.5])))
         assert constraint.event_dim == 1
 
@@ -229,6 +229,6 @@ class TestArgConstraints:
         density = np.zeros(64)
         density[20:30] = 1.0
         with np.errstate(divide="ignore"):
-            log_density = jnp.asarray(np.log(density))
-        d = LogGridDensity(ln_grid, log_density, validate_args=True)
+            ln_density = jnp.asarray(np.log(density))
+        d = LogGridDensity(ln_grid, ln_density, validate_args=True)
         assert np.isfinite(float(d.log_prob(float(np.exp(ln_grid[25])))))

@@ -957,7 +957,7 @@ def _build_marginalized_component_model(
             explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
         numpyro.factor(
-            "log_lik",
+            "ln_lik",
             component.log_prob(
                 nl_values,
                 data,
@@ -1044,7 +1044,7 @@ def _build_full_component_model(  # noqa: C901
 
         # Evaluate explicit log-likelihood
         numpyro.factor(
-            "log_lik",
+            "ln_lik",
             component._log_prob_explicit(nl_values, linear_values, data),
         )
 

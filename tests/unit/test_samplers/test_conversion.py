@@ -400,7 +400,7 @@ class TestSamplesWrapper:
         samples = Samples(
             nonlinear=_rv_nonlinear(),
             linear={**_rv_linear(), "jitter": Q(jnp.array([0.2, 0.3]), "km/s")},
-            data_type="RVModel",
+            model_type="RVModel",
             metadata={"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 2},
             linear_extension_names=("jitter",),
         )
@@ -410,7 +410,7 @@ class TestSamplesWrapper:
         assert isinstance(converted, Samples)
         assert set(converted.nonlinear) == {"period", "ecosw", "esinw", "phase_peri"}
         assert "jitter" in converted.linear
-        assert converted.data_type == "RVModel"
+        assert converted.model_type == "RVModel"
         assert converted.metadata == samples.metadata
         assert converted.linear_extension_names == ("jitter",)
 
@@ -453,7 +453,7 @@ class TestSamplesWrapper:
                 "ti_F": ti_F,
                 "ti_G": ti_G,
             },
-            data_type="gaia_astro",
+            model_type="gaia_astro",
             metadata={},
         )
         converted = samples.convert_parameterization(
@@ -471,7 +471,7 @@ class TestSamplesWrapper:
                 "primary.rv_semiamp": Q(jnp.array([5.0, 6.0]), "km/s"),
                 "v_sys": Q(jnp.array([0.0, 1.0]), "km/s"),
             },
-            data_type="JointModel",
+            model_type="JointModel",
             metadata={},
         )
         with pytest.raises(NotImplementedError, match="single-component"):

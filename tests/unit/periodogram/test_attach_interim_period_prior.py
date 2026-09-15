@@ -21,15 +21,15 @@ def _make_samples(periods) -> Samples:
             "phase_peri": Q(jnp.linspace(0.1, 0.9, n), ""),
         },
         linear={"rv_semiamp": Q(jnp.ones(n), "km/s")},
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
 def _grid_prior() -> QD:
     ln_grid = jnp.log(jnp.geomspace(10.0, 1000.0, 32))
-    log_density = -0.5 * ((ln_grid - jnp.log(100.0)) / 0.3) ** 2
-    return QD(LogGridDensity(ln_grid, log_density), "day")
+    ln_density = -0.5 * ((ln_grid - jnp.log(100.0)) / 0.3) ** 2
+    return QD(LogGridDensity(ln_grid, ln_density), "day")
 
 
 class TestAttach:

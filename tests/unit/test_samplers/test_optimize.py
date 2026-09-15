@@ -91,7 +91,7 @@ def off_mode_sample() -> Samples:
             "rv_semiamp": Q(jnp.array([7.0]), "km/s"),
             "v_sys": Q(jnp.array([0.5]), "km/s"),
         },
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -121,7 +121,7 @@ def rv_case(rv_data_and_truth):
             "rv_semiamp": Q(jnp.array([7.0, 9.0]), "km/s"),
             "v_sys": Q(jnp.array([0.5, -0.8]), "km/s"),
         },
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0},
     )
     refined = sampler.optimize(warm, rv_data_and_truth, seed=0)
@@ -261,7 +261,7 @@ class TestNumpyroSamplerOptimize:
                 "rv_semiamp": Q(jnp.array([]), "km/s"),
                 "v_sys": Q(jnp.array([]), "km/s"),
             },
-            data_type="RVModel",
+            model_type="RVModel",
             metadata={},
         )
         with pytest.raises(ValueError, match="no samples"):
@@ -342,7 +342,7 @@ def joint_off_mode_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="JointModel",
+        model_type="JointModel",
         metadata={"time_ref": 0.0},
     )
 
@@ -500,7 +500,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         return Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="GaiaAstrometryModel",
+            model_type="GaiaAstrometryModel",
             metadata={"time_ref": 0.0},
         )
 
@@ -720,7 +720,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
                 "ti_F": Q(jnp.array([float(t["ti_F"].value) * 1.05]), "mas"),
                 "ti_G": Q(jnp.array([float(t["ti_G"].value) * 1.05]), "mas"),
             },
-            data_type="GaiaAstrometryModel",
+            model_type="GaiaAstrometryModel",
             metadata={"time_ref": 0.0},
         )
 

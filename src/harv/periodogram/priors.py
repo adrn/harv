@@ -92,7 +92,7 @@ def _assemble_knots(
     ln_grid = np.log(p_grid)
 
     # A non-finite Delta makes every downstream density meaningless, and would
-    # otherwise surface as an opaque "log_density must have positive total mass"
+    # otherwise surface as an opaque "ln_density must have positive total mass"
     # from LogGridDensity. The usual cause is float32: on high-SNR data the
     # marginal log-likelihoods reach O(1e4) nats and the periodogram overflows.
     if not np.all(np.isfinite(delta)):
@@ -156,10 +156,10 @@ def _to_prior(
     ln_period: np.ndarray, density: np.ndarray, unit: str
 ) -> QuantityDistribution:
     """Wrap knots and a density per unit ln-period as a period prior."""
-    with np.errstate(divide="ignore"):  # density == 0 -> log_density == -inf is valid
-        log_density = np.log(density)
+    with np.errstate(divide="ignore"):  # density == 0 -> ln_density == -inf is valid
+        ln_density = np.log(density)
     return QuantityDistribution(
-        LogGridDensity(jnp.asarray(ln_period), jnp.asarray(log_density)), unit
+        LogGridDensity(jnp.asarray(ln_period), jnp.asarray(ln_density)), unit
     )
 
 
@@ -404,7 +404,7 @@ def attach_interim_period_prior(
     return Samples(
         nonlinear={**samples.nonlinear, name: Q(ln_interim, "")},
         linear=samples.linear,
-        data_type=samples.data_type,
+        model_type=samples.model_type,
         metadata=samples.metadata,
         linear_extension_names=samples.linear_extension_names,
         ln_likelihood=samples.ln_likelihood,

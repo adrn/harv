@@ -96,7 +96,7 @@ class TestBasicAPI:
         samples = sampler.run(data, n_prior_samples=10_000, seed=42)
 
         assert samples.n_samples > 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
         period = samples["period"]
         assert period.unit == "day"
@@ -189,10 +189,12 @@ class TestSamplesContainer:
         assert "semi_major_axis" in samples
 
         # Test derived quantity access
-        assert "log_period" in samples
+        assert "log10_period" in samples
         period = samples["period"]
-        log_period = samples["log_period"]
-        np.testing.assert_allclose(period.to_value("day"), 10.0**log_period, rtol=1e-5)
+        log10_period = samples["log10_period"]
+        np.testing.assert_allclose(
+            period.to_value("day"), 10.0**log10_period, rtol=1e-5
+        )
 
     def test_unit_conversion(self):
         """Test that units are properly restored when accessing parameters."""
@@ -234,9 +236,9 @@ class TestSamplesContainer:
             if hasattr(val, "unit"):
                 assert val.unit == ""
 
-        log_period = samples["log_period"]
-        if hasattr(log_period, "unit"):
-            assert log_period.unit == ""
+        log10_period = samples["log10_period"]
+        if hasattr(log10_period, "unit"):
+            assert log10_period.unit == ""
 
     def test_len_and_n_samples(self):
         """Test len() and n_samples property."""
@@ -258,7 +260,7 @@ class TestSamplesContainer:
         repr_str = repr(samples)
         assert "Samples(" in repr_str
         assert "n_samples=" in repr_str
-        assert "data_type='GaiaAstrometryModel'" in repr_str
+        assert "model_type='GaiaAstrometryModel'" in repr_str
         assert "parameters=" in repr_str
 
 
@@ -293,7 +295,7 @@ class TestEdgeCases:
         samples = sampler.run(data, n_prior_samples=10, seed=62)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
 
 class TestAcceptanceRate:

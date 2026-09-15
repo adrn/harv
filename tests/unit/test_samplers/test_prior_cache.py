@@ -3,7 +3,7 @@
 Covers:
 
 - :meth:`HarvPrior.sample` — keys, shapes, units, optional ``ln_prior``,
-  ``data_type`` propagation, JointModel support.
+  ``model_type`` propagation, JointModel support.
 - :func:`make_prior_cache` — chunked HDF5 write with round-trip via
   :meth:`Samples.from_hdf5`.
 - :meth:`RejectionSampler.run_with_samples` — in-memory and HDF5-path
@@ -64,7 +64,7 @@ class TestHarvPriorSample:
         samples = _rv_prior().sample(jr.key(0), 100, model=RVModel())
         assert isinstance(samples, Samples)
         assert samples.n_samples == 100
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
 
     def test_keys_match_base_nonlinear(self):
         samples = _rv_prior().sample(jr.key(0), 64, model=RVModel())
@@ -132,7 +132,7 @@ class TestHarvPriorSample:
         )
         joint = JointModel.for_sb2(prior)
         samples = prior.sample(jr.key(0), 16, model=joint)
-        assert samples.data_type == "JointModel"
+        assert samples.model_type == "JointModel"
         assert samples.n_samples == 16
 
 
@@ -157,7 +157,7 @@ class TestMakePriorCache:
             "arg_peri",
         }
         assert str(loaded.nonlinear["period"].unit) == "d"
-        assert loaded.data_type == "RVModel"
+        assert loaded.model_type == "RVModel"
 
     def test_writes_ln_prior_when_requested(self, tmp_path: Path):
         path = tmp_path / "cache.h5"
@@ -290,7 +290,7 @@ class TestRunWithSamplesInMemory:
         broken = Samples(
             nonlinear=broken_nonlinear,
             linear=pri.linear,
-            data_type=pri.data_type,
+            model_type=pri.model_type,
             linear_extension_names=pri.linear_extension_names,
         )
         with pytest.raises(ValueError, match="Missing"):

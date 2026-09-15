@@ -133,8 +133,8 @@ The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns `Na
 there.
 
 `NaN` does not behave like a rejected sample. It propagates through the `max` reduction
-the rejection step normalizes by, so `max_log_likelihood`, `logZ_int`, and
-`logZ_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
+the rejection step normalizes by, so `max_ln_likelihood`, `ln_Z_int`, and
+`ln_Z_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
 raised. Pass `ignore_non_finite=True` so those draws are treated as rejections:
 
 ```python

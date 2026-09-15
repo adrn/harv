@@ -77,7 +77,7 @@ class TestTempered:
         floor = 0.15
         prior = hp.tempered_period_prior(_fake_result(), beta=1.0, floor=floor)
         x = jnp.geomspace(P_LO * 1.01, P_HI * 0.99, 501)
-        density_ln = jnp.exp(prior.distribution.log_prob_ln(x))
+        density_ln = jnp.exp(prior.distribution.ln_prob_ln(x))
         bound = floor / np.log(P_HI / P_LO)
         assert bool(jnp.all(density_ln >= bound * (1.0 - 1e-3)))
 

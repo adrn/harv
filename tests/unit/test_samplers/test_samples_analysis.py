@@ -40,7 +40,7 @@ def _rv_samples(n=120, *, period=None, with_logprobs=False, seed=0):
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         **kwargs,
     )
@@ -68,7 +68,7 @@ def _astro_samples(n=60, seed=1):
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
+        model_type="GaiaAstrometryModel",
         metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
@@ -151,7 +151,7 @@ class TestLogProbStorage:
         s = Samples(
             nonlinear=base.nonlinear,
             linear=base.linear,
-            data_type=base.data_type,
+            model_type=base.model_type,
             metadata={"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 4},
         )
         path = tmp_path / "samples_metadata.h5"
@@ -238,7 +238,7 @@ class TestSingleComponentGuard:
         s = Samples(
             nonlinear={"primary.period": Q(jnp.full(5, 50.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(5, 5.0), "km/s")},
-            data_type="JointModel",
+            model_type="JointModel",
             metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
@@ -386,7 +386,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
     samples = Samples(
         nonlinear=nonlinear,
         linear={"rv_semiamp": col(o["K"], "km/s"), "v_sys": col(o["v0"], "km/s")},
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={"time_ref": 0.0},
     )
     return data, samples
@@ -439,7 +439,7 @@ class TestChiSquared:
         joint = Samples(
             nonlinear={"primary.period": Q(jnp.full(3, 60.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(3, 9.0), "km/s")},
-            data_type="JointModel",
+            model_type="JointModel",
             metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):

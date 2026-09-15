@@ -910,7 +910,7 @@ class JointModel(eqx.Module):
         # params independently and we sum the resulting log-likelihoods.  This
         # is the correct behaviour whenever no shared linear param is being
         # marginalized (including the common case of an unshared joint model).
-        log_probs = [
+        ln_probs = [
             comp.log_prob(
                 comp_nl[name],
                 data[name],
@@ -919,7 +919,7 @@ class JointModel(eqx.Module):
             )
             for name, comp in self.components.items()
         ]
-        return jnp.sum(jnp.stack(log_probs))
+        return jnp.sum(jnp.stack(ln_probs))
 
     def sample_conditional_linear(
         self,
@@ -1211,19 +1211,19 @@ class JointModel(eqx.Module):
                 marg_dist, y_joint, _, _ = joint._build_joint_marginalized_linear(
                     comp_nl, per_comp_marginalized_names, data, linear_priors
                 )
-                log_lik = marg_dist.log_prob(y_joint)
+                ln_lik = marg_dist.log_prob(y_joint)
             else:
                 # Per-component sum: each component's marginalization is
                 # independent, so the log-likelihoods simply add.
-                log_lik = jnp.zeros(())
+                ln_lik = jnp.zeros(())
                 for comp_name, comp in joint.components.items():
-                    log_lik = log_lik + comp.log_prob(
+                    ln_lik = ln_lik + comp.log_prob(
                         comp_nl[comp_name],
                         data[comp_name],
                         linear_priors=per_comp_lp[comp_name],
                         marginalized_names=per_comp_marginalized_names[comp_name],
                     )
-            numpyro.factor("log_lik", log_lik)
+            numpyro.factor("ln_lik", ln_lik)
 
         return model_fn
 
@@ -1397,17 +1397,17 @@ class JointModel(eqx.Module):
                     _record(cname, base, v, is_shared=base in shared_lin_set)
 
             # Evaluate explicit log-likelihood per component
-            log_lik = jnp.zeros(())
+            ln_lik = jnp.zeros(())
             for comp_name, comp in joint.components.items():
                 comp_linear = {
                     n: linear_by_comp[comp_name][n]
                     for n in comp._all_linear_names()
                     if n in linear_by_comp[comp_name]
                 }
-                log_lik = log_lik + comp._log_prob_explicit(
+                ln_lik = ln_lik + comp._log_prob_explicit(
                     comp_nl[comp_name], comp_linear, data[comp_name]
                 )
 
-            numpyro.factor("log_lik", log_lik)
+            numpyro.factor("ln_lik", ln_lik)
 
         return model_fn

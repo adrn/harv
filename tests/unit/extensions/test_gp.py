@@ -308,7 +308,7 @@ class TestGPWithRVModel:
         sampler = RejectionSampler(prior, model, batch_size=32)
         prepared = _prepare_sampler_model(prior, model, None)
 
-        _, log_likelihoods = sampler._sample_prior_and_evaluate_batched(
+        _, ln_likelihoods = sampler._sample_prior_and_evaluate_batched(
             prepared.model,
             jax.random.key(0),
             128,
@@ -318,4 +318,4 @@ class TestGPWithRVModel:
             data,
         )
 
-        assert jnp.any(jnp.isfinite(log_likelihoods))
+        assert jnp.any(jnp.isfinite(ln_likelihoods))

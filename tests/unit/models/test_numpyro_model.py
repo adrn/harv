@@ -48,8 +48,8 @@ class TestNumpyroModelMarginalized:
         assert "phase_peri" in trace
         assert "arg_peri" in trace
 
-        # Should have a factor site for log_lik
-        assert "log_lik" in trace
+        # Should have a factor site for ln_lik
+        assert "ln_lik" in trace
 
     def test_log_lik_is_finite(self, rv_data, nonlinear_priors, linear_priors):
         """Log-likelihood in the trace is finite."""
@@ -61,8 +61,8 @@ class TestNumpyroModelMarginalized:
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
 
-        log_lik = _get_factor_value(trace, "log_lik")
-        assert jnp.isfinite(log_lik)
+        ln_lik = _get_factor_value(trace, "ln_lik")
+        assert jnp.isfinite(ln_lik)
 
     def test_no_linear_sites(self, rv_data, nonlinear_priors, linear_priors):
         """Marginalized model should NOT have linear param sample sites."""
@@ -117,8 +117,8 @@ class TestNumpyroModelFull:
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
 
-        log_lik = _get_factor_value(trace, "log_lik")
-        assert jnp.isfinite(log_lik)
+        ln_lik = _get_factor_value(trace, "ln_lik")
+        assert jnp.isfinite(ln_lik)
 
     def test_requires_linear_prior(self, rv_data, nonlinear_priors):
         """Full model without linear_priors raises ValueError."""
@@ -147,7 +147,7 @@ class TestNumpyroModelWithExtensions:
 
         assert "jitter" in trace
         assert trace["jitter"]["type"] == "sample"
-        assert jnp.isfinite(_get_factor_value(trace, "log_lik"))
+        assert jnp.isfinite(_get_factor_value(trace, "ln_lik"))
 
     def test_trend_in_trace(self, rv_data):
         """Trend extension adds linear param; marginalized model traces OK."""
@@ -170,7 +170,7 @@ class TestNumpyroModelWithExtensions:
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
 
-        assert jnp.isfinite(_get_factor_value(trace, "log_lik"))
+        assert jnp.isfinite(_get_factor_value(trace, "ln_lik"))
 
 
 class TestNumpyroModelUnitConversion:
@@ -191,4 +191,4 @@ class TestNumpyroModelUnitConversion:
         with handlers.seed(rng_seed=42):
             trace = handlers.trace(model_fn).get_trace()
 
-        assert jnp.isfinite(_get_factor_value(trace, "log_lik"))
+        assert jnp.isfinite(_get_factor_value(trace, "ln_lik"))

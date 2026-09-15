@@ -55,8 +55,8 @@ class TestDictLinearPriorRV:
                 "phase_peri": jnp.array([0.2, 0.2, 0.2, 0.2]),
                 "arg_peri": jnp.array([1.0, 1.0, 1.0, 1.0]),
             }
-            log_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
-            return prior_samples, log_likelihoods
+            ln_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
+            return prior_samples, ln_likelihoods
 
         def fake_sample_linear_parameters(
             self,
@@ -124,8 +124,8 @@ class TestDictLinearPriorRV:
                 "phase_peri": jnp.array([0.2, 0.2, 0.2, 0.2]),
                 "arg_peri": jnp.array([1.0, 1.0, 1.0, 1.0]),
             }
-            log_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
-            return prior_samples, log_likelihoods
+            ln_likelihoods = jnp.array([0.0, jnp.nan, -jnp.inf, jnp.inf])
+            return prior_samples, ln_likelihoods
 
         def fake_sample_linear_parameters(
             self,
@@ -184,7 +184,7 @@ class TestDictLinearPriorRV:
         dict_samples = dict_sampler.run(data, n_prior_samples=n_prior, seed=0)
 
         assert dict_samples.n_samples >= 0
-        assert dict_samples.data_type == "RVModel"
+        assert dict_samples.model_type == "RVModel"
         assert "rv_semiamp" in dict_samples
         assert "v_sys" in dict_samples
 
@@ -208,7 +208,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(data, n_prior_samples=10_000, seed=1)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
         assert "rv_semiamp" in samples
         assert "v_sys" in samples
         # rv_semiamp was sampled from HalfNormal: all values should be >= 0
@@ -236,7 +236,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(data, n_prior_samples=10_000, seed=2)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
         # rv_semiamp should be fixed at 10.0 for all samples
         if samples.n_samples > 0:
             K_vals = samples["rv_semiamp"]
@@ -262,7 +262,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(data, n_prior_samples=10_000, seed=3)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
 
     def test_sampler_owned_marginalized_subset(self):
         """Sampler-owned marginalized_names can force a Gaussian subset."""
@@ -284,7 +284,7 @@ class TestDictLinearPriorRV:
         samples = sampler.run(data, n_prior_samples=10_000, seed=30)
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
         assert "rv_semiamp" in samples.linear
         assert "v_sys" in samples.linear
 

@@ -224,12 +224,12 @@ class TestJointModelNumpyro:
 
         assert "period" in trace
         assert "eccentricity" in trace
-        assert "log_lik" in trace
+        assert "ln_lik" in trace
 
         # Verify finite log-likelihood
-        site = trace["log_lik"]
-        log_lik = site["fn"].log_prob(site["value"])
-        assert jnp.isfinite(log_lik)
+        site = trace["ln_lik"]
+        ln_lik = site["fn"].log_prob(site["value"])
+        assert jnp.isfinite(ln_lik)
 
     def test_with_per_component_jitter(
         self, rv_data_primary, rv_data_secondary, linear_priors

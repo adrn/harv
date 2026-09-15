@@ -28,14 +28,14 @@ from harv.samplers.conversion import convert_parameterization
 
 __all__ = ("Samples", "pad_and_stack_samples")
 
-# Default minimum evidence effective sample size (logZ_int_ess) below which a
+# Default minimum evidence effective sample size (ln_Z_int_ess) below which a
 # rejection run is reported as under-resolved: the marginal-likelihood integral
-# is then dominated by a handful of prior draws, so max_log_likelihood may not
+# is then dominated by a handful of prior draws, so max_ln_likelihood may not
 # have converged and the accepted-sample count is not a reliable posterior size.
 #
 # There is no sharp transition to calibrate against, so this is a convention,
 # not a derived quantity: ESS = 3 is where the delta-method MC error on
-# logZ_int (``sqrt(1/ESS - 1/M)``, reported as ``logZ_int_mcse``) reaches ~0.6
+# ln_Z_int (``sqrt(1/ESS - 1/M)``, reported as ``ln_Z_int_mcse``) reaches ~0.6
 # nats, i.e. the log-evidence is uncertain at the factor-of-two level. Callers
 # who want a different bar set ``min_evidence_ess`` on
 # :class:`~harv.samplers.RejectionSampler` or pass it to
@@ -43,7 +43,7 @@ __all__ = ("Samples", "pad_and_stack_samples")
 # ``float("inf")`` always flags.
 MIN_EVIDENCE_ESS = 3.0
 
-_EVIDENCE_KEYS = ("logZ_int", "logZ_int_ess", "max_log_likelihood", "n_prior_samples")
+_EVIDENCE_KEYS = ("ln_Z_int", "ln_Z_int_ess", "max_ln_likelihood", "n_prior_samples")
 
 
 def _assess_resolution(
@@ -51,7 +51,7 @@ def _assess_resolution(
     n_prior: int,
     n_accepted: int,
     evidence_ess: float,
-    max_log_likelihood: float,
+    max_ln_likelihood: float,
     min_evidence_ess: float = MIN_EVIDENCE_ESS,
 ) -> tuple[bool, str]:
     """Judge whether a rejection run resolved the posterior; return a message.
@@ -71,8 +71,8 @@ def _assess_resolution(
     if well_resolved:
         msg = (
             f"Resolved: ~{evidence_ess:.0f} effective prior samples (of {n_prior}) "
-            f"contribute to the evidence integral, so max_log_likelihood="
-            f"{max_log_likelihood:.1f} is likely converged. Confirm across seeds "
+            f"contribute to the evidence integral, so max_ln_likelihood="
+            f"{max_ln_likelihood:.1f} is likely converged. Confirm across seeds "
             "if it matters."
         )
     else:
@@ -80,9 +80,9 @@ def _assess_resolution(
             f"Under-resolved rejection run: the evidence integral is dominated by "
             f"~{evidence_ess:.1f} effective prior sample(s) of {n_prior} "
             f"(below min_evidence_ess={min_evidence_ess:g}), so "
-            f"max_log_likelihood={max_log_likelihood:.1f} may not have converged and "
+            f"max_ln_likelihood={max_ln_likelihood:.1f} may not have converged and "
             f"the accepted-sample count ({n_accepted}) is not a reliable posterior "
-            "size. Increase n_prior_samples (compare max_log_likelihood across runs "
+            "size. Increase n_prior_samples (compare max_ln_likelihood across runs "
             "to check it stops rising) and/or continue with "
             "NumpyroSampler(prior, model).run(data, init_samples=...) to draw the "
             "posterior."
@@ -300,7 +300,7 @@ class Samples(eqx.Module):
         ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``, ``"pmra"``, ``"pmdec"``,
         ``"parallax"``, ``"semi_major_axis"`` for astrometry.  Units are data-driven
         (e.g. ``"km/s"`` for RV).
-    data_type
+    model_type
         Informational label identifying the model that produced these samples (e.g.
         ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``). Stored in HDF5 for
         round-tripping.
@@ -328,7 +328,7 @@ class Samples(eqx.Module):
     ...         "rv_semiamp": Q([10.0, 11.0, 9.5], "km/s"),
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
-    ...     data_type="rv",
+    ...     model_type="RVModel",
     ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     ... )
     >>> samples.n_samples
@@ -344,7 +344,7 @@ class Samples(eqx.Module):
     linear: dict[str, Q]
 
     # Static fields -- not JAX leaves
-    data_type: str = eqx.field(static=True, default="")
+    model_type: str = eqx.field(static=True, default="")
     metadata: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     # Names of linear params introduced by extensions (offsets, trends, etc.).
     linear_extension_names: tuple[str, ...] = eqx.field(static=True, default=())
@@ -412,7 +412,7 @@ class Samples(eqx.Module):
         ``w_i = exp(ln L_i - logsumexp(ln L))`` where the ``logsumexp`` runs
         over *every* prior draw the sampler evaluated, not just the ones
         returned.  It is reconstructed rather than stored: the normalization is
-        ``logZ_int + ln(n_prior_samples)``, and both come from the evidence
+        ``ln_Z_int + ln(n_prior_samples)``, and both come from the evidence
         metadata that ``top_k`` / ``return_evidence_stats=True`` writes.
 
         Because the normalization spans the whole library, ``weight.sum()`` is
@@ -449,7 +449,7 @@ class Samples(eqx.Module):
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 101.0], "day")},
         ...     linear={},
-        ...     metadata={"logZ_int": 0.0, "n_prior_samples": 4},
+        ...     metadata={"ln_Z_int": 0.0, "n_prior_samples": 4},
         ...     ln_likelihood=jnp.zeros(2),
         ... )
         >>> samples.weight
@@ -471,7 +471,7 @@ class Samples(eqx.Module):
                 "sampler with top_k=... or return_logprobs=True."
             )
             raise ValueError(msg)
-        missing = [k for k in ("logZ_int", "n_prior_samples") if k not in self.metadata]
+        missing = [k for k in ("ln_Z_int", "n_prior_samples") if k not in self.metadata]
         if missing:
             msg = (
                 f"weight requires the evidence metadata {missing} to normalize "
@@ -480,19 +480,19 @@ class Samples(eqx.Module):
             )
             raise ValueError(msg)
 
-        log_norm = float(self.metadata["logZ_int"]) + np.log(
+        ln_norm = float(self.metadata["ln_Z_int"]) + np.log(
             float(self.metadata["n_prior_samples"])
         )
-        if not np.isfinite(log_norm):
+        if not np.isfinite(ln_norm):
             # Every evaluated likelihood was non-finite; -inf - -inf is NaN,
             # and zero weight is the honest answer.
             return jnp.zeros_like(self.ln_likelihood)
-        return jnp.exp(self.ln_likelihood - log_norm)
+        return jnp.exp(self.ln_likelihood - ln_norm)
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
-        derived_keys = ["log_period"]
+        derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
         # periastron phase, so time_peri is only derivable when phase_peri exists.
         if "phase_peri" in self.nonlinear:
@@ -545,7 +545,7 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
-        ...     data_type="rv",
+        ...     model_type="RVModel",
         ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> samples["period"].unit
@@ -580,7 +580,7 @@ class Samples(eqx.Module):
             return Samples(
                 nonlinear=sliced_nl,
                 linear=sliced_lin,
-                data_type=self.data_type,
+                model_type=self.model_type,
                 metadata=self.metadata,
                 linear_extension_names=self.linear_extension_names,
                 ln_likelihood=(
@@ -595,7 +595,7 @@ class Samples(eqx.Module):
         if key in self.linear:
             return self.linear[key]
 
-        if key == "log_period":
+        if key == "log10_period":
             period = self.nonlinear["period"]
             return jnp.log10(  # ty: ignore[invalid-return-type]
                 ustrip(str(period.unit), period)
@@ -648,7 +648,7 @@ class Samples(eqx.Module):
         """String representation."""
         return (
             f"Samples(n_samples={self.n_samples}, "
-            f"data_type='{self.data_type}', "
+            f"model_type='{self.model_type}', "
             f"parameters={len(self.keys())})"
         )
 
@@ -708,7 +708,7 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.0], "rad")},
         ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
         ...             "v_sys": Q([0.0, 0.0], "km/s")},
-        ...     data_type="rv",
+        ...     model_type="RVModel",
         ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> wrapped = samples.wrap_angles()
@@ -816,7 +816,7 @@ class Samples(eqx.Module):
         return Samples(
             nonlinear=new_nl,
             linear=new_lin,
-            data_type=self.data_type,
+            model_type=self.model_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
             ln_likelihood=self.ln_likelihood,
@@ -859,7 +859,7 @@ class Samples(eqx.Module):
         """Convert stored values between supported parameterizations.
 
         Wraps :func:`harv.samplers.convert_parameterization`, returning a new
-        :class:`Samples` with ``metadata``, ``data_type``, and
+        :class:`Samples` with ``metadata``, ``model_type``, and
         ``linear_extension_names`` preserved.  The initial implementation
         supports single-component RV and Gaia astrometry parameterizations only.
         """
@@ -872,7 +872,7 @@ class Samples(eqx.Module):
         return Samples(
             nonlinear=new_nonlinear,
             linear=new_linear,
-            data_type=self.data_type,
+            model_type=self.model_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
             ln_likelihood=self.ln_likelihood,
@@ -905,7 +905,7 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
+        ...     model_type="RVModel",
         ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> med = samples.median("period")
@@ -954,7 +954,7 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
+        ...     model_type="RVModel",
         ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
@@ -993,7 +993,7 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
+        ...     model_type="RVModel",
         ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
@@ -1086,10 +1086,10 @@ class Samples(eqx.Module):
 
         The rejection step accepts each prior draw with probability
         ``exp(L - max L)``, so the accepted-sample count is only a meaningful
-        posterior size once ``max_log_likelihood`` has converged to the true
-        peak. When the evidence effective sample size (``logZ_int_ess``) is
+        posterior size once ``max_ln_likelihood`` has converged to the true
+        peak. When the evidence effective sample size (``ln_Z_int_ess``) is
         O(1), the evidence integral is dominated by a single lucky draw:
-        ``max_log_likelihood`` is likely under-resolved and the count is
+        ``max_ln_likelihood`` is likely under-resolved and the count is
         misleading (a broad prior can "accept" a poor fit simply because it
         never sampled a good one). See ``docs/spec.md``, "Interpreting
         acceptance".
@@ -1109,7 +1109,7 @@ class Samples(eqx.Module):
         Returns
         -------
             A dict with ``n_prior_samples``, ``n_accepted``, ``evidence_ess``,
-            ``min_evidence_ess``, ``max_log_likelihood``, ``logZ_int``, a
+            ``min_evidence_ess``, ``max_ln_likelihood``, ``ln_Z_int``, a
             boolean ``well_resolved``, and a human-readable ``message``.
 
         Raises
@@ -1126,14 +1126,14 @@ class Samples(eqx.Module):
             )
             raise ValueError(msg)
         n_prior = int(self.metadata["n_prior_samples"])
-        ess = float(self.metadata["logZ_int_ess"])
-        max_ll = float(self.metadata["max_log_likelihood"])
+        ess = float(self.metadata["ln_Z_int_ess"])
+        max_ll = float(self.metadata["max_ln_likelihood"])
         n_accepted = self.n_samples
         well_resolved, message = _assess_resolution(
             n_prior=n_prior,
             n_accepted=n_accepted,
             evidence_ess=ess,
-            max_log_likelihood=max_ll,
+            max_ln_likelihood=max_ll,
             min_evidence_ess=min_evidence_ess,
         )
         return {
@@ -1141,8 +1141,8 @@ class Samples(eqx.Module):
             "n_accepted": n_accepted,
             "evidence_ess": ess,
             "min_evidence_ess": min_evidence_ess,
-            "max_log_likelihood": max_ll,
-            "logZ_int": float(self.metadata["logZ_int"]),
+            "max_ln_likelihood": max_ll,
+            "ln_Z_int": float(self.metadata["ln_Z_int"]),
             "well_resolved": well_resolved,
             "message": message,
         }
@@ -1532,7 +1532,7 @@ class Samples(eqx.Module):
 
             # Store metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["data_type"] = self.data_type
+            meta_group.attrs["model_type"] = self.model_type
             meta_group.attrs["linear_extension_names"] = ",".join(
                 self.linear_extension_names
             )
@@ -1564,7 +1564,7 @@ class Samples(eqx.Module):
         >>> samples = Samples.from_hdf5("posterior_samples.h5")  # doctest: +SKIP
         >>> samples.n_samples  # doctest: +SKIP
         42
-        >>> samples.data_type  # doctest: +SKIP
+        >>> samples.model_type  # doctest: +SKIP
         'rv'
         """
         filename = Path(filename)
@@ -1572,7 +1572,7 @@ class Samples(eqx.Module):
         with h5py.File(filename, "r") as f:
             meta = f["metadata"]
 
-            data_type: str = meta.attrs.get("data_type", "")
+            model_type: str = meta.attrs.get("model_type", "")
 
             raw_extra = meta.attrs.get("linear_extension_names", "") or meta.attrs.get(
                 "offset_names", ""
@@ -1591,7 +1591,7 @@ class Samples(eqx.Module):
                     "linear_extension_names",
                     "offset_names",
                     "n_samples",
-                    "data_type",
+                    "model_type",
                 ]:
                     continue
                 value = meta.attrs[key]
@@ -1627,7 +1627,7 @@ class Samples(eqx.Module):
         return cls(
             nonlinear=nonlinear,
             linear=linear,
-            data_type=data_type,
+            model_type=model_type,
             linear_extension_names=linear_extension_names,
             metadata=metadata,
             ln_likelihood=ln_likelihood,
@@ -1712,7 +1712,7 @@ class Samples(eqx.Module):
         ----------
         params
             Parameters to include in corner plot. If None, selects a default
-            set based on data_type.
+            set based on model_type.
         truths
             Dictionary of true parameter values to overplot as reference values.
         labels
@@ -1825,15 +1825,15 @@ class Samples(eqx.Module):
 
 
 def _check_stack_consistency(samples_list: Sequence[Samples]) -> None:
-    """Verify all entries share schema (data_type, keys, units, ext names)."""
+    """Verify all entries share schema (model_type, keys, units, ext names)."""
     first = samples_list[0]
     first_nl_units = {k: str(v.unit) for k, v in first.nonlinear.items()}
     first_lin_units = {k: str(v.unit) for k, v in first.linear.items()}
     for i, s in enumerate(samples_list[1:], start=1):
-        if s.data_type != first.data_type:
+        if s.model_type != first.model_type:
             msg = (
-                f"Samples[{i}].data_type={s.data_type!r} does not match "
-                f"Samples[0].data_type={first.data_type!r}"
+                f"Samples[{i}].model_type={s.model_type!r} does not match "
+                f"Samples[0].model_type={first.model_type!r}"
             )
             raise ValueError(msg)
         if s.linear_extension_names != first.linear_extension_names:
@@ -1900,7 +1900,7 @@ def pad_and_stack_samples(
 ) -> tuple[Samples, jax.Array]:
     """Stack a list of per-entity ``Samples`` into one batched ``Samples`` + mask.
 
-    All inputs must share ``data_type``, ``linear_extension_names``, and the
+    All inputs must share ``model_type``, ``linear_extension_names``, and the
     set of nonlinear / linear keys with matching units. Per-entity sample
     counts may differ; the trailing axis is padded to
     ``K_max = max(s.n_samples for s in samples_list)`` with ``pad_value``.
@@ -1944,7 +1944,7 @@ def pad_and_stack_samples(
     ...             "rv_semiamp": Q([K] * len(periods), "km/s"),
     ...             "v_sys": Q([0.0] * len(periods), "km/s"),
     ...         },
-    ...         data_type="rv",
+    ...         model_type="RVModel",
     ...     )
     >>> stacked, mask = pad_and_stack_samples([_mk([10.0, 20.0], 5.0),
     ...                                        _mk([30.0, 40.0, 50.0], 7.0)])
@@ -1992,7 +1992,7 @@ def pad_and_stack_samples(
     stacked = Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type=first.data_type,
+        model_type=first.model_type,
         metadata=first.metadata,
         linear_extension_names=first.linear_extension_names,
         ln_likelihood=ln_likelihood,

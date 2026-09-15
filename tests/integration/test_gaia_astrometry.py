@@ -58,8 +58,8 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.5,
             "lon_asc_node": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
-        assert jnp.isfinite(log_lik)
+        ln_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
+        assert jnp.isfinite(ln_lik)
 
     def test_vmap_batch(self, astro_data):
         """Vmap over a batch of parameter samples works correctly."""
@@ -148,7 +148,7 @@ class TestGaiaAstrometryRejectionSampler:
         samples = sampler.run(data, n_prior_samples=50_000, seed=42)
 
         assert samples.n_samples > 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
     def test_samples_have_correct_keys(self, sim_data):
         """Samples object has all expected parameter keys."""
@@ -159,7 +159,7 @@ class TestGaiaAstrometryRejectionSampler:
         keys = samples.keys()
         for nl_key in (
             "period",
-            "log_period",
+            "log10_period",
             "eccentricity",
             "phase_peri",
             "arg_peri",

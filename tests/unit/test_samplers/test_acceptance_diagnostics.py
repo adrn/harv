@@ -51,7 +51,7 @@ def _broad_data():
 class TestAssessResolution:
     def test_low_ess_is_under_resolved(self):
         resolved, msg = _assess_resolution(
-            n_prior=1_000_000, n_accepted=1, evidence_ess=1.0, max_log_likelihood=-50.0
+            n_prior=1_000_000, n_accepted=1, evidence_ess=1.0, max_ln_likelihood=-50.0
         )
         assert resolved is False
         assert "Under-resolved" in msg
@@ -61,7 +61,7 @@ class TestAssessResolution:
             n_prior=1_000_000,
             n_accepted=5000,
             evidence_ess=3000.0,
-            max_log_likelihood=-8.0,
+            max_ln_likelihood=-8.0,
         )
         assert resolved is True
         assert "Resolved" in msg
@@ -71,13 +71,13 @@ class TestAssessResolution:
             n_prior=10,
             n_accepted=1,
             evidence_ess=MIN_EVIDENCE_ESS,
-            max_log_likelihood=0.0,
+            max_ln_likelihood=0.0,
         )[0]
         assert not _assess_resolution(
             n_prior=10,
             n_accepted=1,
             evidence_ess=MIN_EVIDENCE_ESS - 0.1,
-            max_log_likelihood=0.0,
+            max_ln_likelihood=0.0,
         )[0]
 
 
@@ -125,7 +125,7 @@ class TestAcceptanceDiagnostics:
         s = Samples(
             nonlinear={"period": Q([100.0, 101.0], "day")},
             linear={},
-            data_type="RVModel",
+            model_type="RVModel",
             metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         )
         with pytest.raises(ValueError, match="return_evidence_stats"):
@@ -155,7 +155,7 @@ class TestSamplerWarning:
         assert not any("Under-resolved" in str(w.message) for w in caught)
 
 
-_ASSESS_KW = {"n_prior": 1000, "n_accepted": 5, "max_log_likelihood": -10.0}
+_ASSESS_KW = {"n_prior": 1000, "n_accepted": 5, "max_ln_likelihood": -10.0}
 
 
 class TestMinEvidenceEssIsConfigurable:
@@ -185,13 +185,13 @@ class TestMinEvidenceEssIsConfigurable:
         s = Samples(
             nonlinear={"period": Q([100.0, 101.0], "day")},
             linear={},
-            data_type="RVModel",
+            model_type="RVModel",
             metadata={
                 "time_ref": 0.0,
                 "time_ref_unit": "day",
-                "logZ_int": -12.0,
-                "logZ_int_ess": 5.0,
-                "max_log_likelihood": -10.0,
+                "ln_Z_int": -12.0,
+                "ln_Z_int_ess": 5.0,
+                "max_ln_likelihood": -10.0,
                 "n_prior_samples": 1000,
             },
         )

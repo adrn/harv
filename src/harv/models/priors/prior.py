@@ -222,7 +222,7 @@ class HarvPrior(eqx.Module):
         >>> samples = prior.sample(jax.random.key(0), 100, model=RVModel())
         >>> samples.n_samples
         100
-        >>> samples.data_type
+        >>> samples.model_type
         'RVModel'
         """
         # Local imports break the cycle: ``harv.samplers`` already imports
@@ -300,7 +300,7 @@ class HarvPrior(eqx.Module):
         return Samples(
             nonlinear=nonlinear_q,
             linear=linear_q,
-            data_type=type(model).__name__,
+            model_type=type(model).__name__,
             linear_extension_names=linear_extension_names,
             ln_prior=ln_prior,
             ln_likelihood=None,

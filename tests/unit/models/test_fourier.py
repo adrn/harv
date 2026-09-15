@@ -270,7 +270,7 @@ class TestSamplerIntegration:
         assert "cos_amp_1" in samples.linear
         # Kepler-free samples: time_peri is not advertised (no phase_peri).
         assert "time_peri" not in samples
-        assert "log_period" in samples
+        assert "log10_period" in samples
 
     def test_vmap_and_jit_log_prob(self):
         data = _rv_data()

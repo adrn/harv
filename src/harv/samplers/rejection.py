@@ -107,13 +107,13 @@ def _wrap_unit_values(
 
 
 def _prior_monte_carlo_evidence_stats(
-    log_likelihoods: jax.Array,
+    ln_likelihoods: jax.Array,
 ) -> dict[str, Any]:
     """Estimate the log-evidence using Monte Carlo integration with the prior.
 
     Parameters
     ----------
-    log_likelihoods
+    ln_likelihoods
         The log-likelihood values for each prior sample.
 
     Returns
@@ -121,33 +121,33 @@ def _prior_monte_carlo_evidence_stats(
     dict[str, Any]
         A dictionary containing the estimated log-evidence and related statistics.
     """
-    n_prior = int(log_likelihoods.shape[0])
+    n_prior = int(ln_likelihoods.shape[0])
 
-    log_s1 = logsumexp(log_likelihoods)
-    log_s2 = logsumexp(2.0 * log_likelihoods)
-    max_log_likelihood = jnp.max(log_likelihoods)
+    ln_s1 = logsumexp(ln_likelihoods)
+    ln_s2 = logsumexp(2.0 * ln_likelihoods)
+    max_ln_likelihood = jnp.max(ln_likelihoods)
 
-    logz = log_s1 - jnp.log(n_prior)
+    ln_z = ln_s1 - jnp.log(n_prior)
 
     # Evidence effective sample size:
     # ESS_Z = (sum L)^2 / sum L^2
-    log_ess = 2.0 * log_s1 - log_s2
-    ess = jnp.exp(log_ess)
+    ln_ess = 2.0 * ln_s1 - ln_s2
+    ess = jnp.exp(ln_ess)
 
     # Delta-method MC standard error for log(mean L):
     # se(log Z) ~ sqrt(1 / ESS_Z - 1 / N)
-    logz_mcse = jnp.sqrt(jnp.maximum(0.0, jnp.exp(-log_ess) - 1.0 / n_prior))
+    ln_z_mcse = jnp.sqrt(jnp.maximum(0.0, jnp.exp(-ln_ess) - 1.0 / n_prior))
 
     return {
-        "logZ_int": logz,
-        "logZ_int_mcse": logz_mcse,
-        "logZ_int_ess": ess,
-        "max_log_likelihood": max_log_likelihood,
+        "ln_Z_int": ln_z,
+        "ln_Z_int_mcse": ln_z_mcse,
+        "ln_Z_int_ess": ess,
+        "max_ln_likelihood": max_ln_likelihood,
         "n_prior_samples": n_prior,
     }
 
 
-def _top_k_indices_impl(log_likelihoods: jax.Array, k: int) -> jax.Array:
+def _top_k_indices_impl(ln_likelihoods: jax.Array, k: int) -> jax.Array:
     """Indices of the ``k`` largest importance weights, at a static ``(k,)`` shape.
 
     Importance weights are ``exp(ln L - logsumexp(ln L))``, so the normalization
@@ -164,7 +164,7 @@ def _top_k_indices_impl(log_likelihoods: jax.Array, k: int) -> jax.Array:
 
     Parameters
     ----------
-    log_likelihoods : jax.Array
+    ln_likelihoods : jax.Array
         Marginal log-likelihood for every prior sample, shape ``(M,)``.
     k : int
         Number of samples to select.  Static, so the output shape is static.
@@ -172,9 +172,9 @@ def _top_k_indices_impl(log_likelihoods: jax.Array, k: int) -> jax.Array:
     Returns
     -------
     jax.Array
-        Integer indices into ``log_likelihoods``, shape ``(k,)``.
+        Integer indices into ``ln_likelihoods``, shape ``(k,)``.
     """
-    ll = jnp.where(jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf)
+    ll = jnp.where(jnp.isfinite(ln_likelihoods), ln_likelihoods, -jnp.inf)
     return jax.lax.top_k(ll, k)[1]
 
 
@@ -274,7 +274,7 @@ class RejectionSampler(AbstractSampler):
         Number of samples to process per batch. Smaller values use less memory
         but may be slower. Default: 100_000.
     min_evidence_ess
-        Evidence effective sample size (``logZ_int_ess``) below which a run is
+        Evidence effective sample size (``ln_Z_int_ess``) below which a run is
         reported as under-resolved and :meth:`run` emits a ``UserWarning``.
         Default: :data:`~harv.samplers.samples.MIN_EVIDENCE_ESS` (3.0); see
         that constant for what the number means. Set ``0.0`` to silence the
@@ -507,9 +507,9 @@ class RejectionSampler(AbstractSampler):
             the :attr:`Samples.ln_posterior` property.  Default ``False``.
         return_evidence_stats
             If ``True``, add prior-Monte-Carlo evidence statistics to the
-            returned ``Samples.metadata``: ``logZ_int``, ``logZ_int_mcse``,
-            ``logZ_int_ess``, ``max_log_likelihood`` and ``n_prior_samples``.
-            ``logZ_int_ess`` is the Kish effective sample size of the
+            returned ``Samples.metadata``: ``ln_Z_int``, ``ln_Z_int_mcse``,
+            ``ln_Z_int_ess``, ``max_ln_likelihood`` and ``n_prior_samples``.
+            ``ln_Z_int_ess`` is the Kish effective sample size of the
             importance weights over the full prior library -- the diagnostic
             for whether the library resolved this posterior at all. Default
             ``False``.
@@ -543,7 +543,7 @@ class RejectionSampler(AbstractSampler):
         # generate prior samples and evaluate (marginalized) log likelihoods in batches
         # TODO: only return accepted samples and acceptance rate to conserve memory?
 
-        prior_samples, log_likelihoods = self._sample_prior_and_evaluate_batched(
+        prior_samples, ln_likelihoods = self._sample_prior_and_evaluate_batched(
             prepared.model,
             sample_key,
             n_prior_samples,
@@ -557,7 +557,7 @@ class RejectionSampler(AbstractSampler):
             data=data,
             prepared=prepared,
             prior_samples=prior_samples,
-            log_likelihoods=log_likelihoods,
+            ln_likelihoods=ln_likelihoods,
             rej_key=rej_key,
             key=key,
             ignore_non_finite=ignore_non_finite,
@@ -573,7 +573,7 @@ class RejectionSampler(AbstractSampler):
         data: Any,
         prepared: _PreparedSamplerModel,
         prior_samples: dict[str, jax.Array],
-        log_likelihoods: jax.Array,
+        ln_likelihoods: jax.Array,
         rej_key: jax.Array,
         key: jax.Array,
         ignore_non_finite: bool,
@@ -585,7 +585,7 @@ class RejectionSampler(AbstractSampler):
         """Shared downstream: select -> linear -> Samples assembly.
 
         Both :meth:`run` and :meth:`run_with_samples` call this once the
-        flat ``prior_samples`` dict and matching ``log_likelihoods`` array
+        flat ``prior_samples`` dict and matching ``ln_likelihoods`` array
         have been produced.  ``key`` seeds the linear-sampling and
         max-posterior-samples subsamples (via :func:`jax.random.fold_in`);
         ``rej_key`` seeds the per-sample uniform draws.
@@ -595,7 +595,7 @@ class RejectionSampler(AbstractSampler):
         weight when ``top_k`` is set (a static output length).  ``top_k``
         forces ``return_logprobs`` and ``return_evidence_stats`` on, because
         the ``Samples["weight"]`` derived key is reconstructed from
-        ``ln_likelihood`` plus the ``logZ_int`` / ``n_prior_samples``
+        ``ln_likelihood`` plus the ``ln_Z_int`` / ``n_prior_samples``
         metadata.
         """
         model = prepared.model
@@ -605,13 +605,13 @@ class RejectionSampler(AbstractSampler):
         linear_extension_names = prepared.linear_extension_names
 
         if ignore_non_finite:
-            log_likelihoods = jnp.where(
-                jnp.isfinite(log_likelihoods), log_likelihoods, -jnp.inf
+            ln_likelihoods = jnp.where(
+                jnp.isfinite(ln_likelihoods), ln_likelihoods, -jnp.inf
             )
 
         accepted_nonlinear, accepted_log_likelihood = self._select_posterior_samples(
             prior_samples=prior_samples,
-            log_likelihoods=log_likelihoods,
+            ln_likelihoods=ln_likelihoods,
             rej_key=rej_key,
             key=key,
             max_posterior_samples=max_posterior_samples,
@@ -661,14 +661,14 @@ class RejectionSampler(AbstractSampler):
         # caller did not ask to keep the full evidence statistics.
         evidence_meta = {
             k: float(v)
-            for k, v in _prior_monte_carlo_evidence_stats(log_likelihoods).items()
+            for k, v in _prior_monte_carlo_evidence_stats(ln_likelihoods).items()
         }
         n_accepted = int(next(iter(accepted_nonlinear.values())).shape[0])
         well_resolved, resolution_msg = _assess_resolution(
             n_prior=int(evidence_meta["n_prior_samples"]),
             n_accepted=n_accepted,
-            evidence_ess=evidence_meta["logZ_int_ess"],
-            max_log_likelihood=evidence_meta["max_log_likelihood"],
+            evidence_ess=evidence_meta["ln_Z_int_ess"],
+            max_ln_likelihood=evidence_meta["max_ln_likelihood"],
             min_evidence_ess=self.min_evidence_ess,
         )
         if not well_resolved:
@@ -686,7 +686,7 @@ class RejectionSampler(AbstractSampler):
                 ),
             )
         # ``top_k`` forces both on: ``Samples["weight"]`` is reconstructed from
-        # ``ln_likelihood`` plus ``logZ_int`` / ``n_prior_samples``, so a
+        # ``ln_likelihood`` plus ``ln_Z_int`` / ``n_prior_samples``, so a
         # top-K result without them would carry samples whose weights cannot be
         # recovered -- and the weights are what make the output usable.
         if return_evidence_stats or top_k is not None:
@@ -695,14 +695,14 @@ class RejectionSampler(AbstractSampler):
         if top_k is not None:
             # Fraction of total posterior mass the returned top_k capture:
             # sum(w) over the selected rows, where the denominator is the
-            # logsumexp over the *full* library (== logZ_int + ln M, already
+            # logsumexp over the *full* library (== ln_Z_int + ln M, already
             # computed above).  ~1.0 means top_k was ample; 0.1 means 90% of the
-            # mass was truncated away.  Non-finite logZ_int (every likelihood in
+            # mass was truncated away.  Non-finite ln_Z_int (every likelihood in
             # the run non-finite) would give -inf - -inf = NaN, so clamp to 0.0.
-            log_norm = metadata["logZ_int"] + np.log(metadata["n_prior_samples"])
+            ln_norm = metadata["ln_Z_int"] + np.log(metadata["n_prior_samples"])
             captured = (
-                float(jnp.exp(logsumexp(accepted_log_likelihood) - log_norm))
-                if np.isfinite(log_norm)
+                float(jnp.exp(logsumexp(accepted_log_likelihood) - ln_norm))
+                if np.isfinite(ln_norm)
                 else 0.0
             )
             metadata["weight_captured"] = captured
@@ -718,7 +718,7 @@ class RejectionSampler(AbstractSampler):
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_samples),
-            data_type=type(model).__name__,
+            model_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
             ln_likelihood=ln_likelihood_arr,
@@ -729,7 +729,7 @@ class RejectionSampler(AbstractSampler):
         self,
         *,
         prior_samples: dict[str, jax.Array],
-        log_likelihoods: jax.Array,
+        ln_likelihoods: jax.Array,
         rej_key: jax.Array,
         key: jax.Array,
         max_posterior_samples: int | None,
@@ -749,7 +749,7 @@ class RejectionSampler(AbstractSampler):
         ----------
         prior_samples : dict[str, jax.Array]
             Flat, unit-stripped prior draws, each of leading length ``M``.
-        log_likelihoods : jax.Array
+        ln_likelihoods : jax.Array
             Marginal log-likelihood per prior draw, shape ``(M,)``.
         rej_key : jax.Array
             Seeds the per-sample uniform draws of the rejection step.
@@ -775,7 +775,7 @@ class RejectionSampler(AbstractSampler):
             # for every dataset -- no data-dependent shape, no device->host sync
             # on a boolean mask, and no recompile of the conditional Gaussian
             # solve downstream.  Rows come back ordered by decreasing weight.
-            n_prior = int(log_likelihoods.shape[0])
+            n_prior = int(ln_likelihoods.shape[0])
             if top_k > n_prior:
                 msg = (
                     f"top_k={top_k} exceeds the number of prior samples "
@@ -784,15 +784,15 @@ class RejectionSampler(AbstractSampler):
                     "provide; enlarge the prior library or lower top_k."
                 )
                 raise ValueError(msg)
-            idx = _top_k_indices(log_likelihoods, top_k)
+            idx = _top_k_indices(ln_likelihoods, top_k)
             return (
                 {k: v[idx] for k, v in prior_samples.items()},
-                log_likelihoods[idx],
+                ln_likelihoods[idx],
             )
 
-        accepted_mask = self._rejection_step(rej_key, log_likelihoods)
+        accepted_mask = self._rejection_step(rej_key, ln_likelihoods)
         accepted = {k: v[accepted_mask] for k, v in prior_samples.items()}
-        accepted_ll = log_likelihoods[accepted_mask]
+        accepted_ll = ln_likelihoods[accepted_mask]
 
         # Trim to ``max_posterior_samples`` *before* the linear-parameter
         # sampling step so the ``jax.vmap`` inside ``_sample_linear_parameters``
@@ -900,11 +900,11 @@ class RejectionSampler(AbstractSampler):
         if isinstance(prior_samples, Samples):
             if prior_samples.n_samples <= 0:
                 raise ValueError("prior_samples must contain at least one sample.")
-            flat_samples, log_likelihoods = self._evaluate_in_memory(
+            flat_samples, ln_likelihoods = self._evaluate_in_memory(
                 prepared, prior_samples, data
             )
         else:
-            flat_samples, log_likelihoods = self._evaluate_from_hdf5(
+            flat_samples, ln_likelihoods = self._evaluate_from_hdf5(
                 prepared,
                 Path(os.fspath(prior_samples)),
                 data,
@@ -916,7 +916,7 @@ class RejectionSampler(AbstractSampler):
             data=data,
             prepared=prepared,
             prior_samples=flat_samples,
-            log_likelihoods=log_likelihoods,
+            ln_likelihoods=ln_likelihoods,
             rej_key=rej_key,
             key=key,
             ignore_non_finite=ignore_non_finite,
@@ -1017,7 +1017,7 @@ class RejectionSampler(AbstractSampler):
         n_prior_samples = prior_samples.n_samples
         padded, _ = self._pad_to_batch_multiple(flat, n_prior_samples)
 
-        log_likelihoods = self._evaluate_log_likelihoods_batched(
+        ln_likelihoods = self._evaluate_log_likelihoods_batched(
             prepared.model,
             padded,
             prepared.effective_linear_prior or {},
@@ -1025,7 +1025,7 @@ class RejectionSampler(AbstractSampler):
             data,
         )
         trimmed = {k: v[:n_prior_samples] for k, v in padded.items()}
-        return trimmed, log_likelihoods[:n_prior_samples]
+        return trimmed, ln_likelihoods[:n_prior_samples]
 
     def _evaluate_from_hdf5(
         self,
@@ -1078,7 +1078,7 @@ class RejectionSampler(AbstractSampler):
             else:
                 batch_order = np.arange(n_batches)
 
-            log_lik_chunks: list[jax.Array] = []
+            ln_lik_chunks: list[jax.Array] = []
             sample_chunks: dict[str, list[jax.Array]] = {k: [] for k in expected_keys}
 
             for i in batch_order:
@@ -1097,7 +1097,7 @@ class RejectionSampler(AbstractSampler):
                         arr = np.concatenate([arr, np.repeat(arr[-1:], pad)])
                     batch[k] = jnp.asarray(arr)
 
-                log_lik = self._evaluate_log_likelihoods_one_batch(
+                ln_lik = self._evaluate_log_likelihoods_one_batch(
                     prepared.model,
                     batch,
                     prepared.effective_linear_prior or {},
@@ -1105,13 +1105,13 @@ class RejectionSampler(AbstractSampler):
                     data,
                 )
                 # Drop padding before accumulating.
-                log_lik_chunks.append(log_lik[:actual])
+                ln_lik_chunks.append(ln_lik[:actual])
                 for k in expected_keys:
                     sample_chunks[k].append(batch[k][:actual])
 
-        log_likelihoods = jnp.concatenate(log_lik_chunks)
+        ln_likelihoods = jnp.concatenate(ln_lik_chunks)
         flat = {k: jnp.concatenate(v) for k, v in sample_chunks.items()}
-        return flat, log_likelihoods
+        return flat, ln_likelihoods
 
     @eqx.filter_jit
     def _sample_prior_and_evaluate_batched(
@@ -1156,12 +1156,12 @@ class RejectionSampler(AbstractSampler):
             for (model_key, d), k in zip(ext_nl_priors.items(), ext_keys, strict=True):
                 prior_samples[model_key] = _unwrap_dist(d).sample(k, (n_total,))
 
-        log_likelihoods = self._evaluate_log_likelihoods_batched(
+        ln_likelihoods = self._evaluate_log_likelihoods_batched(
             model, prior_samples, eff_linear, marginalize_names, data
         )
 
         trimmed = {k: prior_samples[k][:n_prior_samples] for k in prior_samples}
-        return trimmed, log_likelihoods[:n_prior_samples]
+        return trimmed, ln_likelihoods[:n_prior_samples]
 
     @eqx.filter_jit
     def _evaluate_log_likelihoods_batched(
@@ -1218,10 +1218,10 @@ class RejectionSampler(AbstractSampler):
             )
 
         # TODO: investigate parallelizing this over device - using shard_map instead?
-        log_liks_batched = jax.lax.fori_loop(
+        ln_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
-        return log_liks_batched.flatten()
+        return ln_liks_batched.flatten()
 
     @eqx.filter_jit
     def _evaluate_log_likelihoods_one_batch(
@@ -1256,15 +1256,15 @@ class RejectionSampler(AbstractSampler):
 
     @staticmethod
     @jax.jit
-    def _rejection_step(key: jax.Array, log_likelihoods: jax.Array) -> jax.Array:
+    def _rejection_step(key: jax.Array, ln_likelihoods: jax.Array) -> jax.Array:
         """Compute rejection mask."""
-        max_log_likelihood = jnp.max(log_likelihoods)
+        max_ln_likelihood = jnp.max(ln_likelihoods)
         weights = jnp.where(
-            jnp.isfinite(max_log_likelihood),
-            jnp.exp(log_likelihoods - max_log_likelihood),
-            jnp.zeros_like(log_likelihoods),
+            jnp.isfinite(max_ln_likelihood),
+            jnp.exp(ln_likelihoods - max_ln_likelihood),
+            jnp.zeros_like(ln_likelihoods),
         )
-        uniform_draws = jr.uniform(key, shape=log_likelihoods.shape)
+        uniform_draws = jr.uniform(key, shape=ln_likelihoods.shape)
         return uniform_draws < weights
 
     @eqx.filter_jit
