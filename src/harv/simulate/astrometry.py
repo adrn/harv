@@ -29,7 +29,7 @@ from harv.custom_types import (
 from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
 
-__all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
+__all__ = ("simulate_gaia_epoch_astrometry", "fake_parallax_factor")
 
 
 def fake_parallax_factor(

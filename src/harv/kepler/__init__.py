@@ -19,7 +19,7 @@ from .masses import (
 from .nbody_system import AbstractNBodySystem, TwoBodySystem
 from .orientation import KeplerianOrientation
 
-__all__ = [
+__all__ = (
     "KeplerianBody",
     "KeplerianOrientation",
     "AbstractNBodySystem",
@@ -35,4 +35,4 @@ __all__ = [
     "semi_major_axis_physical",
     "thiele_innes_ABFG",
     "true_anomaly_from_mean",
-]
+)

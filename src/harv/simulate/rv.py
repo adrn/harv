@@ -14,7 +14,7 @@ from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.data import RVData, SourceData
 from harv.kepler.orbits import rv_at_times
 
-__all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
+__all__ = ("simulate_rv_multisurv_data", "simulate_rv_sb1_data")
 
 
 def simulate_rv_sb1_data(

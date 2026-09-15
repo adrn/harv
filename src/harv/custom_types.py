@@ -43,7 +43,7 @@ NTime = Real[Q["time"], "n"]
 NVelocity = Real[Q["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
-NQAny = Real[AbstractQuantity, ""]
+NQAny = Real[AbstractQuantity, "n"]
 
 Vec3QLength = Real[Q["length"], "3"]
 Vec3QSpeed = Real[Q["speed"], "3"]

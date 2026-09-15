@@ -1284,7 +1284,7 @@ is trustworthy, override with a `Normal` prior and set
 #### `default_sb2_prior` (module-level)
 
 ```python
-from harv.samplers import default_sb2_prior
+from harv.models import default_sb2_prior
 
 default_sb2_prior(
     *,
@@ -1351,7 +1351,8 @@ Jitter requires **two** things:
 
 ```python
 from harv.models.extensions import Jitter
-from harv.samplers import RejectionSampler, HarvPrior
+from harv.models import HarvPrior
+from harv.samplers import RejectionSampler
 from harv.distributions import QD
 import numpyro.distributions as dist
 
@@ -2682,8 +2683,10 @@ ______________________________________________________________________
 ### `save_sampler` / `load_sampler`
 
 ```python
-harv.save_sampler(path, sampler)  # -> None
-harv.load_sampler(path)           # -> sampler
+from harv.io import save_sampler, load_sampler
+
+save_sampler(path, sampler)  # -> None
+load_sampler(path)           # -> sampler
 ```
 
 Persist a fully-constructed sampler (prior, parameterization, extensions) to
@@ -2692,12 +2695,13 @@ numpyro distribution objects in static pytree fields.
 
 ```python
 import harv
+from harv.io import load_sampler, save_sampler
 
 sampler = harv.RejectionSampler(prior, extensions=(jitter,))
-harv.save_sampler("sampler.pkl", sampler)
+save_sampler("sampler.pkl", sampler)
 
 # Later:
-sampler2 = harv.load_sampler("sampler.pkl")
+sampler2 = load_sampler("sampler.pkl")
 samples = sampler2.run(data, seed=0)
 ```
 
@@ -2957,7 +2961,8 @@ from harv.data import RVData
 from harv.distributions import QD
 from harv.models import RVModel, GaiaAstrometryModel, JointModel
 from harv.models.extensions import Jitter, MultiSurveyOffset
-from harv.samplers import NumpyroSampler, HarvPrior, RejectionSampler
+from harv.models import HarvPrior
+from harv.samplers import NumpyroSampler, RejectionSampler
 
 # --- Minimal RV-only case ---
 import harv.models as hm
@@ -3043,8 +3048,10 @@ mcmc_samples["eccentricity"]    # dimensionless array
 mcmc_samples.median("rv_semiamp")        # median semi-amplitude
 mcmc_samples.summary()          # dict of all statistics
 mcmc_samples.plot_corner()                  # arviz corner plot
-harv.plot_rv(mcmc_samples, data)                       # RV curve with data overlay
-harv.plot_gaia_astrometry(mcmc_samples.map_sample(), data=gaia_data)  # single-sample plot
-harv.save_sampler("sampler.pkl", sampler)   # persist sampler
+harv.plot.plot_rv(mcmc_samples, data)       # RV curve with data overlay
+harv.plot.plot_gaia_astrometry(mcmc_samples.map_sample(), gaia_data)  # single sample
+
+from harv.io import save_sampler            # `harv.io` is not imported by `harv`
+save_sampler("sampler.pkl", sampler)        # persist sampler
 mcmc_samples.to_hdf5("out.h5")             # persistence
 ```

@@ -1,6 +1,6 @@
 """Helper functions for Keplerian orbits.
 
-Implementations of core orbit computations used by ``harv.kepler``, ``harv.likelihood``,
+Implementations of core orbit computations used by ``harv.kepler``, ``harv.models``,
 and ``harv.simulate``.
 
 All functions accept :class:`~unxt.Q` objects (including dimensionless ones)
