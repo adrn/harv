@@ -53,8 +53,7 @@ from harv.models.extensions.base import AbstractExtension
 from harv.models.parameterizations.fourier import FourierGaiaAstrometry, FourierRV
 from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
-from harv.periodogram.grid import _data_time_span
-from harv.periodogram.grid import frequency_grid as get_frequency_grid
+from harv.periodogram.grid import _data_time_span, frequency_grid
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
     validate_extension_priors,
@@ -430,7 +429,7 @@ def _dataset_delta_lnl(
 
 def periodogram(
     data: AbstractData | AbstractDatasetContainer,
-    frequency_grid: NFrequency | None = None,
+    grid: NFrequency | None = None,
     *,
     prior: HarvPrior | Mapping[str, HarvPrior | Literal[False]] | Literal[False],
     period_min: ScalarQTime | None = None,
@@ -474,9 +473,10 @@ def periodogram(
     data
         `~harv.data.RVData`, `~harv.data.GaiaAstrometryData`, or a dataset
         container holding them.
-    frequency_grid
-        Explicit frequency grid. Mutually exclusive with the grid keywords
-        (``period_min``, ``period_max``, ``n_grid``).
+    grid
+        Explicit frequency grid, as built by :func:`frequency_grid`. Mutually
+        exclusive with the grid keywords (``period_min``, ``period_max``,
+        ``n_grid``).
     prior
         REQUIRED. ``False`` selects **profile mode**: no priors at all, every
         linear column fitted by generalized least squares, and
@@ -497,7 +497,7 @@ def periodogram(
         (``LinearPriorCallable``) are resolved per trial period.
     period_min, period_max, samples_per_peak, n_grid
         Grid construction keywords, forwarded to :func:`frequency_grid`
-        (``period_min`` is required when ``frequency_grid`` is not given).
+        (``period_min`` is required when ``grid`` is not given).
     n_terms
         Number of Fourier terms (harmonics of the trial frequency).
         ``n_terms >= 2`` absorbs eccentricity distortion of the orbit shape.
@@ -606,7 +606,7 @@ def periodogram(
 
     Many sources at once. ``periodogram`` is safe under ``jax.jit`` and
     ``jax.vmap`` provided the frequency grid is *shape-fixed* -- an explicit
-    ``frequency_grid``, or ``period_min``/``period_max``/``n_grid`` all given.
+    ``grid``, or ``period_min``/``period_max``/``n_grid`` all given.
     A grid whose size is derived from each source's own baseline cannot be
     traced, since ``n_grid`` is then an output shape. Batching also requires
     one observation count across the stacked sources; differing counts retrace
@@ -653,7 +653,7 @@ def periodogram(
             "least one harmonic of the trial frequency; with none, the trial "
             "model is the base model and every Delta would be zero."
         )
-    if frequency_grid is not None:
+    if grid is not None:
         conflicting = period_min, period_max, samples_per_peak, n_grid
         if any(arg is not None for arg in conflicting):
             raise TypeError(
@@ -668,7 +668,7 @@ def periodogram(
         grid_kwargs: dict[str, Any] = {}
         if samples_per_peak is not None:
             grid_kwargs["samples_per_peak"] = samples_per_peak
-        frequency_grid = get_frequency_grid(
+        grid = frequency_grid(
             data,
             period_min=period_min,
             period_max=period_max,
@@ -686,7 +686,7 @@ def periodogram(
         ds_prior = _resolve_per_dataset(prior, "prior", name)
         ds_ext = _resolve_per_dataset(extensions, "extensions", name)
         delta, lnl0, eff = _dataset_delta_lnl(
-            d, ds_prior, tuple(ds_ext), frequency_grid, n_terms, prior_params
+            d, ds_prior, tuple(ds_ext), grid, n_terms, prior_params
         )
         per_dataset[name] = delta
         base_lnls.append(lnl0)
@@ -695,12 +695,12 @@ def periodogram(
     total_delta = jnp.sum(jnp.stack(list(per_dataset.values())), axis=0)
     total_lnl0 = functools.reduce(jnp.add, base_lnls)
 
-    time_unit = str((1.0 / frequency_grid[:1]).unit)
+    time_unit = str((1.0 / grid[:1]).unit)
 
     # time_ref is always set by AbstractData.__check_init__ / the containers:
     time_ref = cast("ScalarQTime", data.time_ref)
     return PeriodogramResult(
-        frequency=frequency_grid,
+        frequency=grid,
         delta_ln_likelihood=total_delta,
         ln_likelihood_base=total_lnl0,
         time_span=Q(_data_time_span(data, time_unit), time_unit),

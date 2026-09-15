@@ -78,11 +78,11 @@ class TestRejectionSamplerGetExtensions:
         assert isinstance(result, tuple)
         assert result == (ext,)
 
-    def test_constructor_with_multisurvey_offset(self):
+    def test_constructor_with_multi_survey_offset(self):
         """The case that motivated this method: MultiSurveyOffset built from data."""
-        from harv.simulate.rv import simulate_rv_multisurv_data  # noqa: PLC0415
+        from harv.simulate.rv import simulate_rv_multi_survey_data  # noqa: PLC0415
 
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "harps": Q(2.0, "km/s")},
             seed=0,
             n_obs_per_instrument=10,

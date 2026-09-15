@@ -199,6 +199,20 @@ def get_time_grid(
     return Q(grid, time_unit)
 
 
+def _default_gaia_model(model: Any) -> Any:
+    """Fall back to a bare ``GaiaAstrometryModel()`` when the caller passes none.
+
+    Imported lazily to keep :mod:`harv.plot` importable without pulling in the
+    models layer (and to avoid the import cycle through
+    :mod:`harv.models.astrometry`).
+    """
+    if model is not None:
+        return model
+    from harv.models.astrometry import GaiaAstrometryModel  # noqa: PLC0415
+
+    return GaiaAstrometryModel()
+
+
 def get_alpha(n: int) -> float:
     """Get alpha (transparency) for plotting many samples, to avoid overplotting."""
     return max(0.08, min(0.8, 8.0 / n))
@@ -313,7 +327,7 @@ def _component_sample_params(
     return nonlinear_for_model, linear_stripped
 
 
-def _strip_multisurvey_offsets(model: Any) -> Any:
+def _strip_multi_survey_offsets(model: Any) -> Any:
     """Return a copy of *model* with any MultiSurveyOffset extension removed.
 
     The offset extension's ``indicator_matrix`` is fixed to the original
@@ -617,7 +631,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             nonlinear_ref, linear_ref = _component_sample_params(
                 samples, comp_model_for_instr, rv_data, instr_name, ref_idx
             )
-            curve_model = _strip_multisurvey_offsets(comp_model_for_instr)
+            curve_model = _strip_multi_survey_offsets(comp_model_for_instr)
             # Keplerian + trend contribution at data times (no offsets,
             # no zero-point — those are part of the *model* prediction, not the
             # noise we want to subtract).
@@ -635,15 +649,15 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             # Baseline Keplerian-only prediction (no extensions at all).
             kepler_only_model = eqx.tree_at(lambda m: m.extensions, curve_model, ())
             y_full = trend_only_model.predict_at_times(
-                rv_data.time,
                 nonlinear_ref,
                 linear_ref,
+                rv_data.time,
                 time_ref=rv_data.time_ref,
             )
             y_kepler = kepler_only_model.predict_at_times(
-                rv_data.time,
                 nonlinear_ref,
                 linear_ref,
+                rv_data.time,
                 time_ref=rv_data.time_ref,
             )
             trend_contrib = y_full - y_kepler  # bare jax array in rv_unit
@@ -778,22 +792,22 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         nonlinear_i, linear_i = _component_sample_params(
             samples, comp_model, rv_data_ref, instr_name, i
         )
-        curve_model = _strip_multisurvey_offsets(comp_model)
+        curve_model = _strip_multi_survey_offsets(comp_model)
         # Keplerian-only baseline (no design-matrix extensions).
         kepler_only = eqx.tree_at(lambda m: m.extensions, curve_model, ())
         y_kepler = kepler_only.predict_at_times(
-            time_grid,
             nonlinear_i,
             linear_i,
+            time_grid,
             time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
         # Full design-matrix prediction (Keplerian + trend + any other
         # design-matrix extension).
         y_full = curve_model.predict_at_times(
-            time_grid,
             nonlinear_i,
             linear_i,
+            time_grid,
             time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
@@ -890,15 +904,15 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             time_ref=time_ref,
         )
         comp_model_for_curve = model if isinstance(model, _RVModel) else _RVModel()
-        curve_model = _strip_multisurvey_offsets(comp_model_for_curve)
+        curve_model = _strip_multi_survey_offsets(comp_model_for_curve)
         for i in draw_indices:
             nonlinear_i, linear_i = _component_sample_params(
                 samples, curve_model, dummy_data, "data", i
             )
             y_model = curve_model.predict_at_times(
-                time_grid,
                 nonlinear_i,
                 linear_i,
+                time_grid,
                 time_ref=time_ref,
                 obs_unit=rv_unit,
             )
@@ -921,10 +935,10 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
 
 def plot_gaia_sky_orbit(
-    model: Any,
     samples: Samples,
-    *,
     data: GaiaAstrometryData | None = None,
+    model: Any = None,
+    *,
     n_grid: int = 500,
     errorbar_scale: float = 1.0,
     plot_kwargs: dict[str, Any] | None = None,
@@ -982,6 +996,8 @@ def plot_gaia_sky_orbit(
         If *samples* does not contain exactly one posterior sample.
     """
     _, plt = get_mpl("plot_gaia_sky_orbit")
+
+    model = _default_gaia_model(model)
 
     if len(samples) != 1:
         msg = (
@@ -1184,12 +1200,7 @@ def plot_gaia_astrometry(
         )
         raise ValueError(msg)
 
-    if model is None:
-        from harv.models.astrometry import (  # noqa: PLC0415
-            GaiaAstrometryModel as _GaiaAstrometryModel,
-        )
-
-        model = _GaiaAstrometryModel()
+    model = _default_gaia_model(model)
 
     return_fig = axes is None
     if axes is None:
@@ -1254,7 +1265,7 @@ def plot_gaia_astrometry(
     ax_resid.set_title("Along-scan residual vs time")
 
     # --- Panel 1: sky-projected orbit (delegated) ---
-    plot_gaia_sky_orbit(model, samples, data=data, ax=ax_sky, **sky_orbit_kwargs)
+    plot_gaia_sky_orbit(samples, data, model, ax=ax_sky, **sky_orbit_kwargs)
     ax_sky.set_title("Sky-projected orbit")
 
     if return_fig:

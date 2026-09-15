@@ -12,8 +12,8 @@ from harv.kepler.orbits import (
     ecosw_esinw_from_ecc_omega,
     mean_anomaly,
     rv_shape,
-    thiele_innes_ABFG,
     thiele_innes_from_campbell,
+    thiele_innes_unit,
     true_anomaly_from_mean,
 )
 
@@ -111,7 +111,7 @@ class TestRvShape:
 class TestThieleInnesABFG:
     def test_identity_orientation(self) -> None:
         # omega=0, Omega=0, i=0 -> A=1, B=0, F=0, G=1 (face-on, aligned)
-        A, B, F, G = thiele_innes_ABFG(1.0, 0.0, 1.0, 0.0, 1.0)
+        A, B, F, G = thiele_innes_unit(1.0, 0.0, 1.0, 0.0, 1.0)
         assert jnp.allclose(A, 1.0, atol=1e-10)
         assert jnp.allclose(B, 0.0, atol=1e-10)
         assert jnp.allclose(F, 0.0, atol=1e-10)
@@ -128,7 +128,7 @@ class TestThieleInnesABFG:
         )
         A_ref, B_ref, F_ref, G_ref = orient.thiele_innes_constants()
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             orient.cos_arg_peri,
             orient.sin_arg_peri,
             orient.cos_lon_asc_node,
@@ -150,7 +150,7 @@ class TestThieleInnesABFG:
         a = Q(2.5, "mas")
         A_ref, B_ref, F_ref, G_ref = orient.thiele_innes_constants(semi_major_axis=a)
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             orient.cos_arg_peri,
             orient.sin_arg_peri,
             orient.cos_lon_asc_node,
@@ -164,13 +164,13 @@ class TestThieleInnesABFG:
         assert jnp.allclose(a_val * G, ustrip("mas", G_ref), atol=1e-10)
 
     def test_jit(self) -> None:
-        A, _B, _F, _G = jax.jit(thiele_innes_ABFG)(1.0, 0.0, 1.0, 0.0, 1.0)
+        A, _B, _F, _G = jax.jit(thiele_innes_unit)(1.0, 0.0, 1.0, 0.0, 1.0)
         assert jnp.isfinite(A)
 
     def test_vmap(self) -> None:
         cos_ws = jnp.array([1.0, 0.0, -1.0])
         sin_ws = jnp.array([0.0, 1.0, 0.0])
-        vmap_ti = jax.vmap(thiele_innes_ABFG, in_axes=(0, 0, None, None, None))
+        vmap_ti = jax.vmap(thiele_innes_unit, in_axes=(0, 0, None, None, None))
         As, _Bs, _Fs, _Gs = vmap_ti(cos_ws, sin_ws, 1.0, 0.0, 1.0)
         assert As.shape == (3,)
 
@@ -204,7 +204,7 @@ class TestCampbellFromThieleInnes:
         a: float,
     ) -> None:
         # Forward pass: Campbell → TI
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -221,7 +221,7 @@ class TestCampbellFromThieleInnes:
         assert jnp.allclose(ustrip("", result["cos_i"]), cos_i, atol=1e-5)
         # Re-compute TI from the recovered Campbell elements; must recover original
         # A,B,F,G
-        A_rt, B_rt, F_rt, G_rt = thiele_innes_ABFG(
+        A_rt, B_rt, F_rt, G_rt = thiele_innes_unit(
             jnp.cos(ustrip("rad", result["arg_peri"])),
             jnp.sin(ustrip("rad", result["arg_peri"])),
             jnp.cos(ustrip("rad", result["lon_asc_node"])),
@@ -236,7 +236,7 @@ class TestCampbellFromThieleInnes:
     def test_round_trip_quantity(self) -> None:
         arg_peri, lon_asc_node, cos_i = 0.7, 1.3, 0.5
         a = Q(2.5, "mas")
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -251,7 +251,7 @@ class TestCampbellFromThieleInnes:
 
     def test_jit(self) -> None:
         arg_peri, lon_asc_node, cos_i, a = 0.5, 1.0, 0.6, 3.0
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),

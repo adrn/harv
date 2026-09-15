@@ -43,7 +43,7 @@ from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
-from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
+from harv.simulate.rv import simulate_rv_multi_survey_data, simulate_rv_sb1_data
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -157,9 +157,9 @@ class TestMultiSurveyRVRecovery:
     """
 
     @pytest.fixture(scope="class")
-    def multisurv_samples(self):
+    def multi_survey_samples(self):
         instruments = {"keck": None, "harps": Q(2.0, "km/s")}
-        source_data, true = simulate_rv_multisurv_data(
+        source_data, true = simulate_rv_multi_survey_data(
             instruments=instruments,
             seed=10,
             n_obs_per_instrument=10,
@@ -188,12 +188,12 @@ class TestMultiSurveyRVRecovery:
         samples = sampler.run(stacked, n_prior_samples=500_000, key=jax.random.key(10))
         return samples, true
 
-    def test_enough_accepted_samples(self, multisurv_samples):
-        samples, _ = multisurv_samples
+    def test_enough_accepted_samples(self, multi_survey_samples):
+        samples, _ = multi_survey_samples
         assert samples.n_samples >= 10
 
-    def test_true_period_in_90pct_credible_interval(self, multisurv_samples):
-        samples, true = multisurv_samples
+    def test_true_period_in_90pct_credible_interval(self, multi_survey_samples):
+        samples, true = multi_survey_samples
         true_period = float(ustrip("day", true["period"]))
         p5 = _period_quantile(samples, 5)
         p95 = _period_quantile(samples, 95)
@@ -201,9 +201,9 @@ class TestMultiSurveyRVRecovery:
             f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
         )
 
-    def test_injected_offset_in_90pct_credible_interval(self, multisurv_samples):
+    def test_injected_offset_in_90pct_credible_interval(self, multi_survey_samples):
         """Injected harps offset (2 km/s) should be covered by the posterior."""
-        samples, true = multisurv_samples
+        samples, true = multi_survey_samples
         true_offset = float(ustrip("km/s", true["offset_harps"]))
 
         offset_samples = samples["harps"].value
@@ -214,8 +214,8 @@ class TestMultiSurveyRVRecovery:
             f"{off_hi:.2f}]."
         )
 
-    def test_offset_key_present(self, multisurv_samples):
-        samples, _ = multisurv_samples
+    def test_offset_key_present(self, multi_survey_samples):
+        samples, _ = multi_survey_samples
         assert "harps" in samples.keys()  # noqa: SIM118
         assert "keck" not in samples.keys()  # noqa: SIM118
 

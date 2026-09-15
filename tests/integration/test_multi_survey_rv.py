@@ -18,7 +18,7 @@ from harv.distributions import QD
 from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
-from harv.simulate.rv import simulate_rv_multisurv_data
+from harv.simulate.rv import simulate_rv_multi_survey_data
 
 
 class TestMultiSurveyModel:
@@ -26,7 +26,7 @@ class TestMultiSurveyModel:
 
     def test_log_prob_finite(self):
         """Model returns a finite scalar at arbitrary parameters."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "espresso": Q(2.0, "km/s")},
             seed=1,
             n_obs_per_instrument=20,
@@ -58,7 +58,7 @@ class TestMultiSurveyModel:
 
     def test_log_prob_higher_than_single_instrument(self):
         """Multi-survey model with correct offset is higher than without."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "espresso": Q(10.0, "km/s")},
             seed=2,
             n_obs_per_instrument=30,
@@ -101,7 +101,7 @@ class TestMultiSurveyModel:
 
     def test_vmap_batch(self):
         """Vmap over a batch of parameter samples works correctly."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "hires": Q(1.0, "km/s")},
             seed=3,
             n_obs_per_instrument=15,
@@ -146,7 +146,7 @@ class TestMultiSurveyRejectionSampler:
     @pytest.fixture
     def low_snr_data(self):
         """Low-SNR multi-survey RV data: K/sigma ~ 1, rejection sampling tractable."""
-        source_data, true = simulate_rv_multisurv_data(
+        source_data, true = simulate_rv_multi_survey_data(
             instruments={"keck": None, "harps": Q(2.0, "km/s")},
             seed=7,
             n_obs_per_instrument=20,

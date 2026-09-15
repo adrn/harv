@@ -8,7 +8,7 @@ from unxt import Q, ustrip
 from harv.kepler.orbits import (
     astrometric_orbit_at_times,
     rv_at_times,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
 )
 from harv.samplers.samples import Samples, _MetadataView, pad_and_stack_samples
 
@@ -777,7 +777,7 @@ def _make_ti_samples(n: int = 4) -> Samples:
     cos_i = jnp.linspace(0.3, 0.8, n)
 
     A_arr, B_arr, F_arr, G_arr = jax.vmap(
-        lambda w, lon_node, ci: thiele_innes_ABFG(
+        lambda w, lon_node, ci: thiele_innes_unit(
             jnp.cos(w), jnp.sin(w), jnp.cos(lon_node), jnp.sin(lon_node), ci
         )
     )(arg_peri, lon_asc_node, cos_i)
@@ -857,7 +857,7 @@ class TestThieleInnesToCampbell:
         ci_rec = converted["cos_i"].value
         a0_rec = converted["semi_major_axis"].value
         A_rt, B_rt, F_rt, G_rt = jax.vmap(
-            lambda w, lon_node, ci: thiele_innes_ABFG(
+            lambda w, lon_node, ci: thiele_innes_unit(
                 jnp.cos(w), jnp.sin(w), jnp.cos(lon_node), jnp.sin(lon_node), ci
             )
         )(w_rec, lon_asc_node_rec, ci_rec)

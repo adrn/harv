@@ -14,7 +14,7 @@ from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.data import RVData, SourceData
 from harv.kepler.orbits import rv_at_times
 
-__all__ = ("simulate_rv_multisurv_data", "simulate_rv_sb1_data")
+__all__ = ("simulate_rv_multi_survey_data", "simulate_rv_sb1_data")
 
 
 def simulate_rv_sb1_data(
@@ -163,7 +163,7 @@ def simulate_rv_sb1_data(
     return data, true_params
 
 
-def simulate_rv_multisurv_data(  # noqa: C901
+def simulate_rv_multi_survey_data(  # noqa: C901
     instruments: dict[str, ScalarQSpeed | None],
     seed: int = 42,
     n_obs_per_instrument: int = 30,
@@ -229,8 +229,8 @@ def simulate_rv_multisurv_data(  # noqa: C901
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.simulate import simulate_rv_multisurv_data
-    >>> source_data, true_params = simulate_rv_multisurv_data(
+    >>> from harv.simulate import simulate_rv_multi_survey_data
+    >>> source_data, true_params = simulate_rv_multi_survey_data(
     ...     instruments={"keck": None, "espresso": Q(3.5, "km/s")},
     ...     seed=0,
     ...     n_obs_per_instrument=20,

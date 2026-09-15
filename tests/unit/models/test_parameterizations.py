@@ -6,7 +6,7 @@ import pytest
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_unit
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
@@ -241,7 +241,7 @@ class TestThieleInnesGaiaAstrometry:
 
         a0 = 2.5
         ecc, arg_peri, lon_asc_node, cos_i = 0.3, 0.8, 1.1, 0.6
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),

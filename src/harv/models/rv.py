@@ -122,9 +122,9 @@ class RVModel(AbstractComponentModel):
 
     def predict_at_times(
         self,
-        times: BatchQTime,
         nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: BatchQTime,
         *,
         time_ref: ScalarQTime,
         obs_unit: str = "km/s",

@@ -452,7 +452,7 @@ class JointModel(eqx.Module):
             # Bare non-shared non-qualified keys are not routed to any component
         return result
 
-    def params_explicit(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
+    def explicit_params(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
         """Names of parameters that must be explicitly sampled.
 
         Shared nonlinear params use bare names (e.g. ``"period"``).
@@ -500,7 +500,7 @@ class JointModel(eqx.Module):
 
         return shared_names + tuple(comp_specific) + tuple(explicit_lin)
 
-    def params_marginalized(
+    def marginalized_params(
         self, linear_priors: dict[str, Any] | None
     ) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized across all components.

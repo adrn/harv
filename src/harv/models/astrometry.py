@@ -184,5 +184,5 @@ class GaiaAstrometryModel(AbstractComponentModel):
         # Not defined by FourierGaiaAstrometry: a Fourier fit has no Campbell
         # elements, so there is no sky orbit ellipse to draw.
         return self.parameterization.sky_orbit(  # ty: ignore[unresolved-attribute]
-            times, nonlinear_values, linear_values
+            nonlinear_values, linear_values, times
         )

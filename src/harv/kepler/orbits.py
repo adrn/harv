@@ -10,7 +10,7 @@ as well as plain JAX arrays and Python scalars.
 __all__ = (
     "mean_anomaly",
     "rv_shape",
-    "thiele_innes_ABFG",
+    "thiele_innes_unit",
     "true_anomaly_from_mean",
     "campbell_from_thiele_innes",
     "thiele_innes_from_campbell",
@@ -105,7 +105,7 @@ def rv_shape(
     return cast("BatchFloat", cos_wf + ecc * jnp.cos(arg_peri))
 
 
-def thiele_innes_ABFG(
+def thiele_innes_unit(
     cos_arg_peri: BatchFloatLike,
     sin_arg_peri: BatchFloatLike,
     cos_lon_asc_node: BatchFloatLike,
@@ -136,8 +136,8 @@ def thiele_innes_ABFG(
     --------
     >>> import quaxed.numpy as jnp
     >>> from unxt import Q
-    >>> from harv.kepler.orbits import thiele_innes_ABFG
-    >>> A, B, F, G = thiele_innes_ABFG(
+    >>> from harv.kepler.orbits import thiele_innes_unit
+    >>> A, B, F, G = thiele_innes_unit(
     ...     cos_arg_peri=jnp.cos(Q(0.5, "rad")),
     ...     sin_arg_peri=jnp.sin(Q(0.5, "rad")),
     ...     cos_lon_asc_node=jnp.cos(Q(1.0, "rad")),
@@ -222,7 +222,7 @@ def thiele_innes_from_campbell(
 
     The forward direction of the change of variables inverted by
     :func:`campbell_from_thiele_innes`.  The unit Thiele-Innes constants from
-    :func:`thiele_innes_ABFG` are scaled by the semi-major axis:
+    :func:`thiele_innes_unit` are scaled by the semi-major axis:
 
     .. math::
 
@@ -240,7 +240,7 @@ def thiele_innes_from_campbell(
     >>> A.unit
     Unit("mas")
     """
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(arg_peri),
         jnp.sin(arg_peri),
         jnp.cos(lon_asc_node),
@@ -489,7 +489,7 @@ def astrometric_orbit_at_times(
     sin_f, cos_f = compute_true_anomaly_components(
         times, period, eccentricity, time_peri
     )
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(ustrip("rad", arg_peri)),
         jnp.sin(ustrip("rad", arg_peri)),
         jnp.cos(ustrip("rad", lon_asc_node)),

@@ -22,7 +22,7 @@ from harv.distributions import QD
 from harv.kepler.orbits import (
     astrometric_orbit_at_times,
     rv_at_times,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
 )
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions import Jitter, MonomialTrend
@@ -1573,19 +1573,19 @@ class TestPlotGaiaSkyOrbit:
 
     def test_returns_figure_no_data(self, astro_samples):
         """Without data, only the orbit ellipse is drawn."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=None)
+        fig = plot_gaia_sky_orbit(astro_samples[0], None, self._model())
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_returns_figure_with_data(self, astro_samples, gaia_data):
         """With data, scan-direction segments are drawn at each epoch."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=gaia_data)
+        fig = plot_gaia_sky_orbit(astro_samples[0], gaia_data, self._model())
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_equal_aspect(self, astro_samples):
         """The sky-orbit axes use equal aspect ratio."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0])
+        fig = plot_gaia_sky_orbit(astro_samples[0], model=self._model())
         assert fig.axes[0].get_aspect() != "auto"
         plt.close("all")
 
@@ -1622,7 +1622,7 @@ _A = 2.5  # mas
 @pytest.fixture
 def ti_samples() -> Samples:
     """Samples with Thiele-Innes linear params built from known Campbell elements."""
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(_ARG_PERI),
         jnp.sin(_ARG_PERI),
         jnp.cos(_LON_ASC_NODE),
@@ -1692,7 +1692,7 @@ class TestThieleInnesToCampbell:
         arg_peri_out = ustrip("rad", result.nonlinear["arg_peri"])[0]
         lon_asc_node_out = ustrip("rad", result.nonlinear["lon_asc_node"])[0]
         cos_i_out = ustrip("", result.nonlinear["cos_i"])[0]
-        A_rt, B_rt, *_ = thiele_innes_ABFG(
+        A_rt, B_rt, *_ = thiele_innes_unit(
             jnp.cos(arg_peri_out),
             jnp.sin(arg_peri_out),
             jnp.cos(lon_asc_node_out),
@@ -1700,7 +1700,7 @@ class TestThieleInnesToCampbell:
             cos_i_out,
         )
         # Must recover original unit TI constants (a0 cancels)
-        A, B, *_ = thiele_innes_ABFG(
+        A, B, *_ = thiele_innes_unit(
             jnp.cos(_ARG_PERI),
             jnp.sin(_ARG_PERI),
             jnp.cos(_LON_ASC_NODE),

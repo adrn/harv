@@ -13,7 +13,7 @@ from harv.custom_types import (
     ScalarQLength,
     float_converter,
 )
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_unit
 
 
 class KeplerianOrientation(eqx.Module):
@@ -278,7 +278,7 @@ class KeplerianOrientation(eqx.Module):
             jnp.array(1.0) if semi_major_axis is None else Q.from_(semi_major_axis)
         )
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             self.cos_arg_peri,
             self.sin_arg_peri,
             self.cos_lon_asc_node,

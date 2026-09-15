@@ -27,7 +27,7 @@ from harv.custom_types import (
     ScalarQTime,
 )
 from harv.data import GaiaAstrometryData
-from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
+from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_unit
 
 __all__ = ("simulate_gaia_epoch_astrometry", "fake_parallax_factor")
 
@@ -285,7 +285,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     y_orbit = uconvert("mas", sin_psi * delta_ra + cos_psi * delta_dec)
 
     # Thiele-Innes constants for true_params output
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(arg_peri),
         jnp.sin(arg_peri),
         jnp.cos(lon_asc_node),

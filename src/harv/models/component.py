@@ -187,7 +187,7 @@ class AbstractComponentModel(eqx.Module):
             n for n, d in linear_priors.items() if not _needs_explicit_sampling(d)
         )
 
-    def params_explicit(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
+    def explicit_params(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
         """Names of parameters that must be explicitly sampled.
 
         Given a (resolved) ``linear_prior`` dict, returns all nonlinear
@@ -202,7 +202,7 @@ class AbstractComponentModel(eqx.Module):
         explicit_linear = tuple(n for n in self._all_linear_names() if n not in marg)
         return self._all_nonlinear_names() + explicit_linear
 
-    def params_marginalized(
+    def marginalized_params(
         self, linear_priors: dict[str, Any] | None
     ) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized in log_prob.

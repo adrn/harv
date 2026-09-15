@@ -14,8 +14,8 @@ from harv.kepler.orbits import (
     campbell_from_thiele_innes,
     ecc_omega_from_ecosw_esinw,
     ecosw_esinw_from_ecc_omega,
-    thiele_innes_ABFG,
     thiele_innes_from_campbell,
+    thiele_innes_unit,
 )
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
@@ -346,7 +346,7 @@ class TestConvertGaia:
 
         # TI design matrix: (n, 9); TI columns at the end
         # Compute equivalent ti_A..G = a * unit_TI_constants
-        A_u, B_u, F_u, G_u = thiele_innes_ABFG(
+        A_u, B_u, F_u, G_u = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),

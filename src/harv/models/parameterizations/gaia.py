@@ -25,7 +25,7 @@ from harv.custom_types import (
 from harv.distributions import QuantityDistribution
 from harv.kepler.orbits import (
     mean_anomaly,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
     true_anomaly_from_mean,
 )
 from harv.models._helpers import LinearPriorDist, PriorDist
@@ -143,7 +143,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
         lon_asc_node = nonlinear_values["lon_asc_node"]
         cos_i = nonlinear_values["cos_i"]
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -173,14 +173,14 @@ class StandardGaiaAstrometry(AbstractParameterization):
 
     def sky_orbit(
         self,
-        times: Any,
         nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: Any,
     ) -> tuple[jax.Array, jax.Array]:
         """Sky-plane orbital offsets ``(dRA, dDec)`` from the photocentre orbit.
 
         Computes ``(dRA, dDec) = a_0 * (B*X + G*Y, A*X + F*Y)`` using the same
-        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_ABFG`,
+        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_unit`,
         :func:`~harv.kepler.orbits.mean_anomaly`,
         :func:`~harv.kepler.orbits.true_anomaly_from_mean`) that the design
         matrix uses.  Returns bare JAX arrays in the same unit as the scalar
@@ -201,7 +201,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
         sin_f = ustrip(AllowValue, "", sin_f_q)
         cos_f = ustrip(AllowValue, "", cos_f_q)
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -537,9 +537,9 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
 
     def sky_orbit(
         self,
-        times: Any,
         nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: Any,
     ) -> tuple[jax.Array, jax.Array]:
         r"""Sky-plane orbital offsets ``(dRA, dDec)`` from the TI constants.
 

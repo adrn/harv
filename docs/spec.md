@@ -220,7 +220,7 @@ src/harv/
 │   └── linear_op.py         # vendored linear operators
 ├── plot.py                  # get_time_grid and plotting utilities
 └── simulate/                # Synthetic data generators
-    ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
+    ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multi_survey_data
     ├── astrometry.py        # simulate_gaia_epoch_astrometry
     ├── scanlaw.py           # Gaia scanning law utilities
     └── source.py            # Source motion models (for simulation)
@@ -406,11 +406,11 @@ so callers never need to strip units themselves:
 - `mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle` — `M = 2π · dt / period`
 - `true_anomaly_from_mean(M: BatchQAngle, eccentricity: ScalarFloatLike) -> (sin f, cos f)` — solve Kepler's equation
 
-`rv_shape` and `thiele_innes_ABFG` remain pure functions on raw JAX arrays
+`rv_shape` and `thiele_innes_unit` remain pure functions on raw JAX arrays
 or dimensionless `Q` objects, because their inputs are always already dimensionless at every call site:
 
 - `rv_shape(sin_f, cos_f, eccentricity, arg_peri)` — RV shape function: cos(ω+f) + e·cos(ω)
-- `thiele_innes_ABFG(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
+- `thiele_innes_unit(cos_ω, sin_ω, cos_Ω, sin_Ω, cos_i)` — unit Thiele-Innes constants (a=1)
 
 Orbital-element conversions translate between equivalent element sets. They accept
 and return `Q` objects, and back the parameterization-conversion machinery (see
@@ -2715,7 +2715,7 @@ Generates a synthetic `RVData` for a single-lined spectroscopic binary.
 All orbital parameters have random defaults if not specified. Returns
 `(data, true_params)`. Uses NumPy RNG (not JAX) because this is a one-off setup step.
 
-### `simulate_rv_multisurv_data`
+### `simulate_rv_multi_survey_data`
 
 Generates a `SourceData` with multiple `RVData` instruments and
 per-instrument zero-point offsets. Takes an `instruments` dict mapping instrument
