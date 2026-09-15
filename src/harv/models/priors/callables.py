@@ -40,7 +40,7 @@ class PeriodDependentKPrior(eqx.Module):
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol and is the default
-    ``linear_prior`` returned by
+    ``linear_priors`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_rv`.
 
     References
@@ -56,7 +56,7 @@ class PeriodDependentKPrior(eqx.Module):
     >>> prior.sigma_K0.unit
     Unit("km / s")
 
-    Used as the default ``linear_prior`` for ``rv_semiamp`` in
+    Used as the default ``linear_priors`` for ``rv_semiamp`` in
     :meth:`~harv.models.priors.HarvPrior.default_rv`.  Called with a dict of
     parameter values to condition on the nonlinear parameters:
 
@@ -123,7 +123,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
-    and is the default ``linear_prior`` for ``semi_major_axis`` returned by
+    and is the default ``linear_priors`` for ``semi_major_axis`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` dict must contain ``"period"``, ``"eccentricity"``, and
@@ -212,7 +212,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
-    and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
+    and is the default ``linear_priors`` for ``pmra`` and ``pmdec`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` dict must contain ``"parallax"`` (``Quantity`` with angular

@@ -62,7 +62,7 @@ class AbstractParameterization(eqx.Module):
         Returns
         -------
         HarvPrior
-            A prior whose ``nonlinear_priors`` and ``linear_prior`` entries
+            A prior whose ``nonlinear_priors`` and ``linear_priors`` entries
             match the names declared by ``self.params()``.
         """
         msg = (

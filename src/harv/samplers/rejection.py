@@ -66,7 +66,7 @@ def _prepare_sampler_model(
     """Prepare a normalized model/prior bundle for rejection or MCMC sampling.
 
     Walks the attached ``model`` to extract nonlinear extension priors and
-    computes the effective linear prior at run-time from ``prior.linear_prior``
+    computes the effective linear prior at run-time from ``prior.linear_priors``
     plus any linear-extension parameters declared on the model's extensions.
     """
     nonlinear_extension_priors, linear_extension_names = (

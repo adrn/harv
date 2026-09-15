@@ -273,7 +273,7 @@ class JointModel(eqx.Module):
             Defaults to the standard nonlinear shared orbital params. For example,
             "period", "eccentricity", "phase_peri", and "arg_peri".
         shared_linear_params
-            Defaults to every key in ``prior.linear_prior`` except the ``rv_semiamp``
+            Defaults to every key in ``prior.linear_priors`` except the ``rv_semiamp``
             keys.
 
         Returns

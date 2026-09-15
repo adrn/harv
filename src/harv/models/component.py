@@ -66,7 +66,7 @@ class AbstractComponentModel(eqx.Module):
     """Abstract base for single-data-type component models.
 
     Component models are *templates*: they carry only ``parameterization`` and
-    ``extensions`` (config). ``data`` and ``linear_prior`` are passed at
+    ``extensions`` (config). ``data`` and ``linear_priors`` are passed at
     evaluation time to the methods that need them. This means the same model
     instance can be re-used across multiple datasets without rebuilding.
 
@@ -190,7 +190,7 @@ class AbstractComponentModel(eqx.Module):
     def explicit_params(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
         """Names of parameters that must be explicitly sampled.
 
-        Given a (resolved) ``linear_prior`` dict, returns all nonlinear
+        Given a (resolved) ``linear_priors`` dict, returns all nonlinear
         parameters (orbital + extension, e.g. jitter) plus any linear
         parameters with non-Gaussian priors (e.g. parallax with a HalfNormal
         prior) that cannot be analytically marginalized.
@@ -207,7 +207,7 @@ class AbstractComponentModel(eqx.Module):
     ) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized in log_prob.
 
-        Given a (resolved) ``linear_prior`` dict, returns the linear
+        Given a (resolved) ``linear_priors`` dict, returns the linear
         parameter names whose priors are Gaussian (or callable-returning-Normal)
         and so are integrated out analytically via the Woodbury identity
         rather than sampled. Their values are NOT required in the ``values``
@@ -508,7 +508,7 @@ class AbstractComponentModel(eqx.Module):
 
         Three calling conventions are supported:
 
-        1. **Auto mode** (recommended): pass ``linear_prior`` and let the
+        1. **Auto mode** (recommended): pass ``linear_priors`` and let the
            model classify which linear params to marginalize. Non-Gaussian
            linear priors are expected as entries in ``nonlinear_values``.
         2. **Manual marginalization**: pass ``marginalized_names`` (and
@@ -756,7 +756,7 @@ class AbstractComponentModel(eqx.Module):
         """Sample linear parameters from the conditional posterior.
 
         In auto mode (both ``marginalized_names`` and ``explicit_linear``
-        are ``None``), the method classifies from ``linear_prior`` and
+        are ``None``), the method classifies from ``linear_priors`` and
         extracts explicit linear values from ``nonlinear_values``.
 
         Returns all linear parameter values (both sampled and explicit),

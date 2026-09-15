@@ -82,11 +82,22 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 | `Vec3QSpeed`          | `Real[Q["speed"], "3"]`                                                 | 3-vector velocity returns                     |
 | `BatchVec3QLength`    | `Real[Q["length"], "3 *batch"]`                                         | Batched 3-vector positions                    |
 | `BatchVec3QSpeed`     | `Real[Q["speed"], "3 *batch"]`                                          | Batched 3-vector velocities                   |
+| `ScalarQAny`          | `Real[AbstractQuantity, ""]`                                            | Scalar Quantity of any dimension              |
 | `BatchQTime`, etc.    | `Real[Q[dim], "*batch"]`                                                | Batched Quantities (scalar or array)          |
-| `BatchFloat`          | `Float[jax.Array, "*batch"] \| np.floating \| float \| ...`             | Dimensionless batched inputs                  |
-| `NTime`, `NAngle`, …  | `Real[Q[dim], "n"]`                                                     | 1-d arrays of observations                    |
+| `BatchFloat`          | `Float[jax.Array, "*batch"] \| BatchQDimless`                           | Dimensionless batched values                  |
+| `BatchFloatLike`      | `Float[jax.Array, "*batch"] \| np.floating \| float \| int \| BatchQDimless` | Dimensionless batched *inputs*          |
+| `NTime`, `NAngle`, `NSpeed`, … | `Real[Q[dim], "n"]`                                            | 1-d arrays of observations                    |
+| `NQAny`               | `Real[AbstractQuantity, "n"]`                                           | 1-d array of any dimension                    |
 | `NFloatArray`         | `Float[jax.Array, "n"]`                                                 | Plain JAX float arrays                        |
-| `ScalarFloatLike`         | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
+| `ScalarFloatLike`     | `Float[jax.Array, ""] \| np.floating \| float \| int \| ScalarQDimless` | Dimensionless scalar *inputs*                 |
+
+Two conventions hold across the whole table, and a violation of either is a bug:
+
+- **Shape prefix:** `Scalar*` is shape `""`, `N*` is shape `"n"` (one entry per
+  observation), `Batch*` is `"*batch"`, `Vec3*` is `"3"`.
+- **`*Like` suffix:** a bare alias is the narrow, stored type; the `*Like` alias
+  is the wide union of what a field or argument *accepts*. `ScalarFloatLike` and
+  `BatchFloatLike` are the two that exist.
 
 Dimension literal aliases (`Time = Literal["time"]`, `Speed = Literal["speed"]`, etc.)
 are also exported for use in `Q[Time]`-style annotations elsewhere.
@@ -173,42 +184,55 @@ ______________________________________________________________________
 
 ```
 src/harv/
-├── custom_types.py          # Unit-dimension Literal aliases + Batch* type aliases
+├── __init__.py              # Curated top level; see __all__. Does NOT import harv.io
+├── custom_types.py          # Unit-dimension Literal aliases + Batch*/N*/Scalar* aliases
 ├── distributions.py         # QuantityDistribution (QD) unit-aware wrapper
+├── io.py                    # save_sampler / load_sampler (import harv.io explicitly)
+├── _optional_deps.py        # get_mpl, get_arviz -- lazy optional-dependency imports
 ├── data/                    # Observation data classes + stack/indicator helpers
-│   ├── datasets.py          # AbstractData, GaiaAstrometryData, RVData
-│   ├── containers.py        # SystemData, SourceData
+│   ├── datasets.py          # AbstractData, AbstractAstrometryData,
+│   │                        #   GaiaAstrometryData, RVData
+│   ├── containers.py        # AbstractDatasetContainer, SystemData, SourceData
 │   └── helpers.py           # stack_datasets, build_indicator_matrix
 ├── kepler/                  # Orbit mechanics (JAX)
 │   ├── orbits.py            # Low-level building blocks and orbit functions
 │   ├── body.py              # KeplerianBody
 │   ├── orientation.py       # KeplerianOrientation + Thiele-Innes
 │   ├── nbody_system.py      # AbstractNBodySystem, TwoBodySystem
+│   ├── masses.py            # binary/astrometric mass functions, companion_mass
 │   └── constants.py         # G, c
 ├── models/                  # Component models (likelihood + parameterization)
-│   ├── parameterizations/    # Parameter declarations and design matrices
-│   │   ├── _base.py         # AbstractParameterization base class
+│   ├── parameterizations/   # Parameter declarations and design matrices
+│   │   ├── base.py          # AbstractParameterization base class
 │   │   ├── rv.py            # StandardRV, EcoswEsinwRV
 │   │   ├── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
 │   │   └── fourier.py       # FourierRV, FourierGaiaAstrometry (Kepler-free)
+│   ├── priors/              # HarvPrior and the prior-building machinery
+│   │   ├── prior.py         # HarvPrior
+│   │   ├── callables.py     # PeriodDependentKPrior,
+│   │   │                    #   PeriodDependentSemiMajorAxisPrior,
+│   │   │                    #   ParallaxDependentProperMotionPrior
+│   │   ├── defaults.py      # default_sb2_prior
+│   │   └── _helpers.py      # _make_period_prior, _apply_overrides, ... (private)
+│   ├── extensions/          # Pluggable model modifiers
+│   │   ├── base.py          # ParamInfo, AbstractExtension
+│   │   ├── jitter.py        # Jitter (excess variance)
+│   │   ├── trend.py         # MonomialTrend
+│   │   ├── multi_survey.py  # MultiSurveyOffset
+│   │   └── gp.py            # GP (Gaussian Process covariance)
 │   ├── component.py         # AbstractComponentModel (marginalization, numpyro)
 │   ├── rv.py                # RVModel (final)
 │   ├── astrometry.py        # GaiaAstrometryModel (final)
 │   ├── joint.py             # JointModel (composition of components)
 │   └── _helpers.py          # PriorDist, LinearPriorCallable, _needs_explicit_sampling
-├── extensions/              # Pluggable model modifiers
-│   ├── base.py              # ParamInfo, AbstractExtension
-│   ├── jitter.py            # Jitter (excess variance)
-│   ├── trend.py             # MonomialTrend
-│   ├── multi_survey.py      # MultiSurveyOffset
-│   └── gp.py                # GP (Gaussian Process covariance)
 ├── samplers/
-│   ├── base.py              # AbstractSampler (shared base)
-│   ├── rejection_prior.py   # HarvPrior
-│   ├── custom_priors.py     # PeriodDependentKPrior, _make_log_period_prior
+│   ├── base.py              # AbstractSampler (shared base), _fresh_key
 │   ├── rejection.py         # RejectionSampler
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
-│   └── samples.py           # Samples container
+│   ├── samples.py           # Samples container, pad_and_stack_samples
+│   ├── conversion.py        # convert_parameterization
+│   ├── prior_cache.py       # make_prior_cache
+│   └── _prior_resolution.py # shared marginalized/explicit-name resolution (private)
 ├── periodogram/             # Periodogram-informed interim period priors
 │   ├── grid.py              # frequency_grid
 │   ├── core.py              # periodogram(), PeriodogramResult
@@ -222,9 +246,13 @@ src/harv/
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multi_survey_data
     ├── astrometry.py        # simulate_gaia_epoch_astrometry
-    ├── scanlaw.py           # Gaia scanning law utilities
+    ├── scan_law.py          # Gaia scanning law utilities
     └── source.py            # Source motion models (for simulation)
 ```
+
+`HarvPrior` lives in `harv.models.priors`, not `harv.samplers` -- a prior is a
+statement about the model, and the samplers consume it. It is re-exported at the
+top level as `harv.HarvPrior`.
 
 ______________________________________________________________________
 
@@ -304,6 +332,9 @@ arguments are forwarded to `ax.errorbar()` and override the defaults.
   `(time - time_ref) / phase_fold mod 1` (orbital phase in \[0, 1)) instead of absolute
   time. Mutually exclusive with `relative_to_time_ref`.
 
+`AbstractData` exposes `n_obs` (the number of observations; the length of
+`time`).
+
 ### Indexing data objects
 
 All concrete `AbstractData` subclasses (`RVData`, `GaiaAstrometryData`) support
@@ -333,7 +364,7 @@ data = SourceData(
 ```
 
 Each dataset is accessed by name (`data["keck"]`). `SourceData` provides
-`get_datasets_by_type(dtype)`, `keys()`, `values()`, and `items()` for iteration,
+`get_datasets_by_type(data_type)`, `keys()`, `values()`, and `items()` for iteration,
 plus a `plot(ax=None, *, add_legend=True, color_cycler=None, **kwargs)` method that
 inherits the shared implementation on `AbstractDatasetContainer`. `SourceData.plot()`
 raises `TypeError` if the contained datasets are not all the same concrete type, since
@@ -364,7 +395,7 @@ Components are passed as keyword arguments; the number and names are
 user-defined (not restricted to "primary"/"secondary").
 
 `SystemData` provides the same dict-like interface as `SourceData`:
-`__getitem__`, `keys()`, `values()`, `items()`, `get_datasets_by_type(dtype)`,
+`__getitem__`, `keys()`, `values()`, `items()`, `get_datasets_by_type(data_type)`,
 `plot(...)` (inherited; no homogeneity check is needed because the constructor
 already enforces one), plus:
 
@@ -786,6 +817,66 @@ docstrings explaining the model), the physics symbols $K$ (semi-amplitude) and $
 (systemic velocity) are standard and should be used. The API-level parameter names
 (`rv_semiamp`, `v_sys`) appear in function signatures, dict keys, and struct fields.
 
+### Naming conventions across the package
+
+These hold for every public name -- arguments, attributes, functions, modules --
+and for local variables derived from them. They are normative: a name that
+violates one is a bug in the code, not an exception to the rule.
+
+1. **Time is `time_`, never `t_`.** `time`, `time_ref`, `time_peri`, `time_span`,
+   `time_grid`, `time_unit`. The observation array on every `AbstractData` is
+   `time`, so its companions spell it out too.
+
+1. **`ln_` is natural log; `log10_` is base 10.** `ln_likelihood`, `ln_prior`,
+   `ln_posterior`, `max_ln_likelihood`, `ln_Z_int`, `ln_density`, `ln_prob_ln`,
+   and `samples["log10_period"]`. Exactly two carve-outs, both because the name
+   is not ours to pick: `log_prob` is numpyro's `Distribution` method, and "Log"
+   inside a *distribution's own name* stays (`dist.LogUniform`,
+   `log_uniform_in_a`, the class `LogGridDensity`).
+
+1. **Counts are `n_<thing>`.** `n_obs`, `n_samples`, `n_prior_samples`,
+   `n_terms`, `n_grid`. `num_*` appears only where it is a numpyro passthrough:
+   `num_chains`, `num_warmup`, `num_samples` on `NumpyroSampler.run`.
+
+1. **Trig functions separate with `_`:** `sin_i`, `cos_i`, `sin_arg_peri`,
+   `cos_lon_asc_node`. `sin2i_floor` is *not* an exception -- it floors
+   `sin²(i)`, not `sin(i)`.
+
+1. **Masses are `m_<role>`:** `m_primary`, `m_total`, `m_companion`, `m_body`.
+
+1. **RNG:** the JAX-facing API takes `key: jax.Array`
+   (`RejectionSampler.run`, `NumpyroSampler.run`/`.optimize`,
+   `HarvPrior.sample`, `make_prior_cache`). `harv.simulate.*` is NumPy-backed
+   (`np.random.SeedSequence`) and takes `seed: int`. `key=None` means "a fresh
+   unpredictable key", via `harv.samplers.base._fresh_key`.
+
+1. **Abbreviate only when the abbreviation is itself a domain term.** `arg_peri`,
+   `pmra`, `rv`, `lon_asc_node` qualify. `nl_` (nonlinear) and `multisurv` did
+   not, and were expanded.
+
+1. **Type aliases** follow the shape-prefix and `*Like`-suffix rules in
+   §Annotation conventions.
+
+1. **Modules:** a module whose contents are entirely private takes a leading
+   underscore (`models/_helpers.py`, `models/priors/_helpers.py`,
+   `samplers/_prior_resolution.py`); one exposing public names does not
+   (`data/helpers.py`). The abstract base of a subpackage is `base.py`.
+
+#### Deliberate non-uniformities
+
+Checked and kept as-is; they are not drift:
+
+- **`sigma_vtan` vs `sigma_pm`** are different quantities, not two names for
+  one. `sigma_vtan` is a physical tangential velocity (`ScalarQSpeed`, e.g.
+  km/s) fed through `ParallaxDependentProperMotionPrior`; `sigma_pm` is a flat
+  angular scale (`ScalarQAngularSpeed`, e.g. mas/yr) on the Fourier
+  parameterizations, which make no data-driven prior choices.
+- **`a_physical` / `a_angular`** in `harv.kepler.masses` keep the short `a`:
+  expanding them collides with the sibling function name
+  `semi_major_axis_physical`.
+- **`HarvPrior`** is package-prefixed to avoid colliding with the far more
+  common word "prior" at call sites.
+
 ### The `period` convention
 
 The period prior is typically a `dist.LogUniform(period_min, period_max)` wrapped in a
@@ -941,7 +1032,7 @@ Subclasses declare these fields:
 
 - `data` -- observation data.
 - `parameterization` -- declares parameter names and design matrix.
-- `linear_prior: dict | None` -- per-parameter priors for marginalization.
+- `linear_priors: dict | None` -- per-parameter priors for marginalization.
 - `extensions: tuple` -- model extensions.
 
 The base class methods `log_prob`, `sample_conditional_linear`, and
@@ -962,7 +1053,7 @@ methods just to pass their data.
 
 When `log_prob(values)` is called with only a flat dict of values (no explicit
 `marginalized_names`), the model auto-classifies which linear params to
-marginalize based on `linear_prior`:
+marginalize based on `linear_priors`:
 
 | Prior type                    | Classification | Treatment                         |
 | ----------------------------- | -------------- | --------------------------------- |
@@ -1025,6 +1116,23 @@ must be JAX-traceable: no Python branching on parameter *values*. Branching on d
    which linear params to marginalize.
 1. **Explicit evaluation**: pass `linear_values` without `marginalized_names`.
 
+### Predicting the model at arbitrary times
+
+Three related entry points, all taking `(nonlinear_values, linear_values, ...)`
+in that order:
+
+- `AbstractComponentModel.predict(nonlinear_values, linear_values, data)` --
+  the full model prediction at the data's own times.
+- `RVModel.predict_at_times(nonlinear_values, linear_values, times, *,
+  time_ref, obs_unit="km/s")` -- the RV model on an arbitrary time grid, with
+  no observed-data object required. Backs the orbit curves in `plot_rv`.
+- `GaiaAstrometryModel.predict_orbit_sky(nonlinear_values, linear_values,
+  times)` -- sky-plane orbital offsets `(dRA, dDec)`, the *orbit only* (no
+  proper motion, parallax, or zero-point). Delegates to
+  `parameterization.sky_orbit(nonlinear_values, linear_values, times)`, so it
+  works for both `StandardGaiaAstrometry` and `ThieleInnesGaiaAstrometry`.
+  Not defined for `FourierGaiaAstrometry`, which has no Campbell elements.
+
 ### `chi_squared`
 
 `chi_squared(nonlinear_values, linear_values, data) -> jax.Array` returns the
@@ -1052,7 +1160,7 @@ no data or linear prior are stored as fields. Both are passed at call time.
 | ------------------ | -------------------------- | -------------------------- |
 | `data`             | `GaiaAstrometryData`       | (required)                 |
 | `parameterization` | `AbstractParameterization` | `StandardGaiaAstrometry()` |
-| `linear_prior`     | `dict \| None`             | `None`                     |
+| `linear_priors`     | `dict \| None`             | `None`                     |
 | `extensions`       | `tuple`                    | `()`                       |
 
 Overrides `_linear_param_units()` because astrometric linear params have mixed
@@ -1091,11 +1199,11 @@ systemic velocity.
 
 **Key methods:**
 
-- `log_prob(nonlinear_values, data, *, linear_prior=None)` -- splits flat dict into per-component
+- `log_prob(nonlinear_values, data, *, linear_priors=None)` -- splits flat dict into per-component
   dicts, routes explicit linear values, sums component log-likelihoods.
-- `sample_conditional_linear(nonlinear_values, key, data, *, linear_prior=None)` -- returns
+- `sample_conditional_linear(nonlinear_values, key, data, *, linear_priors=None)` -- returns
   `dict[str, dict[str, jax.Array]]` keyed by component name.
-- `numpyro_model(nonlinear_priors, data, linear_prior, *, marginalized=True)` -- builds
+- `numpyro_model(nonlinear_priors, data, linear_priors, *, marginalized=True)` -- builds
   a joint numpyro model.
   **Explicit linear routing:** Non-Gaussian linear priors (e.g. HalfNormal parallax)
   are sampled alongside nonlinear params and appear in the flat `nonlinear_values` dict.
@@ -1223,8 +1331,7 @@ per-parameter linear prior. It is an `eqx.Module`.
 | Field               | Type                                           | Description                                                |
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
 | `nonlinear_priors`  | `dict[str, PriorDist]`                         | Nonlinear parameter priors                                 |
-| `linear_prior`      | `LinearPriorDist`                              | Per-parameter linear priors                                |
-| `offsets` parameter | `dict[str, QD \| None] \| None` (factory only) | Offset priors; non-ref entries merged into `linear_prior`  |
+| `linear_priors`      | `LinearPriorDist`                              | Per-parameter linear priors                                |
 | `extension_priors`  | `dict[str, PriorDist]` (KW_ONLY, default `{}`) | Priors for extension params (jitter, GP hyperparams, etc.) |
 
 ### Constructing a prior
@@ -1331,7 +1438,7 @@ assert "espresso" in prior.extension_priors
 
 The offsets are additional linear parameters appended to the design matrix by a
 `MultiSurveyOffset` extension via `indicator_matrix`. Because they are in
-`linear_prior`, they are passed directly to the model — no manual merging needed.
+`linear_priors`, they are passed directly to the model — no manual merging needed.
 
 ### Jitter (excess variance)
 
@@ -1371,7 +1478,7 @@ sampler = RejectionSampler(prior, extensions=(Jitter(obs_unit="km/s"),))
 # Or with explicit HarvPrior construction:
 prior = HarvPrior(
     nonlinear_priors=...,
-    linear_prior=...,
+    linear_priors=...,
     extension_priors={"jitter": QD(dist.HalfNormal(1.0), "km/s")},
 )
 sampler = RejectionSampler(prior, extensions=(Jitter(obs_unit="km/s"),))
@@ -1382,7 +1489,7 @@ For a `JointModel`, use the component-qualified key in `extension_priors`:
 ```python
 prior = HarvPrior(
     nonlinear_priors=...,
-    linear_prior=...,
+    linear_priors=...,
     extension_priors={"rv.jitter": QD(dist.HalfNormal(1.0), "km/s")},
 )
 sampler = RejectionSampler(prior, joint)
@@ -1513,7 +1620,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
    wrap unit-bearing parameters as `Quantity` objects and evaluate
    `jax.vmap(model.log_prob)(values)`. If `marginalized_names` is not set, the
    model auto-classifies which linear params to marginalize from its own
-   `linear_prior`. If `marginalized_names` is set on the sampler, that subset is
+   `linear_priors`. If `marginalized_names` is set on the sampler, that subset is
    passed through explicitly.
    Evaluated via `jax.lax.fori_loop` to bound memory.
 
@@ -2563,10 +2670,18 @@ ______________________________________________________________________
 
 ### `get_time_grid`
 
-`get_time_grid(times: BatchQTime, period: Q["time"])` returns a dense time grid
-for plotting orbit curves. The grid spans from `min(times) - span_factor*range/2` to
-`max(times) + span_factor*range/2`, with spacing determined by
-`period / n_points_per_period`.
+```python
+get_time_grid(
+    times, period, *,
+    span_buffer_factor=0.1, n_points_per_period=256,
+    max_time_grid=int(1e6), min_time_grid=None,
+)
+```
+
+Returns a dense time grid for plotting orbit curves, spanning
+`[min(times) - buffer, max(times) + buffer]` where
+`buffer = max(span * span_buffer_factor, 0.5 * period)`, with spacing
+`period / n_points_per_period`, clamped to `[min_time_grid, max_time_grid]`.
 
 ### `plot_rv`
 
@@ -2574,11 +2689,13 @@ for plotting orbit curves. The grid spans from `min(times) - span_factor*range/2
 plot_rv(
     samples,
     data=None,
-    extensions=(),
+    model=None,
     *,
     n_samples=128,
     time_grid=None,
     show_signal_components=False,
+    relative_to_time_ref=False,
+    relative_to_median_v_sys=False,
     phase_fold_median=False,
     apply_median_offsets=True,
     plot_kwargs=None,
@@ -2623,7 +2740,7 @@ created and returned; otherwise draws into `ax` and returns `None`.
 plot_gaia_astrometry(
     samples,
     data,
-    extensions=(),
+    model=None,
     *,
     data_plot_kwargs=None,
     sky_orbit_kwargs=None,
@@ -2654,8 +2771,9 @@ the two given axes `(sky, residual)` and returns `None`.
 
 ```python
 plot_gaia_sky_orbit(
-    orbit_params,
+    samples,
     data=None,
+    model=None,
     *,
     n_grid=500,
     errorbar_scale=1.0,
@@ -2666,15 +2784,20 @@ plot_gaia_sky_orbit(
 )
 ```
 
-Draw a single astrometric photocenter orbit on the sky for one set of orbital
-parameters. When `data` is provided, each Gaia epoch is rendered as a short line
-segment in the scan direction at the model-predicted photocenter offset, with
-half-length equal to `errorbar_scale * al_position_err`.
+Draw a single astrometric photocenter orbit on the sky. When `data` is provided,
+each Gaia epoch is rendered as a short line segment in the scan direction at the
+model-predicted photocenter offset, with half-length equal to
+`errorbar_scale * al_position_err`.
 
-- `orbit_params` -- dict with keys `period`, `eccentricity`, `time_peri`,
-  `arg_peri`, `cos_i`, `lon_asc_node`, `semi_major_axis`. `time_peri` is the
-  *absolute* periastron time (i.e. `time_ref + phase_peri * period`).
+- `samples` -- a `Samples` containing **exactly one** sample; any other count
+  raises `ValueError`. Select one with `samples[i]` or `samples.map_sample()`.
 - `data` -- `GaiaAstrometryData` or `None`.
+- `model` -- `GaiaAstrometryModel` or `None`; `None` uses a bare
+  `GaiaAstrometryModel()`. The orbit path is obtained from
+  `model.predict_orbit_sky(...)`, so both Standard and Thiele-Innes
+  parameterizations work.
+
+All three plotting entry points take `(samples, data, model)` in that order.
 
 ______________________________________________________________________
 
