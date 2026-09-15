@@ -342,8 +342,10 @@ class TestAstrometryLikelihoodSanity:
     def test_true_params_log_prob_finite(self, astro_model_and_truth):
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
         nl = {
             "period": true["period"],
             "eccentricity": true["eccentricity"],
@@ -366,8 +368,10 @@ class TestAstrometryLikelihoodSanity:
         """
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
 
         nl_true = {
             "period": true["period"],
@@ -412,8 +416,10 @@ class TestAstrometryLikelihoodSanity:
         """A grid search over period (all other params fixed) peaks near truth."""
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
         ecc = true["eccentricity"]
         cos_i = float(jnp.cos(ustrip("rad", true["inclination"])))
         arg_peri = float(ustrip("rad", true["arg_peri"]))

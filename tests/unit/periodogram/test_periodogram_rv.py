@@ -106,7 +106,7 @@ class TestInvariance:
                 time=data.time,
                 rv=data.rv + Q(100.0, "km/s"),
                 rv_err=data.rv_err,
-                t_ref=data.t_ref,
+                time_ref=data.time_ref,
             )
             wide = _prior(2, v_sys=harv.QD(dist.Normal(0.0, 1e4), "km/s"))
             f = hp.frequency_grid(data, period_min=Q(5.0, "day"))
@@ -378,7 +378,7 @@ class TestProfileMode:
                 time=data.time,
                 rv=data.rv + Q(500.0, "km/s"),
                 rv_err=data.rv_err,
-                t_ref=data.t_ref,
+                time_ref=data.time_ref,
             )
             grid = hp.frequency_grid(data, period_min=Q(5.0, "day"))
             a = hp.periodogram(data, grid, prior=False)
@@ -386,7 +386,7 @@ class TestProfileMode:
             assert jnp.allclose(a.delta_ln_likelihood, b.delta_ln_likelihood, atol=1e-6)
 
     def test_finite_past_the_baseline(self):
-        """At P >> t_span the trial columns go collinear with the base ones.
+        """At P >> time_span the trial columns go collinear with the base ones.
 
         The one place the least-squares solve could produce NaN; the rank-masked
         pseudo-inverse is what keeps it finite.
@@ -462,7 +462,7 @@ class TestJitVmap:
     """
 
     GRID = hp.frequency_grid(
-        t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=96
+        time_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=96
     )
 
     @staticmethod
@@ -489,7 +489,7 @@ class TestJitVmap:
             got = run(self._stack(sources))
 
             assert got.delta_ln_likelihood.shape == (3, self.GRID.shape[0])
-            assert got.t_span.shape == (3,)
+            assert got.time_span.shape == (3,)
             assert got.ln_likelihood_base.shape == (3,)
             # Static fields survive the trace unbatched.
             assert got.n_terms == 2
@@ -501,7 +501,9 @@ class TestJitVmap:
                     got.delta_ln_likelihood[i], want.delta_ln_likelihood, **_TOL
                 )
                 np.testing.assert_allclose(
-                    ustrip("day", got.t_span[i]), ustrip("day", want.t_span), rtol=1e-5
+                    ustrip("day", got.time_span[i]),
+                    ustrip("day", want.time_span),
+                    rtol=1e-5,
                 )
 
     def test_vmap_profile_mode(self):

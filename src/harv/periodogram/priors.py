@@ -279,7 +279,7 @@ def peak_period_prior(
 
     Strict local maxima of ``delta_ln_likelihood`` within ``height_drop`` nats
     of the global maximum each receive a top-hat in ln-period of full frequency
-    width ``peak_width`` (default ``1/t_span``, the natural periodogram peak
+    width ``peak_width`` (default ``1/time_span``, the natural periodogram peak
     width) and **equal mass** ``1/n_peaks`` regardless of peak amplitude — the
     amplitude-agnostic alternative to :func:`tempered_period_prior`. Each
     top-hat is normalized by its mass on the knot grid, so the equal share is
@@ -321,7 +321,7 @@ def peak_period_prior(
     )
 
     if peak_width is None:
-        width = 1.0 / float(ustrip(unit, result.t_span))
+        width = 1.0 / float(ustrip(unit, result.time_span))
     else:
         width = float(ustrip(f"1/({unit})", peak_width))
 

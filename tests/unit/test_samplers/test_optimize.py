@@ -55,9 +55,9 @@ TRUE_V_SYS = Q(-0.3, "km/s")
 def rv_data_and_truth():
     """Synthetic RV data generated from a known orbit."""
     times = Q(jnp.linspace(0.0, 200.0, 20), "day")
-    t_peri = TRUE_PHASE_PERI * TRUE_PERIOD
+    time_peri = TRUE_PHASE_PERI * TRUE_PERIOD
     rv_true = rv_at_times(
-        times, TRUE_PERIOD, TRUE_ECC, t_peri, TRUE_ARG_PERI, TRUE_K, TRUE_V_SYS
+        times, TRUE_PERIOD, TRUE_ECC, time_peri, TRUE_ARG_PERI, TRUE_K, TRUE_V_SYS
     )
     rng = np.random.default_rng(0)
     noise = Q(jnp.asarray(rng.normal(0.0, 0.5, size=20)), "km/s")
@@ -92,7 +92,7 @@ def off_mode_sample() -> Samples:
             "v_sys": Q(jnp.array([0.5]), "km/s"),
         },
         data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -122,7 +122,7 @@ def rv_case(rv_data_and_truth):
             "v_sys": Q(jnp.array([0.5, -0.8]), "km/s"),
         },
         data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
     refined = sampler.optimize(warm, rv_data_and_truth, seed=0)
     return sampler, rv_data_and_truth, warm, refined
@@ -343,7 +343,7 @@ def joint_off_mode_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="JointModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -398,12 +398,12 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         true_pmdec = Q(-4.0, "mas/yr")
         true_parallax = Q(3.0, "mas")
 
-        t_peri = true_phase * true_period
+        time_peri = true_phase * true_period
         dra, ddec = astrometric_orbit_at_times(
             times,
             true_period,
             true_ecc,
-            t_peri,
+            time_peri,
             true_arg_peri,
             true_cos_i,
             true_Omega,
@@ -501,7 +501,7 @@ class TestNumpyroSamplerOptimizeThieleInnes:
             nonlinear=nonlinear,
             linear=linear,
             data_type="GaiaAstrometryModel",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
 
     @pytest.fixture(scope="class")
@@ -592,9 +592,9 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         true_period = Q(4000.0, "day")
         baseline = Q(1200.0, "day")  # ~30% of one orbit
         times = Q(jnp.linspace(0.0, float(baseline.value), n), "day")
-        # Use explicit t_ref=0 so phase_peri matches the data-generation convention.
-        # (Default t_ref is mean(times), which would shift the orbital phase.)
-        t_ref = Q(0.0, "day")
+        # Use explicit time_ref=0 so phase_peri matches the data-generation convention.
+        # (Default time_ref is mean(times), which would shift the orbital phase.)
+        time_ref = Q(0.0, "day")
         rng = np.random.default_rng(42)
         scan_angle = Q(jnp.asarray(rng.uniform(0.0, 2 * jnp.pi, n)), "rad")
         parallax_factor = jnp.asarray(rng.uniform(-1.0, 1.0, n))
@@ -612,13 +612,14 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         true_dec0 = Q(0.0, "mas")
 
         # Note: the model internally interprets phase_peri as relative to
-        # data.t_ref, so the absolute t_peri used here must be t_ref + phase*period.
-        t_peri = t_ref + true_phase * true_period
+        # data.time_ref, so the absolute time_peri used here must be
+        # time_ref + phase*period.
+        time_peri = time_ref + true_phase * true_period
         dra, ddec = _astrom(
             times,
             true_period,
             true_ecc,
-            t_peri,
+            time_peri,
             true_arg_peri,
             true_cos_i,
             true_Omega,
@@ -626,7 +627,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         )
         sin_psi = jnp.sin(scan_angle.value)
         cos_psi = jnp.cos(scan_angle.value)
-        dt_yr = (times.value - float(t_ref.value)) / 365.25
+        dt_yr = (times.value - float(time_ref.value)) / 365.25
         al_truth = (
             true_ra0.value * sin_psi
             + true_dec0.value * cos_psi
@@ -646,7 +647,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             al_position_err=al_err,
             scan_angle=scan_angle,
             parallax_factor=parallax_factor,
-            t_ref=t_ref,
+            time_ref=time_ref,
         )
 
         ti_A, ti_B, ti_F, ti_G = thiele_innes_from_campbell(
@@ -720,7 +721,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
                 "ti_G": Q(jnp.array([float(t["ti_G"].value) * 1.05]), "mas"),
             },
             data_type="GaiaAstrometryModel",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
 
     @pytest.fixture(scope="class")
@@ -740,8 +741,8 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         period = float(refined.nonlinear["period"][0].value)
         ecc = float(refined.nonlinear["eccentricity"][0].value)
         phase = float(refined.nonlinear["phase_peri"][0].value)
-        t_peri = phase * period
-        dt = data.time.value - 0.0 - t_peri  # t_ref=0 by default
+        time_peri = phase * period
+        dt = data.time.value - 0.0 - time_peri  # time_ref=0 by default
         M = mean_anomaly(Q(dt, "day"), Q(period, "day"))
         sin_f, cos_f = true_anomaly_from_mean(M, ecc)
         sin_f = jnp.asarray(
@@ -839,7 +840,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             data.time,
             campbell.nonlinear["period"][0],
             campbell.nonlinear["eccentricity"][0],
-            campbell["t_peri"][0],
+            campbell["time_peri"][0],
             campbell.nonlinear["arg_peri"][0],
             campbell.nonlinear["cos_i"][0],
             campbell.nonlinear["lon_asc_node"][0],

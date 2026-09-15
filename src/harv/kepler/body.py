@@ -37,7 +37,7 @@ class KeplerianBody(eqx.Module):
     - Period (P)
     - Eccentricity (e)
     - Semi-major axis (a) or ``semi_major_axis``
-    - Time of pericenter or ``t_peri``
+    - Time of pericenter or ``time_peri``
 
     Alternative constructors support different parameterizations.
 
@@ -49,7 +49,7 @@ class KeplerianBody(eqx.Module):
         Orbital eccentricity.
     semi_major_axis
         The semi-major axis of the body relative to its system barycenter.
-    t_peri
+    time_peri
         Time of pericenter passage.
     orientation
         Optional: Orientation of the orbit.
@@ -67,14 +67,14 @@ class KeplerianBody(eqx.Module):
     ...     period=Q(365.25, "day"),
     ...     eccentricity=0.1,
     ...     semi_major_axis=Q(1.0, "AU"),
-    ...     t_peri=Q(0.0, "day"),
+    ...     time_peri=Q(0.0, "day"),
     ... )
     """
 
     period: ScalarQTime
     eccentricity: ScalarFloat = eqx.field(converter=float_converter)
     semi_major_axis: ScalarQLength
-    t_peri: ScalarQTime
+    time_peri: ScalarQTime
     orientation: KeplerianOrientation = KeplerianOrientation()
     _: KW_ONLY
     ecc_zero_tol: ScalarFloat = jnp.finfo(float).eps * 10.0
@@ -91,12 +91,12 @@ class KeplerianBody(eqx.Module):
         # dimensionless - no mixing of dimensionless and dimensional
         checks = [
             x.unit.decompose().is_equivalent(apyu.one) if hasattr(x, "unit") else True
-            for x in [self.period, self.semi_major_axis, self.t_peri]
+            for x in [self.period, self.semi_major_axis, self.time_peri]
         ]
         if any(checks) and not all(checks):
             raise ValueError(
-                "Either all or none of period, semi_major_axis, and t_peri must have "
-                "units"
+                "Either all or none of period, semi_major_axis, and time_peri "
+                "must have units"
             )
 
     # ========================================================================
@@ -110,7 +110,7 @@ class KeplerianBody(eqx.Module):
         eccentricity: ScalarFloat,
         m_total: ScalarQMass,
         m_body: ScalarQMass,
-        t_peri: ScalarQTime,
+        time_peri: ScalarQTime,
         **kwargs: Any,
     ) -> "KeplerianBody":
         r"""Construct body's barycentric orbit from masses and period.
@@ -129,7 +129,7 @@ class KeplerianBody(eqx.Module):
             Total system mass.
         m_body
             Mass of this body.
-        t_peri
+        time_peri
             Time of pericenter passage.
         orientation
             Optional: Orientation of the orbit.
@@ -148,7 +148,7 @@ class KeplerianBody(eqx.Module):
             period=period,
             eccentricity=eccentricity,
             semi_major_axis=cast("ScalarQLength", a_body),
-            t_peri=t_peri,
+            time_peri=time_peri,
             **kwargs,
         )
 
@@ -189,7 +189,7 @@ class KeplerianBody(eqx.Module):
 
         Uses a circular shortcut when eccentricity is effectively zero.
         """
-        M = mean_anomaly(time - self.t_peri, self.period)
+        M = mean_anomaly(time - self.time_peri, self.period)
         M_raw = jnp.asarray(ustrip("rad", M))
         sin_f, cos_f = jax.lax.cond(
             jnp.isclose(self.eccentricity, 0.0, atol=self.ecc_zero_tol),

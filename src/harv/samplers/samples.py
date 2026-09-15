@@ -224,8 +224,8 @@ class _MetadataView(Mapping[str, Any]):
 
     The underlying ``metadata`` dict holds the *split* form for quantity-valued
     entries: a value (``float`` / ``int`` / ``str`` / ``bool``) under ``name``
-    and a unit string under ``f"{name}_unit"`` (e.g. ``{"t_ref": 0.0,
-    "t_ref_unit": "day"}``).  This split keeps the static field free of JAX
+    and a unit string under ``f"{name}_unit"`` (e.g. ``{"time_ref": 0.0,
+    "time_ref_unit": "day"}``).  This split keeps the static field free of JAX
     arrays so equinox doesn't warn about JAX arrays being marked static.
 
     The view papers over that split: ``view[name]`` returns a :class:`~unxt.Q`
@@ -236,16 +236,16 @@ class _MetadataView(Mapping[str, Any]):
 
     Examples
     --------
-    >>> view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
-    >>> view["t_ref"]  # doctest: +ELLIPSIS
+    >>> view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 2})
+    >>> view["time_ref"]  # doctest: +ELLIPSIS
     Quantity(..., unit='d')
     >>> view["num_chains"]
     2
     >>> sorted(view)
-    ['num_chains', 't_ref']
-    >>> "t_ref" in view
+    ['num_chains', 'time_ref']
+    >>> "time_ref" in view
     True
-    >>> "t_ref_unit" in view  # the _unit companion is hidden
+    >>> "time_ref_unit" in view  # the _unit companion is hidden
     False
     >>> view.get("missing", 5)
     5
@@ -305,7 +305,7 @@ class Samples(eqx.Module):
         ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``). Stored in HDF5 for
         round-tripping.
     metadata
-        Additional metadata (``t_ref``, ``num_chains``, acceptance rate, etc.).
+        Additional metadata (``time_ref``, ``num_chains``, acceptance rate, etc.).
     linear_extension_names
         Names of linear parameters introduced by extensions (instrument offsets,
         polynomial trends, etc.) beyond the base linear set.
@@ -329,7 +329,7 @@ class Samples(eqx.Module):
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
     ...     data_type="rv",
-    ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+    ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     ... )
     >>> samples.n_samples
     3
@@ -494,9 +494,9 @@ class Samples(eqx.Module):
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
         derived_keys = ["log_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
-        # periastron phase, so t_peri is only derivable when phase_peri exists.
+        # periastron phase, so time_peri is only derivable when phase_peri exists.
         if "phase_peri" in self.nonlinear:
-            derived_keys.append("t_peri")
+            derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
         if "rv_semiamp" in self.linear:
@@ -546,7 +546,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> samples["period"].unit
         Unit("d")
@@ -601,23 +601,23 @@ class Samples(eqx.Module):
                 ustrip(str(period.unit), period)
             )
 
-        if key == "t_peri":
-            # Express t_peri in absolute time: t_ref + phase_peri * period.
+        if key == "time_peri":
+            # Express time_peri in absolute time: time_ref + phase_peri * period.
             # phase_peri encodes the fractional orbital phase at t=0, so
             # phase_peri * period is the periastron time relative to t=0, and
-            # adding t_ref converts it to the same absolute coordinate as data.time.
+            # adding time_ref converts it to the same absolute coordinate as data.time.
             period = self.nonlinear["period"]
             time_unit = str(period.unit)
-            t_ref = self.meta.get("t_ref")
-            if t_ref is None:
-                t_ref_val = 0.0
-            elif isinstance(t_ref, AbstractQuantity):
-                t_ref_val = float(ustrip(time_unit, t_ref))
+            time_ref = self.meta.get("time_ref")
+            if time_ref is None:
+                time_ref_val = 0.0
+            elif isinstance(time_ref, AbstractQuantity):
+                time_ref_val = float(ustrip(time_unit, time_ref))
             else:
-                t_ref_val = float(t_ref)
+                time_ref_val = float(time_ref)
             phase_peri = ustrip("", self.nonlinear["phase_peri"])
             period_val = ustrip(time_unit, period)
-            return Q(t_ref_val + phase_peri * period_val, time_unit)
+            return Q(time_ref_val + phase_peri * period_val, time_unit)
 
         if key == "inclination":
             if "cos_i" in self.nonlinear:
@@ -709,7 +709,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
         ...             "v_sys": Q([0.0, 0.0], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> wrapped = samples.wrap_angles()
         >>> bool((wrapped["rv_semiamp"].value >= 0).all())
@@ -906,7 +906,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> med = samples.median("period")
         >>> med.unit
@@ -955,7 +955,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
         >>> len(samples.percentile("period", [5, 50, 95]))
@@ -994,7 +994,7 @@ class Samples(eqx.Module):
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
         ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
         >>> sorted(summary.keys())
@@ -1038,15 +1038,17 @@ class Samples(eqx.Module):
     def _phases(self, data: AbstractData) -> np.ndarray:
         """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
 
-        Phase is ``((time - t_ref) / period) mod 1`` evaluated at each sample's
+        Phase is ``((time - time_ref) / period) mod 1`` evaluated at each sample's
         period.
         """
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
-        period_val = np.asarray(ustrip(t_unit, period))
-        return ((time[None, :] - t_ref) / period_val[:, None]) % 1.0
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        time_ref = (
+            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
+        )
+        period_val = np.asarray(ustrip(time_unit, period))
+        return ((time[None, :] - time_ref) / period_val[:, None]) % 1.0
 
     def map_sample(
         self, *, return_index: bool = False
@@ -1159,9 +1161,9 @@ class Samples(eqx.Module):
         """
         self._require_single_component("period_unimodal")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        period_val = np.asarray(ustrip(t_unit, period))
-        time = np.asarray(ustrip(t_unit, data.time))
+        time_unit = str(period.unit)
+        period_val = np.asarray(ustrip(time_unit, period))
+        time = np.asarray(ustrip(time_unit, data.time))
         span = float(np.ptp(time))
         p_min = float(np.min(period_val))
         delta = 4.0 * p_min**2 / (2.0 * np.pi * span)
@@ -1196,8 +1198,8 @@ class Samples(eqx.Module):
             raise ImportError(msg) from exc
 
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        period_val = np.asarray(ustrip(t_unit, period))
+        time_unit = str(period.unit)
+        period_val = np.asarray(ustrip(time_unit, period))
         labels = KMeans(n_clusters=n_clusters).fit_predict(
             np.log(period_val).reshape(-1, 1)
         )
@@ -1212,7 +1214,7 @@ class Samples(eqx.Module):
             mode_periods.append(float(np.median(period_val[mask])))
             n_per_mode.append(int(mask.sum()))
 
-        return all(unimodal), Q(np.array(mode_periods), t_unit), np.array(n_per_mode)
+        return all(unimodal), Q(np.array(mode_periods), time_unit), np.array(n_per_mode)
 
     def max_phase_gap(self, data: AbstractData) -> np.ndarray:
         """Largest gap in orbital-phase coverage, per sample.
@@ -1278,9 +1280,9 @@ class Samples(eqx.Module):
         """
         self._require_single_component("periods_spanned")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        period_val = np.asarray(ustrip(t_unit, period))
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        period_val = np.asarray(ustrip(time_unit, period))
         return float(np.ptp(time)) / period_val
 
     def phase_coverage_per_period(self, data: AbstractData) -> np.ndarray:
@@ -1297,11 +1299,13 @@ class Samples(eqx.Module):
         """
         self._require_single_component("phase_coverage_per_period")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
-        period_val = np.asarray(ustrip(t_unit, period))
-        n_per = (time - t_ref) / period_val[:, None]  # (n_samples, n_obs)
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        time_ref = (
+            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
+        )
+        period_val = np.asarray(ustrip(time_unit, period))
+        n_per = (time - time_ref) / period_val[:, None]  # (n_samples, n_obs)
 
         out = np.empty(n_per.shape[0], dtype=int)
         for s, row in enumerate(n_per):

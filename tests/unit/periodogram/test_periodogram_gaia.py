@@ -143,7 +143,7 @@ class TestJitVmap:
     def test_vmap_callable_prior(self):
         with jax.enable_x64(new_val=True):
             grid = hp.frequency_grid(
-                t_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
+                time_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
             )
             prior = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
                 period_min=Q(20.0, "day"),

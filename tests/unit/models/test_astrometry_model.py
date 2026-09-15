@@ -18,7 +18,7 @@ def _make_astro_data(n_obs=50):
         al_position_err=Q(jnp.ones(n_obs) * 0.1, "mas"),
         scan_angle=Q(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad"),
         parallax_factor=jnp.ones(n_obs) * 0.5,
-        t_ref=Q(0.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
 
 

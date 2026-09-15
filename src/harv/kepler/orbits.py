@@ -328,7 +328,7 @@ def compute_true_anomaly_components(
     time: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    time_peri: ScalarQTime,
 ) -> tuple[BatchFloat, BatchFloat]:
     """Compute true anomaly at given times.
 
@@ -340,7 +340,7 @@ def compute_true_anomaly_components(
         Orbital period
     eccentricity
         Orbital eccentricity
-    t_peri
+    time_peri
         Time of pericenter passage
 
     Returns
@@ -355,10 +355,10 @@ def compute_true_anomaly_components(
     ...     time=Q([0.0, 25.0, 50.0], "day"),
     ...     period=Q(100.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(0.0, "day"),
+    ...     time_peri=Q(0.0, "day"),
     ... )
     """
-    M = mean_anomaly(time - t_peri, period)
+    M = mean_anomaly(time - time_peri, period)
     return true_anomaly_from_mean(M, ustrip(AllowValue, "", eccentricity))
 
 
@@ -366,7 +366,7 @@ def rv_at_times(
     times: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
     rv_semiamp: ScalarQSpeed,
     v_sys: ScalarQSpeed,
@@ -381,10 +381,10 @@ def rv_at_times(
         Orbital period.
     eccentricity
         Orbital eccentricity.
-    t_peri
+    time_peri
         Time of periastron passage.  In the likelihood layer this is
         derived from the dimensionless ``phase_peri`` as
-        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
+        ``time_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron omega.
     rv_semiamp
@@ -405,7 +405,7 @@ def rv_at_times(
     ...     times,
     ...     period=Q(200.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(50.0, "day"),
+    ...     time_peri=Q(50.0, "day"),
     ...     arg_peri=Q(1.2, "rad"),
     ...     rv_semiamp=Q(8.0, "km/s"),
     ...     v_sys=Q(-5.0, "km/s"),
@@ -413,7 +413,9 @@ def rv_at_times(
     >>> rv.unit
     Unit("km / s")
     """
-    sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
+    sin_f, cos_f = compute_true_anomaly_components(
+        times, period, eccentricity, time_peri
+    )
     amplitude = rv_shape(sin_f, cos_f, eccentricity, arg_peri)
     return cast("BatchQSpeed", rv_semiamp * amplitude + v_sys)
 
@@ -422,7 +424,7 @@ def astrometric_orbit_at_times(
     times: BatchQTime,
     period: ScalarQTime,
     eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
     cos_i: ScalarFloat,
     lon_asc_node: ScalarQAngle,
@@ -448,10 +450,10 @@ def astrometric_orbit_at_times(
         Orbital period.
     eccentricity
         Orbital eccentricity.
-    t_peri
+    time_peri
         Time of periastron passage.  In the likelihood layer this is
         derived from the dimensionless ``phase_peri`` as
-        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
+        ``time_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron omega.
     cos_i
@@ -475,7 +477,7 @@ def astrometric_orbit_at_times(
     ...     times,
     ...     period=Q(300.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(0.0, "day"),
+    ...     time_peri=Q(0.0, "day"),
     ...     arg_peri=Q(1.2, "rad"),
     ...     cos_i=0.5,
     ...     lon_asc_node=Q(0.8, "rad"),
@@ -484,7 +486,9 @@ def astrometric_orbit_at_times(
     >>> dra.unit
     Unit("mas")
     """
-    sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
+    sin_f, cos_f = compute_true_anomaly_components(
+        times, period, eccentricity, time_peri
+    )
     A, B, F, G = thiele_innes_ABFG(
         jnp.cos(ustrip("rad", arg_peri)),
         jnp.sin(ustrip("rad", arg_peri)),

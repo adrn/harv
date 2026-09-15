@@ -263,7 +263,7 @@ class TestReweightingConsistency:
         )
         # One shared grid config for the whole population (same knot count):
         frequency = hp.frequency_grid(
-            t_span=Q(6.0, "yr"), period_min=P_MIN, period_max=P_MAX
+            time_span=Q(6.0, "yr"), period_min=P_MIN, period_max=P_MAX
         )
 
         samples_base, samples_tail = [], []

@@ -104,7 +104,7 @@ periodograms for a whole population of sources in one traced call:
 
 ```python
 batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
-grid = hp.frequency_grid(t_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
+grid = hp.frequency_grid(time_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
 results = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))(batched)
 ```
 

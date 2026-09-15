@@ -29,8 +29,8 @@ def _fake_result(
         frequency=Q(f, "1/day"),
         delta_ln_likelihood=delta,
         ln_likelihood_base=jnp.asarray(0.0),
-        t_span=Q(2000.0, "day"),
-        t_ref=Q(0.0, "day"),
+        time_span=Q(2000.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
 
 
@@ -133,8 +133,8 @@ class TestTempered:
             frequency=base.frequency,
             delta_ln_likelihood=delta,
             ln_likelihood_base=base.ln_likelihood_base,
-            t_span=base.t_span,
-            t_ref=base.t_ref,
+            time_span=base.time_span,
+            time_ref=base.time_ref,
         )
         with pytest.raises(ValueError, match="non-finite at 1 of"):
             hp.tempered_period_prior(result)
@@ -181,8 +181,8 @@ class TestPeaks:
             frequency=base.frequency,
             delta_ln_likelihood=base.delta_ln_likelihood - 500.0,
             ln_likelihood_base=base.ln_likelihood_base,
-            t_span=base.t_span,
-            t_ref=base.t_ref,
+            time_span=base.time_span,
+            time_ref=base.time_ref,
         )
         p0 = hp.peak_period_prior(base, height_drop=15.0, floor=0.1)
         p1 = hp.peak_period_prior(shifted, height_drop=15.0, floor=0.1)

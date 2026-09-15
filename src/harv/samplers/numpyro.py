@@ -786,17 +786,17 @@ class NumpyroSampler(AbstractSampler):
             # deterministic sites.
             linear_q = self._extract_linear_from_posterior(model, posterior, data)
 
-        # Build metadata from the passed-in data.  t_ref is uniformly exposed by
+        # Build metadata from the passed-in data.  time_ref is uniformly exposed by
         # both AbstractData and AbstractDatasetContainer.
-        t_ref = data.t_ref
+        time_ref = data.time_ref
 
         metadata: dict[str, Any] = {"num_chains": num_chains}
-        if t_ref is not None:
+        if time_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit)
-            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
-            metadata["t_ref_unit"] = _t_unit
+            _t_unit = str(time_ref.unit)
+            metadata["time_ref"] = float(ustrip(_t_unit, time_ref))
+            metadata["time_ref_unit"] = _t_unit
 
         # Optional per-sample log-probabilities.
         ln_likelihood_arr: jax.Array | None = None

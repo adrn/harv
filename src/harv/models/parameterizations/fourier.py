@@ -1,10 +1,11 @@
 """Kepler-free Fourier-series parameterizations.
 
 These parameterizations replace the Keplerian orbit with a truncated Fourier series in
-the mean longitude ``M = 2*pi*(t - t_ref)/P``, and all coefficients are linear (so they
-can be marginalized). The only nonlinear parameter is ``period``: the periastron phase
-is absorbed into each ``(cos, sin)`` amplitude pair, and eccentricity distortion of the
-orbit shape is absorbed by the higher harmonics. No Kepler solve occurs here.
+the mean longitude ``M = 2*pi*(t - time_ref)/P``, and all coefficients are linear
+(so they can be marginalized). The only nonlinear parameter is ``period``: the
+periastron phase is absorbed into each ``(cos, sin)`` amplitude pair, and eccentricity
+distortion of the orbit shape is absorbed by the higher harmonics. No Kepler solve
+occurs here.
 
 This parameterization drives the Kepler periodogram functionality (``harv.periodogram``)
 through the standard model/likelihood machinery (one ``model.log_prob`` per trial period
@@ -153,7 +154,7 @@ class FourierRV(AbstractParameterization):
 
     The design matrix has shape ``(n_obs, 2*n_terms + 1)`` with columns
     ``[cos(k M), sin(k M)]`` for ``k = 1..n_terms`` plus a constant column,
-    where ``M = 2*pi*(t - t_ref)/P`` is the mean longitude. ``n_terms = 0`` is
+    where ``M = 2*pi*(t - time_ref)/P`` is the mean longitude. ``n_terms = 0`` is
     the valid null (no-signal) model: just the constant column.
 
     Examples
@@ -310,7 +311,7 @@ class FourierGaiaAstrometry(AbstractParameterization):
           ``k = 1..n_terms`` the Thiele-Innes-like amplitudes ``ti_A_k``,
           ``ti_B_k``, ``ti_F_k``, ``ti_G_k``.
 
-    Per harmonic ``k`` with mean longitude ``M = 2*pi*(t - t_ref)/P``, the four
+    Per harmonic ``k`` with mean longitude ``M = 2*pi*(t - time_ref)/P``, the four
     columns are ``[cos(kM)*cos_psi, cos(kM)*sin_psi, sin(kM)*cos_psi,
     sin(kM)*sin_psi]`` — the circular-orbit Thiele-Innes structure (compare
     :class:`~harv.models.parameterizations.gaia.ThieleInnesGaiaAstrometry` at

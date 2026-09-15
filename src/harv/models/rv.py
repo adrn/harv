@@ -85,8 +85,8 @@ class RVModel(AbstractComponentModel):
             nl_values
         )
 
-        t_peri = phase_peri * period
-        dt = (data.time - data.t_ref) - t_peri
+        time_peri = phase_peri * period
+        dt = (data.time - data.time_ref) - time_peri
         M = mean_anomaly(dt, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
@@ -94,12 +94,12 @@ class RVModel(AbstractComponentModel):
     def _mean_longitude(
         self, nl_values: dict[str, Any], data: RVData
     ) -> tuple[jax.Array, jax.Array]:
-        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - t_ref)/P``.
+        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - time_ref)/P``.
 
         Kepler-free path used by Fourier parameterizations: no periastron
         phase (absorbed into the linear amplitude pairs) and no Kepler solve.
         """
-        M = mean_anomaly(data.time - data.t_ref, nl_values["period"])
+        M = mean_anomaly(data.time - data.time_ref, nl_values["period"])
         m_rad = ustrip(AllowValue, "rad", M)
         return jnp.sin(m_rad), jnp.cos(m_rad)
 
@@ -122,7 +122,7 @@ class RVModel(AbstractComponentModel):
         nl_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
         *,
-        t_ref: ScalarQTime,
+        time_ref: ScalarQTime,
         obs_unit: str = "km/s",
     ) -> jax.Array:
         """Predicted RV at arbitrary *times*, no observed-data object required.
@@ -130,7 +130,7 @@ class RVModel(AbstractComponentModel):
         Internally constructs an :class:`~harv.data.RVData` shim at ``times``
         with dummy ``rv`` / ``rv_err`` (zeros / ones) and delegates to
         :meth:`predict`.  The dummy obs are never read by the prediction path
-        (``_full_design_matrix`` only consumes ``data.time`` and ``data.t_ref``;
+        (``_full_design_matrix`` only consumes ``data.time`` and ``data.time_ref``;
         extensions read at most those fields too).  The returned array is in
         the same units the model's linear parameters are expressed in.
 
@@ -152,6 +152,6 @@ class RVModel(AbstractComponentModel):
             time=times,
             rv=Q(jnp.zeros(n), obs_unit),
             rv_err=Q(jnp.ones(n), obs_unit),
-            t_ref=t_ref,
+            time_ref=time_ref,
         )
         return self.predict(nl_values, linear_values, dummy)

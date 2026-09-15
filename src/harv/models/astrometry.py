@@ -100,8 +100,8 @@ class GaiaAstrometryModel(AbstractComponentModel):
         phase_peri = nl_values["phase_peri"]
         eccentricity = nl_values["eccentricity"]
 
-        t_peri = phase_peri * period
-        dt = (data.time - data.t_ref) - t_peri
+        time_peri = phase_peri * period
+        dt = (data.time - data.time_ref) - time_peri
         M = mean_anomaly(dt, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
@@ -109,12 +109,12 @@ class GaiaAstrometryModel(AbstractComponentModel):
     def _mean_longitude(
         self, nl_values: dict[str, Any], data: GaiaAstrometryData
     ) -> tuple[jax.Array, jax.Array]:
-        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - t_ref)/P``.
+        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - time_ref)/P``.
 
         Kepler-free path used by Fourier parameterizations: no periastron
         phase (absorbed into the linear amplitude pairs) and no Kepler solve.
         """
-        M = mean_anomaly(data.time - data.t_ref, nl_values["period"])
+        M = mean_anomaly(data.time - data.time_ref, nl_values["period"])
         m_rad = ustrip(AllowValue, "rad", M)
         return jnp.sin(m_rad), jnp.cos(m_rad)
 
@@ -129,7 +129,7 @@ class GaiaAstrometryModel(AbstractComponentModel):
             sin_f, cos_f = self._solve_kepler(nl_values, data)
 
         # Prepare auxiliary data arrays
-        dt = jnp.array(ustrip(self.pm_time_unit, data.time - data.t_ref))
+        dt = jnp.array(ustrip(self.pm_time_unit, data.time - data.time_ref))
         scan_angle_rad = ustrip("rad", data.scan_angle)
         sin_psi = jnp.sin(scan_angle_rad)
         cos_psi = jnp.cos(scan_angle_rad)

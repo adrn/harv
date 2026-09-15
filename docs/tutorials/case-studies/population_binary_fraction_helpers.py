@@ -23,7 +23,7 @@ def load_population(path: pathlib.Path | str) -> tuple[list[RVData], dict]:
 
         - per-star arrays ``M1`` (Msun), ``M2`` (Msun, NaN for singles),
           ``period`` (day, NaN), ``eccentricity`` (NaN), ``sini`` (NaN),
-          ``arg_peri`` (rad, NaN), ``t_peri`` (day, NaN), ``K`` (km/s,
+          ``arg_peri`` (rad, NaN), ``time_peri`` (day, NaN), ``K`` (km/s,
           0 for singles), ``v_sys`` (km/s), and boolean ``is_binary`` /
           ``is_close_binary``;
         - scalars ``simulation_binary_fraction`` (raw 0.40 input),
@@ -40,13 +40,13 @@ def load_population(path: pathlib.Path | str) -> tuple[list[RVData], dict]:
         t_arr = np.asarray(f["time"][:])
         rv_arr = np.asarray(f["rv"][:])
         e_arr = np.asarray(f["rv_err"][:])
-        t_unit = f["time"].attrs["unit"]
+        time_unit = f["time"].attrs["unit"]
         rv_unit = f["rv"].attrs["unit"]
         e_unit = f["rv_err"].attrs["unit"]
         for n in range(t_arr.shape[0]):
             datasets.append(  # noqa: PERF401
                 RVData(
-                    time=Q(t_arr[n], t_unit),
+                    time=Q(t_arr[n], time_unit),
                     rv=Q(rv_arr[n], rv_unit),
                     rv_err=Q(e_arr[n], e_unit),
                 )

@@ -643,18 +643,18 @@ class RejectionSampler(AbstractSampler):
             unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
             nonlinear_q[k] = Q(v, unit)
 
-        # t_ref is uniformly exposed by both AbstractData and
+        # time_ref is uniformly exposed by both AbstractData and
         # AbstractDatasetContainer; no branching needed.
-        t_ref = data.t_ref
+        time_ref = data.time_ref
 
         metadata: dict[str, Any] = {}
 
-        if t_ref is not None:
+        if time_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit)
-            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
-            metadata["t_ref_unit"] = _t_unit
+            _t_unit = str(time_ref.unit)
+            metadata["time_ref"] = float(ustrip(_t_unit, time_ref))
+            metadata["time_ref_unit"] = _t_unit
 
         # Always assess resolution (cheap: a few reductions over log-likelihoods
         # already in memory) so the under-resolution warning fires even when the

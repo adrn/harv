@@ -90,9 +90,9 @@ class TestGaiaAstrometryModel:
 
         cos_i_true = float(np.cos(float(true["inclination"].value)))
 
-        t_peri_yr = float(_ustrip("yr", true["t_peri"]))
+        time_peri_yr = float(_ustrip("yr", true["time_peri"]))
         period_yr = float(_ustrip("yr", true["period"]))
-        phase_peri_true = (t_peri_yr / period_yr) % 1.0
+        phase_peri_true = (time_peri_yr / period_yr) % 1.0
         nl_true = {
             "period": true["period"],
             "eccentricity": float(true["eccentricity"]),

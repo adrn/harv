@@ -194,8 +194,8 @@ class StandardGaiaAstrometry(AbstractParameterization):
         cos_i = ustrip(AllowValue, "", nl_values["cos_i"])
         a0 = linear_values["semi_major_axis"]
 
-        t_peri = phase_peri * period
-        dt = times - t_peri
+        time_peri = phase_peri * period
+        dt = times - time_peri
         M = mean_anomaly(dt, period)
         sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
         sin_f = ustrip(AllowValue, "", sin_f_q)
@@ -549,8 +549,8 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
         phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
 
-        t_peri = phase_peri * period
-        dt = times - t_peri
+        time_peri = phase_peri * period
+        dt = times - time_peri
         M = mean_anomaly(dt, period)
         sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
         sin_f = ustrip(AllowValue, "", sin_f_q)

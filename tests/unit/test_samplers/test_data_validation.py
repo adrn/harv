@@ -1,9 +1,9 @@
-"""Tests for sampler ``data`` validation and AbstractDatasetContainer.t_ref.
+"""Tests for sampler ``data`` validation and AbstractDatasetContainer.time_ref.
 
 Covers the typing-tightening change: ``RejectionSampler.run`` /
 ``NumpyroSampler.run`` / ``NumpyroSampler.optimize`` reject anything that isn't
 an ``AbstractData`` (single-component) or ``AbstractDatasetContainer`` (joint),
-and ``t_ref`` is uniformly exposed on every container.
+and ``time_ref`` is uniformly exposed on every container.
 """
 
 import jax.numpy as jnp
@@ -101,34 +101,34 @@ class TestJointValidation:
 
 
 class TestContainerTRef:
-    """t_ref is exposed uniformly on AbstractDatasetContainer subclasses."""
+    """time_ref is exposed uniformly on AbstractDatasetContainer subclasses."""
 
-    def test_systemdata_t_ref_matches_components(self):
+    def test_systemdata_time_ref_matches_components(self):
         d1 = RVData(
             time=Q(jnp.array([0.0, 1.0, 2.0]), "day"),
             rv=Q(jnp.zeros(3), "km/s"),
             rv_err=Q(jnp.ones(3), "km/s"),
-            t_ref=Q(1.0, "day"),
+            time_ref=Q(1.0, "day"),
         )
         d2 = RVData(
             time=Q(jnp.array([0.5, 1.5]), "day"),
             rv=Q(jnp.zeros(2), "km/s"),
             rv_err=Q(jnp.ones(2), "km/s"),
-            t_ref=Q(1.0, "day"),
+            time_ref=Q(1.0, "day"),
         )
         sys = SystemData(primary=d1, secondary=d2)
-        assert sys.t_ref is not None
+        assert sys.time_ref is not None
         # Synchronized to the same value across components.
-        assert sys.t_ref == sys["primary"].t_ref
-        assert sys.t_ref == sys["secondary"].t_ref
+        assert sys.time_ref == sys["primary"].time_ref
+        assert sys.time_ref == sys["secondary"].time_ref
 
-    def test_sourcedata_t_ref_available(self):
-        """SourceData previously had no t_ref; the base property now provides it."""
+    def test_sourcedata_time_ref_available(self):
+        """SourceData previously had no time_ref; the base property now provides it."""
         rv = RVData(
             time=Q(jnp.array([0.0, 1.0]), "day"),
             rv=Q(jnp.zeros(2), "km/s"),
             rv_err=Q(jnp.ones(2), "km/s"),
-            t_ref=Q(0.5, "day"),
+            time_ref=Q(0.5, "day"),
         )
         gaia = GaiaAstrometryData(
             time=Q(jnp.array([0.0, 1.0, 2.0]), "day"),
@@ -136,8 +136,8 @@ class TestContainerTRef:
             al_position_err=Q(jnp.array([0.05, 0.06, 0.04]), "mas"),
             scan_angle=Q(jnp.array([0.5, 1.2, 2.8]), "rad"),
             parallax_factor=jnp.array([0.3, -0.1, 0.4]),
-            t_ref=Q(0.5, "day"),
+            time_ref=Q(0.5, "day"),
         )
         source = SourceData(rv=rv, gaia=gaia)
-        assert source.t_ref is not None
-        assert source.t_ref == source["rv"].t_ref
+        assert source.time_ref is not None
+        assert source.time_ref == source["rv"].time_ref

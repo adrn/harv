@@ -160,7 +160,7 @@ class TestMonomialTrend:
             time=Q([10.0, 20.0, 30.0], "day"),
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
-            t_ref=Q(20.0, "day"),
+            time_ref=Q(20.0, "day"),
         )
         t = MonomialTrend(order=2, time_unit="day")
         X = jnp.ones((3, 2))  # base design matrix
@@ -182,7 +182,7 @@ class TestMonomialTrend:
             al_position_err=Q([0.01, 0.01, 0.01], "mas"),
             scan_angle=Q([0.0, jnp.pi / 2, jnp.pi], "rad"),
             parallax_factor=jnp.array([0.3, -0.1, 0.4]),
-            t_ref=Q(365.25, "day"),
+            time_ref=Q(365.25, "day"),
         )
         t = MonomialTrend(order=1, time_unit="yr", astrometry=True)
         X = jnp.ones((3, 6))

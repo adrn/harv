@@ -71,7 +71,7 @@ built on top of **unxt.Quantity**. The canonical aliases live in `harv.custom_ty
 
 | Alias                 | Definition                                                              | Use for                                       |
 | --------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
-| `ScalarQTime`         | `Real[Q["time"], ""]`                                                   | Scalar time quantities (period, t_peri, …)    |
+| `ScalarQTime`         | `Real[Q["time"], ""]`                                                   | Scalar time quantities (period, time_peri, …)    |
 | `ScalarQLength`       | `Real[Q["length"], ""]`                                                 | Scalar length quantities (semi-major axis, …) |
 | `ScalarQMass`         | `Real[Q["mass"], ""]`                                                   | Scalar mass quantities                        |
 | `ScalarQSpeed`        | `Real[Q["speed"], ""]`                                                  | Scalar velocity quantities                    |
@@ -218,7 +218,7 @@ src/harv/
 │   ├── grid_density.py      # LogGridDensity
 │   ├── numpyro_ext.py       # vendored numpyro-ext (MarginalizedLinear, ...)
 │   └── linear_op.py         # vendored linear operators
-├── plot.py                  # get_t_grid and plotting utilities
+├── plot.py                  # get_time_grid and plotting utilities
 └── simulate/                # Synthetic data generators
     ├── rv.py                # simulate_rv_sb1_data, simulate_rv_multisurv_data
     ├── astrometry.py        # simulate_gaia_epoch_astrometry
@@ -233,7 +233,7 @@ ______________________________________________________________________
 ### `AbstractData`
 
 The root base class for all observational datasets. Carries a `time: Q["time"]`
-array (barycentric TCB) and an optional keyword-only `t_ref` reference epoch
+array (barycentric TCB) and an optional keyword-only `time_ref` reference epoch
 (defaults to the mean observation time via `__check_init__`). Subclasses add the
 observed quantities and their uncertainties. Declares abstract class variables
 `_obs_name` and `_err_name` that point to the observation and error field names.
@@ -250,14 +250,14 @@ for a single source:
 | `al_position_err` | angle (mas)   | Per-observation 1σ uncertainties        |
 | `scan_angle`      | angle (rad)   | Scan angle ψ of Gaia's field of view    |
 | `parallax_factor` | dimensionless | AL parallax factor H_ϖ(t)               |
-| `t_ref`           | time          | Reference epoch (defaults to mean time) |
+| `time_ref`           | time          | Reference epoch (defaults to mean time) |
 
 The along-scan model is (see §Gaia astrometry likelihood), following the Gaia local plane
 coordinate convention (Lindegren & Bastian, GAIA-C3-TN-LU-LL-061-08, Eqs. 4 & 6):
 
 ```
 y_AL(t) = α₀ sin(θ) + δ₀ cos(θ)
-         + (μ_α sin(θ) + μ_δ cos(θ)) · (t − t_ref)
+         + (μ_α sin(θ) + μ_δ cos(θ)) · (t − time_ref)
          + ϖ · H_ϖ(t)
          + a · [(B X + G Y) sin(θ) + (A X + F Y) cos(θ)]
 ```
@@ -285,7 +285,7 @@ defaults.
 | `time`   | time         | Barycentric observation times                       |
 | `rv`     | speed (km/s) | Measured radial velocities                          |
 | `rv_err` | speed (km/s) | Per-observation 1σ uncertainties                    |
-| `t_ref`  | time         | Reference epoch (defaults to mean observation time) |
+| `time_ref`  | time         | Reference epoch (defaults to mean observation time) |
 
 The RV model is:
 
@@ -296,13 +296,13 @@ RV(t) = K · [cos(ω + f(t)) + e · cos(ω)] + v₀
 where K is the semi-amplitude, ω is the argument of pericenter, and v₀ is the
 systemic velocity.
 
-`RVData` has a `plot(ax, *, rv_unit=None, add_labels=True, relative_to_t_ref=False, phase_fold=None, **kwargs)` method that renders the observations as error-bars on the
+`RVData` has a `plot(ax, *, rv_unit=None, add_labels=True, relative_to_time_ref=False, phase_fold=None, **kwargs)` method that renders the observations as error-bars on the
 given matplotlib `Axes`. Default style: black markers with grey error bars; all keyword
 arguments are forwarded to `ax.errorbar()` and override the defaults.
 
 - `phase_fold`: a `Q["time"]` period. When provided, the x-axis shows
-  `(time - t_ref) / phase_fold mod 1` (orbital phase in \[0, 1)) instead of absolute
-  time. Mutually exclusive with `relative_to_t_ref`.
+  `(time - time_ref) / phase_fold mod 1` (orbital phase in \[0, 1)) instead of absolute
+  time. Mutually exclusive with `relative_to_time_ref`.
 
 ### Indexing data objects
 
@@ -315,7 +315,7 @@ data[:10]    # first 10 observations
 data[mask]   # boolean mask
 ```
 
-Fields whose shape matches the observation count are sliced; scalar fields (`t_ref`)
+Fields whose shape matches the observation count are sliced; scalar fields (`time_ref`)
 are passed through unchanged. Integer keys are promoted to length-1 slices so all
 arrays remain 1-d.
 
@@ -368,7 +368,7 @@ user-defined (not restricted to "primary"/"secondary").
 `plot(...)` (inherited; no homogeneity check is needed because the constructor
 already enforces one), plus:
 
-- `t_ref` — delegates to the first component's `t_ref`
+- `time_ref` — delegates to the first component's `time_ref`
 - `_get_obs()` — concatenates observations across all components (key order)
 - `_get_obs_err()` — concatenates uncertainties across all components (key order)
 
@@ -382,7 +382,7 @@ astrometry in `SourceData` or a standalone `GaiaAstrometryData`.
 
 - `stack_datasets(datasets: dict[str, AbstractData]) -> AbstractData` — concatenates
   multiple datasets of the same type into a single stacked dataset. Scalar fields
-  like `t_ref` are recomputed from the concatenated time array via `__check_init__`.
+  like `time_ref` are recomputed from the concatenated time array via `__check_init__`.
 
 - `build_indicator_matrix(datasets: dict[str, AbstractData], reference: str) -> tuple[AbstractData, jax.Array | None, tuple[str, ...] | None]` — stacks datasets
   and builds an indicator matrix for multi-survey data. Returns
@@ -426,9 +426,9 @@ and return `Q` objects, and back the parameterization-conversion machinery (see
 
 Higher-level convenience functions compose these building blocks:
 
-- `compute_true_anomaly_components(time, period, eccentricity, t_peri)` — returns (sin f, cos f) at given times
-- `rv_at_times(times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys)` — evaluates the full RV model
-- `astrometric_orbit_at_times(times, period, eccentricity, t_peri, arg_peri, cos_i, lon_asc_node, semi_major_axis)` — returns (Δra, Δdec) offsets
+- `compute_true_anomaly_components(time, period, eccentricity, time_peri)` — returns (sin f, cos f) at given times
+- `rv_at_times(times, period, eccentricity, time_peri, arg_peri, rv_semiamp, v_sys)` — evaluates the full RV model
+- `astrometric_orbit_at_times(times, period, eccentricity, time_peri, arg_peri, cos_i, lon_asc_node, semi_major_axis)` — returns (Δra, Δdec) offsets
 
 The building blocks are shape-agnostic: they work for both scalar inputs
 (`KeplerianBody`) and batched inputs (`jax.vmap` over parameter structs).
@@ -451,12 +451,12 @@ combination of `a · (A sin ψ + B cos ψ)` and `a · (F sin ψ + G cos ψ)`. Th
 
 ### `KeplerianBody`
 
-A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `t_peri`, and an
+A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `time_peri`, and an
 optional `KeplerianOrientation`. Provides `get_position(time)` and `get_velocity(time)`
 in 3D, accounting for the orbit orientation. Both accept `BatchQTime` and return
 `BatchVec3QLength` / `BatchVec3QSpeed` respectively. Alternative constructors:
 
-- `from_masses(period, e, m_total, m_body, t_peri)` — uses Kepler's 3rd law to
+- `from_masses(period, e, m_total, m_body, time_peri)` — uses Kepler's 3rd law to
   derive the barycentric semi-major axis from the total system mass and this body's mass.
 - `get_mass(m_total)` — returns the body mass using Kepler's 3rd law.
 
@@ -717,7 +717,7 @@ correct posterior under a flat-Campbell-elements prior.
 ### `FourierRV` and `FourierGaiaAstrometry` (Kepler-free)
 
 Two **Kepler-free** parameterizations replace the Keplerian orbit with a
-truncated Fourier series in the mean longitude `M = 2π(t − t_ref)/P` whose
+truncated Fourier series in the mean longitude `M = 2π(t − time_ref)/P` whose
 coefficients are all *linear*. The only nonlinear parameter is `period`: the
 periastron phase is absorbed into each `(cos, sin)` amplitude pair, and
 eccentricity distortion of the orbit shape is absorbed by the higher
@@ -758,7 +758,7 @@ usual. They exist primarily to drive the periodogram through the standard
 model/likelihood machinery (see "Periodogram and interim period priors").
 Being Kepler-free they carry no orbital elements, so orbital-element-specific
 analysis raises cleanly: `Samples` from these parameterizations do not
-advertise the derived `t_peri` key (it requires `phase_peri`), and
+advertise the derived `time_peri` key (it requires `phase_peri`), and
 `binary_mass_function` / `companion_mass` / `convert_parameterization` /
 Gaia sky-orbit plotting are not applicable.
 
@@ -792,13 +792,13 @@ The period prior is typically a `dist.LogUniform(period_min, period_max)` wrappe
 `QD` to carry the unit. At sampling time, the sampler converts period draws from the
 prior's unit to the data's time unit before constructing parameter values.
 
-### `phase_peri` vs `t_peri`
+### `phase_peri` vs `time_peri`
 
-Models use `phase_peri = t_peri / period` (dimensionless, range 0-1) rather than an
-absolute `t_peri`. This decouples the phase from the period scale, simplifies the
+Models use `phase_peri = time_peri / period` (dimensionless, range 0-1) rather than an
+absolute `time_peri`. This decouples the phase from the period scale, simplifies the
 prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
-prior. `Samples` exposes a derived `"t_peri"` key that reconstructs the absolute time
-as `phase_peri * period + t_ref`.
+prior. `Samples` exposes a derived `"time_peri"` key that reconstructs the absolute time
+as `phase_peri * period + time_ref`.
 
 ### Parameterization conversion
 
@@ -882,7 +882,7 @@ ext = Jitter(param_unit="km/s")
 
 Appends monomial trend columns to the design matrix:
 
-- **RV** (`astrometry=False`): columns `(t - t_ref)^k` for `k = 1..order`.
+- **RV** (`astrometry=False`): columns `(t - time_ref)^k` for `k = 1..order`.
 - **Astrometry** (`astrometry=True`): two columns per order
   `sin(psi) * dt^(k+1)` and `cos(psi) * dt^(k+1)`, with exponent `k+1` to
   avoid degeneracy with the base proper-motion columns.
@@ -1921,7 +1921,7 @@ One convention applies in-memory and on disk -- the samplers produce this
 shape, `to_hdf5` writes the dict entries one-for-one as HDF5 attrs, and
 `from_hdf5` loads them back the same way. Keys harv writes itself:
 
-- `t_ref` (`float`) + `t_ref_unit` (`str`) -- the reference epoch in the
+- `time_ref` (`float`) + `time_ref_unit` (`str`) -- the reference epoch in the
   source data's time unit.
 - `num_chains` (`int`) -- written by `NumpyroSampler.run()`.
 - `logZ_int`, `logZ_int_mcse`, `logZ_int_ess`, `max_log_likelihood` (`float`)
@@ -1935,9 +1935,9 @@ that reassembles `<name>` + `<name>_unit` pairs into `Q` instances on the
 fly and hides the `_unit` companions from iteration:
 
 ```python
-samples.meta["t_ref"]      # Q(0.0, "day")
+samples.meta["time_ref"]      # Q(0.0, "day")
 samples.meta["num_chains"] # 1 (no _unit companion -> bare value)
-list(samples.meta)         # ["t_ref", "num_chains"] (no "t_ref_unit")
+list(samples.meta)         # ["time_ref", "num_chains"] (no "time_ref_unit")
 ```
 
 Drop down to `samples.metadata` for raw dict access (e.g. when you need
@@ -1952,7 +1952,7 @@ to construct a new `Samples` with the same metadata).
 - Linear params (`"rv_semiamp"`, `"v_sys"`, `"ra0"`, etc.) → `Q` with units
 - Derived keys:
   - `"log_period"` → dimensionless array (`log10(period in data time units)`)
-  - `"t_peri"` → `Q` (derived from `phase_peri * period + t_ref`)
+  - `"time_peri"` → `Q` (derived from `phase_peri * period + time_ref`)
   - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
   - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
   - `"semi_major_axis_AU"` → `Q` in `AU` (present only for astrometry samples
@@ -2299,9 +2299,9 @@ Consequences:
 frequency_grid(
     data=None, *,
     period_min,               # required; its unit sets the grid unit (1/unit)
-    period_max=None,          # default: max_period_factor * t_span
-    t_span=None,              # alternative to data (exactly one required)
-    samples_per_peak=8,       # oversampling per peak width 1/t_span
+    period_max=None,          # default: max_period_factor * time_span
+    time_span=None,              # alternative to data (exactly one required)
+    samples_per_peak=8,       # oversampling per peak width 1/time_span
     max_period_factor=1.0,
     n_grid=None,              # explicit grid size override
 ) -> Q["frequency"]           # uniform in frequency, ascending
@@ -2338,7 +2338,7 @@ periodogram(
 
 `PeriodogramResult` is an `eqx.Module` with fields `frequency`,
 `delta_ln_likelihood`, `ln_likelihood_base` (scalar, or per-frequency when the
-base model is period-dependent), `t_span`, `t_ref`, optional
+base model is period-dependent), `time_span`, `time_ref`, optional
 `per_dataset` (per-dataset Δ for container inputs), and static `n_terms` and
 `statistic` (`"marginal"` | `"profile"`); plus `period` (property,
 `1/frequency`), `max_period()`, and `plot(ax=None, x="period" | "frequency")`.
@@ -2360,7 +2360,7 @@ Everything else `periodogram` does in Python is static — `n_obs` and the
 static fields, and prior validation happens once at trace time (its
 `UserWarning`s likewise fire once per trace, not per source). The whole
 `PeriodogramResult` returns from the trace: `n_terms` and `statistic` stay
-static, and `t_span` is a traced scalar rather than a concrete one.
+static, and `time_span` is a traced scalar rather than a concrete one.
 
 ### Priors are explicit
 
@@ -2467,7 +2467,7 @@ peak_period_prior(result, *, height_drop=10.0, max_peaks=8, peak_width=None,
 
 Amplitude-agnostic alternative: strict local maxima of Δ **within `height_drop`
 nats of the global maximum** each get a top-hat in ln-period of full frequency
-width `peak_width` (default `1/t_span`) with **equal mass** `1/n_peaks`
+width `peak_width` (default `1/time_span`) with **equal mass** `1/n_peaks`
 regardless of amplitude. Each top-hat is normalized by its mass *as the knots
 sample it* (the measure `LogGridDensity` actually integrates), so the share is
 exact rather than approximate — including for a peak clipped by the domain edge
@@ -2561,9 +2561,9 @@ ______________________________________________________________________
 
 ## Plotting utilities (`harv.plot`)
 
-### `get_t_grid`
+### `get_time_grid`
 
-`get_t_grid(times: BatchQTime, period: Q["time"])` returns a dense time grid
+`get_time_grid(times: BatchQTime, period: Q["time"])` returns a dense time grid
 for plotting orbit curves. The grid spans from `min(times) - span_factor*range/2` to
 `max(times) + span_factor*range/2`, with spacing determined by
 `period / n_points_per_period`.
@@ -2671,9 +2671,9 @@ parameters. When `data` is provided, each Gaia epoch is rendered as a short line
 segment in the scan direction at the model-predicted photocenter offset, with
 half-length equal to `errorbar_scale * al_position_err`.
 
-- `orbit_params` -- dict with keys `period`, `eccentricity`, `t_peri`,
-  `arg_peri`, `cos_i`, `lon_asc_node`, `semi_major_axis`. `t_peri` is the
-  *absolute* periastron time (i.e. `t_ref + phase_peri * period`).
+- `orbit_params` -- dict with keys `period`, `eccentricity`, `time_peri`,
+  `arg_peri`, `cos_i`, `lon_asc_node`, `semi_major_axis`. `time_peri` is the
+  *absolute* periastron time (i.e. `time_ref + phase_peri * period`).
 - `data` -- `GaiaAstrometryData` or `None`.
 
 ______________________________________________________________________
@@ -2929,7 +2929,7 @@ class TrendBasis(Protocol):
     n_basis: int
     names: tuple[str, ...]          # one per output column
     def __call__(
-        self, times: jax.Array, t_ref: float,
+        self, times: jax.Array, time_ref: float,
     ) -> jax.Array:                 # (n_obs, n_basis)
         ...
 ```

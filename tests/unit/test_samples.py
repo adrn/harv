@@ -35,7 +35,7 @@ def _make_astro_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="gaia_astro",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -157,7 +157,7 @@ class TestSamplesAccess:
         assert "parallax" in keys
         assert "semi_major_axis_AU" in keys
         # 6 nonlinear + 6 linear + 4 derived
-        # (log_period, t_peri, inclination, semi_major_axis_AU) = 16
+        # (log_period, time_peri, inclination, semi_major_axis_AU) = 16
         assert len(keys) == 16
 
     def test_unit_conversion_angles(self):
@@ -190,8 +190,8 @@ class TestMetadataView:
     """Tests for the Q-aware ``samples.meta`` read view."""
 
     def test_q_reassembly(self):
-        view = _MetadataView({"t_ref": 100.0, "t_ref_unit": "day"})
-        v = view["t_ref"]
+        view = _MetadataView({"time_ref": 100.0, "time_ref_unit": "day"})
+        v = view["time_ref"]
         assert isinstance(v, Q)
         assert float(ustrip("day", v)) == 100.0
         assert str(v.unit) == "d"
@@ -202,26 +202,26 @@ class TestMetadataView:
         assert view["name"] == "rv_run"
 
     def test_missing_key_raises(self):
-        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day"})
         with pytest.raises(KeyError):
             _ = view["missing"]
 
     def test_get_default(self):
-        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
+        view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day"})
         assert view.get("missing", 7) == 7
         # ``get`` should still reassemble the Q for present keys.
-        assert isinstance(view.get("t_ref"), Q)
+        assert isinstance(view.get("time_ref"), Q)
 
     def test_iter_hides_unit_companions(self):
-        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
-        assert sorted(view) == ["num_chains", "t_ref"]
-        assert list(view.keys()) == ["t_ref", "num_chains"]
+        view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 2})
+        assert sorted(view) == ["num_chains", "time_ref"]
+        assert list(view.keys()) == ["time_ref", "num_chains"]
         assert len(view) == 2
 
     def test_contains_hides_unit_companions(self):
-        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day"})
-        assert "t_ref" in view
-        assert "t_ref_unit" not in view  # companion is hidden
+        view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day"})
+        assert "time_ref" in view
+        assert "time_ref_unit" not in view  # companion is hidden
         assert "missing" not in view
 
     def test_unit_without_base_is_visible(self):
@@ -232,9 +232,9 @@ class TestMetadataView:
         assert list(view) == ["orphan_unit"]
 
     def test_items_reassembles(self):
-        view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
+        view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 2})
         items = dict(view.items())
-        assert isinstance(items["t_ref"], Q)
+        assert isinstance(items["time_ref"], Q)
         assert items["num_chains"] == 2
 
     def test_samples_meta_property(self):
@@ -250,11 +250,11 @@ class TestMetadataView:
                 "v_sys": Q(jnp.array([2.0]), "km/s"),
             },
             data_type="rv",
-            metadata={"t_ref": 50.0, "t_ref_unit": "day", "num_chains": 1},
+            metadata={"time_ref": 50.0, "time_ref_unit": "day", "num_chains": 1},
         )
-        t_ref = samples.meta["t_ref"]
-        assert isinstance(t_ref, Q)
-        assert float(ustrip("day", t_ref)) == 50.0
+        time_ref = samples.meta["time_ref"]
+        assert isinstance(time_ref, Q)
+        assert float(ustrip("day", time_ref)) == 50.0
         assert samples.meta["num_chains"] == 1
 
 
@@ -385,7 +385,7 @@ def _make_rv_samples_with_signs(K_values: list[float]) -> Samples:
             "v_sys": Q(jnp.full(n, 5.0), "km/s"),
         },
         data_type="rv",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
@@ -410,7 +410,7 @@ def _make_astro_samples_with_signs(a_values: list[float]) -> Samples:
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="gaia_astro",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
@@ -440,7 +440,7 @@ def _make_joint_samples_with_signs(
             "semi_major_axis": Q(jnp.asarray(a_values), "mas"),
         },
         data_type="joint",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
@@ -504,7 +504,7 @@ class TestSamplesWrapAngles:
             kwargs_orig = {
                 "period": samples["period"][i],
                 "eccentricity": samples["eccentricity"][i],
-                "t_peri": samples["t_peri"][i],
+                "time_peri": samples["time_peri"][i],
                 "arg_peri": samples["arg_peri"][i],
                 "rv_semiamp": samples["rv_semiamp"][i],
                 "v_sys": samples["v_sys"][i],
@@ -512,7 +512,7 @@ class TestSamplesWrapAngles:
             kwargs_wrap = {
                 "period": wrapped["period"][i],
                 "eccentricity": wrapped["eccentricity"][i],
-                "t_peri": wrapped["t_peri"][i],
+                "time_peri": wrapped["time_peri"][i],
                 "arg_peri": wrapped["arg_peri"][i],
                 "rv_semiamp": wrapped["rv_semiamp"][i],
                 "v_sys": wrapped["v_sys"][i],
@@ -530,7 +530,7 @@ class TestSamplesWrapAngles:
             kwargs_orig = {
                 "period": samples["period"][i],
                 "eccentricity": samples["eccentricity"][i],
-                "t_peri": samples["t_peri"][i],
+                "time_peri": samples["time_peri"][i],
                 "arg_peri": samples["arg_peri"][i],
                 "cos_i": samples["cos_i"][i],
                 "lon_asc_node": samples["lon_asc_node"][i],
@@ -539,7 +539,7 @@ class TestSamplesWrapAngles:
             kwargs_wrap = {
                 "period": wrapped["period"][i],
                 "eccentricity": wrapped["eccentricity"][i],
-                "t_peri": wrapped["t_peri"][i],
+                "time_peri": wrapped["time_peri"][i],
                 "arg_peri": wrapped["arg_peri"][i],
                 "cos_i": wrapped["cos_i"][i],
                 "lon_asc_node": wrapped["lon_asc_node"][i],
@@ -708,7 +708,7 @@ class TestSamplesWrapAngles:
                 rv_times,
                 samples["period"][i],
                 samples["eccentricity"][i],
-                samples["t_peri"][i],
+                samples["time_peri"][i],
                 samples["arg_peri"][i],
                 samples["rv_semiamp"][i],
                 samples["v_sys"][i],
@@ -717,7 +717,7 @@ class TestSamplesWrapAngles:
                 rv_times,
                 wrapped["period"][i],
                 wrapped["eccentricity"][i],
-                wrapped["t_peri"][i],
+                wrapped["time_peri"][i],
                 wrapped["arg_peri"][i],
                 wrapped["rv_semiamp"][i],
                 wrapped["v_sys"][i],
@@ -728,7 +728,7 @@ class TestSamplesWrapAngles:
                 astro_times,
                 samples["period"][i],
                 samples["eccentricity"][i],
-                samples["t_peri"][i],
+                samples["time_peri"][i],
                 samples["arg_peri"][i],
                 samples["cos_i"][i],
                 samples["lon_asc_node"][i],
@@ -738,7 +738,7 @@ class TestSamplesWrapAngles:
                 astro_times,
                 wrapped["period"][i],
                 wrapped["eccentricity"][i],
-                wrapped["t_peri"][i],
+                wrapped["time_peri"][i],
                 wrapped["arg_peri"][i],
                 wrapped["cos_i"][i],
                 wrapped["lon_asc_node"][i],
@@ -917,7 +917,7 @@ def _make_rv_samples(
         nonlinear=nonlinear,
         linear=linear,
         data_type=data_type,
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
         linear_extension_names=linear_extension_names,
         **kw,
     )
@@ -944,7 +944,7 @@ class TestBatchedSamples:
                 "v_sys": Q(jnp.zeros((3, 7)), "km/s"),
             },
             data_type="rv",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
         assert s.n_samples == 7
         assert s.batch_shape == (3,)

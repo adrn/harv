@@ -22,7 +22,7 @@ def _make_samples(periods) -> Samples:
         },
         linear={"rv_semiamp": Q(jnp.ones(n), "km/s")},
         data_type="RVModel",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 

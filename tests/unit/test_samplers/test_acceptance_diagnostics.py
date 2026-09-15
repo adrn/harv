@@ -126,7 +126,7 @@ class TestAcceptanceDiagnostics:
             nonlinear={"period": Q([100.0, 101.0], "day")},
             linear={},
             data_type="RVModel",
-            metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+            metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         )
         with pytest.raises(ValueError, match="return_evidence_stats"):
             s.acceptance_diagnostics()
@@ -187,8 +187,8 @@ class TestMinEvidenceEssIsConfigurable:
             linear={},
             data_type="RVModel",
             metadata={
-                "t_ref": 0.0,
-                "t_ref_unit": "day",
+                "time_ref": 0.0,
+                "time_ref_unit": "day",
                 "logZ_int": -12.0,
                 "logZ_int_ess": 5.0,
                 "max_log_likelihood": -10.0,

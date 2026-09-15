@@ -65,7 +65,7 @@ def rv_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -92,7 +92,7 @@ def astro_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -121,7 +121,7 @@ def combined_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="JointModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -176,7 +176,7 @@ class TestRvAtTimes:
             times,
             period=Q(200.0, "day"),
             eccentricity=0.0,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(0.0, "rad"),
             rv_semiamp=Q(10.0, "km/s"),
             v_sys=Q(0.0, "km/s"),
@@ -190,7 +190,7 @@ class TestRvAtTimes:
             times,
             period=Q(200.0, "day"),
             eccentricity=0.3,
-            t_peri=Q(50.0, "day"),
+            time_peri=Q(50.0, "day"),
             arg_peri=Q(1.2, "rad"),
             rv_semiamp=Q(8.0, "km/s"),
             v_sys=Q(-5.0, "km/s"),
@@ -203,7 +203,7 @@ class TestRvAtTimes:
         kwargs = {
             "period": Q(200.0, "day"),
             "eccentricity": 0.0,
-            "t_peri": Q(0.0, "day"),
+            "time_peri": Q(0.0, "day"),
             "arg_peri": Q(0.0, "rad"),
             "rv_semiamp": Q(10.0, "km/s"),
         }
@@ -222,7 +222,7 @@ class TestAstrometricOrbitAtTimes:
             times,
             period=Q(300.0, "day"),
             eccentricity=0.3,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(1.2, "rad"),
             cos_i=0.5,
             lon_asc_node=Q(0.8, "rad"),
@@ -239,7 +239,7 @@ class TestAstrometricOrbitAtTimes:
             times,
             period=Q(1.0, "day"),
             eccentricity=0.0,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -251,20 +251,20 @@ class TestAstrometricOrbitAtTimes:
     def test_eccentric_face_on_orbit_pericenter_distance(self):
         """Face-on eccentric orbit: r(pericenter) = a(1-e), r(apocenter) = a(1+e).
 
-        At pericenter (true anomaly f=0, i.e. t=t_peri), the distance from
+        At pericenter (true anomaly f=0, i.e. t=time_peri), the distance from
         the focus should be a*(1-e). At apocenter (f=pi), a*(1+e). This
         verifies the r/a = (1-e^2)/(1+e*cos f) factor is applied.
         """
         e = 0.6
         a = 5.0  # mas
         period = Q(100.0, "day")
-        # At t_peri, f=0, so r = a(1-e)
-        t_peri_val = Q(0.0, "day")
+        # At time_peri, f=0, so r = a(1-e)
+        time_peri_val = Q(0.0, "day")
         dra_peri, ddec_peri = astrometric_orbit_at_times(
             Q(np.array([0.0]), "day"),
             period=period,
             eccentricity=e,
-            t_peri=t_peri_val,
+            time_peri=time_peri_val,
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -280,7 +280,7 @@ class TestAstrometricOrbitAtTimes:
             Q(np.array([50.0]), "day"),
             period=period,
             eccentricity=e,
-            t_peri=t_peri_val,
+            time_peri=time_peri_val,
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -772,7 +772,7 @@ class TestNumpyroSamplerCombinedWithJitter:
             nonlinear=nonlinear,
             linear=linear,
             data_type="combined",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
 
     def test_run_marginalized_completes(
@@ -1282,7 +1282,7 @@ class TestPlotRV:
         plt.close("all")
 
     def test_plot_uses_explicit_time_grid(self, rv_samples):
-        """Supplying time_grid bypasses the default get_t_grid path."""
+        """Supplying time_grid bypasses the default get_time_grid path."""
         times = Q(jnp.array([0.0, 50.0, 100.0]), "day")
         rv = Q(jnp.zeros(3), "km/s")
         rv_err = Q(jnp.ones(3), "km/s")
@@ -1290,7 +1290,8 @@ class TestPlotRV:
         time_grid = Q(jnp.array([2.0, 4.0, 8.0, 16.0]), "day")
 
         with patch(
-            "harv.plot.get_t_grid", side_effect=AssertionError("should not be called")
+            "harv.plot.get_time_grid",
+            side_effect=AssertionError("should not be called"),
         ):
             ax = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
 
@@ -1354,7 +1355,7 @@ class TestPlotRV:
         with (
             patch("tinygp.GaussianProcess", FakeGaussianProcess),
             patch(
-                "harv.plot.get_t_grid",
+                "harv.plot.get_time_grid",
                 return_value=Q(jnp.linspace(-10.0, 110.0, 5000), "day"),
             ),
         ):
@@ -1647,7 +1648,7 @@ def ti_samples() -> Samples:
         nonlinear=nonlinear,
         linear=linear,
         data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
 
 

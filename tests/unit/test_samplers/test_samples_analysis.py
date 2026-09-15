@@ -41,7 +41,7 @@ def _rv_samples(n=120, *, period=None, with_logprobs=False, seed=0):
         nonlinear=nonlinear,
         linear=linear,
         data_type="RVModel",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         **kwargs,
     )
 
@@ -69,7 +69,7 @@ def _astro_samples(n=60, seed=1):
         nonlinear=nonlinear,
         linear=linear,
         data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
@@ -152,16 +152,16 @@ class TestLogProbStorage:
             nonlinear=base.nonlinear,
             linear=base.linear,
             data_type=base.data_type,
-            metadata={"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 4},
+            metadata={"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 4},
         )
         path = tmp_path / "samples_metadata.h5"
         s.to_hdf5(path)
         loaded = Samples.from_hdf5(path)
 
         assert loaded.metadata == s.metadata
-        assert type(loaded.metadata["t_ref"]) is float
+        assert type(loaded.metadata["time_ref"]) is float
         assert type(loaded.metadata["num_chains"]) is int
-        assert type(loaded.metadata["t_ref_unit"]) is str
+        assert type(loaded.metadata["time_ref_unit"]) is str
         assert not any(
             isinstance(v, np.generic | np.ndarray) for v in loaded.metadata.values()
         )
@@ -205,13 +205,13 @@ class TestPhaseStatistics:
         assert np.all((cov >= 0.0) & (cov <= 1.0))
 
     def test_phase_coverage_known_value(self):
-        # period = 10 d, t_ref = 0: phase = (time / 10) mod 1. Times 0.5, 1.5,
+        # period = 10 d, time_ref = 0: phase = (time / 10) mod 1. Times 0.5, 1.5,
         # 2.5 d give phases 0.05, 0.15, 0.25 -> bins 0, 1, 2 of 10 occupied.
         data = RVData(
             time=Q(np.array([0.5, 1.5, 2.5]), "day"),
             rv=Q(np.zeros(3), "km/s"),
             rv_err=Q(np.ones(3), "km/s"),
-            t_ref=Q(0.0, "day"),
+            time_ref=Q(0.0, "day"),
         )
         s = _rv_samples(n=5, period=np.full(5, 10.0))
         cov = s.phase_coverage(data, n_bins=10)
@@ -239,7 +239,7 @@ class TestSingleComponentGuard:
             nonlinear={"primary.period": Q(jnp.full(5, 50.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(5, 5.0), "km/s")},
             data_type="JointModel",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
             s.periods_spanned(rv_data)
@@ -350,8 +350,8 @@ _ORBIT = {"P": 60.0, "ecc": 0.15, "tp": 8.0, "w": 1.1, "K": 9.0, "v0": 2.0}
 def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
     """RV data built from ``_ORBIT`` plus a Samples object matching it exactly.
 
-    ``t_ref`` is fixed to 0 so that the model's ``phase_peri`` (relative to
-    ``t_ref``) equals ``t_peri / period``.
+    ``time_ref`` is fixed to 0 so that the model's ``phase_peri`` (relative to
+    ``time_ref``) equals ``time_peri / period``.
     """
     o = _ORBIT
     t = np.sort(np.random.default_rng(0).uniform(0.0, 240.0, n_obs))
@@ -359,7 +359,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
         Q(t, "day"),
         period=Q(o["P"], "day"),
         eccentricity=Q(o["ecc"], ""),
-        t_peri=Q(o["tp"], "day"),
+        time_peri=Q(o["tp"], "day"),
         arg_peri=Q(o["w"], "rad"),
         rv_semiamp=Q(o["K"], "km/s"),
         v_sys=Q(o["v0"], "km/s"),
@@ -368,7 +368,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
         time=Q(t, "day"),
         rv=rv + Q(rv_offset, "km/s"),
         rv_err=Q(np.full(n_obs, 1.5), "km/s"),
-        t_ref=Q(0.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
     n = 4
 
@@ -387,7 +387,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
         nonlinear=nonlinear,
         linear={"rv_semiamp": col(o["K"], "km/s"), "v_sys": col(o["v0"], "km/s")},
         data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        metadata={"time_ref": 0.0},
     )
     return data, samples
 
@@ -440,7 +440,7 @@ class TestChiSquared:
             nonlinear={"primary.period": Q(jnp.full(3, 60.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(3, 9.0), "km/s")},
             data_type="JointModel",
-            metadata={"t_ref": 0.0},
+            metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
             joint.chi2(data, RVModel())

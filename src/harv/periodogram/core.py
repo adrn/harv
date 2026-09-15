@@ -53,7 +53,7 @@ from harv.models.extensions.base import AbstractExtension
 from harv.models.parameterizations.fourier import FourierGaiaAstrometry, FourierRV
 from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
-from harv.periodogram.grid import _data_t_span
+from harv.periodogram.grid import _data_time_span
 from harv.periodogram.grid import frequency_grid as get_frequency_grid
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
@@ -89,8 +89,8 @@ class PeriodogramResult(eqx.Module):
     frequency: NFrequency
     delta_ln_likelihood: NFloatArray
     ln_likelihood_base: Float[jax.Array, ""] | NFloatArray
-    t_span: ScalarQTime
-    t_ref: ScalarQTime
+    time_span: ScalarQTime
+    time_ref: ScalarQTime
     _: KW_ONLY
     per_dataset: dict[str, NFloatArray] | None = None
     n_terms: int = eqx.field(static=True, default=1)
@@ -617,7 +617,7 @@ def periodogram(
     ... ]
     >>> batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
     >>> grid = hp.frequency_grid(
-    ...     t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=128
+    ...     time_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=128
     ... )
     >>> run = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))
     >>> run(batched).delta_ln_likelihood.shape
@@ -694,14 +694,14 @@ def periodogram(
 
     time_unit = str((1.0 / frequency_grid[:1]).unit)
 
-    # t_ref is always set by AbstractData.__check_init__ / the containers:
-    t_ref = cast("ScalarQTime", data.t_ref)
+    # time_ref is always set by AbstractData.__check_init__ / the containers:
+    time_ref = cast("ScalarQTime", data.time_ref)
     return PeriodogramResult(
         frequency=frequency_grid,
         delta_ln_likelihood=total_delta,
         ln_likelihood_base=total_lnl0,
-        t_span=Q(_data_t_span(data, time_unit), time_unit),
-        t_ref=t_ref,
+        time_span=Q(_data_time_span(data, time_unit), time_unit),
+        time_ref=time_ref,
         per_dataset=per_dataset if is_container else None,
         n_terms=eff_terms,
         statistic="profile" if prior is False else "marginal",

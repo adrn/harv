@@ -36,8 +36,8 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     semimajor_axis = 1.0  # mas
 
     # Observation times
-    t_ref = Q(2000.0, "day")
-    times = Q(np.sort(rng.uniform(0, 1000, n_obs)), "day") + t_ref
+    time_ref = Q(2000.0, "day")
+    times = Q(np.sort(rng.uniform(0, 1000, n_obs)), "day") + time_ref
 
     # Random scan angles
     scan_angle = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
@@ -47,7 +47,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
 
     # Create simple along-scan positions
     # Just use a simplified model: linear motion + simple orbital signal
-    dt_yr = (times - t_ref).to_value("yr")
+    dt_yr = (times - time_ref).to_value("yr")
     cos_psi = np.cos(scan_angle.to_value("rad"))
     sin_psi = np.sin(scan_angle.to_value("rad"))
 
@@ -67,7 +67,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     )
 
     # Add simple orbital signal
-    phase = 2 * np.pi * (times - t_ref).to_value("day") / period
+    phase = 2 * np.pi * (times - time_ref).to_value("day") / period
     y_orbit = semimajor_axis * (cos_psi * np.cos(phase) + sin_psi * np.sin(phase))
 
     # Add noise
@@ -81,7 +81,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
         al_position_err=al_error,
         scan_angle=scan_angle,
         parallax_factor=parallax_factor,
-        t_ref=t_ref,
+        time_ref=time_ref,
     )
 
 

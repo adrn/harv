@@ -25,7 +25,7 @@ def _make_system(
         eccentricity=eccentricity,
         m_total=Q(m_primary + m_companion, "Msun"),
         m_body=Q(m_companion, "Msun"),
-        t_peri=Q(0.0, "yr"),
+        time_peri=Q(0.0, "yr"),
     )
     return TwoBodySystem(
         m_primary=Q(m_primary, "Msun"),
