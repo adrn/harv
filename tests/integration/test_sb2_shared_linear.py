@@ -196,7 +196,7 @@ class TestSampleConditionalLinearShape:
         data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
-            _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
+            _NL_VALUES, data, key=key, linear_priors=_JOINT_LINEAR_PRIOR_SHARED_VSYS
         )
 
         # Shared v_sys at top level
@@ -226,7 +226,7 @@ class TestSampleConditionalLinearShape:
         data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         key = jax.random.PRNGKey(0)
         samples = joint.sample_conditional_linear(
-            _NL_VALUES, key, data, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
+            _NL_VALUES, data, key=key, linear_priors=_JOINT_LINEAR_PRIOR_UNSHARED
         )
 
         assert "primary" in samples

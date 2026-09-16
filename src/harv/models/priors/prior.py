@@ -97,7 +97,7 @@ class HarvPrior(eqx.Module):
     # parameter has a matching entry.
     extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
 
-    def sample_nonlinear(self, key: jax.Array, n_samples: int) -> dict[str, Any]:
+    def sample_nonlinear(self, n_samples: int, *, key: jax.Array) -> dict[str, Any]:
         """Sample nonlinear parameters from priors.
 
         Parameters
@@ -143,9 +143,9 @@ class HarvPrior(eqx.Module):
 
     def sample(
         self,
-        key: jax.Array,
         n_samples: int,
         *,
+        key: jax.Array,
         model: "AbstractComponentModel | JointModel",
         return_logprobs: bool = False,
         marginalized_names: tuple[str, ...] | None = None,
@@ -248,7 +248,7 @@ class HarvPrior(eqx.Module):
         # 1. Base nonlinear orbital params (bare arrays).
         key, nonlinear_key = jr.split(key)
         base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(
-            nonlinear_key, n_samples
+            n_samples, key=nonlinear_key
         )
 
         # 2. Extension nonlinear params (jitter, GP hypers, ...).

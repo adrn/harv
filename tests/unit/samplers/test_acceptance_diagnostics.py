@@ -234,7 +234,7 @@ class TestWarningAttribution:
     def test_run_with_samples_is_attributed_too(self):
         """The other entry point sits at a different depth; both must work."""
         sampler = RejectionSampler(_prior(), hm.RVModel())
-        library = _prior().sample(jax.random.key(1), 200_000, model=hm.RVModel())
+        library = _prior().sample(200_000, key=jax.random.key(1), model=hm.RVModel())
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sampler.run_with_samples(_peaked_data(), library, key=jax.random.key(0))

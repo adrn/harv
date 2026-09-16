@@ -927,9 +927,9 @@ class JointModel(eqx.Module):
     def sample_conditional_linear(
         self,
         nonlinear_values: dict[str, Any],
-        key: jax.Array,
         data: AbstractDatasetContainer,
         *,
+        key: jax.Array,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
         use_mean: bool = False,
@@ -1023,8 +1023,8 @@ class JointModel(eqx.Module):
             key, subkey = jax.random.split(key)
             results[name] = comp.sample_conditional_linear(
                 comp_nl[name],
-                subkey,
                 data[name],
+                key=subkey,
                 linear_priors=per_comp_lp[name],
                 marginalized_names=per_comp_marg[name],
                 use_mean=use_mean,

@@ -999,8 +999,8 @@ class NumpyroSampler(AbstractSampler):
                     wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
             return model.sample_conditional_linear(
                 wrapped,
-                key,
                 data,
+                key=key,
                 linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
                 use_mean=use_mean,

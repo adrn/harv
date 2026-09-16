@@ -182,7 +182,7 @@ class TestJointModelSampleConditional:
         key = jax.random.PRNGKey(42)
         data = SystemData(primary=rv_data_primary, secondary=rv_data_secondary)
         samples = joint.sample_conditional_linear(
-            nonlinear_values, key, data, linear_priors=_JOINT_LP_SHARED_VSYS
+            nonlinear_values, data, key=key, linear_priors=_JOINT_LP_SHARED_VSYS
         )
 
         # v_sys is shared — appears at the top level

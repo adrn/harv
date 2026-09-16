@@ -880,15 +880,15 @@ class Samples(eqx.Module):
         )
 
     def median(
-        self, key: str | None = None
+        self, param: str | None = None
     ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
         ----------
-        key
-            If provided, return median for this parameter only.
-            If None, return dict of medians for all parameters.
+        param
+            If provided, return the median for this parameter only.
+            If None, return a dict of medians for all parameters.
 
         Returns
         -------
@@ -915,25 +915,25 @@ class Samples(eqx.Module):
         >>> "period" in all_medians
         True
         """
-        if key is not None:
-            return jnp.median(self[key])
+        if param is not None:
+            return jnp.median(self[param])
 
         result: dict[str, AbstractQuantity | jnp.ndarray] = {}
-        for param_key in self.keys():
+        for name in self.keys():
             try:
-                result[param_key] = jnp.median(self[param_key])
+                result[name] = jnp.median(self[name])
             except (KeyError, ValueError):
                 continue
         return result
 
     def percentile(
-        self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
+        self, param: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
     ) -> list[AbstractQuantity | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters
         ----------
-        key
+        param
             Parameter name.
         percentiles
             Percentile values to compute (0-100). Default: (16, 50, 84)
@@ -961,7 +961,7 @@ class Samples(eqx.Module):
         >>> len(samples.percentile("period", [5, 50, 95]))
         3
         """
-        values = self[key]
+        values = self[param]
         return [jnp.percentile(values, p) for p in percentiles]
 
     def summary(self, params: list[str] | None = None) -> dict[str, dict[str, Any]]:

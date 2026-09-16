@@ -390,7 +390,7 @@ class TestAstrometryLikelihoodSanity:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        prior_nl = prior.sample_nonlinear(jr.key(0), 1_000)
+        prior_nl = prior.sample_nonlinear(1_000, key=jr.key(0))
         nl_batch = {
             "period": Q(prior_nl["period"], "day"),
             "eccentricity": prior_nl["eccentricity"],

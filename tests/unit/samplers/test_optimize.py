@@ -223,15 +223,15 @@ class TestNumpyroSamplerOptimize:
 
         mean_a = rv_sampler.model.sample_conditional_linear(
             nonlinear_values,
-            jax.random.key(1),
             rv_data_and_truth,
+            key=jax.random.key(1),
             linear_priors=rv_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = rv_sampler.model.sample_conditional_linear(
             nonlinear_values,
-            jax.random.key(999),
             rv_data_and_truth,
+            key=jax.random.key(999),
             linear_priors=rv_sampler.prior.linear_priors,
             use_mean=True,
         )
@@ -545,15 +545,15 @@ class TestNumpyroSamplerOptimizeThieleInnes:
 
         mean_a = ti_sampler.model.sample_conditional_linear(
             nonlinear_values,
-            jax.random.key(1),
             data,
+            key=jax.random.key(1),
             linear_priors=ti_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = ti_sampler.model.sample_conditional_linear(
             nonlinear_values,
-            jax.random.key(999),
             data,
+            key=jax.random.key(999),
             linear_priors=ti_sampler.prior.linear_priors,
             use_mean=True,
         )

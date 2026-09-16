@@ -234,7 +234,7 @@ class TestSamplerDropIn:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        samples = prior.sample_nonlinear(jax.random.key(0), n_samples=4096)
+        samples = prior.sample_nonlinear(key=jax.random.key(0), n_samples=4096)
         p = samples["period"]
         frac_near_peak = float(jnp.mean((p > 90.0) & (p < 110.0)))
         lu_frac = np.log(110.0 / 90.0) / np.log(P_HI / P_LO)

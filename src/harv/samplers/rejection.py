@@ -1131,7 +1131,7 @@ class RejectionSampler(AbstractSampler):
         n_total = n_batches * self.batch_size
 
         key, nonlinear_key = jr.split(key)
-        prior_samples = prior.sample_nonlinear(nonlinear_key, n_total)
+        prior_samples = prior.sample_nonlinear(n_total, key=nonlinear_key)
 
         # Sample explicit linear params (those not analytically marginalized).
         # ``_explicit_linear_names`` honors the effective marginalize_names computed
@@ -1319,8 +1319,8 @@ class RejectionSampler(AbstractSampler):
             wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
             return model.sample_conditional_linear(
                 wrapped,
-                key,
                 data,
+                key=key,
                 linear_priors=linear_priors,
                 marginalized_names=marginalized_names,
             )

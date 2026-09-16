@@ -106,8 +106,8 @@ def make_prior_cache(
     # hand-tracking the same prior-resolution logic that lives in
     # HarvPrior.sample.
     probe = prior.sample(
-        key,
         1,
+        key=key,
         model=model,
         return_logprobs=return_logprobs,
         marginalized_names=marginalized_names,
@@ -165,8 +165,8 @@ def make_prior_cache(
 
             sub_key = jr.fold_in(key, i)
             batch: Samples = prior.sample(
-                sub_key,
                 n_this,
+                key=sub_key,
                 model=model,
                 return_logprobs=return_logprobs,
                 marginalized_names=marginalized_names,

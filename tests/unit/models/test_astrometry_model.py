@@ -105,7 +105,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(42)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_priors=_astro_prior()
+            _nl_values(), data, key=key, linear_priors=_astro_prior()
         )
         expected = {"ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis"}
         assert set(samples.keys()) == expected
@@ -115,7 +115,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(0)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_priors=_astro_prior()
+            _nl_values(), data, key=key, linear_priors=_astro_prior()
         )
         for name, val in samples.items():
             assert jnp.isfinite(val), f"{name} is not finite"

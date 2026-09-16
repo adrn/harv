@@ -61,13 +61,13 @@ def _rv_prior_with_jitter() -> HarvPrior:
 
 class TestHarvPriorSample:
     def test_returns_samples_container(self):
-        samples = _rv_prior().sample(jr.key(0), 100, model=RVModel())
+        samples = _rv_prior().sample(100, key=jr.key(0), model=RVModel())
         assert isinstance(samples, Samples)
         assert samples.n_samples == 100
         assert samples.model_type == "RVModel"
 
     def test_keys_match_base_nonlinear(self):
-        samples = _rv_prior().sample(jr.key(0), 64, model=RVModel())
+        samples = _rv_prior().sample(64, key=jr.key(0), model=RVModel())
         assert set(samples.nonlinear) == {
             "period",
             "eccentricity",
@@ -79,7 +79,7 @@ class TestHarvPriorSample:
         assert samples.linear == {}
 
     def test_period_units_round_trip(self):
-        samples = _rv_prior().sample(jr.key(0), 32, model=RVModel())
+        samples = _rv_prior().sample(32, key=jr.key(0), model=RVModel())
         assert str(samples.nonlinear["period"].unit) == "d"
         # Period values lie inside [period_min, period_max).
         values = np.asarray(samples.nonlinear["period"].value)
@@ -89,13 +89,13 @@ class TestHarvPriorSample:
     def test_extension_nonlinear_drawn(self):
         """Jitter (extension nonlinear) appears in the sample dict."""
         model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
-        samples = _rv_prior_with_jitter().sample(jr.key(0), 50, model=model)
+        samples = _rv_prior_with_jitter().sample(50, key=jr.key(0), model=model)
         assert "jitter" in samples.nonlinear
         assert samples.nonlinear["jitter"].shape == (50,)
 
     def test_return_logprobs_populates_ln_prior(self):
         samples = _rv_prior().sample(
-            jr.key(0), 32, model=RVModel(), return_logprobs=True
+            32, key=jr.key(0), model=RVModel(), return_logprobs=True
         )
         assert samples.ln_prior is not None
         assert samples.ln_prior.shape == (32,)
@@ -103,7 +103,7 @@ class TestHarvPriorSample:
         assert samples.ln_likelihood is None
 
     def test_ln_prior_omitted_by_default(self):
-        samples = _rv_prior().sample(jr.key(0), 32, model=RVModel())
+        samples = _rv_prior().sample(32, key=jr.key(0), model=RVModel())
         assert samples.ln_prior is None
         assert samples.ln_likelihood is None
 
@@ -118,7 +118,7 @@ class TestHarvPriorSample:
             sigma_pos=Q(100.0, "mas"),
             sigma_vtan=Q(50.0, "km/s"),
         )
-        samples = prior.sample(jr.key(0), 24, model=GaiaAstrometryModel())
+        samples = prior.sample(24, key=jr.key(0), model=GaiaAstrometryModel())
         assert "parallax" in samples.linear
         assert samples.linear["parallax"].shape == (24,)
         assert str(samples.linear["parallax"].unit) == "mas"
@@ -131,7 +131,7 @@ class TestHarvPriorSample:
             sigma_v0=Q(50.0, "km/s"),
         )
         joint = JointModel.for_sb2(prior)
-        samples = prior.sample(jr.key(0), 16, model=joint)
+        samples = prior.sample(16, key=jr.key(0), model=joint)
         assert samples.model_type == "JointModel"
         assert samples.n_samples == 16
 
@@ -260,7 +260,7 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         model = RVModel()
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
 
         out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert isinstance(out, Samples)
@@ -271,7 +271,7 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         model = RVModel()
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
 
         out = sampler.run_with_samples(
             _rv_data(), pri, key=jax.random.key(42), return_logprobs=True
@@ -285,7 +285,7 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         sampler = RejectionSampler(prior, RVModel(), batch_size=200)
         # Build a Samples missing the 'eccentricity' key.
-        pri = prior.sample(jr.key(0), 50, model=RVModel())
+        pri = prior.sample(50, key=jr.key(0), model=RVModel())
         broken_nonlinear = {
             k: v for k, v in pri.nonlinear.items() if k != "eccentricity"
         }
@@ -303,7 +303,7 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior_with_jitter()
         model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
         out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert "jitter" in out.nonlinear
 
@@ -315,7 +315,7 @@ class TestRunWithSamplesInMemory:
         """
         prior_j = _rv_prior_with_jitter()
         model_j = RVModel(extensions=(Jitter(obs_unit="km/s"),))
-        pri = prior_j.sample(jr.key(0), 1000, model=model_j)
+        pri = prior_j.sample(1000, key=jr.key(0), model=model_j)
         assert "jitter" in pri.nonlinear  # the extra key
 
         prior_nj = _rv_prior()
@@ -334,7 +334,9 @@ class TestRunWithSamplesInMemory:
         """
         prior = _rv_prior()
         marg = ("rv_semiamp",)
-        pri = prior.sample(jr.key(0), 1000, model=RVModel(), marginalized_names=marg)
+        pri = prior.sample(
+            1000, key=jr.key(0), model=RVModel(), marginalized_names=marg
+        )
         assert "v_sys" in pri.linear
 
         sampler = RejectionSampler(

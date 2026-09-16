@@ -339,7 +339,7 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         # K prior's (1 - e^2)^(-1/2) is NaN. Those draws must be rejected.
         samples = sampler.run_with_samples(
             data,
-            prior.sample(jr.key(0), 2000, model=model),
+            prior.sample(2000, key=jr.key(0), model=model),
             top_k=8,
             key=jax.random.key(0),
             ignore_non_finite=True,
@@ -357,7 +357,7 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         """
         data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
         prior, model = self._prior_and_model()
-        cache = prior.sample(jr.key(0), 2000, model=model)
+        cache = prior.sample(2000, key=jr.key(0), model=model)
         ecc = qnp.sqrt(cache["ecosw"] ** 2 + cache["esinw"] ** 2)
         assert qnp.any(ecc >= 1.0), "expected the square prior to escape the unit disk"
 

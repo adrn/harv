@@ -844,14 +844,25 @@ violates one is a bug in the code, not an exception to the rule.
 
 1. **Masses are `m_<role>`:** `m_primary`, `m_total`, `m_companion`, `m_body`.
 
-1. **RNG:** the JAX-facing API takes a **required** `key: jax.Array`
-   (`RejectionSampler.run`/`.run_with_samples`, `NumpyroSampler.run`/`.optimize`,
-   `HarvPrior.sample`, `make_prior_cache`), keyword-only everywhere except
-   `HarvPrior.sample`, which takes it positionally like `jax.random.*`. There is
-   no default and harv never draws entropy of its own, so a run is reproducible
-   from its key alone -- the same reason `jax.random` has no implicit global
-   state. `harv.simulate.*` is NumPy-backed (`np.random.SeedSequence`) and takes
+1. **RNG:** every harv-owned callable that consumes randomness takes a
+   **required, keyword-only** `key: jax.Array` -- `RejectionSampler.run` /
+   `.run_with_samples`, `NumpyroSampler.run` / `.optimize`, `HarvPrior.sample` /
+   `.sample_nonlinear`, `sample_conditional_linear`, `make_prior_cache`. This
+   follows equinox, harv's module framework, whose `key` is keyword-only
+   throughout; `jax.random.*` puts the key first positionally because there the
+   key *is* the primary input, which is not true of `run(data, ...)`.
+   There is no default: harv never draws entropy of its own, so a run is
+   reproducible from its key alone -- the same reason `jax.random` has no
+   implicit global state.
+
+   Two exceptions, both forced: `QuantityDistribution.sample(key, sample_shape)`
+   and `LogGridDensity.sample(key, sample_shape)` implement numpyro's
+   `Distribution` interface and must match its positional signature.
+   `harv.simulate.*` is NumPy-backed (`np.random.SeedSequence`) and takes
    `seed: int`.
+
+   `key` means a PRNG key and nothing else; a parameter *name* argument is
+   called `param` (`Samples.median(param)`, `Samples.percentile(param, ...)`).
 
 1. **Abbreviate only when the abbreviation is itself a domain term.** `arg_peri`,
    `pmra`, `rv`, `lon_asc_node` qualify. `nl_` (nonlinear) and `multisurv` did
@@ -1204,7 +1215,7 @@ systemic velocity.
 
 - `log_prob(nonlinear_values, data, *, linear_priors=None)` -- splits flat dict into per-component
   dicts, routes explicit linear values, sums component log-likelihoods.
-- `sample_conditional_linear(nonlinear_values, key, data, *, linear_priors=None)` -- returns
+- `sample_conditional_linear(nonlinear_values, data, *, key, linear_priors=None)` -- returns
   `dict[str, dict[str, jax.Array]]` keyed by component name.
 - `numpyro_model(nonlinear_priors, data, linear_priors, *, marginalized=True)` -- builds
   a joint numpyro model.
@@ -1503,7 +1514,7 @@ observation covariance diagonal.
 
 ### `sample_nonlinear`
 
-`sample_nonlinear(key, n_samples) -> dict[str, jax.Array]` draws from all nonlinear
+`sample_nonlinear(n_samples, *, key) -> dict[str, jax.Array]` draws from all nonlinear
 priors. Returns bare JAX arrays regardless of whether the distribution is wrapped in
 `QuantityDistribution`. This is a low-level primitive; user code should prefer
 `HarvPrior.sample(...)` (below).
@@ -1512,9 +1523,9 @@ priors. Returns bare JAX arrays regardless of whether the distribution is wrappe
 
 ```python
 prior.sample(
-    key: jax.Array,
     n_samples: int,
     *,
+    key: jax.Array,
     model: AbstractComponentModel | JointModel,
     return_logprobs: bool = False,
     marginalized_names: tuple[str, ...] | None = None,
@@ -1651,7 +1662,7 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
    static by construction and so needs no equivalent step.
 
 1. **Linear parameter sampling.** For each (kept) accepted nonlinear sample,
-   call `model.sample_conditional_linear(values, key)` to draw the marginalized
+   call `model.sample_conditional_linear(values, data, key=key)` to draw the marginalized
    linear parameters from their conditional posterior, honoring the sampler's
    `marginalized_names` override when present.
 
@@ -2130,8 +2141,8 @@ the first entry.
 - `batch_shape -> tuple[int, ...]` — leading batch dimensions
   (empty tuple for a flat `Samples`; e.g. `(N_stars,)` after
   `pad_and_stack_samples`)
-- `median(key=None)` — median of one key or all keys
-- `percentile(key, percentiles=(16, 50, 84))` — compute percentiles
+- `median(param=None)` — median of one parameter, or of all of them
+- `percentile(param, percentiles=(16, 50, 84))` — compute percentiles
 - `summary(params=None)` — dict of statistics (median, mean, std, p16, p84)
 - `wrap_angles() -> Samples` — return a new `Samples` enforcing the convention
   `K >= 0`, `a >= 0`. Applied in two steps: (1) negative `rv_semiamp` is flipped

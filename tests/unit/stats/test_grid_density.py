@@ -172,7 +172,7 @@ class TestPriorIntegration:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        samples = prior.sample_nonlinear(jr.key(5), n_samples=256)
+        samples = prior.sample_nonlinear(key=jr.key(5), n_samples=256)
         periods = samples["period"]
         assert periods.shape == (256,)
         assert bool(jnp.all((periods >= 20.0) & (periods <= 300.0)))

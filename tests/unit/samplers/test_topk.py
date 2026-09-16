@@ -279,7 +279,7 @@ class TestRunWithTopK:
         once other tests in the session compile anything.
         """
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 1000, model=RVModel())
+        library = _rv_prior().sample(1000, key=jr.key(1), model=RVModel())
 
         shapes = []
         for seed in range(3):
@@ -300,7 +300,7 @@ class TestRunWithTopK:
         than only asserted about in prose.
         """
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 1000, model=RVModel())
+        library = _rv_prior().sample(1000, key=jr.key(1), model=RVModel())
         lengths = {
             sampler.run_with_samples(
                 _rv_data(seed=seed, noise=noise), library, key=jax.random.key(0)
@@ -367,7 +367,7 @@ class TestRunWithTopK:
         these samples are *not* posterior estimates.  See ``docs/sharp-bits.md``.
         """
         sampler = _sampler(batch_size=1000)
-        library = _rv_prior().sample(jr.key(1), 4000, model=RVModel())
+        library = _rv_prior().sample(4000, key=jr.key(1), model=RVModel())
         # Few, noisy observations -> broad likelihood -> large ESS.
         data = _rv_data(4, seed=7, noise=10.0)
         samples = sampler.run_with_samples(
@@ -414,7 +414,7 @@ class TestRunWithTopK:
         """
         n_library = 5000
         sampler = _sampler(batch_size=1000)
-        library = _rv_prior().sample(jr.key(1), n_library, model=RVModel())
+        library = _rv_prior().sample(n_library, key=jr.key(1), model=RVModel())
         data = _rv_data(10, seed=7, noise=2.0)
 
         topk = sampler.run_with_samples(
@@ -436,7 +436,7 @@ class TestRunWithTopK:
         """Weights and parameters keep float64 under x64, not silent float32."""
         with jax.enable_x64(new_val=True):
             sampler = _sampler()
-            library = _rv_prior().sample(jr.key(1), 500, model=RVModel())
+            library = _rv_prior().sample(500, key=jr.key(1), model=RVModel())
             samples = sampler.run_with_samples(
                 _rv_data(), library, top_k=8, key=jax.random.key(0)
             )
@@ -488,7 +488,7 @@ class TestTopKErrors:
     def test_run_with_samples_rejects_conflicting_arguments(self):
         """The same validation applies on the pre-computed-library path."""
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 500, model=RVModel())
+        library = _rv_prior().sample(500, key=jr.key(1), model=RVModel())
         with pytest.raises(ValueError, match="mutually exclusive"):
             sampler.run_with_samples(
                 _rv_data(),

@@ -745,9 +745,9 @@ class AbstractComponentModel(eqx.Module):
     def sample_conditional_linear(
         self,
         nonlinear_values: dict[str, Any],
-        key: jax.Array,
         data: AbstractData,
         *,
+        key: jax.Array,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
         explicit_linear: dict[str, jax.Array] | None = None,

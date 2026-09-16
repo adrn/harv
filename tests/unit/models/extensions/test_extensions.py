@@ -360,7 +360,7 @@ class TestMultiSurveyOffset:
         }
         key = jax.random.PRNGKey(42)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=linear_prior_off
+            nl, data, key=key, linear_priors=linear_prior_off
         )
         assert "espresso" in samples
         assert "rv_semiamp" in samples
@@ -451,7 +451,7 @@ class TestCombinedExtensions:
         # Sample conditional
         key = jax.random.PRNGKey(0)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=linear_prior_all
+            nl, data, key=key, linear_priors=linear_prior_all
         )
         assert set(samples) == {"rv_semiamp", "v_sys", "trend_1", "other_surv"}
         assert all(jnp.isfinite(v) for v in samples.values())

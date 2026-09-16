@@ -53,13 +53,15 @@ class TestHarvPriorSampleVerbose:
     def test_silent_by_default(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            samples = _halfnormal_prior().sample(jax.random.key(0), 10, model=RVModel())
+            samples = _halfnormal_prior().sample(
+                10, key=jax.random.key(0), model=RVModel()
+            )
         assert samples.n_samples == 10
 
     def test_warns_when_verbose(self):
         with pytest.warns(UserWarning, match=_MATCH):
             samples = _halfnormal_prior().sample(
-                jax.random.key(0), 10, model=RVModel(), verbose=True
+                10, key=jax.random.key(0), model=RVModel(), verbose=True
             )
         # The advisory is informational only: the draw is identical either way.
         assert "rv_semiamp" in samples
