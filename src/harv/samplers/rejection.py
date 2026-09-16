@@ -18,9 +18,10 @@ from unxt.quantity import ustrip
 from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
+    _can_marginalize,
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
     _unwrap_dist,
+    pinned_linear_names,
 )
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
@@ -366,6 +367,7 @@ class RejectionSampler(AbstractSampler):
         explicit = set(
             _explicit_linear_names(eff_linear, prepared.effective_marginalized_names)
         )
+        pinned = pinned_linear_names(dict(eff_linear))
         linear_rows: list[tuple[str, ...]] = []
         n_marginalized = 0
         for name, d in eff_linear.items():
@@ -373,7 +375,14 @@ class RejectionSampler(AbstractSampler):
             if name not in explicit:
                 status = "marginalized"
                 n_marginalized += 1
-            elif _needs_explicit_sampling(d):
+            elif name in pinned:
+                # Marginalizable in itself, but another prior's callable reads
+                # its sampled value (e.g. parallax under the Gaia defaults), so
+                # it has to stay explicit. Distinguished from the two cases
+                # below because the fix is different: drop the dependency, not
+                # the prior or the `marginalized_names` entry.
+                status = "sampled (read by prior)"
+            elif not _can_marginalize(d):
                 status = "sampled"
             else:
                 status = "sampled (could marg.)"
@@ -401,9 +410,13 @@ class RejectionSampler(AbstractSampler):
 
         lines.append("")
         lines.append("status legend: marginalized = integrated out analytically;")
-        lines.append("  sampled = drawn explicitly (non-Gaussian);")
+        lines.append("  sampled = drawn explicitly (prior cannot be marginalized);")
         lines.append(
-            "  sampled (could marg.) = Gaussian/linear but excluded via "
+            "  sampled (read by prior) = marginalizable, but another prior's "
+            "callable reads its value"
+        )
+        lines.append(
+            "  sampled (could marg.) = marginalizable but excluded via "
             "marginalized_names"
         )
         return "\n".join(lines)

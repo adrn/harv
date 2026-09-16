@@ -24,21 +24,30 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
+    _explicit_joint_mvn,
+    _explicit_scalar_dist,
+    _is_plain_gaussian_prior,
     _needs_explicit_sampling,
-    _resolve_prior_to_mvn,
+    _resolve_linear_priors,
     _unwrap_dist,
     _with_derived_eccentricity,
+    pinned_linear_names,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.stats import MarginalizedLinear
 from harv.stats.linear_op import to_linear_op
+from harv.stats.marginalized import (
+    GeneralizedMarginalizedLinear,
+    ResolvedLinearPrior,
+    build_marginalized,
+)
 
 
 class _MargComponents(NamedTuple):
     """Internal return type of ``_build_marginalized_linear``."""
 
-    dist: MarginalizedLinear
+    dist: MarginalizedLinear | GeneralizedMarginalizedLinear
     obs: jax.Array
     marg_names: tuple[str, ...]
     explicit_names: tuple[str, ...]
@@ -57,8 +66,7 @@ class _MargBuildingBlocks(NamedTuple):
     y: jax.Array  # (n,) — residualized observations
     cov: jax.Array  # (n,) diagonal or (n, n) full noise covariance
     marg_names: tuple[str, ...]  # length k_marg
-    prior_mu: jax.Array  # (k_marg,) prior mean
-    prior_scale_tril: jax.Array  # (k_marg, k_marg) prior Cholesky factor
+    prior: ResolvedLinearPrior  # loc/scale/weights/bounds over the marg columns
     explicit_linear: dict[str, Any]  # explicit linear param values (unit-stripped)
 
 
@@ -173,18 +181,26 @@ class AbstractComponentModel(eqx.Module):
     def _auto_marginalized_names(
         self, linear_priors: dict[str, Any] | None
     ) -> tuple[str, ...]:
-        """Classify linear priors: Gaussian -> marginalize, non-Gaussian -> explicit.
+        """Classify which linear priors are analytically marginalized by default.
 
-        Returns the tuple of linear parameter names whose priors are
-        Gaussian (Normal, callable returning Normal, or Delta) and can be
-        analytically marginalized.  Non-Gaussian priors (HalfNormal, etc.)
-        are excluded -- their values must be passed alongside the nonlinear
-        parameters.
+        Returns the linear parameter names the likelihood integrates out without
+        being told to: Normal, truncated Normal (including ``HalfNormal``),
+        Gaussian mixtures, and callables returning any of those.
+
+        Two kinds stay explicit and are excluded -- ``Delta`` priors, whose value
+        is fixed rather than integrated, and any parameter *read* by another
+        prior's callable (``requires``; see
+        :func:`~harv.models._helpers.pinned_linear_names`), which is why
+        ``parallax`` remains sampled under the Gaia defaults. Their values must
+        be passed alongside the nonlinear parameters.
         """
         if linear_priors is None:
             return self._all_linear_names()
+        pinned = pinned_linear_names(linear_priors)
         return tuple(
-            n for n, d in linear_priors.items() if not _needs_explicit_sampling(d)
+            n
+            for n, d in linear_priors.items()
+            if not _needs_explicit_sampling(d, name=n, pinned_names=pinned)
         )
 
     def explicit_params(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
@@ -418,7 +434,7 @@ class AbstractComponentModel(eqx.Module):
         for name, val in linear_params.items():
             u = param_units.get(name, "")
             extra_q[name] = Q(val, u) if u else val
-        lp = _resolve_prior_to_mvn(
+        resolved_prior = _resolve_linear_priors(
             prior_dict,
             nonlinear_values,
             unit_dict,
@@ -431,8 +447,7 @@ class AbstractComponentModel(eqx.Module):
             y=arr_obs,
             cov=cov,
             marg_names=marg_names,
-            prior_mu=lp.loc,  # ty: ignore[invalid-argument-type]
-            prior_scale_tril=lp.scale_tril,
+            prior=resolved_prior,
             explicit_linear=linear_params,
         )
 
@@ -476,14 +491,10 @@ class AbstractComponentModel(eqx.Module):
                 loc=jnp.zeros(blocks.cov.shape[0]), covariance_matrix=blocks.cov
             )
 
-        prior = dist.MultivariateNormal(
-            loc=blocks.prior_mu, scale_tril=blocks.prior_scale_tril
-        )
-        marg_dist = MarginalizedLinear(
-            design_matrix=blocks.X,
-            prior_distribution=prior,
-            data_distribution=data_dist,
-        )
+        # Returns a bare MarginalizedLinear for the ordinary untruncated
+        # single-Gaussian case, so that path is unchanged; a truncated or mixture
+        # prior gets the wrapper, which exposes the same two methods.
+        marg_dist = build_marginalized(blocks.X, blocks.prior, data_dist)
         explicit_names = tuple(blocks.explicit_linear.keys())
         return _MargComponents(
             marg_dist,
@@ -956,17 +967,14 @@ def _build_marginalized_component_model(
 
         for name, prior_dist in explicit_callable_prior.items():
             target_unit = param_units.get(name, "")
-            resolved_prior = _resolve_prior_to_mvn(
+            resolved_prior = _resolve_linear_priors(
                 {name: prior_dist},
                 nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
             )
-            raw = numpyro.sample(
-                name,
-                dist.Normal(resolved_prior.loc[0], resolved_prior.scale_tril[0, 0]),
-            )
+            raw = numpyro.sample(name, _explicit_scalar_dist(resolved_prior))
             explicit_linear_values[name] = raw
             explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
@@ -1005,7 +1013,7 @@ def _build_full_component_model(  # noqa: C901
     gaussian_lp: dict[str, PriorDist | LinearPriorCallable] = {}
     explicit_lp: dict[str, PriorDist] = {}
     for name, d in linear_priors.items():
-        if _needs_explicit_sampling(d):
+        if not _is_plain_gaussian_prior(d):
             explicit_lp[name] = d
         else:
             gaussian_lp[name] = d
@@ -1045,11 +1053,13 @@ def _build_full_component_model(  # noqa: C901
                 else:
                     resolved_lp[name] = d
             gaussian_units = {n: param_units.get(n, "") for n in gaussian_names}
-            mvn = _resolve_prior_to_mvn(
-                resolved_lp,
-                nonlinear_values,
-                gaussian_units,
-                parameterization=component.parameterization,
+            mvn = _explicit_joint_mvn(
+                _resolve_linear_priors(
+                    resolved_lp,
+                    nonlinear_values,
+                    gaussian_units,
+                    parameterization=component.parameterization,
+                )
             )
             linear_vec = jnp.atleast_1d(numpyro.sample("_linear", mvn))
             for i, lname in enumerate(gaussian_names):

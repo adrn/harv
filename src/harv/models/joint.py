@@ -26,18 +26,27 @@ from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
+    _explicit_scalar_dist,
     _is_callable_prior,
+    _is_plain_gaussian_prior,
     _needs_explicit_sampling,
+    _parse_linear_prior,
     _unwrap_dist,
+    pinned_linear_names,
 )
 from harv.models.component import (
     AbstractComponentModel,
     _MargBuildingBlocks,
-    _resolve_prior_to_mvn,
+    _resolve_linear_priors,
     _sample_nonlinear_params,
 )
 from harv.models.extensions.base import ParamInfo
 from harv.stats import MarginalizedLinear
+from harv.stats.marginalized import (
+    GeneralizedMarginalizedLinear,
+    ResolvedLinearPrior,
+    build_marginalized,
+)
 
 
 def _split_nl_values(
@@ -147,7 +156,7 @@ def _sample_explicit_linear_prior(
     """
     _site = site_name if site_name is not None else name
     if _is_callable_prior(prior_dist):
-        resolved = _resolve_prior_to_mvn(
+        resolved = _resolve_linear_priors(
             {name: prior_dist},
             nonlinear_values,
             {name: target_unit},
@@ -156,10 +165,7 @@ def _sample_explicit_linear_prior(
         )
         return cast(
             "jax.Array",
-            numpyro.sample(
-                _site,
-                dist.Normal(resolved.loc[0], resolved.scale_tril[0, 0]),
-            ),
+            numpyro.sample(_site, _explicit_scalar_dist(resolved)),
         )
 
     # Direct sampling for plain Distribution / QuantityDistribution priors.
@@ -684,7 +690,7 @@ class JointModel(eqx.Module):
         data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
     ) -> tuple[
-        MarginalizedLinear,
+        MarginalizedLinear | GeneralizedMarginalizedLinear,
         jax.Array,
         list[tuple[str, str | None]],
         dict[str, dict[str, Any]],
@@ -787,24 +793,39 @@ class JointModel(eqx.Module):
 
         # --- Step (d): build joint prior ---
         # IMPORTANT: this implementation assumes each component's marginalized
-        # linear priors are INDEPENDENT, i.e. ``prior_scale_tril`` is diagonal
-        # for every component.  Under that assumption the joint prior on the
-        # combined linear vector is itself diagonal, and we can read off the
-        # joint mean/scale entry-by-entry without ever forming a full
-        # covariance matrix or calling ``jnp.linalg.cholesky``.  All current
-        # harv parameterizations satisfy this.  If a future component
-        # introduces correlated priors (off-diagonal ``prior_scale_tril``),
-        # this loop must be rewritten to assemble the full block-structured
-        # covariance and Cholesky-factorize it (with a small ridge for PSD
-        # safety); see git history before this commit for the previous
-        # full-Cholesky construction.
+        # linear priors are INDEPENDENT, i.e. every component's resolved prior
+        # is diagonal.  Under that assumption the joint prior on the combined
+        # linear vector is itself diagonal, and we can read off the joint
+        # mean/scale entry-by-entry without ever forming a full covariance
+        # matrix or calling ``jnp.linalg.cholesky``.  All current harv
+        # parameterizations satisfy this.  If a future component introduces
+        # correlated priors, this loop must be rewritten to assemble the full
+        # block-structured covariance and Cholesky-factorize it (with a small
+        # ridge for PSD safety); see git history before this commit for the
+        # previous full-Cholesky construction.
+        #
+        # Truncation bounds ride along in the same per-slot layout, so a
+        # support-constrained prior (e.g. signed SB2 semi-amplitudes) works here
+        # unchanged.  Mixtures do not: their components would have to be expanded
+        # across the joint slot layout, multiplying between components.
         mu_joint = jnp.zeros(n_global)
         scale_diag_joint = jnp.zeros(n_global)
+        low_joint: list[Any] = [-jnp.inf] * n_global
+        high_joint: list[Any] = [jnp.inf] * n_global
+        low_fin_joint = [False] * n_global
+        high_fin_joint = [False] * n_global
         filled: set[int] = set()  # global indices already assigned (for shared cols)
         for comp_name in self.components:
             nms = names_by_comp[comp_name]
-            L_c = blocks_by_comp[comp_name].prior_scale_tril
-            mu_c = blocks_by_comp[comp_name].prior_mu
+            prior_c = blocks_by_comp[comp_name].prior
+            if prior_c.n_components > 1:
+                msg = (
+                    f"Component {comp_name!r} has a Gaussian-mixture linear prior. "
+                    "Mixture linear priors are not supported inside a JointModel "
+                    "with shared linear parameters; use a single-component model, "
+                    "or give the shared parameters non-mixture priors."
+                )
+                raise NotImplementedError(msg)
             for local_j, nm in enumerate(nms):
                 owner = None if nm in shared_set else comp_name
                 gj = col_idx[(nm, owner)]
@@ -813,13 +834,25 @@ class JointModel(eqx.Module):
                 # an identical prior, so subsequent visits are no-ops.
                 if gj in filled:
                     continue
-                mu_joint = mu_joint.at[gj].set(mu_c[local_j])
-                # Diagonal-only assumption: take the (j, j) entry of L_c.
-                scale_diag_joint = scale_diag_joint.at[gj].set(L_c[local_j, local_j])
+                mu_joint = mu_joint.at[gj].set(prior_c.loc[0, local_j])
+                scale_diag_joint = scale_diag_joint.at[gj].set(
+                    prior_c.scale[0, local_j]
+                )
+                low_joint[gj] = prior_c.low[local_j]
+                high_joint[gj] = prior_c.high[local_j]
+                low_fin_joint[gj] = prior_c.low_finite[local_j]
+                high_fin_joint[gj] = prior_c.high_finite[local_j]
                 filled.add(gj)
 
-        prior_joint = dist.MultivariateNormal(
-            loc=mu_joint, scale_tril=jnp.diag(scale_diag_joint)
+        prior_joint = ResolvedLinearPrior(
+            loc=mu_joint[None],
+            scale=scale_diag_joint[None],
+            ln_weights=jnp.zeros(1),
+            low=jnp.stack([jnp.asarray(v) for v in low_joint]),
+            high=jnp.stack([jnp.asarray(v) for v in high_joint]),
+            low_finite=tuple(low_fin_joint),
+            high_finite=tuple(high_fin_joint),
+            names=tuple(nm for nm, _ in global_cols),
         )
 
         # --- Step (e): build joint data distribution ---
@@ -835,11 +868,7 @@ class JointModel(eqx.Module):
                 loc=jnp.zeros(total_rows), covariance_matrix=cov_joint
             )
 
-        marg_dist = MarginalizedLinear(
-            design_matrix=X_joint,
-            prior_distribution=prior_joint,
-            data_distribution=data_dist_joint,
-        )
+        marg_dist = build_marginalized(X_joint, prior_joint, data_dist_joint)
 
         explicit_by_comp = {
             comp_name: dict(blocks_by_comp[comp_name].explicit_linear)
@@ -1103,8 +1132,11 @@ class JointModel(eqx.Module):
         shared_lin_set = set(self.shared_linear_params)
         shared_explicit_lin: set[str] = set()
         if shared_lin_set and linear_priors is not None:
+            pinned_shared = pinned_linear_names(linear_priors)
             for nm in shared_lin_set:
-                if nm in linear_priors and _needs_explicit_sampling(linear_priors[nm]):
+                if nm in linear_priors and _needs_explicit_sampling(
+                    linear_priors[nm], name=nm, pinned_names=pinned_shared
+                ):
                     shared_explicit_lin.add(nm)
 
         # Pre-classify each component's *non-shared* explicit-linear priors into
@@ -1268,7 +1300,7 @@ class JointModel(eqx.Module):
             gaussian: dict[str, Any] = {}
             explicit: dict[str, Any] = {}
             for n, d in lp.items():
-                if _needs_explicit_sampling(d):
+                if not _is_plain_gaussian_prior(d):
                     explicit[n] = d
                 else:
                     gaussian[n] = d
@@ -1375,19 +1407,22 @@ class JointModel(eqx.Module):
                     else:
                         resolved = d
 
-                    if isinstance(resolved, QuantityDistribution):
-                        prior_unit = cast("str", resolved.unit)
-                        inner = resolved.distribution
-                        loc = ustrip(target_u, Q(inner.loc, prior_unit))
-                        scale = ustrip(target_u, Q(inner.scale, prior_unit))
-                    elif isinstance(resolved, dist.Normal):
-                        loc = resolved.loc
-                        scale = resolved.scale
-                    else:
-                        msg = f"Expected Normal for Gaussian linear prior {base}"
-                        raise TypeError(msg)
-                    all_locs.append(loc)
-                    all_scales.append(scale)
+                    parsed = _parse_linear_prior(resolved, target_u, base)
+                    if (
+                        parsed.low_finite
+                        or parsed.high_finite
+                        or parsed.ln_weights.shape[0] > 1
+                    ):
+                        msg = (
+                            "Non-marginalized numpyro models "
+                            "(`marginalized=False`) support only untruncated "
+                            "Gaussian linear priors; got a truncated or mixture "
+                            f"prior for {base!r}. Use `marginalized=True`, where "
+                            "both are supported analytically."
+                        )
+                        raise NotImplementedError(msg)
+                    all_locs.append(parsed.loc[0])
+                    all_scales.append(parsed.scale[0])
 
                 mvn = dist.MultivariateNormal(
                     loc=jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in all_locs]),

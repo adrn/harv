@@ -1,6 +1,6 @@
 """Custom prior distributions and callables that produce numpyro distributions."""
 
-from typing import Any
+from typing import Any, ClassVar, Literal
 
 import equinox as eqx
 import numpyro.distributions as dist
@@ -36,6 +36,23 @@ class PeriodDependentKPrior(eqx.Module):
         Default: 30 km/s -- appropriate for stellar binary searches.
     period_ref
         Numeric value of the reference period in units of ``P0_unit``.
+    support
+        Sign constraint on the semi-amplitude: ``"real"`` (the default, an
+        ordinary zero-mean Gaussian), ``"positive"``, or ``"negative"``.
+
+        The constrained forms exist for SB2 systems.  Because
+        ``rv_shape`` is exactly antisymmetric in the argument of pericenter
+        (``S(omega + pi) == -S(omega)``) and
+        :meth:`~harv.models.JointModel.for_sb2` *shares* ``arg_peri`` between the
+        two components, a negative semi-amplitude is the only way harv's SB2
+        model expresses the secondary's antiphase motion -- ``phase_peri`` is
+        shared too, and is not the mechanism.  Leaving both semi-amplitudes
+        sign-free therefore admits an exact two-fold degeneracy,
+        ``(K_1, K_2, omega)`` versus ``(-K_1, -K_2, omega + pi)``, which under
+        symmetric priors makes the ``arg_peri`` posterior bimodal.  Pinning
+        ``K_1 > 0`` and ``K_2 < 0`` selects one branch and also excludes the
+        unphysical same-sign region, where both stars sit on the same side of
+        the barycenter.
 
     Notes
     -----
@@ -67,6 +84,12 @@ class PeriodDependentKPrior(eqx.Module):
 
     sigma_K0: ScalarQSpeed
     period_ref: ScalarQTime
+    support: Literal["real", "positive", "negative"] = eqx.field(
+        static=True, default="real"
+    )
+
+    requires: ClassVar[tuple[str, ...]] = ("period", "eccentricity")
+    """Parameter values this prior reads; see ``pinned_linear_names``."""
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -89,10 +112,18 @@ class PeriodDependentKPrior(eqx.Module):
             * P_ratio ** (-1.0 / 3.0)
             * (1.0 - params["eccentricity"] ** 2) ** (-0.5)
         )
-        return QuantityDistribution(
-            dist.Normal(loc=0.0, scale=ustrip(self.sigma_K0.unit, sigma_K)),
-            str(self.sigma_K0.unit),
-        )
+        scale = ustrip(self.sigma_K0.unit, sigma_K)
+        unit = str(self.sigma_K0.unit)
+        if self.support == "real":
+            return QuantityDistribution(dist.Normal(loc=0.0, scale=scale), unit)
+        # HalfNormal is positive-only, so the negative branch needs the general
+        # truncated form; both are marginalized analytically by
+        # ``harv.stats.marginalized``.
+        if self.support == "positive":
+            truncated = dist.TruncatedNormal(0.0, scale, low=0.0)
+        else:
+            truncated = dist.TruncatedNormal(0.0, scale, high=0.0)
+        return QuantityDistribution(truncated, unit)
 
 
 class PeriodDependentSemiMajorAxisPrior(eqx.Module):
@@ -149,6 +180,15 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
 
     sigma_a0: ScalarQLength
     period_ref: ScalarQTime
+
+    requires: ClassVar[tuple[str, ...]] = ("period", "eccentricity", "parallax")
+    """Parameter values this prior reads; see ``pinned_linear_names``.
+
+    Naming ``parallax`` here is what keeps it explicitly sampled: the
+    auto-classification pins any linear parameter another prior reads, so
+    ``parallax`` is not marginalized out from under this callable even though its
+    ``HalfNormal`` prior is marginalizable in itself.
+    """
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -233,6 +273,9 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     """
 
     sigma_v0: ScalarQSpeed
+
+    requires: ClassVar[tuple[str, ...]] = ("parallax",)
+    """Parameter values this prior reads; see ``pinned_linear_names``."""
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.

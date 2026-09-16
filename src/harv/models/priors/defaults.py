@@ -31,6 +31,7 @@ def default_sb2_prior(
     sigma_v0: ScalarQSpeed | None = None,
     period_ref: ScalarQTime = Q(1.0, "yr"),
     component_names: tuple[str, str] = ("primary", "secondary"),
+    signed_semiamp: bool = True,
     **kwargs: PriorDist | LinearPriorDist,
 ) -> HarvPrior:
     r"""Create default prior for SB2 (double-lined) radial velocity data.
@@ -43,6 +44,32 @@ def default_sb2_prior(
     Both semi-amplitudes use the same period-dependent scaling as
     :meth:`HarvPrior.default_rv`.  The systemic velocity prior is a fixed
     Gaussian.
+
+    **The two semi-amplitudes have opposite signs by default.**  The secondary's
+    antiphase motion is carried by a *negative* ``rv_semiamp``, not by
+    ``phase_peri``: ``rv_shape`` is exactly antisymmetric in the argument of
+    pericenter (``S(omega + pi) == -S(omega)``), and
+    :meth:`~harv.models.JointModel.for_sb2` shares both ``arg_peri`` and
+    ``phase_peri`` across the components, so flipping the sign of K is the only
+    mechanism available.  Sign-free priors on both therefore admit an exact
+    two-fold degeneracy -- ``(K_1, K_2, omega)`` and
+    ``(-K_1, -K_2, omega + pi)`` predict identical RVs for both components --
+    which makes the ``arg_peri`` posterior bimodal with modes 180 degrees apart,
+    and additionally leave prior mass on the unphysical same-sign region.
+    ``signed_semiamp=True`` pins ``K_1 > 0`` and ``K_2 < 0``, resolving both.
+    The constrained priors are still marginalized analytically (see
+    :mod:`harv.stats.marginalized`).
+
+    :meth:`~harv.samplers.Samples.wrap_angles` also repairs the sign pattern
+    after the fact -- the shared ``arg_peri`` shift flips both semi-amplitudes
+    together -- so the sign prior is not the only route to a canonical answer.
+    It is the route that avoids spending prior volume and acceptance on the
+    mirror branch in the first place, and it additionally excludes the
+    unphysical same-sign region, which the ``arg_peri`` symmetry cannot fix
+    because it flips both semi-amplitudes at once. Under the signed prior
+    ``wrap_angles`` is a no-op.
+
+    Pass ``signed_semiamp=False`` for the older sign-free behaviour.
 
     The default names for the two components are "primary" and "secondary", which
     means the linear priors for the semi-amplitudes must be keyed as
@@ -66,6 +93,12 @@ def default_sb2_prior(
         Names of the two components.  These are used to construct the linear prior
         keys for the semi-amplitudes (e.g. "primary.rv_semiamp" and
         "secondary.rv_semiamp").
+    signed_semiamp
+        When ``True`` (the default), constrain the first component's
+        semi-amplitude to be positive and the second's to be negative, resolving
+        the sign/``omega + pi`` degeneracy described above.  When ``False``, both
+        get sign-free zero-mean Gaussians.  Ignored for any component whose
+        ``rv_semiamp`` prior is supplied explicitly via ``**kwargs``.
     **kwargs
         Override any default nonlinear or linear prior by name.
 
@@ -108,13 +141,17 @@ def default_sb2_prior(
         "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }
 
+    # The sign convention is per component and only meaningful pairwise: the
+    # first gets K > 0, the second K < 0.
+    supports = ("positive", "negative") if signed_semiamp else ("real", "real")
     linear_priors: LinearPriorDict = {
         f"{name}.rv_semiamp": _make_rv_semiamp_prior(
             rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
             sigma_K0=sigma_K0,
             period_ref=period_ref,
+            support=support,
         )
-        for name in component_names
+        for name, support in zip(component_names, supports, strict=True)
     }
     linear_priors["v_sys"] = _make_vsys_prior(
         v_sys=kwargs.pop("v_sys", None),

@@ -12,7 +12,11 @@ import warnings
 from collections.abc import Mapping
 from typing import Any
 
-from harv.models._helpers import _needs_explicit_sampling
+from harv.models._helpers import (
+    _can_marginalize,
+    _needs_explicit_sampling,
+    pinned_linear_names,
+)
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
@@ -35,20 +39,23 @@ def explicit_linear_names(
 ) -> tuple[str, ...]:
     """Linear params the sampler draws explicitly (not analytically marginalized).
 
-    When ``effective_marginalized_names`` is ``None`` only non-Gaussian priors are
-    explicit (decided by :func:`~harv.models._helpers._needs_explicit_sampling`).
-    When it is set, every linear param not in that set is explicit (even Gaussian
-    ones the user chose to sample rather than marginalize).
+    When ``effective_marginalized_names`` is ``None`` the auto-classification
+    decides (see :func:`~harv.models._helpers._needs_explicit_sampling`): a prior
+    is explicit if it is a ``Delta``, if the marginalization cannot handle it, or
+    if another prior's callable reads its value. When it is set, every linear
+    param not in that set is explicit (even ones that could have been
+    marginalized).
 
     Both :meth:`RejectionSampler._expected_prior_keys` and :meth:`HarvPrior.sample`
     call this so the explicit-linear key set stays consistent between the cache
     producer and consumer.
     """
     if effective_marginalized_names is None:
+        pinned = pinned_linear_names(dict(effective_linear_prior))
         return tuple(
             name
             for name, d in effective_linear_prior.items()
-            if _needs_explicit_sampling(d)
+            if _needs_explicit_sampling(d, name=name, pinned_names=pinned)
         )
     marg = set(effective_marginalized_names)
     return tuple(name for name in effective_linear_prior if name not in marg)
@@ -94,7 +101,14 @@ def resolve_effective_marginalized_names(
 ) -> tuple[str, ...] | None:
     """Resolve and validate the effective marginalized linear parameter subset.
 
-    Dropping non-Gaussian priors from the marginalized set is silent unless
+    A name the user asked to marginalize is honoured whenever the math allows it
+    (:func:`~harv.models._helpers._can_marginalize`), which is a weaker test than
+    the auto-mode default: a truncated ``parallax`` pinned by a callable stays
+    explicit *by default*, but an explicit ``marginalized_names=("parallax",)``
+    is respected -- and then the dependent callable raises its own ``KeyError``,
+    which is the documented behaviour.
+
+    Dropping genuinely non-marginalizable priors from the set is silent unless
     ``verbose=True``: it is expected behaviour, not a defect, and
     :meth:`~harv.samplers.RejectionSampler.summary` already reports the resulting
     per-parameter classification.
@@ -118,10 +132,19 @@ def resolve_effective_marginalized_names(
         else set(marginalized_names)
     )
 
+    pinned = pinned_linear_names(dict(effective_linear_prior))
     explicit = {
         name
         for name in names_to_check
-        if _needs_explicit_sampling(effective_linear_prior[name])
+        if (
+            # An explicit request only needs the math to support it...
+            not _can_marginalize(effective_linear_prior[name])
+            if marginalized_names is not None
+            # ...whereas auto mode also respects Delta and `requires` pinning.
+            else _needs_explicit_sampling(
+                effective_linear_prior[name], name=name, pinned_names=pinned
+            )
+        )
     }
     if not explicit:
         return marginalized_names

@@ -28,13 +28,14 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
+    _explicit_scalar_dist,
+    _is_plain_gaussian_prior,
     _unwrap_dist,
 )
 from harv.models.component import (
     AbstractComponentModel,
     _apply_unit_conversions,
-    _resolve_prior_to_mvn,
+    _resolve_linear_priors,
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
@@ -193,17 +194,14 @@ def _build_extra_numpyro_model(
 
         for name, prior_dist in explicit_callable_prior.items():
             target_unit = param_units.get(name, "")
-            resolved_prior = _resolve_prior_to_mvn(
+            resolved_prior = _resolve_linear_priors(
                 {name: prior_dist},
                 nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
             )
-            raw = numpyro.sample(
-                name,
-                dist.Normal(resolved_prior.loc[0], resolved_prior.scale_tril[0, 0]),
-            )
+            raw = numpyro.sample(name, _explicit_scalar_dist(resolved_prior))
             explicit_linear_values[name] = raw
             explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
@@ -674,7 +672,7 @@ class NumpyroSampler(AbstractSampler):
                 else {
                     name
                     for name, prior_dist in effective_linear_prior.items()
-                    if _needs_explicit_sampling(prior_dist)
+                    if not _is_plain_gaussian_prior(prior_dist)
                 }
             )
             for name, d in effective_linear_prior.items():
@@ -712,7 +710,7 @@ class NumpyroSampler(AbstractSampler):
             gaussian_name_pairs = [
                 (name, _resolve_sample_linear_name(name))
                 for name in effective_linear_prior
-                if not _needs_explicit_sampling(effective_linear_prior[name])
+                if _is_plain_gaussian_prior(effective_linear_prior[name])
             ]
             gaussian_name_pairs = [
                 (name, sample_name)

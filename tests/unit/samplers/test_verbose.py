@@ -24,8 +24,14 @@ from harv.samplers.rejection import RejectionSampler
 _MATCH = "Non-Gaussian linear prior"
 
 
-def _halfnormal_prior() -> HarvPrior:
-    """An RV prior whose ``rv_semiamp`` prior cannot be marginalized."""
+def _unmarginalizable_prior() -> HarvPrior:
+    """An RV prior whose ``rv_semiamp`` prior cannot be marginalized.
+
+    ``Uniform`` is the point here. A truncated Gaussian -- ``HalfNormal``, which
+    this fixture used before ``harv.stats.marginalized`` existed -- *is* now
+    marginalized analytically, so it no longer triggers the advisory warning.
+    The warning is for priors outside the Gaussian family altogether.
+    """
     return HarvPrior(
         nonlinear_priors={
             "period": QD(dist.LogUniform(50.0, 200.0), "day"),
@@ -34,7 +40,7 @@ def _halfnormal_prior() -> HarvPrior:
             "arg_peri": QD(dist.Uniform(0.0, 2 * jnp.pi), "rad"),
         },
         linear_priors={
-            "rv_semiamp": QD(dist.HalfNormal(30.0), "km/s"),
+            "rv_semiamp": QD(dist.Uniform(0.0, 100.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 50.0), "km/s"),
         },
     )
@@ -53,14 +59,14 @@ class TestHarvPriorSampleVerbose:
     def test_silent_by_default(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            samples = _halfnormal_prior().sample(
+            samples = _unmarginalizable_prior().sample(
                 10, key=jax.random.key(0), model=RVModel()
             )
         assert samples.n_samples == 10
 
     def test_warns_when_verbose(self):
         with pytest.warns(UserWarning, match=_MATCH):
-            samples = _halfnormal_prior().sample(
+            samples = _unmarginalizable_prior().sample(
                 10, key=jax.random.key(0), model=RVModel(), verbose=True
             )
         # The advisory is informational only: the draw is identical either way.
@@ -69,30 +75,36 @@ class TestHarvPriorSampleVerbose:
 
 class TestRejectionSamplerVerbose:
     def test_silent_by_default(self):
-        sampler = RejectionSampler(_halfnormal_prior(), RVModel())
+        sampler = RejectionSampler(_unmarginalizable_prior(), RVModel())
         with warnings.catch_warnings():
             warnings.simplefilter("error")
+            # The under-resolution warning is the *always-on* class (spec ->
+            # "Warnings and verbosity") and 200 prior draws against a wide
+            # Uniform amplitude prior genuinely is under-resolved. Silencing it
+            # by name keeps this test a tight assertion about the advisory
+            # warning, rather than tuning the fixture to dodge an unrelated one.
+            warnings.filterwarnings("ignore", message="Under-resolved rejection run")
             samples = sampler.run(
                 _rv_data(), n_prior_samples=200, key=jax.random.key(0)
             )
         assert samples.n_samples >= 0
 
     def test_warns_when_verbose(self):
-        sampler = RejectionSampler(_halfnormal_prior(), RVModel(), verbose=True)
+        sampler = RejectionSampler(_unmarginalizable_prior(), RVModel(), verbose=True)
         with pytest.warns(UserWarning, match=_MATCH):
             sampler.run(_rv_data(), n_prior_samples=200, key=jax.random.key(0))
 
     def test_summary_never_warns_even_when_verbose(self):
         """Introspection stays side-effect-free regardless of ``verbose``."""
-        sampler = RejectionSampler(_halfnormal_prior(), RVModel(), verbose=True)
+        sampler = RejectionSampler(_unmarginalizable_prior(), RVModel(), verbose=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             text = sampler.summary()
         assert "rv_semiamp" in text
 
     def test_verbose_is_static_and_does_not_change_results(self):
-        quiet = RejectionSampler(_halfnormal_prior(), RVModel())
-        loud = RejectionSampler(_halfnormal_prior(), RVModel(), verbose=True)
+        quiet = RejectionSampler(_unmarginalizable_prior(), RVModel())
+        loud = RejectionSampler(_unmarginalizable_prior(), RVModel(), verbose=True)
         data = _rv_data()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
