@@ -93,14 +93,16 @@ def _signed_logsumexp_guarded(terms: jax.Array, signs: jax.Array) -> jax.Array:
     ``-inf`` errs the other way and only ever discards weight that was already
     below the precision floor.
 
-    The budget is ``-ln(eps)`` for the working dtype -- about 16 nats in float32
-    and 36 in float64 -- less ``_CANCELLATION_MARGIN``. The margin is not
-    padding: the test has to be made against the *computed* total, which is
-    itself the quantity corrupted by the cancellation, so a bare ``-ln(eps)``
-    threshold lets values sitting on the noise floor pass by a hair (measured:
-    a true -26.7 surviving as -18.9). Holding back ``ln(100)`` means anything
-    returned stands a factor of 100 above the noise floor, and so carries at
-    most ~1% relative error, or ~0.01 nats.
+    The budget is ``-ln(eps)`` for the working dtype -- about 36 nats in the
+    float64 harv runs in, 16 in float32 -- less ``_CANCELLATION_MARGIN``. It is
+    derived from the dtype rather than hard-coded so the guard stays correct if
+    a caller drops to single precision. The margin is not padding: the test has
+    to be made against the *computed* total, which is itself the quantity
+    corrupted by the cancellation, so a bare ``-ln(eps)`` threshold lets values
+    sitting on the noise floor pass by a hair (measured in float32: a true -26.7
+    surviving as -18.9). Holding back ``ln(100)`` means anything returned stands
+    a factor of 100 above the noise floor, and so carries at most ~1% relative
+    error, or ~0.01 nats.
     """
     out, sign = logsumexp(terms, b=signs, return_sign=True)
     budget = -jnp.log(jnp.finfo(terms.dtype).eps) - _CANCELLATION_MARGIN
@@ -225,11 +227,11 @@ def _ln_bvn_rect(
     ponytail: this cancels once the rectangle probability drops far enough below
     its largest corner, so :func:`_signed_logsumexp_guarded` returns ``-inf``
     past the precision floor rather than a value it cannot justify. Measured
-    against ``scipy`` over ``rho`` in (-0.999, 0.999): every *finite* result is
-    within 0.004 nats, and in harv's default float32 the floor sits near
-    ``ln P = -12`` (near -32 under ``jax_enable_x64``). See
+    against ``scipy`` in float64 over ``rho`` in (-0.999, 0.999): 7e-14 for
+    ``ln P`` above -8, 4e-11 above -20, and every *finite* result within 7e-5,
+    with the floor near ``ln P = -32``. See
     ``tests/unit/stats/test_marginalized.py::test_ln_bvn_rect_matches_scipy``.
-    The floor is benign here -- a rectangle holding ``e**-12`` or less of the
+    The floor is benign here -- a rectangle holding ``e**-32`` or less of the
     conditional mass is a draw the sampler rejects either way, and erring to
     ``-inf`` under-weights it rather than over-weighting it. Upgrade path if a
     deeper floor is ever needed: integrate
@@ -439,8 +441,9 @@ def _trunc_normal_draw(
     # ndtr/ndtri can land a hair outside it. Clipping makes the invariant exact.
     #
     # ponytail: the probability-scale inverse CDF loses resolution when the
-    # truncation sits many sigma from the mean (p_lo -> 1), which in float32
-    # starts to matter past ~4 sigma and piles draws near the bound. That regime
+    # truncation sits many sigma from the mean (p_lo -> 1), which starts to
+    # matter past ~6 sigma in float64 (~4 in float32) and piles draws near the
+    # bound. That regime
     # is one where the data contradict the constraint, so the draw is rejected
     # on its likelihood anyway. Upgrade path: invert in log space via the upper
     # tail, which needs a hand-rolled ndtri_exp -- JAX has no such primitive.
@@ -611,9 +614,9 @@ def _sample_truncated_gaussian(
         obs_vals = jnp.stack(drawn) if drawn else jnp.zeros((0,))
         mean_f, cov_f = _gaussian_conditional(mean, cov, idx, obs_vals, free)
         # The Schur complement is symmetric in exact arithmetic but not quite in
-        # float32, and a hair-negative eigenvalue makes the default Cholesky
-        # path return NaN. Symmetrizing plus an SVD draw costs nothing at these
-        # sizes (k is a handful) and cannot fail that way.
+        # floating point, and a hair-negative eigenvalue makes the default
+        # Cholesky path return NaN. Symmetrizing plus an SVD draw costs nothing
+        # at these sizes (k is a handful) and cannot fail that way.
         cov_f = 0.5 * (cov_f + cov_f.T)
         draw_f = jax.random.multivariate_normal(
             key_f, mean_f, cov_f, dtype=mean.dtype, method="svd"

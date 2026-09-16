@@ -1,10 +1,17 @@
-"""Root conftest.py: configure runtime type checking via beartype + jaxtyping."""
+"""Root conftest.py: configure float64 and runtime type checking."""
 
 import os
 
+import jax
 from jaxtyping import install_import_hook
 from sybil import Sybil
 from sybil.parsers.markdown import PythonCodeBlockParser
+
+# harv is run in double precision -- the tutorials and docs all enable it, and the
+# marginalized likelihood is a Cholesky/Woodbury path whose conditioning does not
+# survive float32 gracefully. The suite must therefore test the precision harv
+# actually runs at, or its tolerances measure the wrong thing.
+jax.config.update(name="jax_enable_x64", val=True)
 
 pytest_collect_file = Sybil(
     parsers=[PythonCodeBlockParser()],

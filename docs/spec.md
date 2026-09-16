@@ -60,6 +60,19 @@ ______________________________________________________________________
 1. **No global state.** Component models close over data; samplers combine models and
    priors; random state passes explicitly as JAX key values.
 
+1. **Double precision.** harv is run with `jax.config.update("jax_enable_x64", True)`.
+   The marginalized likelihood is a Cholesky plus Woodbury path, and the
+   truncation normalizers add an alternating sum on top of it (see
+   §Support-constrained and mixture linear priors); neither survives float32
+   gracefully. Every tutorial enables x64 in its first cell and `conftest.py`
+   enables it for the whole test suite, so tolerances are set against the
+   precision harv actually runs at. harv does **not** set the flag on import --
+   a library mutating global JAX config as a side effect of being imported is
+   worse than asking for one line. Code that has a precision-dependent
+   threshold derives it from `jnp.finfo(dtype).eps` rather than hard-coding a
+   float64 constant, so it degrades honestly rather than silently if a caller
+   omits the flag.
+
 ______________________________________________________________________
 
 ## Type annotations and runtime checking
@@ -2442,13 +2455,14 @@ Two numerical properties are contractual, and both are pinned by tests:
 - **Signed sums collapse to `-inf` past the working precision rather than
   returning a value they cannot justify.** Corner-wise inclusion-exclusion
   cancels, and unguarded it returns finite values *far too high* (a true
-  `ln P` of -44 reported as -17 in float32), which would over-weight a draw the
+  `ln P` of -44 reported as -17, measured in float32), which would over-weight a draw the
   truncation is meant to forbid. The guard holds back a margin below `-ln(eps)`,
   because it can only test the computed total -- the quantity the cancellation
-  corrupts. Any finite result is then within ~0.004 nats; the floor sits near
-  `ln P = -12` in harv's default float32 and near -32 under `jax_enable_x64`.
-  Erring to `-inf` under-weights rather than over-weights, and only discards
-  weight already below the precision floor.
+  corrupts. In the float64 harv runs in, the error is 7e-14 for `ln P` above -8
+  and 4e-11 above -20, any finite result is within 7e-5, and the floor sits near
+  `ln P = -32`. The budget is derived from the dtype, so it tightens correctly if
+  a caller drops to single precision. Erring to `-inf` under-weights rather than
+  over-weights, and only discards weight already below the precision floor.
 - **Infinite bounds never enter the arithmetic.** `(-inf - loc) / scale` would
   differentiate to `NaN` via `0 * inf`, and a `jnp.where` on the bound does not
   help because `where` evaluates both branches under `grad`. Unbounded sides are

@@ -29,15 +29,16 @@ from harv.stats.marginalized import (
 
 INF = np.inf
 
-# harv runs in JAX's default float32 unless the user enables x64, so that is the
-# precision these tolerances are set from (measured, not guessed: agreement with
-# float64 quadrature is ~3.4e-6 absolute on log-probs of order 10).
-LN_PROB_TOL = 1e-5
+# harv runs in double precision (``conftest.py`` enables x64 for the suite, and
+# every tutorial does the same), so these tolerances are set from measured
+# float64 behaviour rather than from JAX's float32 default.
+LN_PROB_TOL = 1e-9
 
 # ``_ln_bvn_rect`` is trustworthy while the alternating corner sum stays within
 # the working precision of its largest term. Beyond that it returns -inf by
-# design; this is the region where it is expected to be *accurate*.
-LN_RECT_ACCURATE_ABOVE = -8.0
+# design; this is the region where it is expected to be *accurate*. Measured in
+# float64: 7e-14 above -8, 4e-11 above -20, degrading to 2e-5 by -28.
+LN_RECT_ACCURATE_ABOVE = -20.0
 
 
 def _prior(low, high, *, loc=None, scale=None, ln_weights=None, k=2):
@@ -87,7 +88,7 @@ def test_ln_ndtr_interval_matches_scipy(lo, hi):
         if hi < 5
         else np.log(norm.sf(lo) - norm.sf(hi))
     )
-    assert got == pytest.approx(ref, abs=1e-4)
+    assert got == pytest.approx(ref, abs=1e-12)
 
 
 def test_ln_ndtr_interval_zero_width_is_neg_inf():
@@ -134,9 +135,9 @@ def test_ln_bvn_rect_matches_scipy(rho):
         if ln_ref > LN_RECT_ACCURATE_ABOVE:
             assert np.isfinite(got)
             worst_accurate = max(worst_accurate, abs(got - ln_ref))
-    assert worst_accurate < 1e-3
-    # Pins the guard: measured worst finite error across the sweep is 0.004 nats.
-    assert worst_finite < 0.05
+    assert worst_accurate < 1e-9
+    # Pins the guard: measured worst finite error across the sweep is 7e-5 nats.
+    assert worst_finite < 1e-3
 
 
 def test_ln_bvn_rect_upper_orthant_matches_scipy():
@@ -154,7 +155,7 @@ def test_ln_bvn_rect_upper_orthant_matches_scipy():
                 hi_finite=(False, False),
             )
         )
-        assert got == pytest.approx(np.log(ref), abs=1e-4)
+        assert got == pytest.approx(np.log(ref), abs=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +253,11 @@ def test_mixture_log_prob_matches_quadrature(problem, low, high):
 
     The truncated cases are what catch getting the mixture normalizer wrong:
     ``Z_mix = sum_c w_c Z_prior_c`` must be subtracted once, not per component.
+
+    Looser than ``LN_PROB_TOL`` because the *oracle* is the limit here, not the
+    code: ``dblquad`` converges slowly on a bimodal integrand and reports as
+    much. ``test_mixture_log_prob_equals_explicit_logsumexp`` pins the same
+    quantity against an exact reference at ``LN_PROB_TOL``.
     """
     design, err, obs, data_dist = problem
     prior = _prior(
@@ -266,9 +272,7 @@ def test_mixture_log_prob_matches_quadrature(problem, low, high):
             jnp.asarray(obs)
         )
     )
-    assert got == pytest.approx(
-        _brute_ln_prob(design, err, obs, prior), abs=LN_PROB_TOL
-    )
+    assert got == pytest.approx(_brute_ln_prob(design, err, obs, prior), abs=1e-7)
 
 
 def test_mixture_log_prob_equals_explicit_logsumexp(problem):
@@ -482,7 +486,7 @@ def test_one_constrained_param_matches_closed_form_truncated_moments(
     mean0 = float(np.asarray(cond.mean_untruncated)[0, 0])
     sd0 = float(np.sqrt(np.asarray(cond.cov)[0, 0, 0]))
     expected = truncnorm.mean(a=(0.0 - mean0) / sd0, b=np.inf, loc=mean0, scale=sd0)
-    assert float(np.asarray(cond.mean)[0]) == pytest.approx(expected, rel=1e-4)
+    assert float(np.asarray(cond.mean)[0]) == pytest.approx(expected, rel=1e-8)
 
 
 def test_untruncated_mean_is_the_ordinary_conditional_mean(sampling_problem):
@@ -498,7 +502,7 @@ def test_untruncated_mean_is_the_ordinary_conditional_mean(sampling_problem):
             cond.mean_untruncated,
         )
     )
-    assert np.allclose(np.asarray(cond.mean), mixed, atol=1e-5)
+    assert np.allclose(np.asarray(cond.mean), mixed, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

@@ -156,10 +156,24 @@ class LogGridDensity(Distribution):
         value = jnp.asarray(value)
         positive = value > 0
         u = jnp.log(jnp.where(positive, value, 1.0))
-        j, u0, du = self._segment(u)
-        t = (u - u0) / du
+
+        # The endpoints must survive a round trip through ``exp``/``log``.
+        # ``log(exp(ln_grid[0]))`` can land an ulp *below* the knot -- measured at
+        # 1.1e-16 in float64 -- and a strict comparison then reports the left edge
+        # of the support as outside it, returning ``-inf`` where the density is
+        # finite. That matters downstream: a period sample sitting exactly on the
+        # domain edge would get an ``-inf`` interim prior and blow up hierarchical
+        # reweighting. The same round-trip tolerance is applied in the periodogram
+        # prior builders (see ``docs/spec.md`` -> Prior builders).
+        lo, hi = self.ln_grid[0], self.ln_grid[-1]
+        tol = 8.0 * jnp.finfo(u.dtype).eps * jnp.maximum(jnp.abs(lo), jnp.abs(hi))
+
+        # Interpolate at the clamped coordinate so an edge value evaluates *at*
+        # the knot rather than extrapolating a hair past it.
+        j, u0, du = self._segment(jnp.clip(u, lo, hi))
+        t = jnp.clip((jnp.clip(u, lo, hi) - u0) / du, 0.0, 1.0)
         rho = self._rho[j] + (self._rho[j + 1] - self._rho[j]) * t
-        inside = positive & (u >= self.ln_grid[0]) & (u <= self.ln_grid[-1]) & (rho > 0)
+        inside = positive & (u >= lo - tol) & (u <= hi + tol) & (rho > 0)
         ln_rho = jnp.where(inside, jnp.log(jnp.where(rho > 0, rho, 1.0)), -jnp.inf)
         return ln_rho, u
 
