@@ -15,17 +15,29 @@ __all__ = (
     "QD",
     "QuantityDistribution",
     # Models API
+    "AbstractComponentModel",
     "GaiaAstrometryModel",
     "JointModel",
-    "ParamInfo",
     "RVModel",
+    # Parameterizations
+    "AbstractParameterization",
+    "EcoswEsinwRV",
+    "StandardGaiaAstrometry",
+    "StandardRV",
+    # Extensions
+    "AbstractExtension",
+    "GP",
+    "Jitter",
+    "MonomialTrend",
+    "MultiSurveyOffset",
+    "ParamInfo",
     # Samplers
     "AbstractSampler",
-    "make_prior_cache",
-    "NumpyroSampler",
     "HarvPrior",
+    "NumpyroSampler",
     "RejectionSampler",
     "Samples",
+    "make_prior_cache",
     # Modules:
     "data",
     "periodogram",

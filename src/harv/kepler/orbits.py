@@ -1,6 +1,6 @@
 """Helper functions for Keplerian orbits.
 
-Implementations of core orbit computations used by ``harv.kepler``, ``harv.likelihood``,
+Implementations of core orbit computations used by ``harv.kepler``, ``harv.models``,
 and ``harv.simulate``.
 
 All functions accept :class:`~unxt.Q` objects (including dimensionless ones)
@@ -10,7 +10,7 @@ as well as plain JAX arrays and Python scalars.
 __all__ = (
     "mean_anomaly",
     "rv_shape",
-    "thiele_innes_ABFG",
+    "thiele_innes_unit",
     "true_anomaly_from_mean",
     "campbell_from_thiele_innes",
     "thiele_innes_from_campbell",
@@ -35,7 +35,7 @@ from harv.custom_types import (
     BatchQDimless,
     BatchQSpeed,
     BatchQTime,
-    ScalarFloat,
+    ScalarFloatLike,
     ScalarQAngle,
     ScalarQSpeed,
     ScalarQTime,
@@ -60,7 +60,7 @@ def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
 
 
 def true_anomaly_from_mean(
-    M: BatchQAngle, eccentricity: ScalarFloat
+    M: BatchQAngle, eccentricity: ScalarFloatLike
 ) -> tuple[BatchFloat, BatchFloat]:
     """Solve Kepler's equation: mean anomaly -> (sin f, cos f).
 
@@ -79,8 +79,8 @@ def true_anomaly_from_mean(
 def rv_shape(
     sin_f: BatchFloat,
     cos_f: BatchFloat,
-    eccentricity: ScalarFloat,
-    arg_peri: ScalarQAngle | ScalarFloat,
+    eccentricity: ScalarFloatLike,
+    arg_peri: ScalarQAngle | ScalarFloatLike,
 ) -> BatchFloat:
     """RV shape function: cos(omega + f) + e*cos(omega).
 
@@ -105,7 +105,7 @@ def rv_shape(
     return cast("BatchFloat", cos_wf + ecc * jnp.cos(arg_peri))
 
 
-def thiele_innes_ABFG(
+def thiele_innes_unit(
     cos_arg_peri: BatchFloatLike,
     sin_arg_peri: BatchFloatLike,
     cos_lon_asc_node: BatchFloatLike,
@@ -136,8 +136,8 @@ def thiele_innes_ABFG(
     --------
     >>> import quaxed.numpy as jnp
     >>> from unxt import Q
-    >>> from harv.kepler.orbits import thiele_innes_ABFG
-    >>> A, B, F, G = thiele_innes_ABFG(
+    >>> from harv.kepler.orbits import thiele_innes_unit
+    >>> A, B, F, G = thiele_innes_unit(
     ...     cos_arg_peri=jnp.cos(Q(0.5, "rad")),
     ...     sin_arg_peri=jnp.sin(Q(0.5, "rad")),
     ...     cos_lon_asc_node=jnp.cos(Q(1.0, "rad")),
@@ -222,7 +222,7 @@ def thiele_innes_from_campbell(
 
     The forward direction of the change of variables inverted by
     :func:`campbell_from_thiele_innes`.  The unit Thiele-Innes constants from
-    :func:`thiele_innes_ABFG` are scaled by the semi-major axis:
+    :func:`thiele_innes_unit` are scaled by the semi-major axis:
 
     .. math::
 
@@ -240,7 +240,7 @@ def thiele_innes_from_campbell(
     >>> A.unit
     Unit("mas")
     """
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(arg_peri),
         jnp.sin(arg_peri),
         jnp.cos(lon_asc_node),
@@ -327,8 +327,8 @@ def ecosw_esinw_from_ecc_omega(
 def compute_true_anomaly_components(
     time: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    eccentricity: ScalarFloatLike,
+    time_peri: ScalarQTime,
 ) -> tuple[BatchFloat, BatchFloat]:
     """Compute true anomaly at given times.
 
@@ -340,7 +340,7 @@ def compute_true_anomaly_components(
         Orbital period
     eccentricity
         Orbital eccentricity
-    t_peri
+    time_peri
         Time of pericenter passage
 
     Returns
@@ -355,18 +355,18 @@ def compute_true_anomaly_components(
     ...     time=Q([0.0, 25.0, 50.0], "day"),
     ...     period=Q(100.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(0.0, "day"),
+    ...     time_peri=Q(0.0, "day"),
     ... )
     """
-    M = mean_anomaly(time - t_peri, period)
+    M = mean_anomaly(time - time_peri, period)
     return true_anomaly_from_mean(M, ustrip(AllowValue, "", eccentricity))
 
 
 def rv_at_times(
     times: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    eccentricity: ScalarFloatLike,
+    time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
     rv_semiamp: ScalarQSpeed,
     v_sys: ScalarQSpeed,
@@ -381,10 +381,10 @@ def rv_at_times(
         Orbital period.
     eccentricity
         Orbital eccentricity.
-    t_peri
+    time_peri
         Time of periastron passage.  In the likelihood layer this is
         derived from the dimensionless ``phase_peri`` as
-        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
+        ``time_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron omega.
     rv_semiamp
@@ -405,7 +405,7 @@ def rv_at_times(
     ...     times,
     ...     period=Q(200.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(50.0, "day"),
+    ...     time_peri=Q(50.0, "day"),
     ...     arg_peri=Q(1.2, "rad"),
     ...     rv_semiamp=Q(8.0, "km/s"),
     ...     v_sys=Q(-5.0, "km/s"),
@@ -413,7 +413,9 @@ def rv_at_times(
     >>> rv.unit
     Unit("km / s")
     """
-    sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
+    sin_f, cos_f = compute_true_anomaly_components(
+        times, period, eccentricity, time_peri
+    )
     amplitude = rv_shape(sin_f, cos_f, eccentricity, arg_peri)
     return cast("BatchQSpeed", rv_semiamp * amplitude + v_sys)
 
@@ -421,10 +423,10 @@ def rv_at_times(
 def astrometric_orbit_at_times(
     times: BatchQTime,
     period: ScalarQTime,
-    eccentricity: ScalarFloat,
-    t_peri: ScalarQTime,
+    eccentricity: ScalarFloatLike,
+    time_peri: ScalarQTime,
     arg_peri: ScalarQAngle,
-    cos_i: ScalarFloat,
+    cos_i: ScalarFloatLike,
     lon_asc_node: ScalarQAngle,
     semi_major_axis: ScalarQAngle,
 ) -> tuple[BatchQAngle, BatchQAngle]:
@@ -448,10 +450,10 @@ def astrometric_orbit_at_times(
         Orbital period.
     eccentricity
         Orbital eccentricity.
-    t_peri
+    time_peri
         Time of periastron passage.  In the likelihood layer this is
         derived from the dimensionless ``phase_peri`` as
-        ``t_peri = phase_peri * period`` (see ``_solve_kepler``).
+        ``time_peri = phase_peri * period`` (see ``_solve_kepler``).
     arg_peri
         Argument of periastron omega.
     cos_i
@@ -475,7 +477,7 @@ def astrometric_orbit_at_times(
     ...     times,
     ...     period=Q(300.0, "day"),
     ...     eccentricity=0.3,
-    ...     t_peri=Q(0.0, "day"),
+    ...     time_peri=Q(0.0, "day"),
     ...     arg_peri=Q(1.2, "rad"),
     ...     cos_i=0.5,
     ...     lon_asc_node=Q(0.8, "rad"),
@@ -484,8 +486,10 @@ def astrometric_orbit_at_times(
     >>> dra.unit
     Unit("mas")
     """
-    sin_f, cos_f = compute_true_anomaly_components(times, period, eccentricity, t_peri)
-    A, B, F, G = thiele_innes_ABFG(
+    sin_f, cos_f = compute_true_anomaly_components(
+        times, period, eccentricity, time_peri
+    )
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(ustrip("rad", arg_peri)),
         jnp.sin(ustrip("rad", arg_peri)),
         jnp.cos(ustrip("rad", lon_asc_node)),

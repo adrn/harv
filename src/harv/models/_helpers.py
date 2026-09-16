@@ -116,7 +116,7 @@ def _with_derived_eccentricity(
 
 def _resolve_prior_to_mvn(
     prior_dict: dict[str, PriorDist | LinearPriorCallable],
-    nl_values: dict[str, Any],
+    nonlinear_values: dict[str, Any],
     unit_dict: dict[str, str],
     extra_values: dict[str, Any] | None = None,
     parameterization: Any | None = None,
@@ -127,7 +127,7 @@ def _resolve_prior_to_mvn(
     # Values passed to any LinearPriorCallable. Include explicit linear values so
     # that callables depending on explicitly-sampled linear params (e.g. parallax)
     # can resolve.
-    param_values = dict(nl_values)
+    param_values = dict(nonlinear_values)
     if extra_values:
         param_values.update(extra_values)
     param_values = _with_derived_eccentricity(param_values, parameterization)

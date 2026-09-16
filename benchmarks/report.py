@@ -716,7 +716,7 @@ def render_findings(  # noqa: C901
                 "### The speedup is free",
                 "",
                 f"Across all {n} cells measured on both devices, the largest relative",
-                f"difference in `logZ_int_ess` is {worst:.1e}. Both runs pin float64,",
+                f"difference in `ln_Z_int_ess` is {worst:.1e}. Both runs pin float64,",
                 "and the GPU is not trading accuracy for speed — it is the same",
                 "arithmetic, faster.",
                 "",

@@ -22,7 +22,7 @@ from harv.data.datasets import (
     RVData,
 )
 from harv.data.helpers import (
-    _synchronize_t_refs,
+    _synchronize_time_refs,
     build_indicator_matrix,
     stack_datasets,
 )
@@ -40,14 +40,14 @@ class AbstractDatasetContainer(eqx.Module):
     _datasets: dict[str, DatasetType]
 
     @property
-    def t_ref(self) -> ScalarQTime | None:
+    def time_ref(self) -> ScalarQTime | None:
         """Reference epoch shared by all contained datasets.
 
         Guaranteed to be consistent across components because every concrete
-        subclass calls :func:`~harv.data.helpers._synchronize_t_refs` in its
+        subclass calls :func:`~harv.data.helpers._synchronize_time_refs` in its
         ``__init__``.
         """
-        return next(iter(self._datasets.values())).t_ref
+        return next(iter(self._datasets.values())).time_ref
 
     def __getitem__(self, name: str) -> DatasetType:
         return self._datasets[name]
@@ -268,7 +268,7 @@ class SystemData(AbstractDatasetContainer):
 
         datasets = cast(
             "dict[str, DatasetType]",
-            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
+            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets)),
         )
         self._datasets = datasets
         self._dataset_type = next(iter(dataset_types))
@@ -308,7 +308,7 @@ class SourceData(AbstractDatasetContainer):
                 )
         datasets = cast(
             "dict[str, DatasetType]",
-            _synchronize_t_refs(cast("dict[str, AbstractData]", datasets)),
+            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets)),
         )
         object.__setattr__(self, "_datasets", datasets)
 

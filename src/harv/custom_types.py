@@ -40,10 +40,10 @@ NAngle = Real[Q["angle"], "n"]
 NDimless = Real[Q["dimensionless"], "n"]
 NFrequency = Real[Q["frequency"], "n"]
 NTime = Real[Q["time"], "n"]
-NVelocity = Real[Q["speed"], "n"]
+NSpeed = Real[Q["speed"], "n"]
 NFloatArray = Float[jax.Array, "n"]
 NIntArray = Int[jax.Array, "n"]
-NQAny = Real[AbstractQuantity, ""]
+NQAny = Real[AbstractQuantity, "n"]
 
 Vec3QLength = Real[Q["length"], "3"]
 Vec3QSpeed = Real[Q["speed"], "3"]
@@ -74,9 +74,9 @@ DIMENSIONED_BATCH_TYPES: frozenset[Any] = frozenset(
     }
 )
 
-ScalarFloat = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
+ScalarFloatLike = Float[jax.Array, ""] | np.floating[Any] | float | int | ScalarQDimless
 
-# Like ScalarFloat but shape-agnostic (a strict superset): plain Python/NumPy
+# Like ScalarFloatLike but shape-agnostic (a strict superset): plain Python/NumPy
 # scalars, JAX arrays of any rank, or dimensionless Quantities of any rank.
 # Use for shape-agnostic building blocks that broadcast over scalar or batched
 # inputs (see docs/spec.md, "Shared building blocks").
@@ -85,7 +85,7 @@ BatchFloatLike = (
 )
 
 
-def float_converter(x: ScalarFloat) -> Float[jax.Array, ""]:
+def float_converter(x: ScalarFloatLike) -> Float[jax.Array, ""]:
     """Converter for dimensionless scalar float fields.
 
     Strips units from a dimensionless quantity or passes through plain scalars,

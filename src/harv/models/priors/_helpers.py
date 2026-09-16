@@ -11,7 +11,7 @@ from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
 )
-from harv.models.priors.custom_priors import (
+from harv.models.priors.callables import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
@@ -78,7 +78,7 @@ def _make_rv_semiamp_prior(
     *,
     rv_semiamp: LinearPriorDist | None = None,
     sigma_K0: ScalarQSpeed | None = None,
-    P0: ScalarQTime = Q(1.0, "yr"),
+    period_ref: ScalarQTime = Q(1.0, "yr"),
 ) -> LinearPriorDist:
     if rv_semiamp is not None:
         if sigma_K0 is not None:
@@ -86,7 +86,7 @@ def _make_rv_semiamp_prior(
         return rv_semiamp
     if sigma_K0 is None:
         raise TypeError("Must specify either rv_semiamp or sigma_K0")
-    return PeriodDependentKPrior(sigma_K0=sigma_K0, P0=P0)
+    return PeriodDependentKPrior(sigma_K0=sigma_K0, period_ref=period_ref)
 
 
 def _make_vsys_prior(
@@ -158,7 +158,7 @@ def _make_semi_major_axis_prior(
     *,
     semi_major_axis: LinearPriorDist | None = None,
     sigma_a0: ScalarQLength | None = None,
-    P0: ScalarQTime = Q(1.0, "yr"),
+    period_ref: ScalarQTime = Q(1.0, "yr"),
 ) -> LinearPriorDist:
     if semi_major_axis is not None:
         if sigma_a0 is not None:
@@ -166,4 +166,4 @@ def _make_semi_major_axis_prior(
         return semi_major_axis
     if sigma_a0 is None:
         raise TypeError("Must specify either semi_major_axis or sigma_a0")
-    return PeriodDependentSemiMajorAxisPrior(sigma_a0=sigma_a0, P0=P0)
+    return PeriodDependentSemiMajorAxisPrior(sigma_a0=sigma_a0, period_ref=period_ref)

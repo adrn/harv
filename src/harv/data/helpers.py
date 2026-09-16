@@ -18,34 +18,34 @@ if TYPE_CHECKING:
     from unxt import AbstractQuantity
 
 
-def _synchronize_t_refs(
+def _synchronize_time_refs(
     datasets: dict[str, AbstractData],
 ) -> dict[str, AbstractData]:
-    """Return datasets with a shared t_ref equal to the mean of all observation times.
+    """Return datasets sharing a ``time_ref`` set to the mean of all observation times.
 
     When multiple datasets are combined (e.g., in SourceData, SystemData, or a
     JointModel), the shared ``phase_peri`` parameter is interpreted as a fraction of
-    the orbit relative to ``t_ref``.  All component datasets must therefore use the
+    the orbit relative to ``time_ref``.  All component datasets must therefore use the
     same reference epoch.  This function computes the global mean time and rebuilds
     each dataset with that shared value.
 
     Parameters
     ----------
     datasets
-        Named datasets, possibly with different ``t_ref`` values.
+        Named datasets, possibly with different ``time_ref`` values.
 
     Returns
     -------
-        Same datasets with ``t_ref`` replaced by the global mean time.
+        Same datasets with ``time_ref`` replaced by the global mean time.
     """
     if len(datasets) <= 1:
         return dict(datasets)
 
     all_times = jnp.concatenate([ds.time for ds in datasets.values()])
-    shared_t_ref = jnp.mean(all_times)
+    shared_time_ref = jnp.mean(all_times)
 
     return {
-        name: eqx.tree_at(lambda d: d.t_ref, ds, shared_t_ref)
+        name: eqx.tree_at(lambda d: d.time_ref, ds, shared_time_ref)
         for name, ds in datasets.items()
     }
 
@@ -78,7 +78,7 @@ def stack_datasets[DT: AbstractData](
     ...     rv_err=Q([0.3, 0.3], "km/s"),
     ... )
     >>> stacked = stack_datasets({"instr1": rv1, "instr2": rv2})
-    >>> stacked.n_times
+    >>> stacked.n_obs
     4
     """
     # first make sure that all datasets have the same type:
@@ -95,7 +95,7 @@ def stack_datasets[DT: AbstractData](
     all_fields = {
         field.name
         for field in fields(ref)
-        if field.name != "t_ref"  # scalar, not array -- skip and recompute below
+        if field.name != "time_ref"  # scalar, not array -- skip and recompute below
     }
 
     # NOTE: we assume that all datasets have the same fields and units, and we assume
@@ -106,9 +106,9 @@ def stack_datasets[DT: AbstractData](
         name: jnp.concatenate([getattr(ds, name) for ds in datasets.values()])
         for name in all_fields
     }
-    # NOTE: t_ref is recomputed from the stacked time by __check_init__
+    # NOTE: time_ref is recomputed from the stacked time by __check_init__
     # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
-    # class docstrings) about how t_ref is handled when stacking datasets.
+    # class docstrings) about how time_ref is handled when stacking datasets.
     return type(ref)(**all_data)
 
 
@@ -154,7 +154,7 @@ def build_indicator_matrix[DT: AbstractData](
     >>> stacked, indicator, names = build_indicator_matrix(
     ...     {"survey1": rv1, "survey2": rv2}, reference="survey1",
     ... )
-    >>> stacked.n_times
+    >>> stacked.n_obs
     4
     >>> names
     ('survey2',)

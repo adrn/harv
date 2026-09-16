@@ -16,14 +16,14 @@ from harv.kepler.orientation import KeplerianOrientation
 def _make_circular_body(
     period: float = 1.0,
     a: float = 1.0,
-    t_peri: float = 0.0,
+    time_peri: float = 0.0,
 ) -> KeplerianBody:
     """Create a circular orbit KeplerianBody with units."""
     return KeplerianBody(
         period=Q(period, "yr"),
         eccentricity=0.0,
         semi_major_axis=Q(a, "AU"),
-        t_peri=Q(t_peri, "yr"),
+        time_peri=Q(time_peri, "yr"),
     )
 
 
@@ -31,14 +31,14 @@ def _make_eccentric_body(
     period: float = 1.0,
     eccentricity: float = 0.5,
     a: float = 1.0,
-    t_peri: float = 0.0,
+    time_peri: float = 0.0,
 ) -> KeplerianBody:
     """Create an eccentric orbit KeplerianBody with units."""
     return KeplerianBody(
         period=Q(period, "yr"),
         eccentricity=eccentricity,
         semi_major_axis=Q(a, "AU"),
-        t_peri=Q(t_peri, "yr"),
+        time_peri=Q(time_peri, "yr"),
     )
 
 
@@ -60,7 +60,7 @@ class TestConstruction:
                 period=Q(1.0, "yr"),
                 eccentricity=-0.1,
                 semi_major_axis=Q(1.0, "AU"),
-                t_peri=Q(0.0, "yr"),
+                time_peri=Q(0.0, "yr"),
             )
 
     def test_eccentricity_one_raises(self) -> None:
@@ -69,7 +69,7 @@ class TestConstruction:
                 period=Q(1.0, "yr"),
                 eccentricity=1.0,
                 semi_major_axis=Q(1.0, "AU"),
-                t_peri=Q(0.0, "yr"),
+                time_peri=Q(0.0, "yr"),
             )
 
     def test_eccentricity_converter_accepts_quantity(self) -> None:
@@ -77,7 +77,7 @@ class TestConstruction:
             period=Q(1.0, "yr"),
             eccentricity=Q(0.3, ""),
             semi_major_axis=Q(1.0, "AU"),
-            t_peri=Q(0.0, "yr"),
+            time_peri=Q(0.0, "yr"),
         )
         assert jnp.allclose(body.eccentricity, 0.3)
 
@@ -86,18 +86,18 @@ class TestConstruction:
             period=Q(1.0, "yr"),
             eccentricity=jnp.float32(0.2),
             semi_major_axis=Q(1.0, "AU"),
-            t_peri=Q(0.0, "yr"),
+            time_peri=Q(0.0, "yr"),
         )
         assert jnp.allclose(body.eccentricity, 0.2, atol=1e-6)
 
     def test_mixed_units_rejected(self) -> None:
-        """Mixing units and dimensionless for period/a/t_peri raises."""
+        """Mixing units and dimensionless for period/a/time_peri raises."""
         with pytest.raises((ValueError, TypeError, Exception)):
             KeplerianBody(
                 period=Q(1.0, "yr"),
                 eccentricity=0.0,
                 semi_major_axis=Q(1.0, ""),  # dimensionless
-                t_peri=Q(0.0, "yr"),
+                time_peri=Q(0.0, "yr"),
             )
 
 
@@ -116,7 +116,7 @@ class TestFromMasses:
             eccentricity=0.1,
             m_total=m_prim + m_comp,
             m_body=m_comp,
-            t_peri=Q(0.0, "yr"),
+            time_peri=Q(0.0, "yr"),
         )
         recovered = body.get_mass(m_prim + m_comp)
         assert jnp.allclose(
@@ -135,7 +135,7 @@ class TestFromMasses:
             eccentricity=0.0,
             m_total=Q(1.0, "Msun") + Q(1.0, "Mjup"),
             m_body=Q(1.0, "Mjup"),
-            t_peri=Q(0.0, "yr"),
+            time_peri=Q(0.0, "yr"),
             orientation=o,
         )
         assert jnp.allclose(
@@ -152,8 +152,8 @@ class TestCircularOrbit:
     def test_constant_radius(self) -> None:
         """For e=0, |r| = a at all times."""
         body = _make_circular_body(a=2.0)
-        for t_val in [0.0, 0.25, 0.5, 0.75]:
-            time = Q(t_val, "yr")
+        for time_val in [0.0, 0.25, 0.5, 0.75]:
+            time = Q(time_val, "yr")
             r = body.get_position(time)
             r_mag = jnp.sqrt(jnp.sum(ustrip("AU", r) ** 2))
             assert jnp.allclose(r_mag, 2.0, rtol=1e-6)
@@ -164,8 +164,8 @@ class TestCircularOrbit:
         body = _make_circular_body(period=P, a=a)
         expected_speed = 2 * jnp.pi * a / P  # AU/yr
 
-        for t_val in [0.0, 0.25, 0.5, 0.75]:
-            time = Q(t_val, "yr")
+        for time_val in [0.0, 0.25, 0.5, 0.75]:
+            time = Q(time_val, "yr")
             v = body.get_velocity(time)
             v_mag = jnp.sqrt(jnp.sum(ustrip("AU/yr", v) ** 2))
             assert jnp.allclose(v_mag, expected_speed, rtol=1e-5)
@@ -187,10 +187,10 @@ class TestCircularOrbit:
 
 class TestEccentricOrbit:
     def test_pericenter_distance(self) -> None:
-        """At t_peri, |r| = a(1-e)."""
+        """At time_peri, |r| = a(1-e)."""
         e, a = 0.5, 3.0
         body = _make_eccentric_body(eccentricity=e, a=a)
-        r = body.get_position(Q(0.0, "yr"))  # t = t_peri
+        r = body.get_position(Q(0.0, "yr"))  # t = time_peri
         r_mag = jnp.sqrt(jnp.sum(ustrip("AU", r) ** 2))
         assert jnp.allclose(r_mag, a * (1 - e), rtol=1e-5)
 
@@ -275,7 +275,7 @@ class TestJAXCompat:
         bodies = [_make_circular_body(period=P, a=1.0) for P in period_values]
         bodies_batched = jax.tree.map(lambda *xs: jnp.stack(xs), *bodies)
 
-        t = Q(0.0, "yr")  # t = t_peri: position is at (a, 0, 0)
+        t = Q(0.0, "yr")  # t = time_peri: position is at (a, 0, 0)
 
         result_v = jax.vmap(lambda b: b.get_velocity(t))(bodies_batched)
         assert result_v.shape == (3, 3)
@@ -292,14 +292,14 @@ class TestJAXCompat:
     def test_vmap_over_eccentricity(self) -> None:
         """Vmap over batched KeplerianBody (different eccentricity per element).
 
-        At t=t_peri, |r| = a(1-e), so pericenter distance encodes eccentricity.
+        At t=time_peri, |r| = a(1-e), so pericenter distance encodes eccentricity.
         """
         ecc_values = [0.0, 0.2, 0.5, 0.7]
         a = 2.0
         bodies = [_make_eccentric_body(eccentricity=e, a=a) for e in ecc_values]
         bodies_batched = jax.tree.map(lambda *xs: jnp.stack(xs), *bodies)
 
-        t = Q(0.0, "yr")  # t = t_peri
+        t = Q(0.0, "yr")  # t = time_peri
 
         result_r = jax.vmap(lambda b: b.get_position(t))(bodies_batched)
         assert result_r.shape == (4, 3)

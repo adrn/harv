@@ -29,8 +29,8 @@ def _fake_result(
         frequency=Q(f, "1/day"),
         delta_ln_likelihood=delta,
         ln_likelihood_base=jnp.asarray(0.0),
-        t_span=Q(2000.0, "day"),
-        t_ref=Q(0.0, "day"),
+        time_span=Q(2000.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
 
 
@@ -77,7 +77,7 @@ class TestTempered:
         floor = 0.15
         prior = hp.tempered_period_prior(_fake_result(), beta=1.0, floor=floor)
         x = jnp.geomspace(P_LO * 1.01, P_HI * 0.99, 501)
-        density_ln = jnp.exp(prior.distribution.log_prob_ln(x))
+        density_ln = jnp.exp(prior.distribution.ln_prob_ln(x))
         bound = floor / np.log(P_HI / P_LO)
         assert bool(jnp.all(density_ln >= bound * (1.0 - 1e-3)))
 
@@ -133,8 +133,8 @@ class TestTempered:
             frequency=base.frequency,
             delta_ln_likelihood=delta,
             ln_likelihood_base=base.ln_likelihood_base,
-            t_span=base.t_span,
-            t_ref=base.t_ref,
+            time_span=base.time_span,
+            time_ref=base.time_ref,
         )
         with pytest.raises(ValueError, match="non-finite at 1 of"):
             hp.tempered_period_prior(result)
@@ -158,20 +158,20 @@ class TestPeaks:
         # height_drop=15 admits both peaks (global max 30, so keep delta >= 15):
         prior = hp.peak_period_prior(_fake_result(), height_drop=15.0, floor=floor)
         target = (1.0 - floor) / 2.0
-        m1 = _peak_mass(prior, 100.0, floor)
+        m_primary = _peak_mass(prior, 100.0, floor)
         m2 = _peak_mass(prior, 300.0, floor)
         # Each top-hat is normalized by its mass as the knots sample it, so the
         # documented (1 - floor) / n_peaks share is exact, not approximate.
-        assert m1 == pytest.approx(target, rel=1e-4)
+        assert m_primary == pytest.approx(target, rel=1e-4)
         assert m2 == pytest.approx(target, rel=1e-4)
         assert _mass_between(prior, P_LO, P_HI) == pytest.approx(1.0, abs=1e-6)
 
     def test_height_drop_excludes_weak_peaks(self):
         # global max 30, drop 5 -> keep delta >= 25 -> only the 30 peak:
         prior = hp.peak_period_prior(_fake_result(), height_drop=5.0, floor=0.1)
-        m1 = _mass_between(prior, 100.0 * np.exp(-0.2), 100.0 * np.exp(0.2))
+        m_primary = _mass_between(prior, 100.0 * np.exp(-0.2), 100.0 * np.exp(0.2))
         m2 = _mass_between(prior, 300.0 * np.exp(-0.2), 300.0 * np.exp(0.2))
-        assert m1 > 0.5
+        assert m_primary > 0.5
         assert m2 < 0.1
 
     def test_relative_criterion_is_scale_invariant(self):
@@ -181,8 +181,8 @@ class TestPeaks:
             frequency=base.frequency,
             delta_ln_likelihood=base.delta_ln_likelihood - 500.0,
             ln_likelihood_base=base.ln_likelihood_base,
-            t_span=base.t_span,
-            t_ref=base.t_ref,
+            time_span=base.time_span,
+            time_ref=base.time_ref,
         )
         p0 = hp.peak_period_prior(base, height_drop=15.0, floor=0.1)
         p1 = hp.peak_period_prior(shifted, height_drop=15.0, floor=0.1)
@@ -203,9 +203,9 @@ class TestPeaks:
         assert m3 < 0.1
         # Each kept peak carries exactly (1 - floor) / max_peaks -- the bound
         # the docs state, which the max_peaks cap exists to guarantee.
-        m1 = _peak_mass(prior, 50.0, floor)
+        m_primary = _peak_mass(prior, 50.0, floor)
         m2 = _peak_mass(prior, 100.0, floor)
-        assert m1 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
+        assert m_primary == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
         assert m2 == pytest.approx((1.0 - floor) / 2.0, rel=1e-4)
 
     def test_flat_periodogram_falls_back_to_loguniform(self):
@@ -234,7 +234,7 @@ class TestSamplerDropIn:
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(30.0, "km/s"),
         )
-        samples = prior.sample_nonlinear(jax.random.key(0), n_samples=4096)
+        samples = prior.sample_nonlinear(key=jax.random.key(0), n_samples=4096)
         p = samples["period"]
         frac_near_peak = float(jnp.mean((p > 90.0) & (p < 110.0)))
         lu_frac = np.log(110.0 / 90.0) / np.log(P_HI / P_LO)

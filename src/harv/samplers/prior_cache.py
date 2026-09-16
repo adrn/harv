@@ -106,8 +106,8 @@ def make_prior_cache(
     # hand-tracking the same prior-resolution logic that lives in
     # HarvPrior.sample.
     probe = prior.sample(
-        key,
         1,
+        key=key,
         model=model,
         return_logprobs=return_logprobs,
         marginalized_names=marginalized_names,
@@ -127,30 +127,30 @@ def make_prior_cache(
     )
 
     with h5py.File(path, "w") as f:
-        nl_group = f.create_group("nonlinear")
-        lin_group = f.create_group("linear")
+        nonlinear_group = f.create_group("nonlinear")
+        linear_group = f.create_group("linear")
         meta_group = f.create_group("metadata")
-        meta_group.attrs["data_type"] = type(model).__name__
+        meta_group.attrs["model_type"] = type(model).__name__
         meta_group.attrs["linear_extension_names"] = ",".join(
             probe.linear_extension_names
         )
         meta_group.attrs["n_samples"] = n_samples
 
-        nl_datasets: dict[str, h5py.Dataset] = {}
+        nonlinear_datasets: dict[str, h5py.Dataset] = {}
         for name in nonlinear_keys:
-            ds = nl_group.create_dataset(
+            ds = nonlinear_group.create_dataset(
                 name, shape=(n_samples,), dtype=nonlinear_dtypes[name]
             )
             ds.attrs["unit"] = nonlinear_units[name]
-            nl_datasets[name] = ds
+            nonlinear_datasets[name] = ds
 
-        lin_datasets: dict[str, h5py.Dataset] = {}
+        linear_datasets: dict[str, h5py.Dataset] = {}
         for name in linear_keys:
-            ds = lin_group.create_dataset(
+            ds = linear_group.create_dataset(
                 name, shape=(n_samples,), dtype=linear_dtypes[name]
             )
             ds.attrs["unit"] = linear_units[name]
-            lin_datasets[name] = ds
+            linear_datasets[name] = ds
 
         lp_dataset: h5py.Dataset | None = None
         if return_logprobs:
@@ -165,16 +165,18 @@ def make_prior_cache(
 
             sub_key = jr.fold_in(key, i)
             batch: Samples = prior.sample(
-                sub_key,
                 n_this,
+                key=sub_key,
                 model=model,
                 return_logprobs=return_logprobs,
                 marginalized_names=marginalized_names,
             )
 
             for name in nonlinear_keys:
-                nl_datasets[name][start:stop] = np.asarray(batch.nonlinear[name].value)
+                nonlinear_datasets[name][start:stop] = np.asarray(
+                    batch.nonlinear[name].value
+                )
             for name in linear_keys:
-                lin_datasets[name][start:stop] = np.asarray(batch.linear[name].value)
+                linear_datasets[name][start:stop] = np.asarray(batch.linear[name].value)
             if lp_dataset is not None and batch.ln_prior is not None:
                 lp_dataset[start:stop] = np.asarray(batch.ln_prior)

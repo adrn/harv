@@ -11,7 +11,7 @@ from harv.models._helpers import (
     LinearPriorDist,
     PriorDist,
 )
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_period_prior,
     _make_rv_semiamp_prior,
@@ -29,7 +29,7 @@ def default_sb2_prior(
     period_max: ScalarQTime | None = None,
     sigma_K0: ScalarQSpeed | None = None,
     sigma_v0: ScalarQSpeed | None = None,
-    P0: ScalarQTime = Q(1.0, "yr"),
+    period_ref: ScalarQTime = Q(1.0, "yr"),
     component_names: tuple[str, str] = ("primary", "secondary"),
     **kwargs: PriorDist | LinearPriorDist,
 ) -> HarvPrior:
@@ -57,10 +57,10 @@ def default_sb2_prior(
     period_max
         Upper bound for the log-uniform period prior.
     sigma_K0
-        RV semi-amplitude scale at the reference period ``P0``.
+        RV semi-amplitude scale at the reference period ``period_ref``.
     sigma_v0
         Systemic velocity prior scale.
-    P0
+    period_ref
         Reference period for the K prior scaling.  Default: 1 yr.
     component_names
         Names of the two components.  These are used to construct the linear prior
@@ -112,7 +112,7 @@ def default_sb2_prior(
         f"{name}.rv_semiamp": _make_rv_semiamp_prior(
             rv_semiamp=kwargs.pop(f"{name}.rv_semiamp", None),
             sigma_K0=sigma_K0,
-            P0=P0,
+            period_ref=period_ref,
         )
         for name in component_names
     }

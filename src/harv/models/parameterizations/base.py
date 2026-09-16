@@ -45,7 +45,7 @@ class AbstractParameterization(eqx.Module):
         return tuple(p for p in self.params() if p.linear)
 
     def default_prior(self, **kwargs: Any) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Each concrete parameterization overrides this with its own type-narrow
         signature for the required scale arguments (e.g. ``sigma_K0`` for RV,
@@ -62,7 +62,7 @@ class AbstractParameterization(eqx.Module):
         Returns
         -------
         HarvPrior
-            A prior whose ``nonlinear_priors`` and ``linear_prior`` entries
+            A prior whose ``nonlinear_priors`` and ``linear_priors`` entries
             match the names declared by ``self.params()``.
         """
         msg = (
@@ -71,11 +71,11 @@ class AbstractParameterization(eqx.Module):
         )
         raise NotImplementedError(msg)
 
-    def derived_eccentricity(self, nl_values: dict[str, Any]) -> Any | None:  # noqa: ARG002
+    def derived_eccentricity(self, nonlinear_values: dict[str, Any]) -> Any | None:  # noqa: ARG002
         """Eccentricity implied by this parameterization, if it is not a parameter.
 
         ``LinearPriorCallable`` implementations such as
-        :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior` are written
+        :class:`~harv.models.priors.callables.PeriodDependentKPrior` are written
         against the standard parameter names, so a parameterization that encodes
         eccentricity indirectly must say how to recover it or those priors cannot be
         evaluated at all.
@@ -88,7 +88,7 @@ class AbstractParameterization(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Nonlinear parameter values keyed by bare parameter name.
 
         Returns

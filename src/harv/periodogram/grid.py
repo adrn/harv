@@ -17,7 +17,7 @@ from harv.data.containers import AbstractDatasetContainer
 from harv.data.datasets import AbstractData
 
 
-def _data_t_span(
+def _data_time_span(
     data: AbstractData | AbstractDatasetContainer, unit: str
 ) -> Float[jax.Array, ""]:
     """Total time baseline spanned by all observations, in ``unit``.
@@ -39,7 +39,7 @@ def frequency_grid(
     *,
     period_min: ScalarQTime,
     period_max: ScalarQTime | None = None,
-    t_span: ScalarQTime | None = None,
+    time_span: ScalarQTime | None = None,
     samples_per_peak: int = 8,
     max_period_factor: float = 1.0,
     n_grid: int | None = None,
@@ -47,10 +47,10 @@ def frequency_grid(
     """Build a frequency grid, uniform in frequency, for a periodogram.
 
     The grid spans ``[1/period_max, 1/period_min]`` with spacing
-    ``1 / (samples_per_peak * t_span)`` (the natural periodogram peak width is
-    ``1/t_span`` in frequency), unless ``n_grid`` is given explicitly.
+    ``1 / (samples_per_peak * time_span)`` (the natural periodogram peak width is
+    ``1/time_span`` in frequency), unless ``n_grid`` is given explicitly.
 
-    Exactly one of ``data`` or ``t_span`` must be provided; for dataset
+    Exactly one of ``data`` or ``time_span`` must be provided; for dataset
     containers the baseline spans all contained datasets.
 
     .. note:: To guarantee an identical prior pytree structure across a
@@ -65,18 +65,18 @@ def frequency_grid(
     ----------
     data
         Observations used to derive the time baseline. Mutually exclusive with
-        ``t_span``.
+        ``time_span``.
     period_min
         Shortest trial period (sets the highest frequency). Its unit defines
         the unit of the returned grid (``1/unit``).
     period_max
-        Longest trial period. Defaults to ``max_period_factor * t_span``.
-    t_span
+        Longest trial period. Defaults to ``max_period_factor * time_span``.
+    time_span
         Time baseline. Mutually exclusive with ``data``.
     samples_per_peak
         Grid oversampling factor per periodogram peak width. Default: 8.
     max_period_factor
-        Sets the default ``period_max`` as a multiple of ``t_span``.
+        Sets the default ``period_max`` as a multiple of ``time_span``.
     n_grid
         Explicit number of grid points, overriding the spacing rule.
 
@@ -85,13 +85,13 @@ def frequency_grid(
     >>> from unxt import Q
     >>> from harv.periodogram import frequency_grid
     >>> f = frequency_grid(
-    ...     t_span=Q(1000.0, "day"), period_min=Q(10.0, "day"), n_grid=101
+    ...     time_span=Q(1000.0, "day"), period_min=Q(10.0, "day"), n_grid=101
     ... )
     >>> f.shape, str(f.unit)
     ((101,), '1 / d')
     """
-    if (data is None) == (t_span is None):
-        raise TypeError("Exactly one of data or t_span must be provided")
+    if (data is None) == (time_span is None):
+        raise TypeError("Exactly one of data or time_span must be provided")
 
     unit = str(period_min.unit)
     p_min = float(ustrip(unit, period_min))
@@ -104,13 +104,13 @@ def frequency_grid(
     # lets periodogram(data, period_min=..., period_max=..., n_grid=...) trace.
     def span() -> float:
         value = (
-            float(_data_t_span(data, unit))
+            float(_data_time_span(data, unit))
             if data is not None
-            # t_span is not None here -- guaranteed by the exactly-one check above:
-            else float(ustrip(unit, t_span))  # ty: ignore[no-matching-overload]
+            # time_span is not None here -- guaranteed by the exactly-one check above:
+            else float(ustrip(unit, time_span))  # ty: ignore[no-matching-overload]
         )
         if value <= 0:
-            raise ValueError("The data time baseline (t_span) must be positive")
+            raise ValueError("The data time baseline (time_span) must be positive")
         return value
 
     p_max = (

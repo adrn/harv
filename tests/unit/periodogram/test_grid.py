@@ -146,7 +146,7 @@ class TestEffectiveNTermsShared:
 class TestBounds:
     def test_endpoints_and_unit(self):
         f = frequency_grid(
-            t_span=Q(1000.0, "day"),
+            time_span=Q(1000.0, "day"),
             period_min=Q(10.0, "day"),
             period_max=Q(500.0, "day"),
         )
@@ -158,18 +158,18 @@ class TestBounds:
         span = 1000.0
         spp = 7
         f = frequency_grid(
-            t_span=Q(span, "day"),
+            time_span=Q(span, "day"),
             period_min=Q(10.0, "day"),
             samples_per_peak=spp,
         )
         df = jnp.diff(ustrip("1/day", f))
         assert bool(jnp.all(df <= (1.0 / (spp * span)) * (1.0 + 1e-4)))
 
-    def test_default_period_max_from_t_span(self):
-        f = frequency_grid(t_span=Q(1000.0, "day"), period_min=Q(10.0, "day"))
+    def test_default_period_max_from_time_span(self):
+        f = frequency_grid(time_span=Q(1000.0, "day"), period_min=Q(10.0, "day"))
         assert jnp.isclose(ustrip("1/day", f)[0], 1.0 / 1000.0)
         f2 = frequency_grid(
-            t_span=Q(1000.0, "day"),
+            time_span=Q(1000.0, "day"),
             period_min=Q(10.0, "day"),
             max_period_factor=2.0,
         )
@@ -177,21 +177,21 @@ class TestBounds:
 
     def test_n_grid_override(self):
         f = frequency_grid(
-            t_span=Q(1000.0, "day"), period_min=Q(10.0, "day"), n_grid=37
+            time_span=Q(1000.0, "day"), period_min=Q(10.0, "day"), n_grid=37
         )
         assert f.shape == (37,)
 
     def test_unit_follows_period_min(self):
-        f = frequency_grid(t_span=Q(3.0, "yr"), period_min=Q(0.1, "yr"))
+        f = frequency_grid(time_span=Q(3.0, "yr"), period_min=Q(0.1, "yr"))
         assert jnp.isclose(ustrip("1/yr", f)[-1], 10.0)
 
 
 class TestDataPath:
-    def test_data_matches_t_span(self):
+    def test_data_matches_time_span(self):
         data, _ = simulate_rv_sb1_data(seed=0, n_obs=20)
         span = data.time.max() - data.time.min()
         f_data = frequency_grid(data, period_min=Q(10.0, "day"))
-        f_span = frequency_grid(t_span=span, period_min=Q(10.0, "day"))
+        f_span = frequency_grid(time_span=span, period_min=Q(10.0, "day"))
         assert f_data.shape == f_span.shape
         assert jnp.allclose(ustrip("1/day", f_data), ustrip("1/day", f_span))
 
@@ -206,19 +206,19 @@ class TestDataPath:
 
 
 class TestErrors:
-    def test_requires_exactly_one_of_data_t_span(self):
+    def test_requires_exactly_one_of_data_time_span(self):
         with pytest.raises(TypeError, match="Exactly one"):
             frequency_grid(period_min=Q(10.0, "day"))
         data, _ = simulate_rv_sb1_data(seed=0, n_obs=10)
         with pytest.raises(TypeError, match="Exactly one"):
-            frequency_grid(data, t_span=Q(1.0, "yr"), period_min=Q(10.0, "day"))
+            frequency_grid(data, time_span=Q(1.0, "yr"), period_min=Q(10.0, "day"))
 
     def test_bad_period_bounds(self):
         with pytest.raises(ValueError, match="positive"):
-            frequency_grid(t_span=Q(1.0, "yr"), period_min=Q(-1.0, "day"))
+            frequency_grid(time_span=Q(1.0, "yr"), period_min=Q(-1.0, "day"))
         with pytest.raises(ValueError, match="greater than"):
             frequency_grid(
-                t_span=Q(1.0, "yr"),
+                time_span=Q(1.0, "yr"),
                 period_min=Q(100.0, "day"),
                 period_max=Q(50.0, "day"),
             )

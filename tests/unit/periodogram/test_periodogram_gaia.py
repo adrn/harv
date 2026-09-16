@@ -135,7 +135,7 @@ def test_profile_mode_runs_on_gaia():
 class TestJitVmap:
     """Gaia periodogram under ``jax.vmap`` over sources.
 
-    The callable-amplitude-prior path (``sigma_a0``/``P0`` plus
+    The callable-amplitude-prior path (``sigma_a0``/``period_ref`` plus
     ``prior_params``) resolves priors inside the trace, so it is covered here
     rather than only in the RV tests.
     """
@@ -143,13 +143,13 @@ class TestJitVmap:
     def test_vmap_callable_prior(self):
         with jax.enable_x64(new_val=True):
             grid = hp.frequency_grid(
-                t_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
+                time_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
             )
             prior = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
                 period_min=Q(20.0, "day"),
                 period_max=Q(2000.0, "day"),
                 sigma_a0=Q(0.1, "AU"),
-                P0=Q(1.0, "yr"),
+                period_ref=Q(1.0, "yr"),
                 sigma_pos=Q(500.0, "mas"),
                 sigma_pm=Q(500.0, "mas/yr"),
                 sigma_parallax=Q(500.0, "mas"),

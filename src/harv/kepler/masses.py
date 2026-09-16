@@ -108,13 +108,13 @@ def astrometric_mass_function(
 
 def companion_mass_from_mass_function(
     mass_function: BatchQMass,
-    m1: QMass,
-    sini: BatchFloatLike = 1.0,
+    m_primary: QMass,
+    sin_i: BatchFloatLike = 1.0,
 ) -> BatchQMass:
     r"""Solve the mass function for the companion mass :math:`m_2`.
 
     Inverts :math:`m_2^3 \sin^3 i / (m_1 + m_2)^2 = f` for :math:`m_2`, given
-    the mass function ``f``, primary mass ``m1``, and ``sin i``.  ``sini = 1``
+    the mass function ``f``, primary mass ``m_primary``, and ``sin i``.  ``sin_i = 1``
     (the default) yields the *minimum* companion mass.
 
     The cubic has a single positive root, so it is solved by bisection -- which
@@ -126,9 +126,9 @@ def companion_mass_from_mass_function(
     ----------
     mass_function
         Binary or astrometric mass function (a mass).
-    m1
+    m_primary
         Primary mass.
-    sini
+    sin_i
         Sine of the orbital inclination.  Default 1 (edge-on -> minimum mass).
 
     Returns
@@ -144,8 +144,8 @@ def companion_mass_from_mass_function(
     1.0
     """
     f = ustrip("Msun", mass_function)
-    m1v = ustrip("Msun", m1)
-    s = ustrip(AllowValue, "", sini)
+    m1v = ustrip("Msun", m_primary)
+    s = ustrip(AllowValue, "", sin_i)
     mf_eff = f / s**3
 
     hi0 = jnp.maximum(4.0 * mf_eff, jnp.cbrt(4.0 * mf_eff * m1v**2))

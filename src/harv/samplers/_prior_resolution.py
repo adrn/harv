@@ -151,7 +151,7 @@ def effective_linear_prior_from_prior(
 ) -> dict[str, Any] | None:
     """Build the effective linear prior from prior.linear_priors + extensions.
 
-    Models are templates and carry no ``linear_prior`` themselves.  The sampler
+    Models are templates and carry no ``linear_priors`` themselves.  The sampler
     computes it at run-time by merging ``prior.linear_priors`` with any
     linear-extension parameters declared on the model's extensions.
     """

@@ -128,7 +128,7 @@ class TestRVModelSampleConditional:
         }
         key = jax.random.key(42)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=_rv_prior()
+            nl, data, key=key, linear_priors=_rv_prior()
         )
         assert "rv_semiamp" in samples
         assert "v_sys" in samples
@@ -144,7 +144,7 @@ class TestRVModelSampleConditional:
         }
         key = jax.random.key(0)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=_rv_prior()
+            nl, data, key=key, linear_priors=_rv_prior()
         )
         assert jnp.isfinite(samples["rv_semiamp"])
         assert jnp.isfinite(samples["v_sys"])
@@ -183,7 +183,7 @@ class TestRVModelSampleConditional:
         )
         samples = jax.vmap(
             lambda k: model.sample_conditional_linear(
-                nl, k, data, linear_priors=linear_priors
+                nl, data, key=k, linear_priors=linear_priors
             )
         )(keys)
         mean_v_sys = jnp.mean(samples["v_sys"])

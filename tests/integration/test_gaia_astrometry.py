@@ -58,8 +58,8 @@ class TestGaiaAstrometryModel:
             "cos_i": 0.5,
             "lon_asc_node": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
-        assert jnp.isfinite(log_lik)
+        ln_lik = model.log_prob(nl, data, linear_priors=_linear_prior())
+        assert jnp.isfinite(ln_lik)
 
     def test_vmap_batch(self, astro_data):
         """Vmap over a batch of parameter samples works correctly."""
@@ -90,9 +90,9 @@ class TestGaiaAstrometryModel:
 
         cos_i_true = float(np.cos(float(true["inclination"].value)))
 
-        t_peri_yr = float(_ustrip("yr", true["t_peri"]))
+        time_peri_yr = float(_ustrip("yr", true["time_peri"]))
         period_yr = float(_ustrip("yr", true["period"]))
-        phase_peri_true = (t_peri_yr / period_yr) % 1.0
+        phase_peri_true = (time_peri_yr / period_yr) % 1.0
         nl_true = {
             "period": true["period"],
             "eccentricity": float(true["eccentricity"]),
@@ -145,28 +145,28 @@ class TestGaiaAstrometryRejectionSampler:
         """Rejection sampler completes and returns a valid Samples object."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=42)
+        samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(42))
 
         assert samples.n_samples > 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
     def test_samples_have_correct_keys(self, sim_data):
         """Samples object has all expected parameter keys."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        samples = sampler.run(data, n_prior_samples=50_000, seed=43)
+        samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(43))
 
         keys = samples.keys()
-        for nl_key in (
+        for nonlinear_key in (
             "period",
-            "log_period",
+            "log10_period",
             "eccentricity",
             "phase_peri",
             "arg_peri",
             "cos_i",
             "lon_asc_node",
         ):
-            assert nl_key in keys, f"Missing key: {nl_key}"
+            assert nonlinear_key in keys, f"Missing key: {nonlinear_key}"
         for lin_key in (
             "ra0",
             "dec0",
@@ -181,8 +181,8 @@ class TestGaiaAstrometryRejectionSampler:
         """Same seed produces identical samples."""
         data, _ = sim_data
         sampler, data = self._make_sampler(data)
-        s1 = sampler.run(data, n_prior_samples=20_000, seed=44)
-        s2 = sampler.run(data, n_prior_samples=20_000, seed=44)
+        s1 = sampler.run(data, n_prior_samples=20_000, key=jax.random.key(44))
+        s2 = sampler.run(data, n_prior_samples=20_000, key=jax.random.key(44))
 
         assert s1.n_samples == s2.n_samples
         np.testing.assert_array_equal(s1["period"].value, s2["period"].value)

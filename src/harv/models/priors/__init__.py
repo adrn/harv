@@ -2,7 +2,7 @@
 
 from harv.models.priors.prior import HarvPrior
 from harv.models.priors.defaults import default_sb2_prior
-from harv.models.priors.custom_priors import (
+from harv.models.priors.callables import (
     ParallaxDependentProperMotionPrior,
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,

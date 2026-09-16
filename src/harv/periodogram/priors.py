@@ -92,7 +92,7 @@ def _assemble_knots(
     ln_grid = np.log(p_grid)
 
     # A non-finite Delta makes every downstream density meaningless, and would
-    # otherwise surface as an opaque "log_density must have positive total mass"
+    # otherwise surface as an opaque "ln_density must have positive total mass"
     # from LogGridDensity. The usual cause is float32: on high-SNR data the
     # marginal log-likelihoods reach O(1e4) nats and the periodogram overflows.
     if not np.all(np.isfinite(delta)):
@@ -156,10 +156,10 @@ def _to_prior(
     ln_period: np.ndarray, density: np.ndarray, unit: str
 ) -> QuantityDistribution:
     """Wrap knots and a density per unit ln-period as a period prior."""
-    with np.errstate(divide="ignore"):  # density == 0 -> log_density == -inf is valid
-        log_density = np.log(density)
+    with np.errstate(divide="ignore"):  # density == 0 -> ln_density == -inf is valid
+        ln_density = np.log(density)
     return QuantityDistribution(
-        LogGridDensity(jnp.asarray(ln_period), jnp.asarray(log_density)), unit
+        LogGridDensity(jnp.asarray(ln_period), jnp.asarray(ln_density)), unit
     )
 
 
@@ -279,7 +279,7 @@ def peak_period_prior(
 
     Strict local maxima of ``delta_ln_likelihood`` within ``height_drop`` nats
     of the global maximum each receive a top-hat in ln-period of full frequency
-    width ``peak_width`` (default ``1/t_span``, the natural periodogram peak
+    width ``peak_width`` (default ``1/time_span``, the natural periodogram peak
     width) and **equal mass** ``1/n_peaks`` regardless of peak amplitude — the
     amplitude-agnostic alternative to :func:`tempered_period_prior`. Each
     top-hat is normalized by its mass on the knot grid, so the equal share is
@@ -321,7 +321,7 @@ def peak_period_prior(
     )
 
     if peak_width is None:
-        width = 1.0 / float(ustrip(unit, result.t_span))
+        width = 1.0 / float(ustrip(unit, result.time_span))
     else:
         width = float(ustrip(f"1/({unit})", peak_width))
 
@@ -404,7 +404,7 @@ def attach_interim_period_prior(
     return Samples(
         nonlinear={**samples.nonlinear, name: Q(ln_interim, "")},
         linear=samples.linear,
-        data_type=samples.data_type,
+        model_type=samples.model_type,
         metadata=samples.metadata,
         linear_extension_names=samples.linear_extension_names,
         ln_likelihood=samples.ln_likelihood,

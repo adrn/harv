@@ -32,15 +32,15 @@ class PeriodDependentKPrior(eqx.Module):
     Parameters
     ----------
     sigma_K0
-        RV semi-amplitude scale (km/s) at the reference period ``P0``.
+        RV semi-amplitude scale (km/s) at the reference period ``period_ref``.
         Default: 30 km/s -- appropriate for stellar binary searches.
-    P0
+    period_ref
         Numeric value of the reference period in units of ``P0_unit``.
 
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol and is the default
-    ``linear_prior`` returned by
+    ``linear_priors`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_rv`.
 
     References
@@ -51,12 +51,12 @@ class PeriodDependentKPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import PeriodDependentKPrior
-    >>> prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+    >>> from harv.models.priors.callables import PeriodDependentKPrior
+    >>> prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
     >>> prior.sigma_K0.unit
     Unit("km / s")
 
-    Used as the default ``linear_prior`` for ``rv_semiamp`` in
+    Used as the default ``linear_priors`` for ``rv_semiamp`` in
     :meth:`~harv.models.priors.HarvPrior.default_rv`.  Called with a dict of
     parameter values to condition on the nonlinear parameters:
 
@@ -66,7 +66,7 @@ class PeriodDependentKPrior(eqx.Module):
     """
 
     sigma_K0: ScalarQSpeed
-    P0: ScalarQTime
+    period_ref: ScalarQTime
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -75,7 +75,7 @@ class PeriodDependentKPrior(eqx.Module):
         ----------
         params
             Parameter values keyed by bare parameter name.  Must contain
-            ``"period"`` (a ``Quantity`` compatible with ``P0``) and
+            ``"period"`` (a ``Quantity`` compatible with ``period_ref``) and
             ``"eccentricity"``.
 
         Returns
@@ -83,7 +83,7 @@ class PeriodDependentKPrior(eqx.Module):
         QuantityDistribution
             Prior over the RV semi-amplitude ``rv_semiamp``.
         """
-        P_ratio = ustrip("", params["period"] / self.P0)
+        P_ratio = ustrip("", params["period"] / self.period_ref)
         sigma_K = (
             self.sigma_K0
             * P_ratio ** (-1.0 / 3.0)
@@ -116,14 +116,14 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     ----------
     sigma_a0
         Semi-major axis scale in physical units (e.g. AU) at the reference
-        period ``P0``.  Converted to angular size via the parallax.
-    P0
+        period ``period_ref``.  Converted to angular size via the parallax.
+    period_ref
         Reference period.
 
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
-    and is the default ``linear_prior`` for ``semi_major_axis`` returned by
+    and is the default ``linear_priors`` for ``semi_major_axis`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` dict must contain ``"period"``, ``"eccentricity"``, and
@@ -133,9 +133,9 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import PeriodDependentSemiMajorAxisPrior
+    >>> from harv.models.priors.callables import PeriodDependentSemiMajorAxisPrior
     >>> prior = PeriodDependentSemiMajorAxisPrior(
-    ...     sigma_a0=Q(5.0, "AU"), P0=Q(1.0, "yr"),
+    ...     sigma_a0=Q(5.0, "AU"), period_ref=Q(1.0, "yr"),
     ... )
     >>> prior.sigma_a0.unit
     Unit("AU")
@@ -148,7 +148,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     """
 
     sigma_a0: ScalarQLength
-    P0: ScalarQTime
+    period_ref: ScalarQTime
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -176,7 +176,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
                 "(e.g., HalfNormal)."
             )
         parallax = params["parallax"]
-        P_ratio = ustrip("", params["period"] / self.P0)
+        P_ratio = ustrip("", params["period"] / self.period_ref)
         # By the definition of parallax (varpi == 1 AU / d), the angular
         # semi-major axis is a_angular = a_physical [AU] * varpi [angle].
         sigma_a0_au = ustrip("AU", self.sigma_a0)
@@ -212,7 +212,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
-    and is the default ``linear_prior`` for ``pmra`` and ``pmdec`` returned by
+    and is the default ``linear_priors`` for ``pmra`` and ``pmdec`` returned by
     :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
 
     The ``params`` dict must contain ``"parallax"`` (``Quantity`` with angular
@@ -222,7 +222,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.models.priors.custom_priors import ParallaxDependentProperMotionPrior
+    >>> from harv.models.priors.callables import ParallaxDependentProperMotionPrior
     >>> prior = ParallaxDependentProperMotionPrior(sigma_v0=Q(50.0, "km/s"))
     >>> prior.sigma_v0.unit
     Unit("km / s")

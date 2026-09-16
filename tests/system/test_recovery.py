@@ -43,7 +43,7 @@ from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
-from harv.simulate.rv import simulate_rv_multisurv_data, simulate_rv_sb1_data
+from harv.simulate.rv import simulate_rv_multi_survey_data, simulate_rv_sb1_data
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,7 +88,7 @@ class TestHighSNRRVRecovery:
             sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=500_000, seed=42)
+        samples = sampler.run(data, n_prior_samples=500_000, key=jax.random.key(42))
         return samples, true
 
     def test_enough_accepted_samples(self, rv_samples_high_snr):
@@ -157,9 +157,9 @@ class TestMultiSurveyRVRecovery:
     """
 
     @pytest.fixture(scope="class")
-    def multisurv_samples(self):
+    def multi_survey_samples(self):
         instruments = {"keck": None, "harps": Q(2.0, "km/s")}
-        source_data, true = simulate_rv_multisurv_data(
+        source_data, true = simulate_rv_multi_survey_data(
             instruments=instruments,
             seed=10,
             n_obs_per_instrument=10,
@@ -185,15 +185,15 @@ class TestMultiSurveyRVRecovery:
         # For from_model, we handle routing manually since _build_model is not called.
         model = RVModel(extensions=extensions)
         sampler = RejectionSampler(prior, model)
-        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
+        samples = sampler.run(stacked, n_prior_samples=500_000, key=jax.random.key(10))
         return samples, true
 
-    def test_enough_accepted_samples(self, multisurv_samples):
-        samples, _ = multisurv_samples
+    def test_enough_accepted_samples(self, multi_survey_samples):
+        samples, _ = multi_survey_samples
         assert samples.n_samples >= 10
 
-    def test_true_period_in_90pct_credible_interval(self, multisurv_samples):
-        samples, true = multisurv_samples
+    def test_true_period_in_90pct_credible_interval(self, multi_survey_samples):
+        samples, true = multi_survey_samples
         true_period = float(ustrip("day", true["period"]))
         p5 = _period_quantile(samples, 5)
         p95 = _period_quantile(samples, 95)
@@ -201,9 +201,9 @@ class TestMultiSurveyRVRecovery:
             f"True period {true_period:.1f} d not in 90% CI [{p5:.1f}, {p95:.1f}] d."
         )
 
-    def test_injected_offset_in_90pct_credible_interval(self, multisurv_samples):
+    def test_injected_offset_in_90pct_credible_interval(self, multi_survey_samples):
         """Injected harps offset (2 km/s) should be covered by the posterior."""
-        samples, true = multisurv_samples
+        samples, true = multi_survey_samples
         true_offset = float(ustrip("km/s", true["offset_harps"]))
 
         offset_samples = samples["harps"].value
@@ -214,8 +214,8 @@ class TestMultiSurveyRVRecovery:
             f"{off_hi:.2f}]."
         )
 
-    def test_offset_key_present(self, multisurv_samples):
-        samples, _ = multisurv_samples
+    def test_offset_key_present(self, multi_survey_samples):
+        samples, _ = multi_survey_samples
         assert "harps" in samples.keys()  # noqa: SIM118
         assert "keck" not in samples.keys()  # noqa: SIM118
 
@@ -257,7 +257,7 @@ class TestLowSNRBroadPosterior:
             sigma_v0=Q(30.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        samples = sampler.run(data, n_prior_samples=200_000, seed=7)
+        samples = sampler.run(data, n_prior_samples=200_000, key=jax.random.key(7))
         return samples, true
 
     def test_enough_accepted_samples(self, low_snr_samples):
@@ -342,8 +342,10 @@ class TestAstrometryLikelihoodSanity:
     def test_true_params_log_prob_finite(self, astro_model_and_truth):
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
         nl = {
             "period": true["period"],
             "eccentricity": true["eccentricity"],
@@ -352,10 +354,8 @@ class TestAstrometryLikelihoodSanity:
             "arg_peri": Q(float(ustrip("rad", true["arg_peri"])), "rad"),
             "lon_asc_node": Q(float(ustrip("rad", true["lon_asc_node"])), "rad"),
         }
-        log_lik = model.log_prob(nl, data, linear_priors=lp)
-        assert jnp.isfinite(log_lik), (
-            f"log_prob at true params is not finite: {log_lik}"
-        )
+        ln_lik = model.log_prob(nl, data, linear_priors=lp)
+        assert jnp.isfinite(ln_lik), f"log_prob at true params is not finite: {ln_lik}"
 
     def test_true_params_better_than_prior_median(self, astro_model_and_truth):
         """log_prob at true params >> median log_prob under the prior.
@@ -366,8 +366,10 @@ class TestAstrometryLikelihoodSanity:
         """
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
 
         nl_true = {
             "period": true["period"],
@@ -388,7 +390,7 @@ class TestAstrometryLikelihoodSanity:
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
         )
-        prior_nl = prior.sample_nonlinear(jr.key(0), 1_000)
+        prior_nl = prior.sample_nonlinear(1_000, key=jr.key(0))
         nl_batch = {
             "period": Q(prior_nl["period"], "day"),
             "eccentricity": prior_nl["eccentricity"],
@@ -412,8 +414,10 @@ class TestAstrometryLikelihoodSanity:
         """A grid search over period (all other params fixed) peaks near truth."""
         model, data, lp, true = astro_model_and_truth
         period_day = float(ustrip("day", true["period"]))
-        t_ref_day = float(ustrip("day", data.t_ref))
-        phase_peri = (float(ustrip("day", true["t_peri"])) - t_ref_day) / period_day % 1
+        time_ref_day = float(ustrip("day", data.time_ref))
+        phase_peri = (
+            (float(ustrip("day", true["time_peri"])) - time_ref_day) / period_day % 1
+        )
         ecc = true["eccentricity"]
         cos_i = float(jnp.cos(ustrip("rad", true["inclination"])))
         arg_peri = float(ustrip("rad", true["arg_peri"]))

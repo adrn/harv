@@ -25,14 +25,14 @@ from harv.custom_types import (
 from harv.distributions import QuantityDistribution
 from harv.kepler.orbits import (
     mean_anomaly,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
     true_anomaly_from_mean,
 )
 from harv.models._helpers import LinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
-from harv.models.priors.helpers import (
+from harv.models.priors._helpers import (
     _apply_overrides,
     _make_parallax_prior,
     _make_period_prior,
@@ -109,7 +109,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
         sin_psi: jax.Array,
         cos_psi: jax.Array,
         parallax_factor: jax.Array,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Build (n_obs, 6) along-scan design matrix.
 
@@ -130,7 +130,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
             Cosine of scan angle.
         parallax_factor
             Parallax factor (unit-stripped).
-        nl_values
+        nonlinear_values
             Must contain ``"eccentricity"``, ``"arg_peri"``,
             ``"lon_asc_node"``, ``"cos_i"`` (unit-stripped scalars).
 
@@ -138,12 +138,12 @@ class StandardGaiaAstrometry(AbstractParameterization):
         -------
             Design matrix block, shape ``(n_obs, 6)``.
         """
-        ecc = nl_values["eccentricity"]
-        arg_peri = nl_values["arg_peri"]
-        lon_asc_node = nl_values["lon_asc_node"]
-        cos_i = nl_values["cos_i"]
+        ecc = nonlinear_values["eccentricity"]
+        arg_peri = nonlinear_values["arg_peri"]
+        lon_asc_node = nonlinear_values["lon_asc_node"]
+        cos_i = nonlinear_values["cos_i"]
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -173,35 +173,35 @@ class StandardGaiaAstrometry(AbstractParameterization):
 
     def sky_orbit(
         self,
-        times: Any,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: Any,
     ) -> tuple[jax.Array, jax.Array]:
         """Sky-plane orbital offsets ``(dRA, dDec)`` from the photocentre orbit.
 
         Computes ``(dRA, dDec) = a_0 * (B*X + G*Y, A*X + F*Y)`` using the same
-        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_ABFG`,
+        kepler primitives (:func:`~harv.kepler.orbits.thiele_innes_unit`,
         :func:`~harv.kepler.orbits.mean_anomaly`,
         :func:`~harv.kepler.orbits.true_anomaly_from_mean`) that the design
         matrix uses.  Returns bare JAX arrays in the same unit as the scalar
         ``linear_values["semi_major_axis"]`` (unit-agnostic by construction).
         """
-        period = nl_values["period"]
-        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
-        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
-        arg_peri = ustrip("rad", nl_values["arg_peri"])
-        lon_asc_node = ustrip("rad", nl_values["lon_asc_node"])
-        cos_i = ustrip(AllowValue, "", nl_values["cos_i"])
+        period = nonlinear_values["period"]
+        eccentricity = ustrip(AllowValue, "", nonlinear_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nonlinear_values["phase_peri"])
+        arg_peri = ustrip("rad", nonlinear_values["arg_peri"])
+        lon_asc_node = ustrip("rad", nonlinear_values["lon_asc_node"])
+        cos_i = ustrip(AllowValue, "", nonlinear_values["cos_i"])
         a0 = linear_values["semi_major_axis"]
 
-        t_peri = phase_peri * period
-        dt = times - t_peri
+        time_peri = phase_peri * period
+        dt = times - time_peri
         M = mean_anomaly(dt, period)
         sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
         sin_f = ustrip(AllowValue, "", sin_f_q)
         cos_f = ustrip(AllowValue, "", cos_f_q)
 
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),
@@ -224,13 +224,52 @@ class StandardGaiaAstrometry(AbstractParameterization):
         sigma_parallax: ScalarQAngle | None = None,
         sigma_pos: ScalarQAngle | None = None,
         sigma_vtan: ScalarQSpeed | None = None,
-        P0: ScalarQTime = Q(1.0, "yr"),
+        period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
-        Same defaults as :meth:`harv.samplers.HarvPrior.default_gaia_astrometry`
-        (and ``default_gaia_astrometry`` is a thin wrapper around this method).
+        Nonlinear priors:
+
+        - ``period``: log-uniform on ``[period_min, period_max]``.
+        - ``eccentricity``: Kipping (2013) Beta prior.
+        - ``phase_peri``: ``Uniform(0, 1)``.
+        - ``arg_peri``, ``lon_asc_node``: ``Uniform(0, 2*pi)``.
+        - ``cos_i``: ``Uniform(-1, 1)`` -- isotropic orbit orientations.
+
+        Linear priors:
+
+        - ``ra0``, ``dec0``: ``Normal(0, sigma_pos)`` in mas.
+        - ``pmra``, ``pmdec``:
+          :class:`~harv.models.priors.callables.ParallaxDependentProperMotionPrior`,
+          which holds the prior fixed in velocity space.
+        - ``parallax``: ``HalfNormal(sigma_parallax)`` in mas.  Non-Gaussian, so
+          it is *sampled explicitly* rather than analytically marginalized --
+          the catalog parallax is derived from the same epoch data.
+        - ``semi_major_axis``:
+          :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`.
+
+        Parameters
+        ----------
+        period_min, period_max
+            Log-uniform period bounds.
+        sigma_a0
+            Angular semi-major axis scale at reference period ``period_ref``,
+            given as a physical length (e.g. ``Q(5.0, "AU")``).
+        sigma_parallax
+            Parallax prior scale (an angle).
+        sigma_pos
+            Reference-position (``ra0``/``dec0``) prior scale (an angle).
+        sigma_vtan
+            Tangential-velocity scale for the proper-motion prior (a speed, e.g.
+            ``Q(50.0, "km/s")``) -- *not* an angular speed; see
+            ``ParallaxDependentProperMotionPrior``.
+        period_ref
+            Reference period for the period-dependent ``semi_major_axis`` prior.
+        **kwargs
+            Per-parameter prior overrides or extension priors.  Supplying a
+            linear prior by name (e.g. ``parallax=QD(...)``) means its scale
+            argument must be omitted.
         """
         nonlinear: dict[str, PriorDist] = {
             "period": _make_period_prior(
@@ -266,7 +305,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
             "semi_major_axis": _make_semi_major_axis_prior(
                 semi_major_axis=kwargs.pop("semi_major_axis", None),
                 sigma_a0=sigma_a0,
-                P0=P0,
+                period_ref=period_ref,
             ),
         }
         extension_priors: dict[str, PriorDist] = {}
@@ -366,6 +405,9 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     """
 
     a_floor: float | None = None
+    # sin2i_floor, not sin_2_i_floor: this floors sin^2(i), not sin(i).  The
+    # `sin_i` / `cos_i` separator convention (docs/spec.md) applies to the
+    # trig function of an angle, which this is not.
     sin2i_floor: float | None = None
     log_uniform_in_a: bool | None = eqx.field(static=True, default=None)
     apply_jacobian_correction: bool = eqx.field(static=True, default=False)
@@ -402,9 +444,9 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
     def from_data(
         cls,
         data: "GaiaAstrometryData",
+        *,
         sin2i_floor: float | None = None,
         log_uniform_in_a: bool | None = None,
-        *,
         apply_jacobian_correction: bool = True,
     ) -> "ThieleInnesGaiaAstrometry":
         r"""Construct with ``a_floor = med(sigma_AL) / sqrt(N)`` from the data.
@@ -480,7 +522,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sin_psi: jax.Array,
         cos_psi: jax.Array,
         parallax_factor: jax.Array,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Build (n_obs, 9) along-scan design matrix.
 
@@ -500,14 +542,14 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             Cosine of scan angle.
         parallax_factor : jax.Array, shape (n_obs,)
             Parallax factor (unit-stripped).
-        nl_values : dict
+        nonlinear_values : dict
             Must contain ``"eccentricity"`` (unit-stripped scalar).
 
         Returns
         -------
         jax.Array, shape (n_obs, 9)
         """
-        ecc = nl_values["eccentricity"]
+        ecc = nonlinear_values["eccentricity"]
 
         # Orbital coordinates (dimensionless, in units of semi-major axis)
         r_over_a = (1 - ecc**2) / (1 + ecc * cos_f)
@@ -534,9 +576,9 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
 
     def sky_orbit(
         self,
-        times: Any,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: Any,
     ) -> tuple[jax.Array, jax.Array]:
         r"""Sky-plane orbital offsets ``(dRA, dDec)`` from the TI constants.
 
@@ -545,12 +587,12 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         arbitrary times.  Returns bare JAX arrays in the same unit as the
         scalar TI constants in ``linear_values``.
         """
-        period = nl_values["period"]
-        eccentricity = ustrip(AllowValue, "", nl_values["eccentricity"])
-        phase_peri = ustrip(AllowValue, "", nl_values["phase_peri"])
+        period = nonlinear_values["period"]
+        eccentricity = ustrip(AllowValue, "", nonlinear_values["eccentricity"])
+        phase_peri = ustrip(AllowValue, "", nonlinear_values["phase_peri"])
 
-        t_peri = phase_peri * period
-        dt = times - t_peri
+        time_peri = phase_peri * period
+        dt = times - time_peri
         M = mean_anomaly(dt, period)
         sin_f_q, cos_f_q = true_anomaly_from_mean(M, eccentricity)
         sin_f = ustrip(AllowValue, "", sin_f_q)
@@ -577,10 +619,10 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sigma_parallax: ScalarQAngle | None = None,
         sigma_pos: ScalarQAngle | None = None,
         sigma_vtan: ScalarQSpeed | None = None,
-        P0: ScalarQTime = Q(1.0, "yr"),
+        period_ref: ScalarQTime = Q(1.0, "yr"),
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
-        """Build a :class:`~harv.samplers.HarvPrior` with sensible defaults.
+        """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 
@@ -593,7 +635,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         - ``ra0``, ``dec0``, ``pmra``, ``pmdec``, ``parallax``: same defaults as
           :meth:`StandardGaiaAstrometry.default_prior`.
         - ``ti_A``, ``ti_B``, ``ti_F``, ``ti_G``: each uses
-          :class:`~harv.models.priors.custom_priors.PeriodDependentSemiMajorAxisPrior`,
+          :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`,
           the same scaling as ``semi_major_axis`` in
           :class:`StandardGaiaAstrometry`.
 
@@ -636,7 +678,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             linear_priors[name] = _make_semi_major_axis_prior(
                 semi_major_axis=override,
                 sigma_a0=None if override is not None else sigma_a0,
-                P0=P0,
+                period_ref=period_ref,
             )
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)

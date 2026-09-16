@@ -15,12 +15,12 @@ from harv.kepler.masses import (
 )
 
 
-def _rv_semiamp(period, m1, m2, eccentricity, sini):
+def _rv_semiamp(period, m_primary, m2, eccentricity, sin_i):
     """Primary RV semi-amplitude K1 for a binary (analytic)."""
-    m_total = m1 + m2
+    m_total = m_primary + m2
     factor = qnp.cbrt(2.0 * jnp.pi * G / period)
     return (
-        factor * m2 * sini / (m_total ** (2.0 / 3.0) * qnp.sqrt(1.0 - eccentricity**2))
+        factor * m2 * sin_i / (m_total ** (2.0 / 3.0) * qnp.sqrt(1.0 - eccentricity**2))
     )
 
 
@@ -64,38 +64,38 @@ class TestAstrometricMassFunction:
 
 class TestCompanionMass:
     @pytest.mark.parametrize(
-        ("m1", "m2", "sini"),
+        ("m_primary", "m2", "sin_i"),
         [(1.0, 1.0, 1.0), (1.3, 0.8, 0.7), (0.5, 0.05, 1.0), (2.0, 3.0, 0.9)],
     )
-    def test_roundtrip_through_mass_function(self, m1, m2, sini):
-        # f = m2^3 sin^3 i / (m1 + m2)^2, solved back for m2.
-        mass_function = m2**3 * sini**3 / (m1 + m2) ** 2
+    def test_roundtrip_through_mass_function(self, m_primary, m2, sin_i):
+        # f = m2^3 sin^3 i / (m_primary + m2)^2, solved back for m2.
+        mass_function = m2**3 * sin_i**3 / (m_primary + m2) ** 2
         m2_rec = companion_mass_from_mass_function(
-            Q(mass_function, "Msun"), Q(m1, "Msun"), sini
+            Q(mass_function, "Msun"), Q(m_primary, "Msun"), sin_i
         )
         assert jnp.allclose(ustrip("Msun", m2_rec), m2, rtol=1e-5)
 
     def test_minimum_mass_when_sini_one(self):
         # Smaller sin i implies a larger companion mass for the same f.
         mass_function = Q(0.1, "Msun")
-        m1 = Q(1.0, "Msun")
-        m2_edge = companion_mass_from_mass_function(mass_function, m1, 1.0)
-        m2_incl = companion_mass_from_mass_function(mass_function, m1, 0.5)
+        m_primary = Q(1.0, "Msun")
+        m2_edge = companion_mass_from_mass_function(mass_function, m_primary, 1.0)
+        m2_incl = companion_mass_from_mass_function(mass_function, m_primary, 0.5)
         assert float(ustrip("Msun", m2_incl)) > float(ustrip("Msun", m2_edge))
 
     def test_rv_roundtrip_recovers_companion_mass(self):
         # Build K from known masses, then recover m2 (edge-on).
         period, ecc = Q(300.0, "day"), 0.2
-        m1, m2 = Q(1.1, "Msun"), Q(0.6, "Msun")
-        k = _rv_semiamp(period, m1, m2, ecc, sini=1.0)
+        m_primary, m2 = Q(1.1, "Msun"), Q(0.6, "Msun")
+        k = _rv_semiamp(period, m_primary, m2, ecc, sin_i=1.0)
         mf = binary_mass_function(period, k, ecc)
-        m2_rec = companion_mass_from_mass_function(mf, m1, 1.0)
+        m2_rec = companion_mass_from_mass_function(mf, m_primary, 1.0)
         assert jnp.allclose(ustrip("Msun", m2_rec), ustrip("Msun", m2), rtol=1e-4)
 
     def test_vmap(self):
         mfs = Q(jnp.array([0.05, 0.1, 0.25]), "Msun")
-        m1 = Q(jnp.array([1.0, 1.0, 1.0]), "Msun")
-        out = jax.vmap(companion_mass_from_mass_function)(mfs, m1)
+        m_primary = Q(jnp.array([1.0, 1.0, 1.0]), "Msun")
+        out = jax.vmap(companion_mass_from_mass_function)(mfs, m_primary)
         assert out.shape == (3,)
         assert jnp.all(ustrip("Msun", out) > 0)
 

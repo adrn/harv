@@ -42,8 +42,8 @@ class _MockKernel:
         return self.evaluate(X, Xp)
 
 
-def _mock_kernel_builder(nl_values: dict[str, Any]) -> _MockKernel:
-    return _MockKernel(amp=nl_values["gp_amp"])
+def _mock_kernel_builder(nonlinear_values: dict[str, Any]) -> _MockKernel:
+    return _MockKernel(amp=nonlinear_values["gp_amp"])
 
 
 def _make_gp(time_unit: str = "day") -> GP:
@@ -255,9 +255,9 @@ class TestGPWithRVModel:
         }
         model = RVModel(extensions=(jitter, gp))
         # Both jitter and gp_amp should be nonlinear params
-        nl_names = model._all_nonlinear_names()
-        assert "jitter" in nl_names
-        assert "gp_amp" in nl_names
+        nonlinear_names = model._all_nonlinear_names()
+        assert "jitter" in nonlinear_names
+        assert "gp_amp" in nonlinear_names
 
         nl = {
             "period": Q(100.0, "day"),
@@ -308,7 +308,7 @@ class TestGPWithRVModel:
         sampler = RejectionSampler(prior, model, batch_size=32)
         prepared = _prepare_sampler_model(prior, model, None)
 
-        _, log_likelihoods = sampler._sample_prior_and_evaluate_batched(
+        _, ln_likelihoods = sampler._sample_prior_and_evaluate_batched(
             prepared.model,
             jax.random.key(0),
             128,
@@ -318,4 +318,4 @@ class TestGPWithRVModel:
             data,
         )
 
-        assert jnp.any(jnp.isfinite(log_likelihoods))
+        assert jnp.any(jnp.isfinite(ln_likelihoods))

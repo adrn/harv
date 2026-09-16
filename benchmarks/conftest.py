@@ -207,7 +207,7 @@ def max_samples_by_parameterization(request: pytest.FixtureRequest) -> dict[str,
 @functools.lru_cache(maxsize=1)
 def _build_memory_cache(parameterization: str, n_samples: int) -> Any:
     prior, model = build_prior_and_model(parameterization)
-    return prior.sample(jr.key(0), n_samples, model=model)
+    return prior.sample(n_samples, key=jr.key(0), model=model)
 
 
 @functools.cache

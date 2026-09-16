@@ -25,7 +25,7 @@ def _make_system(
         eccentricity=eccentricity,
         m_total=Q(m_primary + m_companion, "Msun"),
         m_body=Q(m_companion, "Msun"),
-        t_peri=Q(0.0, "yr"),
+        time_peri=Q(0.0, "yr"),
     )
     return TwoBodySystem(
         m_primary=Q(m_primary, "Msun"),
@@ -65,7 +65,7 @@ class TestProperties:
 
 class TestPhysics:
     def test_barycentric_momentum_conservation(self) -> None:
-        """m1*v1 + m2*v2 ~= 0 in the barycentric frame."""
+        """m_primary*v1 + m2*v2 ~= 0 in the barycentric frame."""
         sys = _make_system(m_primary=1.0, m_companion=5e-3, eccentricity=0.3)
         t = Q(0.37, "yr")
 

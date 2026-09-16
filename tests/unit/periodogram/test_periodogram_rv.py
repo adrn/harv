@@ -14,7 +14,7 @@ import harv.models as hm
 import harv.periodogram as hp
 from harv.data import RVData, SourceData
 from harv.distributions import QD
-from harv.models.priors.custom_priors import PeriodDependentKPrior
+from harv.models.priors.callables import PeriodDependentKPrior
 from harv.simulate import simulate_rv_sb1_data
 
 P_TRUE = Q(37.0, "day")
@@ -106,7 +106,7 @@ class TestInvariance:
                 time=data.time,
                 rv=data.rv + Q(100.0, "km/s"),
                 rv_err=data.rv_err,
-                t_ref=data.t_ref,
+                time_ref=data.time_ref,
             )
             wide = _prior(2, v_sys=harv.QD(dist.Normal(0.0, 1e4), "km/s"))
             f = hp.frequency_grid(data, period_min=Q(5.0, "day"))
@@ -289,7 +289,7 @@ class TestPeriodDependentBasePrior:
 
     def test_base_likelihood_is_per_frequency(self):
         result = self._run(
-            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
         )
         # A callable v_sys prior resolves per trial period, so the baseline
         # varies across the grid and must be evaluated there.
@@ -315,7 +315,7 @@ class TestPeriodDependentBasePrior:
             prior={
                 "a": _prior(
                     v_sys=PeriodDependentKPrior(
-                        sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr")
+                        sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr")
                     )
                 ),
                 "b": _prior(),
@@ -331,7 +331,7 @@ class TestPeriodDependentBasePrior:
     def test_delta_uses_the_matching_baseline(self):
         """Delta must not be tilted by a baseline taken at one period."""
         result = self._run(
-            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+            PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr"))
         )
         # Reconstructing lnL and subtracting a single-period baseline (the old
         # behavior) gives a visibly different, tilted statistic.
@@ -378,7 +378,7 @@ class TestProfileMode:
                 time=data.time,
                 rv=data.rv + Q(500.0, "km/s"),
                 rv_err=data.rv_err,
-                t_ref=data.t_ref,
+                time_ref=data.time_ref,
             )
             grid = hp.frequency_grid(data, period_min=Q(5.0, "day"))
             a = hp.periodogram(data, grid, prior=False)
@@ -386,7 +386,7 @@ class TestProfileMode:
             assert jnp.allclose(a.delta_ln_likelihood, b.delta_ln_likelihood, atol=1e-6)
 
     def test_finite_past_the_baseline(self):
-        """At P >> t_span the trial columns go collinear with the base ones.
+        """At P >> time_span the trial columns go collinear with the base ones.
 
         The one place the least-squares solve could produce NaN; the rank-masked
         pseudo-inverse is what keeps it finite.
@@ -462,7 +462,7 @@ class TestJitVmap:
     """
 
     GRID = hp.frequency_grid(
-        t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=96
+        time_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=96
     )
 
     @staticmethod
@@ -489,7 +489,7 @@ class TestJitVmap:
             got = run(self._stack(sources))
 
             assert got.delta_ln_likelihood.shape == (3, self.GRID.shape[0])
-            assert got.t_span.shape == (3,)
+            assert got.time_span.shape == (3,)
             assert got.ln_likelihood_base.shape == (3,)
             # Static fields survive the trace unbatched.
             assert got.n_terms == 2
@@ -501,7 +501,9 @@ class TestJitVmap:
                     got.delta_ln_likelihood[i], want.delta_ln_likelihood, **_TOL
                 )
                 np.testing.assert_allclose(
-                    ustrip("day", got.t_span[i]), ustrip("day", want.t_span), rtol=1e-5
+                    ustrip("day", got.time_span[i]),
+                    ustrip("day", want.time_span),
+                    rtol=1e-5,
                 )
 
     def test_vmap_profile_mode(self):

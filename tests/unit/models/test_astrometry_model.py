@@ -6,7 +6,7 @@ import numpyro.distributions as dist
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_unit
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 
@@ -18,7 +18,7 @@ def _make_astro_data(n_obs=50):
         al_position_err=Q(jnp.ones(n_obs) * 0.1, "mas"),
         scan_angle=Q(jnp.linspace(0, 2 * jnp.pi, n_obs), "rad"),
         parallax_factor=jnp.ones(n_obs) * 0.5,
-        t_ref=Q(0.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
 
 
@@ -105,7 +105,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(42)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_priors=_astro_prior()
+            _nl_values(), data, key=key, linear_priors=_astro_prior()
         )
         expected = {"ra0", "dec0", "pmra", "pmdec", "parallax", "semi_major_axis"}
         assert set(samples.keys()) == expected
@@ -115,7 +115,7 @@ class TestGaiaAstrometryModelSampleConditional:
         model = GaiaAstrometryModel()
         key = jax.random.key(0)
         samples = model.sample_conditional_linear(
-            _nl_values(), key, data, linear_priors=_astro_prior()
+            _nl_values(), data, key=key, linear_priors=_astro_prior()
         )
         for name, val in samples.items():
             assert jnp.isfinite(val), f"{name} is not finite"
@@ -212,7 +212,7 @@ class TestGaiaAstrometryModelThieleInnes:
         """TI and Standard models produce identical orbit contributions."""
         a0 = 1.5
         arg_peri, lon_asc_node, cos_i = 0.8, 1.1, 0.6
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),

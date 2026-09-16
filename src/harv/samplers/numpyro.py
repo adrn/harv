@@ -5,7 +5,6 @@ new component model API. The component models' ``numpyro_model()`` method
 builds the numpyro model closure directly.
 """
 
-import uuid
 import warnings
 from collections.abc import Callable
 from typing import Any, cast, final
@@ -125,7 +124,7 @@ def _build_extra_numpyro_model(
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(all_priors)
-        nl_values = _apply_unit_conversions(values, all_priors, component)
+        nonlinear_values = _apply_unit_conversions(values, all_priors, component)
 
         fixed_linear: dict[str, Any] = extra_model_fn(values)
 
@@ -196,7 +195,7 @@ def _build_extra_numpyro_model(
             target_unit = param_units.get(name, "")
             resolved_prior = _resolve_prior_to_mvn(
                 {name: prior_dist},
-                nl_values,
+                nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
@@ -210,9 +209,9 @@ def _build_extra_numpyro_model(
 
         if marginalized and requested_marginalized_names:
             numpyro.factor(
-                "log_lik",
+                "ln_lik",
                 component.log_prob(
-                    nl_values,
+                    nonlinear_values,
                     data,
                     linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
@@ -221,9 +220,9 @@ def _build_extra_numpyro_model(
             )
         else:
             numpyro.factor(
-                "log_lik",
+                "ln_lik",
                 component.log_prob(
-                    nl_values,
+                    nonlinear_values,
                     data,
                     linear_priors=effective_linear_prior,
                     linear_values=explicit_linear_values,
@@ -277,8 +276,8 @@ class NumpyroSampler(AbstractSampler):
         self,
         data: InputData,
         *,
+        key: jax.Array,
         init_samples: "Samples | None" = None,
-        seed: int | None = None,
         marginalized: bool = True,
         extra_model: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         extra_init_params: dict[str, Any] | None = None,
@@ -300,9 +299,9 @@ class NumpyroSampler(AbstractSampler):
         init_samples
             Posterior samples produced by rejection sampling, used to set the
             initial positions for each MCMC chain.
-        seed
-            Random number seed. If not specified, picks a seed based on the
-            current time.
+        key
+            PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
+            entropy of its own, so a run is reproducible from its key alone.
         marginalized
             If ``True`` (default), linear parameters are analytically
             marginalized in the likelihood and conditionally sampled
@@ -423,8 +422,7 @@ class NumpyroSampler(AbstractSampler):
         )
 
         # Create and run MCMC
-        seed = uuid.uuid4().int >> 96 if seed is None else seed
-        rng_key = jr.key(seed)
+        rng_key = key
 
         kernel_instance = kernel(numpyro_model)
         mcmc = _numpyro_infer.MCMC(
@@ -457,7 +455,7 @@ class NumpyroSampler(AbstractSampler):
         samples: "Samples",
         data: InputData,
         *,
-        seed: int | None = None,
+        key: jax.Array,
         max_passes: int = 10,
         tol: float = 1e-4,
     ) -> "Samples":
@@ -466,7 +464,7 @@ class NumpyroSampler(AbstractSampler):
         Uses :func:`numpyro.optim.Minimize` (BFGS via
         :func:`jax.scipy.optimize.minimize`) with an
         :class:`~numpyro.infer.autoguide.AutoDelta` guide to find the local mode of
-        ``log_prior + marginal_log_likelihood`` starting from each sample in
+        ``ln_prior + marginal ln_likelihood`` starting from each sample in
         *samples*. The returned :class:`~harv.samplers.samples.Samples` has the
         refined nonlinear values, linear values set to the conditional posterior
         **mean** (equal to the conditional MAP since the conditional is Gaussian)
@@ -484,9 +482,9 @@ class NumpyroSampler(AbstractSampler):
             warm starts. Each sample seeds an independent BFGS run.
         data
             Observed data (same shape/type as :meth:`run`).
-        seed
-            Random number seed. If not specified, picks a seed based on the
-            current time.
+        key
+            PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
+            entropy of its own, so a run is reproducible from its key alone.
         max_passes
             Maximum number of BFGS restarts per sample. The wrapped
             ``jax.scipy.optimize.minimize`` BFGS often quits early when its line
@@ -535,8 +533,7 @@ class NumpyroSampler(AbstractSampler):
             marginalized_names=effective_marginalized_names,
         )
 
-        seed_int = uuid.uuid4().int >> 96 if seed is None else seed
-        rng_key = jr.key(seed_int)
+        rng_key = key
 
         per_sample_maps: list[dict[str, jax.Array]] = []
         for i in range(samples.n_samples):
@@ -723,17 +720,17 @@ class NumpyroSampler(AbstractSampler):
                 if sample_name is not None
             ]
             if gaussian_name_pairs:
-                lin_arr = np.column_stack(
+                linear_arr = np.column_stack(
                     [
                         np.asarray(samples.linear[sample_name].value)
                         for _, sample_name in gaussian_name_pairs
                     ]
                 )
                 if _scalar_init:
-                    init_params["_linear"] = jnp.asarray(lin_arr[0])
+                    init_params["_linear"] = jnp.asarray(linear_arr[0])
                 else:
                     init_params["_linear"] = jnp.stack(
-                        [jnp.asarray(lin_arr[i]) for i in indices]
+                        [jnp.asarray(linear_arr[i]) for i in indices]
                     )
 
         return init_params
@@ -786,17 +783,17 @@ class NumpyroSampler(AbstractSampler):
             # deterministic sites.
             linear_q = self._extract_linear_from_posterior(model, posterior, data)
 
-        # Build metadata from the passed-in data.  t_ref is uniformly exposed by
+        # Build metadata from the passed-in data.  time_ref is uniformly exposed by
         # both AbstractData and AbstractDatasetContainer.
-        t_ref = data.t_ref
+        time_ref = data.time_ref
 
         metadata: dict[str, Any] = {"num_chains": num_chains}
-        if t_ref is not None:
+        if time_ref is not None:
             # Strip to a plain Python float so a JAX-traced array never lands in a
             # static metadata dict (which would trigger an equinox UserWarning).
-            _t_unit = str(t_ref.unit)
-            metadata["t_ref"] = float(ustrip(_t_unit, t_ref))
-            metadata["t_ref_unit"] = _t_unit
+            _t_unit = str(time_ref.unit)
+            metadata["time_ref"] = float(ustrip(_t_unit, time_ref))
+            metadata["time_ref_unit"] = _t_unit
 
         # Optional per-sample log-probabilities.
         ln_likelihood_arr: jax.Array | None = None
@@ -815,7 +812,7 @@ class NumpyroSampler(AbstractSampler):
         return Samples(
             nonlinear=cast("dict[str, Q]", nonlinear_q),
             linear=cast("dict[str, Q]", linear_q),
-            data_type=type(model).__name__,
+            model_type=type(model).__name__,
             metadata=metadata,
             linear_extension_names=linear_extension_names,
             ln_likelihood=ln_likelihood_arr,
@@ -878,11 +875,13 @@ class NumpyroSampler(AbstractSampler):
                 if name in posterior
             ]
 
-        nl_keys = [k for k in prior.nonlinear_priors if k in posterior]
-        nl_keys += [
-            k for k in nonlinear_extension_priors if k in posterior and k not in nl_keys
+        nonlinear_keys = [k for k in prior.nonlinear_priors if k in posterior]
+        nonlinear_keys += [
+            k
+            for k in nonlinear_extension_priors
+            if k in posterior and k not in nonlinear_keys
         ]
-        filtered = {k: posterior[k] for k in (*nl_keys, *explicit_keys)}
+        filtered = {k: posterior[k] for k in (*nonlinear_keys, *explicit_keys)}
 
         def _one(sample: dict[str, jax.Array]) -> jax.Array:
             wrapped = _wrap_unit_values(sample, prior.nonlinear_priors, base_names)
@@ -973,20 +972,20 @@ class NumpyroSampler(AbstractSampler):
 
         # Collect all keys the model needs: base nonlinear, extension nonlinear
         # (using model key convention), and explicitly-sampled linear params.
-        nl_keys = list(prior.nonlinear_priors.keys())
+        nonlinear_keys = list(prior.nonlinear_priors.keys())
 
         for model_key in nonlinear_extension_priors:
-            if model_key in posterior and model_key not in nl_keys:
-                nl_keys.append(model_key)
+            if model_key in posterior and model_key not in nonlinear_keys:
+                nonlinear_keys.append(model_key)
 
         for pkey in explicit_posterior_keys:
-            if pkey in posterior and pkey not in nl_keys:
-                nl_keys.append(pkey)
+            if pkey in posterior and pkey not in nonlinear_keys:
+                nonlinear_keys.append(pkey)
 
-        n_samples = len(posterior[nl_keys[0]])
+        n_samples = len(posterior[nonlinear_keys[0]])
         keys = jr.split(jr.fold_in(rng_key, 3), n_samples)
 
-        filtered = {k: posterior[k] for k in nl_keys if k in posterior}
+        filtered = {k: posterior[k] for k in nonlinear_keys if k in posterior}
 
         def _sample_one(
             key: jax.Array,
@@ -1000,8 +999,8 @@ class NumpyroSampler(AbstractSampler):
                     wrapped[pkey] = Q(sample[pkey], unit) if unit else sample[pkey]
             return model.sample_conditional_linear(
                 wrapped,
-                key,
                 data,
+                key=key,
                 linear_priors=effective_linear_prior,
                 marginalized_names=effective_marginalized_names,
                 use_mean=use_mean,

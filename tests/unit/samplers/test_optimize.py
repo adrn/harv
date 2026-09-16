@@ -55,9 +55,9 @@ TRUE_V_SYS = Q(-0.3, "km/s")
 def rv_data_and_truth():
     """Synthetic RV data generated from a known orbit."""
     times = Q(jnp.linspace(0.0, 200.0, 20), "day")
-    t_peri = TRUE_PHASE_PERI * TRUE_PERIOD
+    time_peri = TRUE_PHASE_PERI * TRUE_PERIOD
     rv_true = rv_at_times(
-        times, TRUE_PERIOD, TRUE_ECC, t_peri, TRUE_ARG_PERI, TRUE_K, TRUE_V_SYS
+        times, TRUE_PERIOD, TRUE_ECC, time_peri, TRUE_ARG_PERI, TRUE_K, TRUE_V_SYS
     )
     rng = np.random.default_rng(0)
     noise = Q(jnp.asarray(rng.normal(0.0, 0.5, size=20)), "km/s")
@@ -91,8 +91,8 @@ def off_mode_sample() -> Samples:
             "rv_semiamp": Q(jnp.array([7.0]), "km/s"),
             "v_sys": Q(jnp.array([0.5]), "km/s"),
         },
-        data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        model_type="RVModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -121,10 +121,10 @@ def rv_case(rv_data_and_truth):
             "rv_semiamp": Q(jnp.array([7.0, 9.0]), "km/s"),
             "v_sys": Q(jnp.array([0.5, -0.8]), "km/s"),
         },
-        data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        model_type="RVModel",
+        metadata={"time_ref": 0.0},
     )
-    refined = sampler.optimize(warm, rv_data_and_truth, seed=0)
+    refined = sampler.optimize(warm, rv_data_and_truth, key=jax.random.key(0))
     return sampler, rv_data_and_truth, warm, refined
 
 
@@ -138,7 +138,9 @@ def rv_map_case(rv_data_and_truth, off_mode_sample):
         sigma_v0=Q(20.0, "km/s"),
     )
     sampler = NumpyroSampler(prior, RVModel())
-    refined = sampler.optimize(off_mode_sample, rv_data_and_truth, seed=0)
+    refined = sampler.optimize(
+        off_mode_sample, rv_data_and_truth, key=jax.random.key(0)
+    )
     return sampler, rv_data_and_truth, refined
 
 
@@ -212,7 +214,7 @@ class TestNumpyroSamplerOptimize:
         marginalized linear parameters.
         """
         rv_sampler, rv_data_and_truth, refined = rv_map_case
-        nl_values = {
+        nonlinear_values = {
             "period": refined.nonlinear["period"][0],
             "eccentricity": refined.nonlinear["eccentricity"][0].value,
             "phase_peri": refined.nonlinear["phase_peri"][0].value,
@@ -220,16 +222,16 @@ class TestNumpyroSamplerOptimize:
         }
 
         mean_a = rv_sampler.model.sample_conditional_linear(
-            nl_values,
-            jax.random.key(1),
+            nonlinear_values,
             rv_data_and_truth,
+            key=jax.random.key(1),
             linear_priors=rv_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = rv_sampler.model.sample_conditional_linear(
-            nl_values,
-            jax.random.key(999),
+            nonlinear_values,
             rv_data_and_truth,
+            key=jax.random.key(999),
             linear_priors=rv_sampler.prior.linear_priors,
             use_mean=True,
         )
@@ -261,11 +263,11 @@ class TestNumpyroSamplerOptimize:
                 "rv_semiamp": Q(jnp.array([]), "km/s"),
                 "v_sys": Q(jnp.array([]), "km/s"),
             },
-            data_type="RVModel",
+            model_type="RVModel",
             metadata={},
         )
         with pytest.raises(ValueError, match="no samples"):
-            rv_sampler.optimize(empty, rv_data_and_truth)
+            rv_sampler.optimize(empty, rv_data_and_truth, key=jax.random.key(0))
 
 
 # ---------------------------------------------------------------------------
@@ -342,8 +344,8 @@ def joint_off_mode_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="JointModel",
-        metadata={"t_ref": 0.0},
+        model_type="JointModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -353,7 +355,9 @@ class TestNumpyroSamplerOptimizeJoint:
     def test_optimize_jointmodel(self, joint_sampler_and_data, joint_off_mode_samples):
         """optimize() works for JointModel and populates logprobs."""
         sampler, data = joint_sampler_and_data
-        refined = sampler.optimize(joint_off_mode_samples, data, seed=0, max_passes=2)
+        refined = sampler.optimize(
+            joint_off_mode_samples, data, key=jax.random.key(0), max_passes=2
+        )
         assert refined.n_samples == 1
         assert refined.ln_likelihood is not None
         assert refined.ln_prior is not None
@@ -398,12 +402,12 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         true_pmdec = Q(-4.0, "mas/yr")
         true_parallax = Q(3.0, "mas")
 
-        t_peri = true_phase * true_period
+        time_peri = true_phase * true_period
         dra, ddec = astrometric_orbit_at_times(
             times,
             true_period,
             true_ecc,
-            t_peri,
+            time_peri,
             true_arg_peri,
             true_cos_i,
             true_Omega,
@@ -500,15 +504,15 @@ class TestNumpyroSamplerOptimizeThieleInnes:
         return Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="GaiaAstrometryModel",
-            metadata={"t_ref": 0.0},
+            model_type="GaiaAstrometryModel",
+            metadata={"time_ref": 0.0},
         )
 
     @pytest.fixture(scope="class")
     def ti_case(self, ti_sampler, ti_data_and_truth, ti_off_mode_samples):
         """Cached TI optimize result reused across assertions."""
         data, truth = ti_data_and_truth
-        refined = ti_sampler.optimize(ti_off_mode_samples, data, seed=0)
+        refined = ti_sampler.optimize(ti_off_mode_samples, data, key=jax.random.key(0))
         campbell = refined.thiele_innes_to_campbell()
         return ti_sampler, data, truth, refined, campbell
 
@@ -533,23 +537,23 @@ class TestNumpyroSamplerOptimizeThieleInnes:
     def test_optimize_ti_linear_params_deterministic(self, ti_case):
         """TI constants returned by optimize are RNG-free (conditional mean)."""
         ti_sampler, data, _, refined, _ = ti_case
-        nl_values = {
+        nonlinear_values = {
             "period": refined.nonlinear["period"][0],
             "eccentricity": refined.nonlinear["eccentricity"][0].value,
             "phase_peri": refined.nonlinear["phase_peri"][0].value,
         }
 
         mean_a = ti_sampler.model.sample_conditional_linear(
-            nl_values,
-            jax.random.key(1),
+            nonlinear_values,
             data,
+            key=jax.random.key(1),
             linear_priors=ti_sampler.prior.linear_priors,
             use_mean=True,
         )
         mean_b = ti_sampler.model.sample_conditional_linear(
-            nl_values,
-            jax.random.key(999),
+            nonlinear_values,
             data,
+            key=jax.random.key(999),
             linear_priors=ti_sampler.prior.linear_priors,
             use_mean=True,
         )
@@ -592,9 +596,9 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         true_period = Q(4000.0, "day")
         baseline = Q(1200.0, "day")  # ~30% of one orbit
         times = Q(jnp.linspace(0.0, float(baseline.value), n), "day")
-        # Use explicit t_ref=0 so phase_peri matches the data-generation convention.
-        # (Default t_ref is mean(times), which would shift the orbital phase.)
-        t_ref = Q(0.0, "day")
+        # Use explicit time_ref=0 so phase_peri matches the data-generation convention.
+        # (Default time_ref is mean(times), which would shift the orbital phase.)
+        time_ref = Q(0.0, "day")
         rng = np.random.default_rng(42)
         scan_angle = Q(jnp.asarray(rng.uniform(0.0, 2 * jnp.pi, n)), "rad")
         parallax_factor = jnp.asarray(rng.uniform(-1.0, 1.0, n))
@@ -612,13 +616,14 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         true_dec0 = Q(0.0, "mas")
 
         # Note: the model internally interprets phase_peri as relative to
-        # data.t_ref, so the absolute t_peri used here must be t_ref + phase*period.
-        t_peri = t_ref + true_phase * true_period
+        # data.time_ref, so the absolute time_peri used here must be
+        # time_ref + phase*period.
+        time_peri = time_ref + true_phase * true_period
         dra, ddec = _astrom(
             times,
             true_period,
             true_ecc,
-            t_peri,
+            time_peri,
             true_arg_peri,
             true_cos_i,
             true_Omega,
@@ -626,7 +631,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         )
         sin_psi = jnp.sin(scan_angle.value)
         cos_psi = jnp.cos(scan_angle.value)
-        dt_yr = (times.value - float(t_ref.value)) / 365.25
+        dt_yr = (times.value - float(time_ref.value)) / 365.25
         al_truth = (
             true_ra0.value * sin_psi
             + true_dec0.value * cos_psi
@@ -646,7 +651,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             al_position_err=al_err,
             scan_angle=scan_angle,
             parallax_factor=parallax_factor,
-            t_ref=t_ref,
+            time_ref=time_ref,
         )
 
         ti_A, ti_B, ti_F, ti_G = thiele_innes_from_campbell(
@@ -719,15 +724,15 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
                 "ti_F": Q(jnp.array([float(t["ti_F"].value) * 1.05]), "mas"),
                 "ti_G": Q(jnp.array([float(t["ti_G"].value) * 1.05]), "mas"),
             },
-            data_type="GaiaAstrometryModel",
-            metadata={"t_ref": 0.0},
+            model_type="GaiaAstrometryModel",
+            metadata={"time_ref": 0.0},
         )
 
     @pytest.fixture(scope="class")
     def bh3_case(self, bh3_ti_sampler, bh3_like_data_and_truth, bh3_warm_start):
         """Cached BH3-like optimize result reused by both regression paths."""
         data, truth = bh3_like_data_and_truth
-        refined = bh3_ti_sampler.optimize(bh3_warm_start, data, seed=0)
+        refined = bh3_ti_sampler.optimize(bh3_warm_start, data, key=jax.random.key(0))
         campbell = refined.thiele_innes_to_campbell()
         return data, truth, refined, campbell
 
@@ -740,8 +745,8 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
         period = float(refined.nonlinear["period"][0].value)
         ecc = float(refined.nonlinear["eccentricity"][0].value)
         phase = float(refined.nonlinear["phase_peri"][0].value)
-        t_peri = phase * period
-        dt = data.time.value - 0.0 - t_peri  # t_ref=0 by default
+        time_peri = phase * period
+        dt = data.time.value - 0.0 - time_peri  # time_ref=0 by default
         M = mean_anomaly(Q(dt, "day"), Q(period, "day"))
         sin_f, cos_f = true_anomaly_from_mean(M, ecc)
         sin_f = jnp.asarray(
@@ -839,7 +844,7 @@ class TestNumpyroSamplerOptimizeThieleInnesSubOrbit:
             data.time,
             campbell.nonlinear["period"][0],
             campbell.nonlinear["eccentricity"][0],
-            campbell["t_peri"][0],
+            campbell["time_peri"][0],
             campbell.nonlinear["arg_peri"][0],
             campbell.nonlinear["cos_i"][0],
             campbell.nonlinear["lon_asc_node"][0],
@@ -884,11 +889,13 @@ class TestOptimizeConvergenceWarningVerbosity:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             refined = rv_sampler.optimize(
-                off_mode_sample, rv_data_and_truth, seed=0, max_passes=1
+                off_mode_sample, rv_data_and_truth, key=jax.random.key(0), max_passes=1
             )
         assert refined.n_samples == 1
 
     def test_warns_when_verbose(self, rv_sampler, rv_data_and_truth, off_mode_sample):
         loud = NumpyroSampler(rv_sampler.prior, rv_sampler.model, verbose=True)
         with pytest.warns(UserWarning, match="BFGS did not converge"):
-            loud.optimize(off_mode_sample, rv_data_and_truth, seed=0, max_passes=1)
+            loud.optimize(
+                off_mode_sample, rv_data_and_truth, key=jax.random.key(0), max_passes=1
+            )

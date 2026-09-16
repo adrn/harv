@@ -6,7 +6,7 @@ import pytest
 from unxt import Q
 
 from harv.data import GaiaAstrometryData
-from harv.kepler.orbits import thiele_innes_ABFG
+from harv.kepler.orbits import thiele_innes_unit
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
@@ -48,8 +48,8 @@ class TestStandardRV:
         key = jax.random.key(42)
         sin_f = jax.random.normal(key, (n_obs,))
         cos_f = jax.random.normal(key, (n_obs,))
-        nl_values = {"eccentricity": 0.3, "arg_peri": 0.5}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"eccentricity": 0.3, "arg_peri": 0.5}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         assert X.shape == (n_obs, 2)
 
     def test_design_matrix_second_col_ones(self):
@@ -57,8 +57,8 @@ class TestStandardRV:
         n_obs = 5
         sin_f = jnp.zeros(n_obs)
         cos_f = jnp.ones(n_obs)
-        nl_values = {"eccentricity": 0.0, "arg_peri": 0.0}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"eccentricity": 0.0, "arg_peri": 0.0}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         # Second column (v_sys) should always be ones
         assert jnp.allclose(X[:, 1], 1.0)
 
@@ -66,11 +66,11 @@ class TestStandardRV:
         p = StandardRV()
         sin_f = jnp.array([0.1, 0.2, 0.3])
         cos_f = jnp.array([0.9, 0.8, 0.7])
-        nl_values = {"eccentricity": 0.2, "arg_peri": 1.0}
+        nonlinear_values = {"eccentricity": 0.2, "arg_peri": 1.0}
 
         @jax.jit
         def fn(sf, cf):
-            return p.design_matrix(sf, cf, nl_values)
+            return p.design_matrix(sf, cf, nonlinear_values)
 
         X = fn(sin_f, cos_f)
         assert X.shape == (3, 2)
@@ -120,14 +120,14 @@ class TestStandardGaiaAstrometry:
         sin_psi = jax.random.normal(key, (n_obs,))
         cos_psi = jax.random.normal(key, (n_obs,))
         parallax_factor = jax.random.uniform(key, (n_obs,))
-        nl_values = {
+        nonlinear_values = {
             "eccentricity": 0.3,
             "arg_peri": 0.5,
             "lon_asc_node": 1.0,
             "cos_i": 0.8,
         }
         X = p.design_matrix(
-            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nl_values
+            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nonlinear_values
         )
         assert X.shape == (n_obs, 6)
 
@@ -141,7 +141,7 @@ class TestStandardGaiaAstrometry:
         sin_psi = jax.random.normal(key, (n,))
         cos_psi = jax.random.normal(key, (n,))
         pf = jax.random.uniform(key, (n,))
-        nl_values = {
+        nonlinear_values = {
             "eccentricity": 0.1,
             "arg_peri": 0.0,
             "lon_asc_node": 0.0,
@@ -150,7 +150,7 @@ class TestStandardGaiaAstrometry:
 
         @jax.jit
         def fn(sf, cf, _dt, sp, cp, _pf):
-            return p.design_matrix(sf, cf, _dt, sp, cp, _pf, nl_values)
+            return p.design_matrix(sf, cf, _dt, sp, cp, _pf, nonlinear_values)
 
         X = fn(sin_f, cos_f, dt, sin_psi, cos_psi, pf)
         assert X.shape == (n, 6)
@@ -199,9 +199,9 @@ class TestThieleInnesGaiaAstrometry:
         sin_psi = jax.random.normal(key, (n_obs,))
         cos_psi = jax.random.normal(key, (n_obs,))
         parallax_factor = jax.random.uniform(key, (n_obs,))
-        nl_values = {"eccentricity": 0.3}
+        nonlinear_values = {"eccentricity": 0.3}
         X = p.design_matrix(
-            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nl_values
+            sin_f, cos_f, dt, sin_psi, cos_psi, parallax_factor, nonlinear_values
         )
         assert X.shape == (n_obs, 9)
 
@@ -215,11 +215,11 @@ class TestThieleInnesGaiaAstrometry:
         sin_psi = jax.random.normal(key, (n,))
         cos_psi = jax.random.normal(key, (n,))
         pf = jax.random.uniform(key, (n,))
-        nl_values = {"eccentricity": 0.1}
+        nonlinear_values = {"eccentricity": 0.1}
 
         @jax.jit
         def fn(sf, cf, _dt, sp, cp, _pf):
-            return p.design_matrix(sf, cf, _dt, sp, cp, _pf, nl_values)
+            return p.design_matrix(sf, cf, _dt, sp, cp, _pf, nonlinear_values)
 
         X = fn(sin_f, cos_f, dt, sin_psi, cos_psi, pf)
         assert X.shape == (n, 9)
@@ -241,7 +241,7 @@ class TestThieleInnesGaiaAstrometry:
 
         a0 = 2.5
         ecc, arg_peri, lon_asc_node, cos_i = 0.3, 0.8, 1.1, 0.6
-        A, B, F, G = thiele_innes_ABFG(
+        A, B, F, G = thiele_innes_unit(
             jnp.cos(arg_peri),
             jnp.sin(arg_peri),
             jnp.cos(lon_asc_node),

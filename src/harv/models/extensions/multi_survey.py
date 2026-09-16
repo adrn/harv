@@ -70,7 +70,7 @@ class MultiSurveyOffset(AbstractExtension):
         self,
         X: jax.Array,
         data: Any,  # noqa: ARG002
-        nl_values: dict[str, Any],  # noqa: ARG002
+        nonlinear_values: dict[str, Any],  # noqa: ARG002
     ) -> jax.Array:
         """Append indicator columns to the design matrix."""
         return jnp.concatenate([X, self.indicator_matrix], axis=-1)

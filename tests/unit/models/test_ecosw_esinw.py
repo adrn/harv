@@ -81,7 +81,7 @@ class TestEcoswEsinwRVParameterization:
     def test_strip_nl_for_design(self):
         p = EcoswEsinwRV()
         nl = {"ecosw": 0.3, "esinw": 0.1, "other": "kept"}
-        stripped = p.strip_nl_for_design(nl)
+        stripped = p.strip_nonlinear_for_design(nl)
         assert "ecosw" in stripped
         assert "esinw" in stripped
         assert "other" in stripped
@@ -92,8 +92,8 @@ class TestEcoswEsinwRVParameterization:
         key = jax.random.key(42)
         sin_f = jax.random.normal(key, (n_obs,))
         cos_f = jax.random.normal(key, (n_obs,))
-        nl_values = {"ecosw": _ECOSW, "esinw": _ESINW}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"ecosw": _ECOSW, "esinw": _ESINW}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         assert X.shape == (n_obs, 2)
 
     def test_design_matrix_second_col_ones(self):
@@ -101,8 +101,8 @@ class TestEcoswEsinwRVParameterization:
         n_obs = 5
         sin_f = jnp.zeros(n_obs)
         cos_f = jnp.ones(n_obs)
-        nl_values = {"ecosw": 0.0, "esinw": 0.0}
-        X = p.design_matrix(sin_f, cos_f, nl_values)
+        nonlinear_values = {"ecosw": 0.0, "esinw": 0.0}
+        X = p.design_matrix(sin_f, cos_f, nonlinear_values)
         assert jnp.allclose(X[:, 1], 1.0)
 
     def test_design_matrix_matches_standard(self):
@@ -129,11 +129,11 @@ class TestEcoswEsinwRVParameterization:
         p = EcoswEsinwRV()
         sin_f = jnp.array([0.1, 0.2, 0.3])
         cos_f = jnp.array([0.9, 0.8, 0.7])
-        nl_values = {"ecosw": 0.2, "esinw": 0.1}
+        nonlinear_values = {"ecosw": 0.2, "esinw": 0.1}
 
         @jax.jit
         def fn(sf, cf):
-            return p.design_matrix(sf, cf, nl_values)
+            return p.design_matrix(sf, cf, nonlinear_values)
 
         X = fn(sin_f, cos_f)
         assert X.shape == (3, 2)
@@ -154,7 +154,7 @@ class TestStandardRVHelpers:
             "arg_peri": Q(1.0, "rad"),
             "period": Q(100.0, "day"),
         }
-        stripped = p.strip_nl_for_design(nl)
+        stripped = p.strip_nonlinear_for_design(nl)
         # Should be plain floats after stripping
         assert not hasattr(stripped["eccentricity"], "unit")
         assert not hasattr(stripped["arg_peri"], "unit")
@@ -300,7 +300,7 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
     """The default prior must survive being *evaluated*, not just constructed.
 
     ``EcoswEsinwRV.default_prior`` gives ``rv_semiamp`` a
-    :class:`~harv.models.priors.custom_priors.PeriodDependentKPrior`, which reads
+    :class:`~harv.models.priors.callables.PeriodDependentKPrior`, which reads
     ``params["eccentricity"]`` -- a key this parameterization does not have, since it
     carries ``(ecosw, esinw)``. The existing prior tests only inspect keys, so the
     whole combination raised ``KeyError: 'eccentricity'`` on every sampler run.
@@ -339,17 +339,17 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         # K prior's (1 - e^2)^(-1/2) is NaN. Those draws must be rejected.
         samples = sampler.run_with_samples(
             data,
-            prior.sample(jr.key(0), 2000, model=model),
+            prior.sample(2000, key=jr.key(0), model=model),
             top_k=8,
-            seed=0,
+            key=jax.random.key(0),
             ignore_non_finite=True,
         )
         assert samples.n_samples == 8
-        assert jnp.isfinite(samples.metadata["max_log_likelihood"])
+        assert jnp.isfinite(samples.metadata["max_ln_likelihood"])
 
     @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
     def test_unit_disk_violation_is_rejected_not_propagated(self):
-        """e >= 1 draws must not poison max_log_likelihood.
+        """e >= 1 draws must not poison max_ln_likelihood.
 
         Without ignore_non_finite a single NaN propagates through the max
         reduction, leaving every evidence statistic NaN. This pins the sharp edge
@@ -357,10 +357,10 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         """
         data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
         prior, model = self._prior_and_model()
-        cache = prior.sample(jr.key(0), 2000, model=model)
+        cache = prior.sample(2000, key=jr.key(0), model=model)
         ecc = qnp.sqrt(cache["ecosw"] ** 2 + cache["esinw"] ** 2)
         assert qnp.any(ecc >= 1.0), "expected the square prior to escape the unit disk"
 
         sampler = RejectionSampler(prior, model, batch_size=2000)
-        without = sampler.run_with_samples(data, cache, top_k=8, seed=0)
-        assert not jnp.isfinite(without.metadata["max_log_likelihood"])
+        without = sampler.run_with_samples(data, cache, top_k=8, key=jax.random.key(0))
+        assert not jnp.isfinite(without.metadata["max_ln_likelihood"])

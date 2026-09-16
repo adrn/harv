@@ -19,7 +19,7 @@ from unxt import AbstractQuantity, Q, ustrip
 from harv._optional_deps import get_arviz
 from harv.data.datasets import AbstractData
 from harv.kepler import masses
-from harv.models.parameterizations._base import AbstractParameterization
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
@@ -28,14 +28,14 @@ from harv.samplers.conversion import convert_parameterization
 
 __all__ = ("Samples", "pad_and_stack_samples")
 
-# Default minimum evidence effective sample size (logZ_int_ess) below which a
+# Default minimum evidence effective sample size (ln_Z_int_ess) below which a
 # rejection run is reported as under-resolved: the marginal-likelihood integral
-# is then dominated by a handful of prior draws, so max_log_likelihood may not
+# is then dominated by a handful of prior draws, so max_ln_likelihood may not
 # have converged and the accepted-sample count is not a reliable posterior size.
 #
 # There is no sharp transition to calibrate against, so this is a convention,
 # not a derived quantity: ESS = 3 is where the delta-method MC error on
-# logZ_int (``sqrt(1/ESS - 1/M)``, reported as ``logZ_int_mcse``) reaches ~0.6
+# ln_Z_int (``sqrt(1/ESS - 1/M)``, reported as ``ln_Z_int_mcse``) reaches ~0.6
 # nats, i.e. the log-evidence is uncertain at the factor-of-two level. Callers
 # who want a different bar set ``min_evidence_ess`` on
 # :class:`~harv.samplers.RejectionSampler` or pass it to
@@ -43,7 +43,7 @@ __all__ = ("Samples", "pad_and_stack_samples")
 # ``float("inf")`` always flags.
 MIN_EVIDENCE_ESS = 3.0
 
-_EVIDENCE_KEYS = ("logZ_int", "logZ_int_ess", "max_log_likelihood", "n_prior_samples")
+_EVIDENCE_KEYS = ("ln_Z_int", "ln_Z_int_ess", "max_ln_likelihood", "n_prior_samples")
 
 
 def _assess_resolution(
@@ -51,7 +51,7 @@ def _assess_resolution(
     n_prior: int,
     n_accepted: int,
     evidence_ess: float,
-    max_log_likelihood: float,
+    max_ln_likelihood: float,
     min_evidence_ess: float = MIN_EVIDENCE_ESS,
 ) -> tuple[bool, str]:
     """Judge whether a rejection run resolved the posterior; return a message.
@@ -71,8 +71,8 @@ def _assess_resolution(
     if well_resolved:
         msg = (
             f"Resolved: ~{evidence_ess:.0f} effective prior samples (of {n_prior}) "
-            f"contribute to the evidence integral, so max_log_likelihood="
-            f"{max_log_likelihood:.1f} is likely converged. Confirm across seeds "
+            f"contribute to the evidence integral, so max_ln_likelihood="
+            f"{max_ln_likelihood:.1f} is likely converged. Confirm across seeds "
             "if it matters."
         )
     else:
@@ -80,9 +80,9 @@ def _assess_resolution(
             f"Under-resolved rejection run: the evidence integral is dominated by "
             f"~{evidence_ess:.1f} effective prior sample(s) of {n_prior} "
             f"(below min_evidence_ess={min_evidence_ess:g}), so "
-            f"max_log_likelihood={max_log_likelihood:.1f} may not have converged and "
+            f"max_ln_likelihood={max_ln_likelihood:.1f} may not have converged and "
             f"the accepted-sample count ({n_accepted}) is not a reliable posterior "
-            "size. Increase n_prior_samples (compare max_log_likelihood across runs "
+            "size. Increase n_prior_samples (compare max_ln_likelihood across runs "
             "to check it stops rising) and/or continue with "
             "NumpyroSampler(prior, model).run(data, init_samples=...) to draw the "
             "posterior."
@@ -170,7 +170,7 @@ def _assemble_sample_params(
     *,
     i: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, jax.Array]]:
-    """Build ``(nl_values, linear_values)`` from ``samples`` in the form models expect.
+    """Build ``(nonlinear_values, linear_values)`` from ``samples``, as models expect.
 
     Matches the convention used by the sampler's ``log_prob`` calls:
     dimensioned base nonlinear parameters stay as Quantities, dimensionless
@@ -204,7 +204,7 @@ def _assemble_sample_params(
     def _pick(value: Any) -> Any:
         return value if i is None else value[i]
 
-    nl_for_model: dict[str, Any] = {
+    nonlinear_for_model: dict[str, Any] = {
         name: _pick(value)
         if base_nl_units.get(name, "")
         else ustrip(str(value.unit), _pick(value))
@@ -216,7 +216,7 @@ def _assemble_sample_params(
         for name, value in samples.linear.items()
         if name in linear_names
     }
-    return nl_for_model, linear_stripped
+    return nonlinear_for_model, linear_stripped
 
 
 class _MetadataView(Mapping[str, Any]):
@@ -224,8 +224,8 @@ class _MetadataView(Mapping[str, Any]):
 
     The underlying ``metadata`` dict holds the *split* form for quantity-valued
     entries: a value (``float`` / ``int`` / ``str`` / ``bool``) under ``name``
-    and a unit string under ``f"{name}_unit"`` (e.g. ``{"t_ref": 0.0,
-    "t_ref_unit": "day"}``).  This split keeps the static field free of JAX
+    and a unit string under ``f"{name}_unit"`` (e.g. ``{"time_ref": 0.0,
+    "time_ref_unit": "day"}``).  This split keeps the static field free of JAX
     arrays so equinox doesn't warn about JAX arrays being marked static.
 
     The view papers over that split: ``view[name]`` returns a :class:`~unxt.Q`
@@ -236,16 +236,16 @@ class _MetadataView(Mapping[str, Any]):
 
     Examples
     --------
-    >>> view = _MetadataView({"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 2})
-    >>> view["t_ref"]  # doctest: +ELLIPSIS
+    >>> view = _MetadataView({"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 2})
+    >>> view["time_ref"]  # doctest: +ELLIPSIS
     Quantity(..., unit='d')
     >>> view["num_chains"]
     2
     >>> sorted(view)
-    ['num_chains', 't_ref']
-    >>> "t_ref" in view
+    ['num_chains', 'time_ref']
+    >>> "time_ref" in view
     True
-    >>> "t_ref_unit" in view  # the _unit companion is hidden
+    >>> "time_ref_unit" in view  # the _unit companion is hidden
     False
     >>> view.get("missing", 5)
     5
@@ -300,12 +300,12 @@ class Samples(eqx.Module):
         ``"v_sys"`` for RV; ``"ra0"``, ``"dec0"``, ``"pmra"``, ``"pmdec"``,
         ``"parallax"``, ``"semi_major_axis"`` for astrometry.  Units are data-driven
         (e.g. ``"km/s"`` for RV).
-    data_type
+    model_type
         Informational label identifying the model that produced these samples (e.g.
         ``"RVModel"``, ``"GaiaAstrometryModel"``, ``"JointModel"``). Stored in HDF5 for
         round-tripping.
     metadata
-        Additional metadata (``t_ref``, ``num_chains``, acceptance rate, etc.).
+        Additional metadata (``time_ref``, ``num_chains``, acceptance rate, etc.).
     linear_extension_names
         Names of linear parameters introduced by extensions (instrument offsets,
         polynomial trends, etc.) beyond the base linear set.
@@ -328,8 +328,8 @@ class Samples(eqx.Module):
     ...         "rv_semiamp": Q([10.0, 11.0, 9.5], "km/s"),
     ...         "v_sys": Q([5.0, 5.1, 4.9], "km/s"),
     ...     },
-    ...     data_type="rv",
-    ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+    ...     model_type="RVModel",
+    ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     ... )
     >>> samples.n_samples
     3
@@ -344,7 +344,7 @@ class Samples(eqx.Module):
     linear: dict[str, Q]
 
     # Static fields -- not JAX leaves
-    data_type: str = eqx.field(static=True, default="")
+    model_type: str = eqx.field(static=True, default="")
     metadata: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     # Names of linear params introduced by extensions (offsets, trends, etc.).
     linear_extension_names: tuple[str, ...] = eqx.field(static=True, default=())
@@ -412,7 +412,7 @@ class Samples(eqx.Module):
         ``w_i = exp(ln L_i - logsumexp(ln L))`` where the ``logsumexp`` runs
         over *every* prior draw the sampler evaluated, not just the ones
         returned.  It is reconstructed rather than stored: the normalization is
-        ``logZ_int + ln(n_prior_samples)``, and both come from the evidence
+        ``ln_Z_int + ln(n_prior_samples)``, and both come from the evidence
         metadata that ``top_k`` / ``return_evidence_stats=True`` writes.
 
         Because the normalization spans the whole library, ``weight.sum()`` is
@@ -449,7 +449,7 @@ class Samples(eqx.Module):
         >>> samples = Samples(
         ...     nonlinear={"period": Q([100.0, 101.0], "day")},
         ...     linear={},
-        ...     metadata={"logZ_int": 0.0, "n_prior_samples": 4},
+        ...     metadata={"ln_Z_int": 0.0, "n_prior_samples": 4},
         ...     ln_likelihood=jnp.zeros(2),
         ... )
         >>> samples.weight
@@ -471,7 +471,7 @@ class Samples(eqx.Module):
                 "sampler with top_k=... or return_logprobs=True."
             )
             raise ValueError(msg)
-        missing = [k for k in ("logZ_int", "n_prior_samples") if k not in self.metadata]
+        missing = [k for k in ("ln_Z_int", "n_prior_samples") if k not in self.metadata]
         if missing:
             msg = (
                 f"weight requires the evidence metadata {missing} to normalize "
@@ -480,23 +480,23 @@ class Samples(eqx.Module):
             )
             raise ValueError(msg)
 
-        log_norm = float(self.metadata["logZ_int"]) + np.log(
+        ln_norm = float(self.metadata["ln_Z_int"]) + np.log(
             float(self.metadata["n_prior_samples"])
         )
-        if not np.isfinite(log_norm):
+        if not np.isfinite(ln_norm):
             # Every evaluated likelihood was non-finite; -inf - -inf is NaN,
             # and zero weight is the honest answer.
             return jnp.zeros_like(self.ln_likelihood)
-        return jnp.exp(self.ln_likelihood - log_norm)
+        return jnp.exp(self.ln_likelihood - ln_norm)
 
     def keys(self) -> list[str]:
         """All available parameter names (nonlinear + linear + derived)."""
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
-        derived_keys = ["log_period"]
+        derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
-        # periastron phase, so t_peri is only derivable when phase_peri exists.
+        # periastron phase, so time_peri is only derivable when phase_peri exists.
         if "phase_peri" in self.nonlinear:
-            derived_keys.append("t_peri")
+            derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
         if "rv_semiamp" in self.linear:
@@ -545,8 +545,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 11.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.1], "km/s")},
-        ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     model_type="RVModel",
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> samples["period"].unit
         Unit("d")
@@ -580,7 +580,7 @@ class Samples(eqx.Module):
             return Samples(
                 nonlinear=sliced_nl,
                 linear=sliced_lin,
-                data_type=self.data_type,
+                model_type=self.model_type,
                 metadata=self.metadata,
                 linear_extension_names=self.linear_extension_names,
                 ln_likelihood=(
@@ -595,29 +595,29 @@ class Samples(eqx.Module):
         if key in self.linear:
             return self.linear[key]
 
-        if key == "log_period":
+        if key == "log10_period":
             period = self.nonlinear["period"]
             return jnp.log10(  # ty: ignore[invalid-return-type]
                 ustrip(str(period.unit), period)
             )
 
-        if key == "t_peri":
-            # Express t_peri in absolute time: t_ref + phase_peri * period.
+        if key == "time_peri":
+            # Express time_peri in absolute time: time_ref + phase_peri * period.
             # phase_peri encodes the fractional orbital phase at t=0, so
             # phase_peri * period is the periastron time relative to t=0, and
-            # adding t_ref converts it to the same absolute coordinate as data.time.
+            # adding time_ref converts it to the same absolute coordinate as data.time.
             period = self.nonlinear["period"]
             time_unit = str(period.unit)
-            t_ref = self.meta.get("t_ref")
-            if t_ref is None:
-                t_ref_val = 0.0
-            elif isinstance(t_ref, AbstractQuantity):
-                t_ref_val = float(ustrip(time_unit, t_ref))
+            time_ref = self.meta.get("time_ref")
+            if time_ref is None:
+                time_ref_val = 0.0
+            elif isinstance(time_ref, AbstractQuantity):
+                time_ref_val = float(ustrip(time_unit, time_ref))
             else:
-                t_ref_val = float(t_ref)
+                time_ref_val = float(time_ref)
             phase_peri = ustrip("", self.nonlinear["phase_peri"])
             period_val = ustrip(time_unit, period)
-            return Q(t_ref_val + phase_peri * period_val, time_unit)
+            return Q(time_ref_val + phase_peri * period_val, time_unit)
 
         if key == "inclination":
             if "cos_i" in self.nonlinear:
@@ -648,7 +648,7 @@ class Samples(eqx.Module):
         """String representation."""
         return (
             f"Samples(n_samples={self.n_samples}, "
-            f"data_type='{self.data_type}', "
+            f"model_type='{self.model_type}', "
             f"parameters={len(self.keys())})"
         )
 
@@ -708,8 +708,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.0], "rad")},
         ...     linear={"rv_semiamp": Q([-10.0, 10.0], "km/s"),
         ...             "v_sys": Q([0.0, 0.0], "km/s")},
-        ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     model_type="RVModel",
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> wrapped = samples.wrap_angles()
         >>> bool((wrapped["rv_semiamp"].value >= 0).all())
@@ -816,7 +816,7 @@ class Samples(eqx.Module):
         return Samples(
             nonlinear=new_nl,
             linear=new_lin,
-            data_type=self.data_type,
+            model_type=self.model_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
             ln_likelihood=self.ln_likelihood,
@@ -859,7 +859,7 @@ class Samples(eqx.Module):
         """Convert stored values between supported parameterizations.
 
         Wraps :func:`harv.samplers.convert_parameterization`, returning a new
-        :class:`Samples` with ``metadata``, ``data_type``, and
+        :class:`Samples` with ``metadata``, ``model_type``, and
         ``linear_extension_names`` preserved.  The initial implementation
         supports single-component RV and Gaia astrometry parameterizations only.
         """
@@ -872,7 +872,7 @@ class Samples(eqx.Module):
         return Samples(
             nonlinear=new_nonlinear,
             linear=new_linear,
-            data_type=self.data_type,
+            model_type=self.model_type,
             metadata=self.metadata,
             linear_extension_names=self.linear_extension_names,
             ln_likelihood=self.ln_likelihood,
@@ -880,15 +880,15 @@ class Samples(eqx.Module):
         )
 
     def median(
-        self, key: str | None = None
+        self, param: str | None = None
     ) -> dict[str, AbstractQuantity | jnp.ndarray] | AbstractQuantity | jnp.ndarray:
         """Compute median values for parameters.
 
         Parameters
         ----------
-        key
-            If provided, return median for this parameter only.
-            If None, return dict of medians for all parameters.
+        param
+            If provided, return the median for this parameter only.
+            If None, return a dict of medians for all parameters.
 
         Returns
         -------
@@ -905,8 +905,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     model_type="RVModel",
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> med = samples.median("period")
         >>> med.unit
@@ -915,25 +915,25 @@ class Samples(eqx.Module):
         >>> "period" in all_medians
         True
         """
-        if key is not None:
-            return jnp.median(self[key])
+        if param is not None:
+            return jnp.median(self[param])
 
         result: dict[str, AbstractQuantity | jnp.ndarray] = {}
-        for param_key in self.keys():
+        for name in self.keys():
             try:
-                result[param_key] = jnp.median(self[param_key])
+                result[name] = jnp.median(self[name])
             except (KeyError, ValueError):
                 continue
         return result
 
     def percentile(
-        self, key: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
+        self, param: str, percentiles: list[float] | tuple[float, ...] = (16, 50, 84)
     ) -> list[AbstractQuantity | jnp.ndarray]:
         """Compute percentiles for a parameter.
 
         Parameters
         ----------
-        key
+        param
             Parameter name.
         percentiles
             Percentile values to compute (0-100). Default: (16, 50, 84)
@@ -954,14 +954,14 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     model_type="RVModel",
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> p16, p50, p84 = samples.percentile("eccentricity")
         >>> len(samples.percentile("period", [5, 50, 95]))
         3
         """
-        values = self[key]
+        values = self[param]
         return [jnp.percentile(values, p) for p in percentiles]
 
     def summary(self, params: list[str] | None = None) -> dict[str, dict[str, Any]]:
@@ -993,8 +993,8 @@ class Samples(eqx.Module):
         ...                "arg_peri": Q([1.0, 1.1], "rad")},
         ...     linear={"rv_semiamp": Q([10.0, 12.0], "km/s"),
         ...             "v_sys": Q([5.0, 5.2], "km/s")},
-        ...     data_type="rv",
-        ...     metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        ...     model_type="RVModel",
+        ...     metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         ... )
         >>> summary = samples.summary(["period", "eccentricity"])
         >>> sorted(summary.keys())
@@ -1038,15 +1038,17 @@ class Samples(eqx.Module):
     def _phases(self, data: AbstractData) -> np.ndarray:
         """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
 
-        Phase is ``((time - t_ref) / period) mod 1`` evaluated at each sample's
+        Phase is ``((time - time_ref) / period) mod 1`` evaluated at each sample's
         period.
         """
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
-        period_val = np.asarray(ustrip(t_unit, period))
-        return ((time[None, :] - t_ref) / period_val[:, None]) % 1.0
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        time_ref = (
+            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
+        )
+        period_val = np.asarray(ustrip(time_unit, period))
+        return ((time[None, :] - time_ref) / period_val[:, None]) % 1.0
 
     def map_sample(
         self, *, return_index: bool = False
@@ -1084,10 +1086,10 @@ class Samples(eqx.Module):
 
         The rejection step accepts each prior draw with probability
         ``exp(L - max L)``, so the accepted-sample count is only a meaningful
-        posterior size once ``max_log_likelihood`` has converged to the true
-        peak. When the evidence effective sample size (``logZ_int_ess``) is
+        posterior size once ``max_ln_likelihood`` has converged to the true
+        peak. When the evidence effective sample size (``ln_Z_int_ess``) is
         O(1), the evidence integral is dominated by a single lucky draw:
-        ``max_log_likelihood`` is likely under-resolved and the count is
+        ``max_ln_likelihood`` is likely under-resolved and the count is
         misleading (a broad prior can "accept" a poor fit simply because it
         never sampled a good one). See ``docs/spec.md``, "Interpreting
         acceptance".
@@ -1107,7 +1109,7 @@ class Samples(eqx.Module):
         Returns
         -------
             A dict with ``n_prior_samples``, ``n_accepted``, ``evidence_ess``,
-            ``min_evidence_ess``, ``max_log_likelihood``, ``logZ_int``, a
+            ``min_evidence_ess``, ``max_ln_likelihood``, ``ln_Z_int``, a
             boolean ``well_resolved``, and a human-readable ``message``.
 
         Raises
@@ -1124,14 +1126,14 @@ class Samples(eqx.Module):
             )
             raise ValueError(msg)
         n_prior = int(self.metadata["n_prior_samples"])
-        ess = float(self.metadata["logZ_int_ess"])
-        max_ll = float(self.metadata["max_log_likelihood"])
+        ess = float(self.metadata["ln_Z_int_ess"])
+        max_ll = float(self.metadata["max_ln_likelihood"])
         n_accepted = self.n_samples
         well_resolved, message = _assess_resolution(
             n_prior=n_prior,
             n_accepted=n_accepted,
             evidence_ess=ess,
-            max_log_likelihood=max_ll,
+            max_ln_likelihood=max_ll,
             min_evidence_ess=min_evidence_ess,
         )
         return {
@@ -1139,8 +1141,8 @@ class Samples(eqx.Module):
             "n_accepted": n_accepted,
             "evidence_ess": ess,
             "min_evidence_ess": min_evidence_ess,
-            "max_log_likelihood": max_ll,
-            "logZ_int": float(self.metadata["logZ_int"]),
+            "max_ln_likelihood": max_ll,
+            "ln_Z_int": float(self.metadata["ln_Z_int"]),
             "well_resolved": well_resolved,
             "message": message,
         }
@@ -1159,9 +1161,9 @@ class Samples(eqx.Module):
         """
         self._require_single_component("period_unimodal")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        period_val = np.asarray(ustrip(t_unit, period))
-        time = np.asarray(ustrip(t_unit, data.time))
+        time_unit = str(period.unit)
+        period_val = np.asarray(ustrip(time_unit, period))
+        time = np.asarray(ustrip(time_unit, data.time))
         span = float(np.ptp(time))
         p_min = float(np.min(period_val))
         delta = 4.0 * p_min**2 / (2.0 * np.pi * span)
@@ -1196,8 +1198,8 @@ class Samples(eqx.Module):
             raise ImportError(msg) from exc
 
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        period_val = np.asarray(ustrip(t_unit, period))
+        time_unit = str(period.unit)
+        period_val = np.asarray(ustrip(time_unit, period))
         labels = KMeans(n_clusters=n_clusters).fit_predict(
             np.log(period_val).reshape(-1, 1)
         )
@@ -1212,7 +1214,7 @@ class Samples(eqx.Module):
             mode_periods.append(float(np.median(period_val[mask])))
             n_per_mode.append(int(mask.sum()))
 
-        return all(unimodal), Q(np.array(mode_periods), t_unit), np.array(n_per_mode)
+        return all(unimodal), Q(np.array(mode_periods), time_unit), np.array(n_per_mode)
 
     def max_phase_gap(self, data: AbstractData) -> np.ndarray:
         """Largest gap in orbital-phase coverage, per sample.
@@ -1278,9 +1280,9 @@ class Samples(eqx.Module):
         """
         self._require_single_component("periods_spanned")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        period_val = np.asarray(ustrip(t_unit, period))
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        period_val = np.asarray(ustrip(time_unit, period))
         return float(np.ptp(time)) / period_val
 
     def phase_coverage_per_period(self, data: AbstractData) -> np.ndarray:
@@ -1297,11 +1299,13 @@ class Samples(eqx.Module):
         """
         self._require_single_component("phase_coverage_per_period")
         period = self.nonlinear["period"]
-        t_unit = str(period.unit)
-        time = np.asarray(ustrip(t_unit, data.time))
-        t_ref = 0.0 if data.t_ref is None else float(ustrip(t_unit, data.t_ref))
-        period_val = np.asarray(ustrip(t_unit, period))
-        n_per = (time - t_ref) / period_val[:, None]  # (n_samples, n_obs)
+        time_unit = str(period.unit)
+        time = np.asarray(ustrip(time_unit, data.time))
+        time_ref = (
+            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
+        )
+        period_val = np.asarray(ustrip(time_unit, period))
+        n_per = (time - time_ref) / period_val[:, None]  # (n_samples, n_obs)
 
         out = np.empty(n_per.shape[0], dtype=int)
         for s, row in enumerate(n_per):
@@ -1335,17 +1339,17 @@ class Samples(eqx.Module):
         """
         self._require_single_component("chi2")
 
-        nl_for_model, linear_stripped = _assemble_sample_params(
+        nonlinear_for_model, linear_stripped = _assemble_sample_params(
             self,
             model,
             data,
             i=None,
         )
 
-        def _one(nl_i: dict[str, Any], lin_i: dict[str, Any]) -> jax.Array:
-            return model.chi_squared(nl_i, lin_i, data)
+        def _one(nonlinear_i: dict[str, Any], linear_i: dict[str, Any]) -> jax.Array:
+            return model.chi_squared(nonlinear_i, linear_i, data)
 
-        return jax.vmap(_one)(nl_for_model, linear_stripped)
+        return jax.vmap(_one)(nonlinear_for_model, linear_stripped)
 
     def reduced_chi2(
         self, data: AbstractData, model: Any, *, dof: int | None = None
@@ -1376,11 +1380,11 @@ class Samples(eqx.Module):
             n_params = len(model._all_nonlinear_names()) + len(
                 model._all_linear_names()
             )
-            dof = int(data.n_times) - n_params
+            dof = int(data.n_obs) - n_params
         if dof <= 0:
             msg = (
                 f"Degrees of freedom must be positive, got dof={dof} "
-                f"(n_obs={int(data.n_times)}). Pass an explicit dof= if needed."
+                f"(n_obs={int(data.n_obs)}). Pass an explicit dof= if needed."
             )
             raise ValueError(msg)
         return self.chi2(data, model) / dof
@@ -1438,20 +1442,20 @@ class Samples(eqx.Module):
             self.linear["semi_major_axis"], self.linear["parallax"]
         )
 
-    def companion_mass(self, m1: Q, *, sini: float | None = None) -> Q:
+    def companion_mass(self, m_primary: Q, *, sin_i: float | None = None) -> Q:
         """Companion mass :math:`m_2` given the primary mass.
 
         For RV samples the mass function is
-        :func:`~harv.kepler.masses.binary_mass_function`; ``sini`` defaults to 1
+        :func:`~harv.kepler.masses.binary_mass_function`; ``sin_i`` defaults to 1
         (the *minimum* companion mass).  For astrometry samples the dark-companion
-        astrometric mass function is used and ``sini`` is ignored (the inclination
+        astrometric mass function is used and ``sin_i`` is ignored (the inclination
         is already encoded in the physical orbit size).
 
         Parameters
         ----------
-        m1
+        m_primary
             Primary mass (a ``Q``).
-        sini
+        sin_i
             Sine of the inclination, for RV samples only. Default 1 (edge-on).
 
         Returns
@@ -1463,30 +1467,32 @@ class Samples(eqx.Module):
         if "rv_semiamp" in self.linear and not is_astrometry:
             mass_function = self.binary_mass_function()
             return masses.companion_mass_from_mass_function(
-                mass_function, m1, 1.0 if sini is None else sini
+                mass_function, m_primary, 1.0 if sin_i is None else sin_i
             )
         if is_astrometry:
             mass_function = masses.astrometric_mass_function(
                 self.semi_major_axis_AU(), self.nonlinear["period"]
             )
-            return masses.companion_mass_from_mass_function(mass_function, m1, 1.0)
+            return masses.companion_mass_from_mass_function(
+                mass_function, m_primary, 1.0
+            )
         msg = (
             "companion_mass() needs either RV ('rv_semiamp') or astrometry "
             "('semi_major_axis' + 'parallax') samples."
         )
         raise KeyError(msg)
 
-    def minimum_companion_mass(self, m1: Q) -> Q:
+    def minimum_companion_mass(self, m_primary: Q) -> Q:
         """Minimum companion mass (edge-on, ``sin i = 1``).
 
-        Convenience wrapper for :meth:`companion_mass` with ``sini=1``.
+        Convenience wrapper for :meth:`companion_mass` with ``sin_i=1``.
 
         Parameters
         ----------
-        m1
+        m_primary
             Primary mass (a ``Q``).
         """
-        return self.companion_mass(m1, sini=1.0)
+        return self.companion_mass(m_primary, sin_i=1.0)
 
     def to_hdf5(self, filename: str | Path) -> None:
         """Save samples to HDF5 file.
@@ -1509,15 +1515,15 @@ class Samples(eqx.Module):
 
         with h5py.File(filename, "w") as f:
             # Store nonlinear parameters -- each as a dataset with a unit attr.
-            nl_group = f.create_group("nonlinear")
+            nonlinear_group = f.create_group("nonlinear")
             for key, qty in self.nonlinear.items():
-                ds = nl_group.create_dataset(key, data=np.asarray(qty.value))
+                ds = nonlinear_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
             # Store linear parameters -- each as a dataset with a unit attr.
-            lin_group = f.create_group("linear")
+            linear_group = f.create_group("linear")
             for key, qty in self.linear.items():
-                ds = lin_group.create_dataset(key, data=np.asarray(qty.value))
+                ds = linear_group.create_dataset(key, data=np.asarray(qty.value))
                 ds.attrs["unit"] = str(qty.unit)
 
             # Store optional per-sample log-probabilities (dimensionless).
@@ -1528,7 +1534,7 @@ class Samples(eqx.Module):
 
             # Store metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["data_type"] = self.data_type
+            meta_group.attrs["model_type"] = self.model_type
             meta_group.attrs["linear_extension_names"] = ",".join(
                 self.linear_extension_names
             )
@@ -1560,7 +1566,7 @@ class Samples(eqx.Module):
         >>> samples = Samples.from_hdf5("posterior_samples.h5")  # doctest: +SKIP
         >>> samples.n_samples  # doctest: +SKIP
         42
-        >>> samples.data_type  # doctest: +SKIP
+        >>> samples.model_type  # doctest: +SKIP
         'rv'
         """
         filename = Path(filename)
@@ -1568,7 +1574,7 @@ class Samples(eqx.Module):
         with h5py.File(filename, "r") as f:
             meta = f["metadata"]
 
-            data_type: str = meta.attrs.get("data_type", "")
+            model_type: str = meta.attrs.get("model_type", "")
 
             raw_extra = meta.attrs.get("linear_extension_names", "") or meta.attrs.get(
                 "offset_names", ""
@@ -1587,7 +1593,7 @@ class Samples(eqx.Module):
                     "linear_extension_names",
                     "offset_names",
                     "n_samples",
-                    "data_type",
+                    "model_type",
                 ]:
                     continue
                 value = meta.attrs[key]
@@ -1623,7 +1629,7 @@ class Samples(eqx.Module):
         return cls(
             nonlinear=nonlinear,
             linear=linear,
-            data_type=data_type,
+            model_type=model_type,
             linear_extension_names=linear_extension_names,
             metadata=metadata,
             ln_likelihood=ln_likelihood,
@@ -1708,7 +1714,7 @@ class Samples(eqx.Module):
         ----------
         params
             Parameters to include in corner plot. If None, selects a default
-            set based on data_type.
+            set based on model_type.
         truths
             Dictionary of true parameter values to overplot as reference values.
         labels
@@ -1821,15 +1827,15 @@ class Samples(eqx.Module):
 
 
 def _check_stack_consistency(samples_list: Sequence[Samples]) -> None:
-    """Verify all entries share schema (data_type, keys, units, ext names)."""
+    """Verify all entries share schema (model_type, keys, units, ext names)."""
     first = samples_list[0]
     first_nl_units = {k: str(v.unit) for k, v in first.nonlinear.items()}
     first_lin_units = {k: str(v.unit) for k, v in first.linear.items()}
     for i, s in enumerate(samples_list[1:], start=1):
-        if s.data_type != first.data_type:
+        if s.model_type != first.model_type:
             msg = (
-                f"Samples[{i}].data_type={s.data_type!r} does not match "
-                f"Samples[0].data_type={first.data_type!r}"
+                f"Samples[{i}].model_type={s.model_type!r} does not match "
+                f"Samples[0].model_type={first.model_type!r}"
             )
             raise ValueError(msg)
         if s.linear_extension_names != first.linear_extension_names:
@@ -1896,7 +1902,7 @@ def pad_and_stack_samples(
 ) -> tuple[Samples, jax.Array]:
     """Stack a list of per-entity ``Samples`` into one batched ``Samples`` + mask.
 
-    All inputs must share ``data_type``, ``linear_extension_names``, and the
+    All inputs must share ``model_type``, ``linear_extension_names``, and the
     set of nonlinear / linear keys with matching units. Per-entity sample
     counts may differ; the trailing axis is padded to
     ``K_max = max(s.n_samples for s in samples_list)`` with ``pad_value``.
@@ -1940,7 +1946,7 @@ def pad_and_stack_samples(
     ...             "rv_semiamp": Q([K] * len(periods), "km/s"),
     ...             "v_sys": Q([0.0] * len(periods), "km/s"),
     ...         },
-    ...         data_type="rv",
+    ...         model_type="RVModel",
     ...     )
     >>> stacked, mask = pad_and_stack_samples([_mk([10.0, 20.0], 5.0),
     ...                                        _mk([30.0, 40.0, 50.0], 7.0)])
@@ -1988,7 +1994,7 @@ def pad_and_stack_samples(
     stacked = Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type=first.data_type,
+        model_type=first.model_type,
         metadata=first.metadata,
         linear_extension_names=first.linear_extension_names,
         ln_likelihood=ln_likelihood,

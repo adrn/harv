@@ -61,7 +61,7 @@ sample.
 ### The speedup is free
 
 Across all 66 cells measured on both devices, the largest relative
-difference in `logZ_int_ess` is 1.4e-10. Both runs pin float64,
+difference in `ln_Z_int_ess` is 1.4e-10. Both runs pin float64,
 and the GPU is not trading accuracy for speed — it is the same
 arithmetic, faster.
 

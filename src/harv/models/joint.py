@@ -41,7 +41,7 @@ from harv.stats import MarginalizedLinear
 
 
 def _split_nl_values(
-    nl_values: dict[str, Any],
+    nonlinear_values: dict[str, Any],
     shared_names: frozenset[str],
     component_names: tuple[str, ...],
     per_component_nl_names: dict[str, tuple[str, ...]],
@@ -57,16 +57,16 @@ def _split_nl_values(
         comp_vals: dict[str, Any] = {}
         # Shared params
         for name in shared_names:
-            if name in nl_values:
-                comp_vals[name] = nl_values[name]
+            if name in nonlinear_values:
+                comp_vals[name] = nonlinear_values[name]
         # Component-specific params
         for param_name in per_component_nl_names.get(comp_name, ()):
             flat_key = f"{comp_name}.{param_name}"
-            if flat_key in nl_values:
-                comp_vals[param_name] = nl_values[flat_key]
-            elif param_name in nl_values:
+            if flat_key in nonlinear_values:
+                comp_vals[param_name] = nonlinear_values[flat_key]
+            elif param_name in nonlinear_values:
                 # Also accept unqualified name if there's no ambiguity
-                comp_vals[param_name] = nl_values[param_name]
+                comp_vals[param_name] = nonlinear_values[param_name]
         result[comp_name] = comp_vals
     return result
 
@@ -98,7 +98,7 @@ def _sample_explicit_linear_prior(
     name: str,
     prior_dist: Any,
     target_unit: str,
-    nl_values: dict[str, Any],
+    nonlinear_values: dict[str, Any],
     extra_values: dict[str, Any] | None = None,
     *,
     site_name: str | None = None,
@@ -112,7 +112,8 @@ def _sample_explicit_linear_prior(
       directly via ``numpyro.sample``; if a ``QuantityDistribution`` is provided the
       result is unit-stripped to ``target_unit``.
     * Callable priors (e.g. :class:`PeriodDependentKPrior`) are resolved to a
-      :class:`numpyro.distributions.distributions.Normal` at the current ``nl_values`` /
+      :class:`numpyro.distributions.distributions.Normal` at the current
+      ``nonlinear_values`` /
       ``extra_values`` and then sampled.  The resolver returns values already expressed
       in ``target_unit``, so no further unit-strip is performed.
 
@@ -125,7 +126,7 @@ def _sample_explicit_linear_prior(
     target_unit
         Unit string the returned value must be expressed in.  ``""`` for
         dimensionless.
-    nl_values
+    nonlinear_values
         Already-sampled nonlinear (and previously-sampled explicit-linear)
         values, keyed by bare parameter name.  Used by callable priors.
     extra_values
@@ -148,7 +149,7 @@ def _sample_explicit_linear_prior(
     if _is_callable_prior(prior_dist):
         resolved = _resolve_prior_to_mvn(
             {name: prior_dist},
-            nl_values,
+            nonlinear_values,
             {name: target_unit},
             extra_values=extra_values,
             parameterization=parameterization,
@@ -272,7 +273,7 @@ class JointModel(eqx.Module):
             Defaults to the standard nonlinear shared orbital params. For example,
             "period", "eccentricity", "phase_peri", and "arg_peri".
         shared_linear_params
-            Defaults to every key in ``prior.linear_prior`` except the ``rv_semiamp``
+            Defaults to every key in ``prior.linear_priors`` except the ``rv_semiamp``
             keys.
 
         Returns
@@ -451,7 +452,7 @@ class JointModel(eqx.Module):
             # Bare non-shared non-qualified keys are not routed to any component
         return result
 
-    def params_explicit(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
+    def explicit_params(self, linear_priors: dict[str, Any] | None) -> tuple[str, ...]:
         """Names of parameters that must be explicitly sampled.
 
         Shared nonlinear params use bare names (e.g. ``"period"``).
@@ -499,7 +500,7 @@ class JointModel(eqx.Module):
 
         return shared_names + tuple(comp_specific) + tuple(explicit_lin)
 
-    def params_marginalized(
+    def marginalized_params(
         self, linear_priors: dict[str, Any] | None
     ) -> tuple[str, ...]:
         """Names of linear parameters analytically marginalized across all components.
@@ -553,15 +554,15 @@ class JointModel(eqx.Module):
 
     def _route_explicit_linear(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         comp_nl: dict[str, dict[str, Any]],
         per_comp_lp: dict[str, dict[str, Any] | None],
         marginalized_names: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
-        """Copy explicit-linear values from *nl_values* to per-component dicts.
+        """Copy explicit-linear values from *nonlinear_values* to per-component dicts.
 
         Explicit linear priors are sampled alongside nonlinear params and
-        appear as bare names in *nl_values*. This method routes them to the
+        appear as bare names in *nonlinear_values*. This method routes them to the
         correct component.
         """
         for comp_name, comp in self.components.items():
@@ -578,10 +579,10 @@ class JointModel(eqx.Module):
                 for name in comp._all_linear_names():
                     if name in explicit_name_set:
                         qualified = f"{comp_name}.{name}"
-                        if qualified in nl_values:
-                            comp_nl[comp_name][name] = nl_values[qualified]
-                        elif name in nl_values:
-                            comp_nl[comp_name][name] = nl_values[name]
+                        if qualified in nonlinear_values:
+                            comp_nl[comp_name][name] = nonlinear_values[qualified]
+                        elif name in nonlinear_values:
+                            comp_nl[comp_name][name] = nonlinear_values[name]
 
     def _resolve_component_marginalized_names(
         self,
@@ -848,7 +849,7 @@ class JointModel(eqx.Module):
 
     def log_prob(
         self,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         data: AbstractDatasetContainer,
         *,
         linear_priors: dict[str, Any] | None = None,
@@ -863,7 +864,7 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Flat dict of parameter values. Shared orbital params use bare names
             (``"period"``, ``"eccentricity"``, etc.). Component-specific nonlinear
             params use ``"component.param"`` convention (e.g. ``"rv.jitter"``).
@@ -892,9 +893,11 @@ class JointModel(eqx.Module):
         )
 
         comp_nl = _split_nl_values(
-            nl_values, shared_nl, self.component_names, per_comp_nl
+            nonlinear_values, shared_nl, self.component_names, per_comp_nl
         )
-        self._route_explicit_linear(nl_values, comp_nl, per_comp_lp, per_comp_marg)
+        self._route_explicit_linear(
+            nonlinear_values, comp_nl, per_comp_lp, per_comp_marg
+        )
 
         if any_shared_marg:
             # Joint path: a single MarginalizedLinear spanning all components,
@@ -910,7 +913,7 @@ class JointModel(eqx.Module):
         # params independently and we sum the resulting log-likelihoods.  This
         # is the correct behaviour whenever no shared linear param is being
         # marginalized (including the common case of an unshared joint model).
-        log_probs = [
+        ln_probs = [
             comp.log_prob(
                 comp_nl[name],
                 data[name],
@@ -919,14 +922,14 @@ class JointModel(eqx.Module):
             )
             for name, comp in self.components.items()
         ]
-        return jnp.sum(jnp.stack(log_probs))
+        return jnp.sum(jnp.stack(ln_probs))
 
     def sample_conditional_linear(
         self,
-        nl_values: dict[str, Any],
-        key: jax.Array,
+        nonlinear_values: dict[str, Any],
         data: AbstractDatasetContainer,
         *,
+        key: jax.Array,
         linear_priors: dict[str, Any] | None = None,
         marginalized_names: tuple[str, ...] | None = None,
         use_mean: bool = False,
@@ -939,7 +942,7 @@ class JointModel(eqx.Module):
 
         Parameters
         ----------
-        nl_values
+        nonlinear_values
             Flat parameter values dict.
         key
             JAX PRNG key.
@@ -977,9 +980,11 @@ class JointModel(eqx.Module):
         )
 
         comp_nl = _split_nl_values(
-            nl_values, shared_nl, self.component_names, per_comp_nl
+            nonlinear_values, shared_nl, self.component_names, per_comp_nl
         )
-        self._route_explicit_linear(nl_values, comp_nl, per_comp_lp, per_comp_marg)
+        self._route_explicit_linear(
+            nonlinear_values, comp_nl, per_comp_lp, per_comp_marg
+        )
 
         if any_shared_marg:
             # Joint path: sample from one big conditional posterior over all
@@ -1018,8 +1023,8 @@ class JointModel(eqx.Module):
             key, subkey = jax.random.split(key)
             results[name] = comp.sample_conditional_linear(
                 comp_nl[name],
-                subkey,
                 data[name],
+                key=subkey,
                 linear_priors=per_comp_lp[name],
                 marginalized_names=per_comp_marg[name],
                 use_mean=use_mean,
@@ -1147,21 +1152,21 @@ class JointModel(eqx.Module):
 
             # Re-attach units to shared QD priors so callable linear priors can
             # consume them (downstream resolvers expect Q-wrapped values).
-            nl_values = dict(values)
+            nonlinear_values = dict(values)
             for name, d in nonlinear_priors.items():
                 if isinstance(d, QuantityDistribution) and name in shared:
-                    nl_values[name] = Q(values[name], cast("str", d.unit))
+                    nonlinear_values[name] = Q(values[name], cast("str", d.unit))
 
             # 2. Sample shared explicit-linear priors ONCE.  Direct priors first
             #    so callable shared priors that depend on them can read the
-            #    sampled values out of ``nl_values``.
+            #    sampled values out of ``nonlinear_values``.
             for name, p in _shared_explicit_direct_lp.items():
-                nl_values[name] = _sample_explicit_linear_prior(
-                    name, p, _shared_param_units.get(name, ""), nl_values
+                nonlinear_values[name] = _sample_explicit_linear_prior(
+                    name, p, _shared_param_units.get(name, ""), nonlinear_values
                 )
             for name, p in _shared_explicit_callable_lp.items():
-                nl_values[name] = _sample_explicit_linear_prior(
-                    name, p, _shared_param_units.get(name, ""), nl_values
+                nonlinear_values[name] = _sample_explicit_linear_prior(
+                    name, p, _shared_param_units.get(name, ""), nonlinear_values
                 )
 
             # 3. Sample per-component explicit-linear priors.  Direct first,
@@ -1176,11 +1181,11 @@ class JointModel(eqx.Module):
                         name,
                         p,
                         target_u,
-                        nl_values,
+                        nonlinear_values,
                         site_name=f"{comp_name}.{name}",
                         parameterization=joint.components[comp_name].parameterization,
                     )
-                    nl_values[f"{comp_name}.{name}"] = raw
+                    nonlinear_values[f"{comp_name}.{name}"] = raw
                     explicit_linear_q[name] = Q(raw, target_u) if target_u else raw
                 for name, p in _comp_explicit_callable_lp[comp_name].items():
                     target_u = pu.get(name, "")
@@ -1188,19 +1193,19 @@ class JointModel(eqx.Module):
                         name,
                         p,
                         target_u,
-                        nl_values,
+                        nonlinear_values,
                         extra_values=explicit_linear_q,
                         parameterization=joint.components[comp_name].parameterization,
                     )
-                    nl_values[f"{comp_name}.{name}"] = raw
+                    nonlinear_values[f"{comp_name}.{name}"] = raw
                     explicit_linear_q[name] = Q(raw, target_u) if target_u else raw
 
-            # 4. Split nl_values per component and route explicit-linear values.
+            # 4. Split nonlinear_values per component and route explicit-linear values.
             comp_nl = _split_nl_values(
-                nl_values, shared, joint.component_names, per_comp_nl
+                nonlinear_values, shared, joint.component_names, per_comp_nl
             )
             joint._route_explicit_linear(
-                nl_values, comp_nl, per_comp_lp, per_comp_marginalized_names
+                nonlinear_values, comp_nl, per_comp_lp, per_comp_marginalized_names
             )
 
             # 5. Compute the marginalized log-likelihood.
@@ -1211,19 +1216,19 @@ class JointModel(eqx.Module):
                 marg_dist, y_joint, _, _ = joint._build_joint_marginalized_linear(
                     comp_nl, per_comp_marginalized_names, data, linear_priors
                 )
-                log_lik = marg_dist.log_prob(y_joint)
+                ln_lik = marg_dist.log_prob(y_joint)
             else:
                 # Per-component sum: each component's marginalization is
                 # independent, so the log-likelihoods simply add.
-                log_lik = jnp.zeros(())
+                ln_lik = jnp.zeros(())
                 for comp_name, comp in joint.components.items():
-                    log_lik = log_lik + comp.log_prob(
+                    ln_lik = ln_lik + comp.log_prob(
                         comp_nl[comp_name],
                         data[comp_name],
                         linear_priors=per_comp_lp[comp_name],
                         marginalized_names=per_comp_marginalized_names[comp_name],
                     )
-            numpyro.factor("log_lik", log_lik)
+            numpyro.factor("ln_lik", ln_lik)
 
         return model_fn
 
@@ -1311,14 +1316,14 @@ class JointModel(eqx.Module):
             values = _sample_nonlinear_params(nonlinear_priors)
 
             # Wrap shared QD priors in Quantity
-            nl_values: dict[str, Any] = dict(values)
+            nonlinear_values: dict[str, Any] = dict(values)
             for name, d in nonlinear_priors.items():
                 if isinstance(d, QuantityDistribution) and name in shared:
-                    nl_values[name] = Q(values[name], cast("str", d.unit))
+                    nonlinear_values[name] = Q(values[name], cast("str", d.unit))
 
             # Split per component
             comp_nl = _split_nl_values(
-                nl_values, shared, joint.component_names, per_comp_nl
+                nonlinear_values, shared, joint.component_names, per_comp_nl
             )
 
             # Per-component view of linear values, used both to feed callable
@@ -1397,17 +1402,17 @@ class JointModel(eqx.Module):
                     _record(cname, base, v, is_shared=base in shared_lin_set)
 
             # Evaluate explicit log-likelihood per component
-            log_lik = jnp.zeros(())
+            ln_lik = jnp.zeros(())
             for comp_name, comp in joint.components.items():
                 comp_linear = {
                     n: linear_by_comp[comp_name][n]
                     for n in comp._all_linear_names()
                     if n in linear_by_comp[comp_name]
                 }
-                log_lik = log_lik + comp._log_prob_explicit(
+                ln_lik = ln_lik + comp._log_prob_explicit(
                     comp_nl[comp_name], comp_linear, data[comp_name]
                 )
 
-            numpyro.factor("log_lik", log_lik)
+            numpyro.factor("ln_lik", ln_lik)
 
         return model_fn

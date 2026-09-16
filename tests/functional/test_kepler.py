@@ -24,7 +24,7 @@ def test_full_orbit_workflow() -> None:
         eccentricity=0.1,
         m_total=m_star + m_planet,
         m_body=m_planet,
-        t_peri=Q(0.0, "yr"),
+        time_peri=Q(0.0, "yr"),
         orientation=orientation,
     )
     system = TwoBodySystem(m_primary=m_star, companion=companion)
@@ -65,7 +65,7 @@ def test_jit_full_pipeline() -> None:
         eccentricity=0.2,
         m_total=m_star + Q(1.0, "Mjup"),
         m_body=Q(1.0, "Mjup"),
-        t_peri=Q(0.0, "yr"),
+        time_peri=Q(0.0, "yr"),
     )
     system = TwoBodySystem(m_primary=m_star, companion=companion)
 

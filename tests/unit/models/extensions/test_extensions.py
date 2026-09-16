@@ -28,7 +28,7 @@ class TestJitter:
         assert isinstance(Jitter(), AbstractExtension)
 
     def test_extra_params(self):
-        j = Jitter(param_unit="km/s")
+        j = Jitter(obs_unit="km/s")
         params = j.extra_params()
         assert len(params) == 1
         assert params[0].name == "jitter"
@@ -62,7 +62,7 @@ class TestJitter:
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         )
-        jitter_ext = Jitter(param_unit="km/s")
+        jitter_ext = Jitter(obs_unit="km/s")
         linear_priors = {
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
@@ -108,7 +108,7 @@ class TestJitter:
             "rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "v_sys": QD(dist.Normal(0.0, 10.0), "km/s"),
         }
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         nl = {
             "period": Q(100.0, "day"),
             "eccentricity": jnp.float32(0.3),
@@ -160,7 +160,7 @@ class TestMonomialTrend:
             time=Q([10.0, 20.0, 30.0], "day"),
             rv=Q([1.0, -2.0, 0.5], "km/s"),
             rv_err=Q([0.5, 0.5, 0.5], "km/s"),
-            t_ref=Q(20.0, "day"),
+            time_ref=Q(20.0, "day"),
         )
         t = MonomialTrend(order=2, time_unit="day")
         X = jnp.ones((3, 2))  # base design matrix
@@ -182,7 +182,7 @@ class TestMonomialTrend:
             al_position_err=Q([0.01, 0.01, 0.01], "mas"),
             scan_angle=Q([0.0, jnp.pi / 2, jnp.pi], "rad"),
             parallax_factor=jnp.array([0.3, -0.1, 0.4]),
-            t_ref=Q(365.25, "day"),
+            time_ref=Q(365.25, "day"),
         )
         t = MonomialTrend(order=1, time_unit="yr", astrometry=True)
         X = jnp.ones((3, 6))
@@ -242,7 +242,9 @@ class TestMonomialTrend:
         )
 
         with pytest.raises(ValueError, match="trend_2"):
-            sampler.run(data, n_prior_samples=8, max_posterior_samples=2, seed=0)
+            sampler.run(
+                data, n_prior_samples=8, max_posterior_samples=2, key=jax.random.key(0)
+            )
 
 
 # ======================================================================
@@ -358,7 +360,7 @@ class TestMultiSurveyOffset:
         }
         key = jax.random.PRNGKey(42)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=linear_prior_off
+            nl, data, key=key, linear_priors=linear_prior_off
         )
         assert "espresso" in samples
         assert "rv_semiamp" in samples
@@ -387,7 +389,7 @@ class TestCombinedExtensions:
         }
         model = RVModel(
             extensions=(
-                Jitter(param_unit="km/s"),
+                Jitter(obs_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
             ),
         )
@@ -430,7 +432,7 @@ class TestCombinedExtensions:
         }
         model = RVModel(
             extensions=(
-                Jitter(param_unit="km/s"),
+                Jitter(obs_unit="km/s"),
                 MonomialTrend(order=1, time_unit="day"),
                 MultiSurveyOffset(indicator, ("other_surv",), "km/s"),
             ),
@@ -449,7 +451,7 @@ class TestCombinedExtensions:
         # Sample conditional
         key = jax.random.PRNGKey(0)
         samples = model.sample_conditional_linear(
-            nl, key, data, linear_priors=linear_prior_all
+            nl, data, key=key, linear_priors=linear_prior_all
         )
         assert set(samples) == {"rv_semiamp", "v_sys", "trend_1", "other_surv"}
         assert all(jnp.isfinite(v) for v in samples.values())

@@ -18,7 +18,7 @@ import numpy as np
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
-from harv.custom_types import NAngle, NFloatArray, NTime, NVelocity, ScalarQTime
+from harv.custom_types import NAngle, NFloatArray, NSpeed, NTime, ScalarQTime
 
 
 class AbstractData(eqx.Module):
@@ -35,21 +35,21 @@ class AbstractData(eqx.Module):
 
     _: KW_ONLY
 
-    t_ref: ScalarQTime | None = None
+    time_ref: ScalarQTime | None = None
     """Reference epoch. If None, uses mean observation time."""
 
     def __check_init__(self) -> None:
-        """Compute t_ref from mean time if not provided."""
-        if self.t_ref is None:
-            # We use np.mean so t_ref is a plain Python float wrapped in Q.
+        """Compute time_ref from mean time if not provided."""
+        if self.time_ref is None:
+            # We use np.mean so time_ref is a plain Python float wrapped in Q.
             # This avoids placing a JAX-traced array in a static metadata field
             # downstream.
             time_unit = str(self.time.unit)
-            t_mean = float(np.mean(np.asarray(ustrip(time_unit, self.time))))
-            object.__setattr__(self, "t_ref", Q(t_mean, time_unit))
+            time_mean = float(np.mean(np.asarray(ustrip(time_unit, self.time))))
+            object.__setattr__(self, "time_ref", Q(time_mean, time_unit))
 
     @property
-    def n_times(self) -> int:
+    def n_obs(self) -> int:
         """Number of times / epochs / observations."""
         return len(self.time)
 
@@ -57,7 +57,7 @@ class AbstractData(eqx.Module):
         """Return a new dataset with observations sliced along the time axis.
 
         Fields whose shape matches ``self.time.shape`` are sliced; scalar fields
-        (e.g. ``t_ref``) are passed through unchanged.  Integer keys are converted
+        (e.g. ``time_ref``) are passed through unchanged.  Integer keys are converted
         to length-1 slices so that all arrays remain 1-d.
 
         Parameters
@@ -78,9 +78,9 @@ class AbstractData(eqx.Module):
         ...     rv=Q([1.0, -2.0, 0.5], "km/s"),
         ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
         ... )
-        >>> data[:2].n_times
+        >>> data[:2].n_obs
         2
-        >>> data[0].n_times
+        >>> data[0].n_obs
         1
         """
         idx = slice(key, key + 1) if isinstance(key, int) else key
@@ -122,7 +122,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
     ...     scan_angle=Q([0.5, 1.2, 2.8], "rad"),
     ...     parallax_factor=jnp.array([0.3, -0.1, 0.4]),
     ... )
-    >>> data.n_times
+    >>> data.n_obs
     3
     """
 
@@ -147,7 +147,7 @@ class GaiaAstrometryData(AbstractAstrometryData):
         *,
         al_unit: str | None = None,
         add_labels: bool = True,
-        relative_to_t_ref: bool = False,
+        relative_to_time_ref: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Plot along-scan residuals vs time.
@@ -161,8 +161,8 @@ class GaiaAstrometryData(AbstractAstrometryData):
             Display unit for the along-scan position.  Defaults to the data's own unit.
         add_labels
             Add axis labels.
-        relative_to_t_ref
-            Plot time relative to ``t_ref``.
+        relative_to_time_ref
+            Plot time relative to ``time_ref``.
         **kwargs
             Passed to ``ax.errorbar()``.  Defaults can be overridden.
 
@@ -197,8 +197,8 @@ class GaiaAstrometryData(AbstractAstrometryData):
             ax=ax,
             time_unit=str(self.time.unit),
             # obs_unit=al_unit,
-            t_ref=self.t_ref,
-            relative_to_t_ref=relative_to_t_ref,
+            time_ref=self.time_ref,
+            relative_to_time_ref=relative_to_time_ref,
             ylabel=f"AL position [{al_unit}]",
             add_labels=add_labels,
             **kwargs,
@@ -237,17 +237,17 @@ class RVData(AbstractData):
     ...     rv=Q([1.0, -2.0, 0.5], "km/s"),
     ...     rv_err=Q([0.5, 0.5, 0.5], "km/s"),
     ... )
-    >>> data.n_times
+    >>> data.n_obs
     3
     """
 
     _obs_name: ClassVar[str] = "rv"
     _err_name: ClassVar[str] = "rv_err"
 
-    rv: NVelocity
+    rv: NSpeed
     """Radial velocities."""
 
-    rv_err: NVelocity
+    rv_err: NSpeed
     """Radial velocity uncertainties."""
 
     def plot(
@@ -256,7 +256,7 @@ class RVData(AbstractData):
         *,
         rv_unit: str | None = None,
         add_labels: bool = True,
-        relative_to_t_ref: bool = False,
+        relative_to_time_ref: bool = False,
         phase_fold: Any | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -271,13 +271,13 @@ class RVData(AbstractData):
             Display unit for the RV axis.  Defaults to the data's own unit.
         add_labels
             Add axis labels.
-        relative_to_t_ref
-            Plot time relative to ``t_ref``.  Mutually exclusive with
+        relative_to_time_ref
+            Plot time relative to ``time_ref``.  Mutually exclusive with
             ``phase_fold``.
         phase_fold
             If given, fold observations to orbital phase using this period:
-            x = (time - t_ref) / phase_fold mod 1.  Mutually exclusive with
-            ``relative_to_t_ref``.
+            x = (time - time_ref) / phase_fold mod 1.  Mutually exclusive with
+            ``relative_to_time_ref``.
         **kwargs
             Passed to ``ax.errorbar()``.  Defaults can be overridden.
 
@@ -302,8 +302,8 @@ class RVData(AbstractData):
         """
         from harv.plot import plot_timeseries_errorbar  # noqa: PLC0415 - circular imp.
 
-        if phase_fold is not None and relative_to_t_ref:
-            msg = "phase_fold and relative_to_t_ref are mutually exclusive"
+        if phase_fold is not None and relative_to_time_ref:
+            msg = "phase_fold and relative_to_time_ref are mutually exclusive"
             raise ValueError(msg)
 
         rv_unit = rv_unit or str(self.rv.unit)
@@ -314,8 +314,8 @@ class RVData(AbstractData):
             ax=ax,
             time_unit=str(self.time.unit),
             obs_unit=rv_unit,
-            t_ref=self.t_ref,
-            relative_to_t_ref=relative_to_t_ref,
+            time_ref=self.time_ref,
+            relative_to_time_ref=relative_to_time_ref,
             phase_fold=phase_fold,
             ylabel=f"RV [{rv_unit}]",
             add_labels=add_labels,
