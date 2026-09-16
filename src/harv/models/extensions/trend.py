@@ -68,27 +68,27 @@ class MonomialTrend(AbstractExtension):
         self,
         X: jax.Array,
         data: Any,
-        nl_values: dict[str, Any],  # noqa: ARG002
+        nonlinear_values: dict[str, Any],  # noqa: ARG002
     ) -> jax.Array:
         """Append trend columns to the design matrix.
 
         For RV (``astrometry=False``):
-            Columns are ``(t - t_ref)^k`` for ``k = 1..order``.
+            Columns are ``(t - time_ref)^k`` for ``k = 1..order``.
 
         For Gaia astrometry (``astrometry=True``):
             Two columns per order:
             ``sin(psi) * dt^(k+1)`` and ``cos(psi) * dt^(k+1)``
-            where ``dt = (t - t_ref)`` and ``psi`` is the scan angle.
+            where ``dt = (t - time_ref)`` and ``psi`` is the scan angle.
             The exponent ``k + 1`` avoids degeneracy with the base
             proper-motion (``dt^1``) columns.
 
-        The data object must have ``time`` and ``t_ref`` attributes (and
+        The data object must have ``time`` and ``time_ref`` attributes (and
         ``scan_angle`` for astrometry mode).
         """
         if self.time_unit:
-            dt = ustrip(self.time_unit, data.time - data.t_ref)
+            dt = ustrip(self.time_unit, data.time - data.time_ref)
         else:
-            dt = jnp.asarray(ustrip(AllowValue, "", data.time - data.t_ref))
+            dt = jnp.asarray(ustrip(AllowValue, "", data.time - data.time_ref))
 
         if self.astrometry:
             scan_angle = jnp.asarray(ustrip("rad", data.scan_angle))

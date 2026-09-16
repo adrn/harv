@@ -95,7 +95,7 @@ class AbstractExtension(eqx.Module):
         self,
         X: jax.Array,
         data: AbstractData | None,  # noqa: ARG002
-        nl_values: dict[str, Any],  # noqa: ARG002
+        nonlinear_values: dict[str, Any],  # noqa: ARG002
     ) -> jax.Array:
         """Optionally append columns to the design matrix.
 
@@ -105,7 +105,7 @@ class AbstractExtension(eqx.Module):
             Current design matrix (base + earlier extensions).
         data
             Observation data (unit-stripped times, etc. accessed via helpers).
-        nl_values
+        nonlinear_values
             Current nonlinear parameter values (unit-stripped scalars).
 
         Returns
@@ -119,7 +119,7 @@ class AbstractExtension(eqx.Module):
         self,
         cov: jax.Array,
         data: AbstractData | None,  # noqa: ARG002
-        nl_values: dict[str, Any],  # noqa: ARG002
+        nonlinear_values: dict[str, Any],  # noqa: ARG002
     ) -> jax.Array:
         """Optionally modify the data covariance matrix.
 
@@ -131,7 +131,7 @@ class AbstractExtension(eqx.Module):
             structure. shape (n_obs,) or (n_obs, n_obs)
         data
             Observation data.
-        nl_values
+        nonlinear_values
             Current nonlinear parameter values (unit-stripped scalars).
 
         Returns

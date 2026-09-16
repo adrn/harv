@@ -4,6 +4,7 @@ These tests verify that the API patterns demonstrated in api.py work end-to-end,
 from data creation through sampling to analysis.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from unxt import Q
@@ -36,8 +37,8 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     semimajor_axis = 1.0  # mas
 
     # Observation times
-    t_ref = Q(2000.0, "day")
-    times = Q(np.sort(rng.uniform(0, 1000, n_obs)), "day") + t_ref
+    time_ref = Q(2000.0, "day")
+    times = Q(np.sort(rng.uniform(0, 1000, n_obs)), "day") + time_ref
 
     # Random scan angles
     scan_angle = Q(rng.uniform(0, 2 * np.pi, n_obs), "rad")
@@ -47,7 +48,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
 
     # Create simple along-scan positions
     # Just use a simplified model: linear motion + simple orbital signal
-    dt_yr = (times - t_ref).to_value("yr")
+    dt_yr = (times - time_ref).to_value("yr")
     cos_psi = np.cos(scan_angle.to_value("rad"))
     sin_psi = np.sin(scan_angle.to_value("rad"))
 
@@ -67,7 +68,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
     )
 
     # Add simple orbital signal
-    phase = 2 * np.pi * (times - t_ref).to_value("day") / period
+    phase = 2 * np.pi * (times - time_ref).to_value("day") / period
     y_orbit = semimajor_axis * (cos_psi * np.cos(phase) + sin_psi * np.sin(phase))
 
     # Add noise
@@ -81,7 +82,7 @@ def simulate_gaia_data_simple(seed: int = 42, n_obs: int = 50) -> GaiaAstrometry
         al_position_err=al_error,
         scan_angle=scan_angle,
         parallax_factor=parallax_factor,
-        t_ref=t_ref,
+        time_ref=time_ref,
     )
 
 
@@ -93,10 +94,10 @@ class TestBasicAPI:
         data = simulate_gaia_data_simple(seed=42, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=42)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(42))
 
         assert samples.n_samples > 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
         period = samples["period"]
         assert period.unit == "day"
@@ -113,7 +114,10 @@ class TestBasicAPI:
 
         max_samples = 64
         samples = sampler.run(
-            data, n_prior_samples=10_000, max_posterior_samples=max_samples, seed=43
+            data,
+            n_prior_samples=10_000,
+            max_posterior_samples=max_samples,
+            key=jax.random.key(43),
         )
         assert samples.n_samples <= max_samples
 
@@ -130,7 +134,7 @@ class TestBasicAPI:
 
         data = simulate_gaia_data_simple(seed=44, n_obs=30)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=5_000, seed=44)
+        samples = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(44))
 
         period = samples["period"]
         assert np.all(period.to_value("day") >= 10.0)
@@ -142,8 +146,8 @@ class TestBasicAPI:
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples1 = sampler.run(data, n_prior_samples=5_000, seed=100)
-        samples2 = sampler.run(data, n_prior_samples=5_000, seed=100)
+        samples1 = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(100))
+        samples2 = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(100))
 
         assert samples1.n_samples == samples2.n_samples
         np.testing.assert_array_equal(
@@ -156,8 +160,8 @@ class TestBasicAPI:
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples1 = sampler.run(data, n_prior_samples=5_000, seed=200)
-        samples2 = sampler.run(data, n_prior_samples=5_000, seed=201)
+        samples1 = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(200))
+        samples2 = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(201))
 
         assert not np.allclose(samples1["eccentricity"], samples2["eccentricity"])
 
@@ -170,7 +174,7 @@ class TestSamplesContainer:
         data = simulate_gaia_data_simple(seed=50, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=50)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(50))
 
         # Test nonlinear parameter access
         assert "period" in samples
@@ -189,17 +193,19 @@ class TestSamplesContainer:
         assert "semi_major_axis" in samples
 
         # Test derived quantity access
-        assert "log_period" in samples
+        assert "log10_period" in samples
         period = samples["period"]
-        log_period = samples["log_period"]
-        np.testing.assert_allclose(period.to_value("day"), 10.0**log_period, rtol=1e-5)
+        log10_period = samples["log10_period"]
+        np.testing.assert_allclose(
+            period.to_value("day"), 10.0**log10_period, rtol=1e-5
+        )
 
     def test_unit_conversion(self):
         """Test that units are properly restored when accessing parameters."""
         data = simulate_gaia_data_simple(seed=51, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=51)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(51))
 
         # Angles should have radian units
         arg_peri = samples["arg_peri"]
@@ -226,7 +232,7 @@ class TestSamplesContainer:
         data = simulate_gaia_data_simple(seed=52, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=52)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(52))
 
         # These should be dimensionless (plain arrays or Q with unit='')
         for key in ("eccentricity", "phase_peri", "cos_i"):
@@ -234,16 +240,16 @@ class TestSamplesContainer:
             if hasattr(val, "unit"):
                 assert val.unit == ""
 
-        log_period = samples["log_period"]
-        if hasattr(log_period, "unit"):
-            assert log_period.unit == ""
+        log10_period = samples["log10_period"]
+        if hasattr(log10_period, "unit"):
+            assert log10_period.unit == ""
 
     def test_len_and_n_samples(self):
         """Test len() and n_samples property."""
         data = simulate_gaia_data_simple(seed=53, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=53)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(53))
 
         assert len(samples) == samples.n_samples
         assert samples.n_samples > 0
@@ -253,12 +259,12 @@ class TestSamplesContainer:
         data = simulate_gaia_data_simple(seed=54, n_obs=30)
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
-        samples = sampler.run(data, n_prior_samples=10_000, seed=54)
+        samples = sampler.run(data, n_prior_samples=10_000, key=jax.random.key(54))
 
         repr_str = repr(samples)
         assert "Samples(" in repr_str
         assert "n_samples=" in repr_str
-        assert "data_type='GaiaAstrometryModel'" in repr_str
+        assert "model_type='GaiaAstrometryModel'" in repr_str
         assert "parameters=" in repr_str
 
 
@@ -271,7 +277,7 @@ class TestEdgeCases:
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples = sampler.run(data, n_prior_samples=5_000, seed=60)
+        samples = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(60))
         assert samples.n_samples >= 0
 
     def test_small_batch_size(self):
@@ -281,7 +287,7 @@ class TestEdgeCases:
 
         sampler = RejectionSampler(prior, GaiaAstrometryModel(), batch_size=1000)
 
-        samples = sampler.run(data, n_prior_samples=5_000, seed=61)
+        samples = sampler.run(data, n_prior_samples=5_000, key=jax.random.key(61))
         assert samples.n_samples >= 0
 
     def test_no_accepted_samples(self):
@@ -290,10 +296,10 @@ class TestEdgeCases:
         prior = hm.StandardGaiaAstrometry().default_prior(**_ASTRO_KWARGS)
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
-        samples = sampler.run(data, n_prior_samples=10, seed=62)
+        samples = sampler.run(data, n_prior_samples=10, key=jax.random.key(62))
 
         assert samples.n_samples >= 0
-        assert samples.data_type == "GaiaAstrometryModel"
+        assert samples.model_type == "GaiaAstrometryModel"
 
 
 class TestAcceptanceRate:
@@ -306,7 +312,7 @@ class TestAcceptanceRate:
         sampler = RejectionSampler(prior, GaiaAstrometryModel())
 
         n_prior = 50_000
-        samples = sampler.run(data, n_prior_samples=n_prior, seed=70)
+        samples = sampler.run(data, n_prior_samples=n_prior, key=jax.random.key(70))
 
         acceptance_rate = samples.n_samples / n_prior
 

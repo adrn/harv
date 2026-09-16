@@ -8,6 +8,7 @@ using the constructor. NumpyroSampler.run() returns a Samples object.
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -21,7 +22,7 @@ from harv.distributions import QD
 from harv.kepler.orbits import (
     astrometric_orbit_at_times,
     rv_at_times,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
 )
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions import Jitter, MonomialTrend
@@ -64,8 +65,8 @@ def rv_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        model_type="RVModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -91,8 +92,8 @@ def astro_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0},
+        model_type="GaiaAstrometryModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -120,8 +121,8 @@ def combined_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="JointModel",
-        metadata={"t_ref": 0.0},
+        model_type="JointModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -139,7 +140,7 @@ def empty_rv_samples() -> Samples:
             "rv_semiamp": Q(jnp.array([]), "km/s"),
             "v_sys": Q(jnp.array([]), "km/s"),
         },
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={},
     )
 
@@ -176,7 +177,7 @@ class TestRvAtTimes:
             times,
             period=Q(200.0, "day"),
             eccentricity=0.0,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(0.0, "rad"),
             rv_semiamp=Q(10.0, "km/s"),
             v_sys=Q(0.0, "km/s"),
@@ -190,7 +191,7 @@ class TestRvAtTimes:
             times,
             period=Q(200.0, "day"),
             eccentricity=0.3,
-            t_peri=Q(50.0, "day"),
+            time_peri=Q(50.0, "day"),
             arg_peri=Q(1.2, "rad"),
             rv_semiamp=Q(8.0, "km/s"),
             v_sys=Q(-5.0, "km/s"),
@@ -203,7 +204,7 @@ class TestRvAtTimes:
         kwargs = {
             "period": Q(200.0, "day"),
             "eccentricity": 0.0,
-            "t_peri": Q(0.0, "day"),
+            "time_peri": Q(0.0, "day"),
             "arg_peri": Q(0.0, "rad"),
             "rv_semiamp": Q(10.0, "km/s"),
         }
@@ -222,7 +223,7 @@ class TestAstrometricOrbitAtTimes:
             times,
             period=Q(300.0, "day"),
             eccentricity=0.3,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(1.2, "rad"),
             cos_i=0.5,
             lon_asc_node=Q(0.8, "rad"),
@@ -239,7 +240,7 @@ class TestAstrometricOrbitAtTimes:
             times,
             period=Q(1.0, "day"),
             eccentricity=0.0,
-            t_peri=Q(0.0, "day"),
+            time_peri=Q(0.0, "day"),
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -251,20 +252,20 @@ class TestAstrometricOrbitAtTimes:
     def test_eccentric_face_on_orbit_pericenter_distance(self):
         """Face-on eccentric orbit: r(pericenter) = a(1-e), r(apocenter) = a(1+e).
 
-        At pericenter (true anomaly f=0, i.e. t=t_peri), the distance from
+        At pericenter (true anomaly f=0, i.e. t=time_peri), the distance from
         the focus should be a*(1-e). At apocenter (f=pi), a*(1+e). This
         verifies the r/a = (1-e^2)/(1+e*cos f) factor is applied.
         """
         e = 0.6
         a = 5.0  # mas
         period = Q(100.0, "day")
-        # At t_peri, f=0, so r = a(1-e)
-        t_peri_val = Q(0.0, "day")
+        # At time_peri, f=0, so r = a(1-e)
+        time_peri_val = Q(0.0, "day")
         dra_peri, ddec_peri = astrometric_orbit_at_times(
             Q(np.array([0.0]), "day"),
             period=period,
             eccentricity=e,
-            t_peri=t_peri_val,
+            time_peri=time_peri_val,
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -280,7 +281,7 @@ class TestAstrometricOrbitAtTimes:
             Q(np.array([50.0]), "day"),
             period=period,
             eccentricity=e,
-            t_peri=t_peri_val,
+            time_peri=time_peri_val,
             arg_peri=Q(0.0, "rad"),
             cos_i=1.0,  # face-on
             lon_asc_node=Q(0.0, "rad"),
@@ -306,7 +307,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=0,
+            key=jax.random.key(0),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -320,7 +321,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=1,
+            key=jax.random.key(1),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -335,7 +336,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=2,
+            key=jax.random.key(2),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -350,7 +351,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=3,
+            key=jax.random.key(3),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -359,18 +360,18 @@ class TestNumpyroSamplerRun:
         assert result.n_samples == 10  # 2 chains x 5 samples
 
     def test_data_type_preserved(self, rv_samples, rv_sampler_and_data):
-        """Output data_type matches the model's data_type."""
+        """Output model_type matches the model's model_type."""
         sampler, data = rv_sampler_and_data
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=4,
+            key=jax.random.key(4),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
             chain_method="sequential",
         )
-        assert result.data_type == "RVModel"
+        assert result.model_type == "RVModel"
 
     def test_return_logprobs(self, rv_samples, rv_sampler_and_data):
         """return_logprobs populates ln_likelihood / ln_prior on the output."""
@@ -378,7 +379,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=5,
+            key=jax.random.key(5),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -397,7 +398,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=6,
+            key=jax.random.key(6),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -413,7 +414,7 @@ class TestNumpyroSamplerRun:
             sampler.run(
                 data,
                 init_samples=empty_rv_samples,
-                seed=5,
+                key=jax.random.key(5),
                 num_chains=2,
                 num_warmup=5,
                 num_samples=5,
@@ -425,7 +426,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=6,
+            key=jax.random.key(6),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -451,7 +452,7 @@ class TestNumpyroSamplerRun:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=7,
+            key=jax.random.key(7),
             num_chains=2,
             num_warmup=5,
             num_samples=5,
@@ -472,7 +473,7 @@ class TestNumpyroSamplerRunFull:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=10,
+            key=jax.random.key(10),
             marginalized=False,
             num_chains=2,
             num_warmup=5,
@@ -487,7 +488,7 @@ class TestNumpyroSamplerRunFull:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=11,
+            key=jax.random.key(11),
             marginalized=False,
             num_chains=2,
             num_warmup=5,
@@ -524,7 +525,7 @@ class TestNumpyroSamplerRunExtraModel:
             sampler.run(
                 data,
                 init_samples=rv_samples,
-                seed=20,
+                key=jax.random.key(20),
                 extra_model=self._make_extra_model(),
                 num_chains=2,
                 num_warmup=5,
@@ -537,7 +538,7 @@ class TestNumpyroSamplerRunExtraModel:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=21,
+            key=jax.random.key(21),
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             num_chains=2,
@@ -553,7 +554,7 @@ class TestNumpyroSamplerRunExtraModel:
         result = sampler.run(
             data,
             init_samples=rv_samples,
-            seed=22,
+            key=jax.random.key(22),
             extra_model=self._make_extra_model(),
             extra_init_params={"K_scale": jnp.full(2, 5.0)},
             marginalized=True,
@@ -581,7 +582,7 @@ class TestNumpyroSamplerRunExtraModel:
             sampler.run(
                 data,
                 init_samples=rv_samples,
-                seed=23,
+                key=jax.random.key(23),
                 extra_model=bad_extra_model,
                 extra_init_params={"x": jnp.zeros(2)},
                 num_chains=2,
@@ -633,7 +634,7 @@ class TestNumpyroSamplerNonGaussianLinear:
         result = sampler.run(
             data,
             init_samples=astro_samples,
-            seed=30,
+            key=jax.random.key(30),
             num_chains=2,
             num_warmup=3,
             num_samples=3,
@@ -651,7 +652,7 @@ class TestNumpyroSamplerNonGaussianLinear:
         result = sampler.run(
             data,
             init_samples=astro_samples,
-            seed=31,
+            key=jax.random.key(31),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -715,7 +716,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         }
 
         astro_model = GaiaAstrometryModel()
-        rv_model_inst = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        rv_model_inst = RVModel(extensions=(Jitter(obs_unit="km/s"),))
 
         joint = JointModel.for_rv_and_gaia(
             components={"astro": astro_model, "rv": rv_model_inst}
@@ -771,8 +772,8 @@ class TestNumpyroSamplerCombinedWithJitter:
         return Samples(
             nonlinear=nonlinear,
             linear=linear,
-            data_type="combined",
-            metadata={"t_ref": 0.0},
+            model_type="combined",
+            metadata={"time_ref": 0.0},
         )
 
     def test_run_marginalized_completes(
@@ -783,7 +784,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=40,
+            key=jax.random.key(40),
             num_chains=1,
             num_warmup=3,
             num_samples=3,
@@ -806,7 +807,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=43,
+            key=jax.random.key(43),
             num_chains=2,
             num_warmup=3,
             num_samples=3,
@@ -823,7 +824,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=41,
+            key=jax.random.key(41),
             num_chains=2,
             num_warmup=3,
             num_samples=4,
@@ -841,7 +842,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=44,
+            key=jax.random.key(44),
             num_chains=num_chains,
             num_warmup=3,
             num_samples=num_samples,
@@ -870,7 +871,7 @@ class TestNumpyroSamplerCombinedWithJitter:
         result = sampler.run(
             data,
             init_samples=combined_samples_with_jitter,
-            seed=42,
+            key=jax.random.key(42),
             marginalized=False,
             num_chains=1,
             num_warmup=3,
@@ -955,7 +956,7 @@ class TestPlotRV:
         jitter_samples = Samples(
             nonlinear={**rv_samples.nonlinear, "jitter": Q(jnp.ones(N), "km/s")},
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
 
@@ -963,7 +964,7 @@ class TestPlotRV:
         ax_jitter = plot_rv(
             jitter_samples,
             rv_data,
-            model=RVModel(extensions=(Jitter(param_unit="km/s"),)),
+            model=RVModel(extensions=(Jitter(obs_unit="km/s"),)),
             n_samples=1,
         )
 
@@ -999,7 +1000,7 @@ class TestPlotRV:
         samples = Samples(
             nonlinear=rv_samples.nonlinear,
             linear=linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         ax = plot_rv(samples, SystemData(**rv_datasets), n_samples=1)
@@ -1021,7 +1022,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1070,7 +1071,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1114,7 +1115,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1159,7 +1160,7 @@ class TestPlotRV:
                 **rv_samples.linear,
                 "trend_1": Q(jnp.ones(N) * 0.25, "km/s"),
             },
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         trend = MonomialTrend(order=1, time_unit="day", obs_unit="km/s")
@@ -1194,7 +1195,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1251,7 +1252,7 @@ class TestPlotRV:
                 "gp_sigma": Q(jnp.ones(N) * 1.0, "km/s"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
         gp = GP(
@@ -1282,7 +1283,7 @@ class TestPlotRV:
         plt.close("all")
 
     def test_plot_uses_explicit_time_grid(self, rv_samples):
-        """Supplying time_grid bypasses the default get_t_grid path."""
+        """Supplying time_grid bypasses the default get_time_grid path."""
         times = Q(jnp.array([0.0, 50.0, 100.0]), "day")
         rv = Q(jnp.zeros(3), "km/s")
         rv_err = Q(jnp.ones(3), "km/s")
@@ -1290,7 +1291,8 @@ class TestPlotRV:
         time_grid = Q(jnp.array([2.0, 4.0, 8.0, 16.0]), "day")
 
         with patch(
-            "harv.plot.get_t_grid", side_effect=AssertionError("should not be called")
+            "harv.plot.get_time_grid",
+            side_effect=AssertionError("should not be called"),
         ):
             ax = plot_rv(rv_samples, rv_data, n_samples=1, time_grid=time_grid)
 
@@ -1320,7 +1322,7 @@ class TestPlotRV:
                 "gp_scale": Q(jnp.ones(N) * 10.0, "day"),
             },
             linear=rv_samples.linear,
-            data_type=rv_samples.data_type,
+            model_type=rv_samples.model_type,
             metadata=rv_samples.metadata,
         )
 
@@ -1354,7 +1356,7 @@ class TestPlotRV:
         with (
             patch("tinygp.GaussianProcess", FakeGaussianProcess),
             patch(
-                "harv.plot.get_t_grid",
+                "harv.plot.get_time_grid",
                 return_value=Q(jnp.linspace(-10.0, 110.0, 5000), "day"),
             ),
         ):
@@ -1524,7 +1526,7 @@ class TestPlotGaiaAstrometry:
                 "trend_ra_1": Q(jnp.array([0.5]), "mas"),
                 "trend_dec_1": Q(jnp.array([-0.3]), "mas"),
             },
-            data_type=sample.data_type,
+            model_type=sample.model_type,
             metadata=sample.metadata,
         )
         fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
@@ -1541,12 +1543,12 @@ class TestPlotGaiaAstrometry:
 
     def test_astrometry_jitter_widens_error_bars(self, astro_samples, gaia_data):
         """Jitter on the astrometry model widens the residual-panel error bars."""
-        jitter = Jitter(param_unit="mas")
+        jitter = Jitter(obs_unit="mas")
         sample = astro_samples[0]
         sample_with_jitter = Samples(
             nonlinear={**sample.nonlinear, "jitter": Q(jnp.array([0.5]), "mas")},
             linear=sample.linear,
-            data_type=sample.data_type,
+            model_type=sample.model_type,
             metadata=sample.metadata,
         )
         fig_plain = plot_gaia_astrometry(sample, data=gaia_data)
@@ -1571,19 +1573,19 @@ class TestPlotGaiaSkyOrbit:
 
     def test_returns_figure_no_data(self, astro_samples):
         """Without data, only the orbit ellipse is drawn."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=None)
+        fig = plot_gaia_sky_orbit(astro_samples[0], None, self._model())
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_returns_figure_with_data(self, astro_samples, gaia_data):
         """With data, scan-direction segments are drawn at each epoch."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0], data=gaia_data)
+        fig = plot_gaia_sky_orbit(astro_samples[0], gaia_data, self._model())
         assert hasattr(fig, "savefig")
         plt.close("all")
 
     def test_equal_aspect(self, astro_samples):
         """The sky-orbit axes use equal aspect ratio."""
-        fig = plot_gaia_sky_orbit(self._model(), astro_samples[0])
+        fig = plot_gaia_sky_orbit(astro_samples[0], model=self._model())
         assert fig.axes[0].get_aspect() != "auto"
         plt.close("all")
 
@@ -1620,7 +1622,7 @@ _A = 2.5  # mas
 @pytest.fixture
 def ti_samples() -> Samples:
     """Samples with Thiele-Innes linear params built from known Campbell elements."""
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(_ARG_PERI),
         jnp.sin(_ARG_PERI),
         jnp.cos(_LON_ASC_NODE),
@@ -1646,8 +1648,8 @@ def ti_samples() -> Samples:
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0},
+        model_type="GaiaAstrometryModel",
+        metadata={"time_ref": 0.0},
     )
 
 
@@ -1690,7 +1692,7 @@ class TestThieleInnesToCampbell:
         arg_peri_out = ustrip("rad", result.nonlinear["arg_peri"])[0]
         lon_asc_node_out = ustrip("rad", result.nonlinear["lon_asc_node"])[0]
         cos_i_out = ustrip("", result.nonlinear["cos_i"])[0]
-        A_rt, B_rt, *_ = thiele_innes_ABFG(
+        A_rt, B_rt, *_ = thiele_innes_unit(
             jnp.cos(arg_peri_out),
             jnp.sin(arg_peri_out),
             jnp.cos(lon_asc_node_out),
@@ -1698,7 +1700,7 @@ class TestThieleInnesToCampbell:
             cos_i_out,
         )
         # Must recover original unit TI constants (a0 cancels)
-        A, B, *_ = thiele_innes_ABFG(
+        A, B, *_ = thiele_innes_unit(
             jnp.cos(_ARG_PERI),
             jnp.sin(_ARG_PERI),
             jnp.cos(_LON_ASC_NODE),
@@ -1722,7 +1724,7 @@ class TestThieleInnesToCampbell:
                 "ti_A": Q(jnp.zeros(3), "mas"),
                 "ti_B": Q(jnp.zeros(3), "mas"),
             },
-            data_type="GaiaAstrometryModel",
+            model_type="GaiaAstrometryModel",
         )
         with pytest.raises(RuntimeError, match="ti_"):
             samples.thiele_innes_to_campbell()

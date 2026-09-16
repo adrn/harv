@@ -11,7 +11,7 @@ import jax
 import pytest
 from grid import TOP_K, Cell, build_data, build_prior_and_model
 
-# The sampler warns when `logZ_int_ess < 3` -- the library did not resolve this
+# The sampler warns when `ln_Z_int_ess < 3` -- the library did not resolve this
 # posterior. Some cells (small M, sharply peaked likelihood) will trip it by
 # construction, and `filterwarnings = ["error"]` is set repo-wide. These
 # benchmarks measure throughput, not resolution quality, so the warning is noise
@@ -48,7 +48,7 @@ def test_run_with_samples(
                 data,
                 prior_cache,
                 top_k=TOP_K,
-                seed=0,
+                key=jax.random.key(0),
                 randomize_prior_order=False,
                 # Uniform across cells, so they stay comparable. Required for
                 # EcoswEsinwRV, whose default prior puts ~21% of draws outside the
@@ -76,7 +76,7 @@ def test_run_with_samples(
         result.metadata.get("weight_captured", float("nan"))
     )
     benchmark.extra_info["evidence_ess"] = float(
-        result.metadata.get("logZ_int_ess", float("nan"))
+        result.metadata.get("ln_Z_int_ess", float("nan"))
     )
 
     # pedantic: no calibration, explicit warmup. The automatic mode would size

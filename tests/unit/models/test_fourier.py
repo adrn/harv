@@ -114,7 +114,7 @@ class TestDesignMatrix:
         model = hm.RVModel(parameterization=hm.FourierRV(n_terms=3))
         P = Q(37.0, "day")
         X = model._base_design_matrix({"period": P}, data)
-        t = ustrip("day", data.time - data.t_ref)
+        t = ustrip("day", data.time - data.time_ref)
         M = 2.0 * np.pi * t / 37.0
         expected = np.stack(
             [
@@ -140,8 +140,8 @@ class TestDesignMatrix:
         )
         P = Q(100.0, "day")
         X = np.asarray(model._base_design_matrix({"period": P}, data))
-        t = ustrip("day", data.time - data.t_ref)
-        dt_yr = ustrip("yr", data.time - data.t_ref)
+        t = ustrip("day", data.time - data.time_ref)
+        dt_yr = ustrip("yr", data.time - data.time_ref)
         psi = ustrip("rad", data.scan_angle)
         sp, cp = np.sin(psi), np.cos(psi)
         M = 2.0 * np.pi * t / 100.0
@@ -263,14 +263,14 @@ class TestSamplerIntegration:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             samples = harv.RejectionSampler(prior, hm.RVModel(parameterization=p)).run(
-                data, n_prior_samples=50_000, seed=0
+                data, n_prior_samples=50_000, key=jax.random.key(0)
             )
         assert samples.n_samples > 0
         assert "period" in samples.nonlinear
         assert "cos_amp_1" in samples.linear
-        # Kepler-free samples: t_peri is not advertised (no phase_peri).
-        assert "t_peri" not in samples
-        assert "log_period" in samples
+        # Kepler-free samples: time_peri is not advertised (no phase_peri).
+        assert "time_peri" not in samples
+        assert "log10_period" in samples
 
     def test_vmap_and_jit_log_prob(self):
         data = _rv_data()

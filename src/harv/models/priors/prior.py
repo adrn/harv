@@ -26,7 +26,7 @@ from harv.models._helpers import (
 if TYPE_CHECKING:
     from harv.models.component import AbstractComponentModel
     from harv.models.joint import JointModel
-    from harv.models.parameterizations._base import AbstractParameterization
+    from harv.models.parameterizations.base import AbstractParameterization
     from harv.samplers.samples import Samples
 
 __all__ = ("HarvPrior",)
@@ -97,7 +97,7 @@ class HarvPrior(eqx.Module):
     # parameter has a matching entry.
     extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
 
-    def sample_nonlinear(self, key: jax.Array, n_samples: int) -> dict[str, Any]:
+    def sample_nonlinear(self, n_samples: int, *, key: jax.Array) -> dict[str, Any]:
         """Sample nonlinear parameters from priors.
 
         Parameters
@@ -143,9 +143,9 @@ class HarvPrior(eqx.Module):
 
     def sample(
         self,
-        key: jax.Array,
         n_samples: int,
         *,
+        key: jax.Array,
         model: "AbstractComponentModel | JointModel",
         return_logprobs: bool = False,
         marginalized_names: tuple[str, ...] | None = None,
@@ -222,7 +222,7 @@ class HarvPrior(eqx.Module):
         >>> samples = prior.sample(jax.random.key(0), 100, model=RVModel())
         >>> samples.n_samples
         100
-        >>> samples.data_type
+        >>> samples.model_type
         'RVModel'
         """
         # Local imports break the cycle: ``harv.samplers`` already imports
@@ -246,8 +246,10 @@ class HarvPrior(eqx.Module):
         )
 
         # 1. Base nonlinear orbital params (bare arrays).
-        key, nl_key = jr.split(key)
-        base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(nl_key, n_samples)
+        key, nonlinear_key = jr.split(key)
+        base_nonlinear: dict[str, jax.Array] = self.sample_nonlinear(
+            n_samples, key=nonlinear_key
+        )
 
         # 2. Extension nonlinear params (jitter, GP hypers, ...).
         extension_nonlinear: dict[str, jax.Array] = {}
@@ -300,7 +302,7 @@ class HarvPrior(eqx.Module):
         return Samples(
             nonlinear=nonlinear_q,
             linear=linear_q,
-            data_type=type(model).__name__,
+            model_type=type(model).__name__,
             linear_extension_names=linear_extension_names,
             ln_prior=ln_prior,
             ln_likelihood=None,

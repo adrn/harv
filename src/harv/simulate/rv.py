@@ -14,7 +14,7 @@ from harv.custom_types import ScalarQAngle, ScalarQSpeed, ScalarQTime
 from harv.data import RVData, SourceData
 from harv.kepler.orbits import rv_at_times
 
-__all__ = ["simulate_rv_multisurv_data", "simulate_rv_sb1_data"]
+__all__ = ("simulate_rv_multi_survey_data", "simulate_rv_sb1_data")
 
 
 def simulate_rv_sb1_data(
@@ -24,7 +24,7 @@ def simulate_rv_sb1_data(
     # Orbital parameters
     period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: ScalarQTime | None = None,
+    time_peri: ScalarQTime | None = None,
     arg_peri: ScalarQAngle | None = None,
     # RV parameters
     rv_semiamp: ScalarQSpeed | None = None,
@@ -32,7 +32,7 @@ def simulate_rv_sb1_data(
     # Uncertainty
     rv_err: ScalarQSpeed | None = None,
     # Reference time
-    t_ref: ScalarQTime | None = None,
+    time_ref: ScalarQTime | None = None,
     # Instrument
     instrument: str = "default",
 ) -> tuple[RVData, dict[str, Any]]:
@@ -55,7 +55,7 @@ def simulate_rv_sb1_data(
         Orbital period. If None, randomly drawn from [10, 1000] days.
     eccentricity
         Orbital eccentricity. If None, randomly drawn from [0, 0.7].
-    t_peri
+    time_peri
         Time of periastron passage. If None, randomly drawn from [0, period].
     arg_peri
         Argument of periastron omega. If None, randomly drawn from [0, 2pi].
@@ -66,7 +66,7 @@ def simulate_rv_sb1_data(
     rv_err
         RV measurement uncertainties (1-sigma). If None, randomly drawn from
         U(0.01, 0.5) km/s for each observation.
-    t_ref
+    time_ref
         Reference time. If None, randomly chosen.
     instrument
         Instrument name for the observations. Default: "default".
@@ -107,8 +107,8 @@ def simulate_rv_sb1_data(
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.7)
 
-    if t_peri is None:
-        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+    if time_peri is None:
+        time_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
 
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -125,19 +125,19 @@ def simulate_rv_sb1_data(
         # Broadcast scalar rv_err to per-observation array
         rv_err = Q(jnp.broadcast_to(ustrip(rv_err.unit, rv_err), (n_obs,)), rv_err.unit)
 
-    if t_ref is None:
-        t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
+    if time_ref is None:
+        time_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
     dt: AbstractQuantity = Q(
         jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
         baseline.unit,
     )
-    times = dt + t_ref
+    times = dt + time_ref
 
     # Compute RV model: RV(t) = K*[cos(omega + f) + e*cos(omega)] + v_0
     rv_true = rv_at_times(
-        times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys
+        times, period, eccentricity, time_peri, arg_peri, rv_semiamp, v_sys
     )
 
     # Add noise
@@ -148,7 +148,7 @@ def simulate_rv_sb1_data(
     true_params = {
         "period": period,
         "eccentricity": eccentricity,
-        "t_peri": t_peri,
+        "time_peri": time_peri,
         "arg_peri": arg_peri,
         "rv_semiamp": rv_semiamp,
         "v_sys": v_sys,
@@ -163,7 +163,7 @@ def simulate_rv_sb1_data(
     return data, true_params
 
 
-def simulate_rv_multisurv_data(  # noqa: C901
+def simulate_rv_multi_survey_data(  # noqa: C901
     instruments: dict[str, ScalarQSpeed | None],
     seed: int = 42,
     n_obs_per_instrument: int = 30,
@@ -171,13 +171,13 @@ def simulate_rv_multisurv_data(  # noqa: C901
     # Shared orbital parameters
     period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: ScalarQTime | None = None,
+    time_peri: ScalarQTime | None = None,
     arg_peri: ScalarQAngle | None = None,
     # Shared RV amplitude and systemic velocity
     rv_semiamp: ScalarQSpeed | None = None,
     v_sys: ScalarQSpeed | None = None,
     rv_err: ScalarQSpeed | None = None,
-    t_ref: ScalarQTime | None = None,
+    time_ref: ScalarQTime | None = None,
 ) -> tuple[SourceData, dict[str, Any]]:
     """Simulate multi-survey RV data with per-instrument zero-point offsets.
 
@@ -203,7 +203,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
         Orbital period. Randomly drawn if None.
     eccentricity
         Orbital eccentricity. Randomly drawn if None.
-    t_peri
+    time_peri
         Time of periastron passage. Randomly drawn if None.
     arg_peri
         Argument of periastron. Randomly drawn if None.
@@ -214,7 +214,7 @@ def simulate_rv_multisurv_data(  # noqa: C901
     rv_err
         Measurement uncertainty (same for all instruments and observations).
         Randomly drawn if None.
-    t_ref
+    time_ref
         Reference epoch. Randomly drawn if None.
 
     Returns
@@ -222,15 +222,15 @@ def simulate_rv_multisurv_data(  # noqa: C901
     source_data
         Multi-instrument RV data container.
     true_params
-        True parameter values: ``period``, ``eccentricity``, ``t_peri``,
+        True parameter values: ``period``, ``eccentricity``, ``time_peri``,
         ``arg_peri``, ``rv_semiamp``, ``v_sys``, and one entry per non-reference
         instrument named ``"offset_{name}"``.
 
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.simulate import simulate_rv_multisurv_data
-    >>> source_data, true_params = simulate_rv_multisurv_data(
+    >>> from harv.simulate import simulate_rv_multi_survey_data
+    >>> source_data, true_params = simulate_rv_multi_survey_data(
     ...     instruments={"keck": None, "espresso": Q(3.5, "km/s")},
     ...     seed=0,
     ...     n_obs_per_instrument=20,
@@ -252,8 +252,8 @@ def simulate_rv_multisurv_data(  # noqa: C901
         period = Q(rngs[1].uniform(10, 1000), "day")
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.7)
-    if t_peri is None:
-        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+    if time_peri is None:
+        time_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
     if rv_semiamp is None:
@@ -262,14 +262,14 @@ def simulate_rv_multisurv_data(  # noqa: C901
         v_sys = Q(rngs[6].normal(0, 20), "km/s")
     if rv_err is None:
         rv_err = Q(rngs[7].uniform(0.01, 0.5), "km/s")
-    if t_ref is None:
-        t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
+    if time_ref is None:
+        time_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     datasets: dict[str, RVData] = {}
     true_params: dict[str, Any] = {
         "period": period,
         "eccentricity": eccentricity,
-        "t_peri": t_peri,
+        "time_peri": time_peri,
         "arg_peri": arg_peri,
         "rv_semiamp": rv_semiamp,
         "v_sys": v_sys,
@@ -289,11 +289,11 @@ def simulate_rv_multisurv_data(  # noqa: C901
             ),
             baseline.unit,
         )
-        times = dt + t_ref
+        times = dt + time_ref
 
         rv_true = (
             rv_at_times(
-                times, period, eccentricity, t_peri, arg_peri, rv_semiamp, v_sys
+                times, period, eccentricity, time_peri, arg_peri, rv_semiamp, v_sys
             )
             + eff_offset
         )

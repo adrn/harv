@@ -5,6 +5,7 @@ mass-function / physical-orbit-size helpers and the optional per-sample
 log-probability storage.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -40,8 +41,8 @@ def _rv_samples(n=120, *, period=None, with_logprobs=False, seed=0):
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="RVModel",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        model_type="RVModel",
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
         **kwargs,
     )
 
@@ -68,8 +69,8 @@ def _astro_samples(n=60, seed=1):
     return Samples(
         nonlinear=nonlinear,
         linear=linear,
-        data_type="GaiaAstrometryModel",
-        metadata={"t_ref": 0.0, "t_ref_unit": "day"},
+        model_type="GaiaAstrometryModel",
+        metadata={"time_ref": 0.0, "time_ref_unit": "day"},
     )
 
 
@@ -151,17 +152,17 @@ class TestLogProbStorage:
         s = Samples(
             nonlinear=base.nonlinear,
             linear=base.linear,
-            data_type=base.data_type,
-            metadata={"t_ref": 0.0, "t_ref_unit": "day", "num_chains": 4},
+            model_type=base.model_type,
+            metadata={"time_ref": 0.0, "time_ref_unit": "day", "num_chains": 4},
         )
         path = tmp_path / "samples_metadata.h5"
         s.to_hdf5(path)
         loaded = Samples.from_hdf5(path)
 
         assert loaded.metadata == s.metadata
-        assert type(loaded.metadata["t_ref"]) is float
+        assert type(loaded.metadata["time_ref"]) is float
         assert type(loaded.metadata["num_chains"]) is int
-        assert type(loaded.metadata["t_ref_unit"]) is str
+        assert type(loaded.metadata["time_ref_unit"]) is str
         assert not any(
             isinstance(v, np.generic | np.ndarray) for v in loaded.metadata.values()
         )
@@ -205,13 +206,13 @@ class TestPhaseStatistics:
         assert np.all((cov >= 0.0) & (cov <= 1.0))
 
     def test_phase_coverage_known_value(self):
-        # period = 10 d, t_ref = 0: phase = (time / 10) mod 1. Times 0.5, 1.5,
+        # period = 10 d, time_ref = 0: phase = (time / 10) mod 1. Times 0.5, 1.5,
         # 2.5 d give phases 0.05, 0.15, 0.25 -> bins 0, 1, 2 of 10 occupied.
         data = RVData(
             time=Q(np.array([0.5, 1.5, 2.5]), "day"),
             rv=Q(np.zeros(3), "km/s"),
             rv_err=Q(np.ones(3), "km/s"),
-            t_ref=Q(0.0, "day"),
+            time_ref=Q(0.0, "day"),
         )
         s = _rv_samples(n=5, period=np.full(5, 10.0))
         cov = s.phase_coverage(data, n_bins=10)
@@ -230,7 +231,7 @@ class TestPhaseStatistics:
         s = _rv_samples(n=10, period=np.full(10, 1e5))
         counts = s.phase_coverage_per_period(rv_data)
         assert counts.shape == (10,)
-        assert np.all(counts == rv_data.n_times)
+        assert np.all(counts == rv_data.n_obs)
 
 
 class TestSingleComponentGuard:
@@ -238,8 +239,8 @@ class TestSingleComponentGuard:
         s = Samples(
             nonlinear={"primary.period": Q(jnp.full(5, 50.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(5, 5.0), "km/s")},
-            data_type="JointModel",
-            metadata={"t_ref": 0.0},
+            model_type="JointModel",
+            metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
             s.periods_spanned(rv_data)
@@ -280,9 +281,9 @@ class TestDerivedQuantities:
 
     def test_minimum_companion_mass_is_smallest(self):
         s = _rv_samples(n=20)
-        m1 = Q(1.0, "Msun")
-        m2_min = s.minimum_companion_mass(m1)
-        m2_incl = s.companion_mass(m1, sini=0.5)
+        m_primary = Q(1.0, "Msun")
+        m2_min = s.minimum_companion_mass(m_primary)
+        m2_incl = s.companion_mass(m_primary, sin_i=0.5)
         assert jnp.all(ustrip("Msun", m2_incl) >= ustrip("Msun", m2_min))
 
     def test_companion_mass_astrometry(self):
@@ -319,7 +320,9 @@ class TestRejectionSamplerLogProbs:
             sigma_v0=Q(50.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        s = sampler.run(rv_data, n_prior_samples=20_000, seed=7, return_logprobs=True)
+        s = sampler.run(
+            rv_data, n_prior_samples=20_000, key=jax.random.key(7), return_logprobs=True
+        )
         assert s.ln_likelihood is not None
         assert s.ln_prior is not None
         assert s.ln_likelihood.shape == (s.n_samples,)
@@ -334,7 +337,7 @@ class TestRejectionSamplerLogProbs:
             sigma_v0=Q(50.0, "km/s"),
         )
         sampler = RejectionSampler(prior, RVModel())
-        s = sampler.run(rv_data, n_prior_samples=5_000, seed=7)
+        s = sampler.run(rv_data, n_prior_samples=5_000, key=jax.random.key(7))
         assert s.ln_likelihood is None
         assert s.ln_prior is None
 
@@ -350,8 +353,8 @@ _ORBIT = {"P": 60.0, "ecc": 0.15, "tp": 8.0, "w": 1.1, "K": 9.0, "v0": 2.0}
 def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
     """RV data built from ``_ORBIT`` plus a Samples object matching it exactly.
 
-    ``t_ref`` is fixed to 0 so that the model's ``phase_peri`` (relative to
-    ``t_ref``) equals ``t_peri / period``.
+    ``time_ref`` is fixed to 0 so that the model's ``phase_peri`` (relative to
+    ``time_ref``) equals ``time_peri / period``.
     """
     o = _ORBIT
     t = np.sort(np.random.default_rng(0).uniform(0.0, 240.0, n_obs))
@@ -359,7 +362,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
         Q(t, "day"),
         period=Q(o["P"], "day"),
         eccentricity=Q(o["ecc"], ""),
-        t_peri=Q(o["tp"], "day"),
+        time_peri=Q(o["tp"], "day"),
         arg_peri=Q(o["w"], "rad"),
         rv_semiamp=Q(o["K"], "km/s"),
         v_sys=Q(o["v0"], "km/s"),
@@ -368,7 +371,7 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
         time=Q(t, "day"),
         rv=rv + Q(rv_offset, "km/s"),
         rv_err=Q(np.full(n_obs, 1.5), "km/s"),
-        t_ref=Q(0.0, "day"),
+        time_ref=Q(0.0, "day"),
     )
     n = 4
 
@@ -386,8 +389,8 @@ def _orbit_data_and_samples(n_obs=20, *, rv_offset=0.0, jitter=None):
     samples = Samples(
         nonlinear=nonlinear,
         linear={"rv_semiamp": col(o["K"], "km/s"), "v_sys": col(o["v0"], "km/s")},
-        data_type="RVModel",
-        metadata={"t_ref": 0.0},
+        model_type="RVModel",
+        metadata={"time_ref": 0.0},
     )
     return data, samples
 
@@ -428,7 +431,7 @@ class TestChiSquared:
         _, samples_jit = _orbit_data_and_samples(n_obs=20, rv_offset=3.0, jitter=2.0)
         chi2_plain = samples_plain.chi2(data, RVModel())
         chi2_jit = samples_jit.chi2(
-            data, RVModel(extensions=(Jitter(param_unit="km/s"),))
+            data, RVModel(extensions=(Jitter(obs_unit="km/s"),))
         )
         assert np.all(np.asarray(chi2_jit) < np.asarray(chi2_plain))
         # chi2 = sum r^2 / (sigma^2 + jitter^2) = 20 * 3^2 / (1.5^2 + 2^2).
@@ -439,8 +442,8 @@ class TestChiSquared:
         joint = Samples(
             nonlinear={"primary.period": Q(jnp.full(3, 60.0), "day")},
             linear={"primary.rv_semiamp": Q(jnp.full(3, 9.0), "km/s")},
-            data_type="JointModel",
-            metadata={"t_ref": 0.0},
+            model_type="JointModel",
+            metadata={"time_ref": 0.0},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
             joint.chi2(data, RVModel())

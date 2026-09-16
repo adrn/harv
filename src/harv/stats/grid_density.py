@@ -26,7 +26,7 @@ class LogGridDensity(Distribution):
     r"""Distribution over ``x > 0`` with a pdf piecewise-linear in ``ln(x)``.
 
     The density is defined by knots ``u_j = ln_grid[j]`` (strictly increasing)
-    and unnormalized log-densities ``g_j = log_density[j]`` *with respect to
+    and unnormalized log-densities ``g_j = ln_density[j]`` *with respect to
     the* ``d(ln x)`` *measure*. Between knots the (normalized) density
     ``rho(u)`` interpolates linearly; outside ``[u_0, u_{n-1}]`` the density is
     zero. Normalization uses the trapezoid rule, which is exact for a
@@ -34,7 +34,7 @@ class LogGridDensity(Distribution):
 
     ``log_prob(x)`` returns the log-density **per unit x** (matching the
     convention of ``numpyro.distributions.LogUniform``); use
-    :meth:`log_prob_ln` for the log-density per unit ``ln x``, which is
+    :meth:`ln_prob_ln` for the log-density per unit ``ln x``, which is
     invariant under a change of the unit that ``x`` is measured in.
 
     Sampling is by inverse-CDF: the CDF is piecewise-quadratic in ``u`` and is
@@ -49,7 +49,7 @@ class LogGridDensity(Distribution):
         ``n >= 2``. The unit convention is the caller's responsibility (wrap
         the distribution in a `~harv.distributions.QuantityDistribution` to
         make it explicit).
-    log_density
+    ln_density
         Unnormalized log-density at each knot w.r.t. ``d(ln x)``, shape
         ``(n,)``.
 
@@ -63,7 +63,7 @@ class LogGridDensity(Distribution):
     >>> bool(jnp.all((x >= 1.0) & (x <= 100.0)))
     True
 
-    A flat ``log_density`` reproduces a log-uniform distribution:
+    A flat ``ln_density`` reproduces a log-uniform distribution:
 
     >>> import numpyro.distributions as dist
     >>> lu = dist.LogUniform(1.0, 100.0)
@@ -79,12 +79,12 @@ class LogGridDensity(Distribution):
         # documented, deliberately-produced input here (a zero-density knot --
         # see harv.periodogram.priors._to_prior). less_than(inf) admits -inf
         # while still rejecting +inf and NaN.
-        "log_density": constraints.independent(constraints.less_than(jnp.inf), 1),
+        "ln_density": constraints.independent(constraints.less_than(jnp.inf), 1),
     }
     reparametrized_params: list[str] = []  # noqa: RUF012
     pytree_data_fields: tuple[str, ...] = (
         "ln_grid",
-        "log_density",
+        "ln_density",
         "_rho",
         "_cdf_knots",
         "_support",
@@ -93,16 +93,16 @@ class LogGridDensity(Distribution):
     def __init__(
         self,
         ln_grid: jax.Array,
-        log_density: jax.Array,
+        ln_density: jax.Array,
         *,
         validate_args: bool | None = None,
     ) -> None:
         ln_grid = jnp.asarray(ln_grid)
-        log_density = jnp.asarray(log_density)
-        if ln_grid.ndim != 1 or ln_grid.shape != log_density.shape:
+        ln_density = jnp.asarray(ln_density)
+        if ln_grid.ndim != 1 or ln_grid.shape != ln_density.shape:
             raise ValueError(
-                "ln_grid and log_density must be 1-d arrays of equal shape; "
-                f"got {ln_grid.shape} and {log_density.shape}"
+                "ln_grid and ln_density must be 1-d arrays of equal shape; "
+                f"got {ln_grid.shape} and {ln_density.shape}"
             )
         if ln_grid.shape[0] < 2:
             raise ValueError("ln_grid must have at least 2 knots")
@@ -112,15 +112,15 @@ class LogGridDensity(Distribution):
             "ln_grid must be strictly increasing",
         )
         self.ln_grid = ln_grid
-        self.log_density = log_density
+        self.ln_density = ln_density
 
         # Normalized knot densities w.r.t. d(ln x) and CDF at the knots.
         du = jnp.diff(ln_grid)
-        rho_tilde = jnp.exp(log_density - jnp.max(log_density))
+        rho_tilde = jnp.exp(ln_density - jnp.max(ln_density))
         segment_mass = 0.5 * (rho_tilde[:-1] + rho_tilde[1:]) * du
         norm = jnp.sum(segment_mass)
         norm = eqx.error_if(
-            norm, ~(norm > 0), "log_density must have positive total mass"
+            norm, ~(norm > 0), "ln_density must have positive total mass"
         )
         self._rho = rho_tilde / norm
         cdf_knots = jnp.concatenate([jnp.zeros(1), jnp.cumsum(segment_mass) / norm])
@@ -151,7 +151,7 @@ class LogGridDensity(Distribution):
         du = self.ln_grid[j + 1] - u0
         return j, u0, du
 
-    def _log_rho_ln(self, value: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def _ln_rho_ln(self, value: jax.Array) -> tuple[jax.Array, jax.Array]:
         """Log-density per unit ``ln x`` at ``value`` (masked to ``-inf`` outside)."""
         value = jnp.asarray(value)
         positive = value > 0
@@ -160,24 +160,24 @@ class LogGridDensity(Distribution):
         t = (u - u0) / du
         rho = self._rho[j] + (self._rho[j + 1] - self._rho[j]) * t
         inside = positive & (u >= self.ln_grid[0]) & (u <= self.ln_grid[-1]) & (rho > 0)
-        log_rho = jnp.where(inside, jnp.log(jnp.where(rho > 0, rho, 1.0)), -jnp.inf)
-        return log_rho, u
+        ln_rho = jnp.where(inside, jnp.log(jnp.where(rho > 0, rho, 1.0)), -jnp.inf)
+        return ln_rho, u
 
     @validate_sample
     def log_prob(self, value: ArrayLike) -> jax.Array:
         """Log-density per unit ``x`` (``-inf`` outside the support)."""
-        log_rho, u = self._log_rho_ln(jnp.asarray(value))
-        return log_rho - u
+        ln_rho, u = self._ln_rho_ln(jnp.asarray(value))
+        return ln_rho - u
 
-    def log_prob_ln(self, value: ArrayLike) -> jax.Array:
+    def ln_prob_ln(self, value: ArrayLike) -> jax.Array:
         """Log-density per unit ``ln x`` — unit-of-``x`` independent.
 
         Equals ``log_prob(value) + ln(value)`` inside the support and ``-inf``
         outside. This is the natural quantity for interim-prior bookkeeping in
         hierarchical reweighting (see ``docs/spec.md``).
         """
-        log_rho, _ = self._log_rho_ln(jnp.asarray(value))
-        return log_rho
+        ln_rho, _ = self._ln_rho_ln(jnp.asarray(value))
+        return ln_rho
 
     def cdf(self, value: ArrayLike) -> jax.Array:
         """Cumulative distribution function (piecewise-quadratic in ``ln x``)."""

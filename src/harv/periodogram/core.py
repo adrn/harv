@@ -53,8 +53,7 @@ from harv.models.extensions.base import AbstractExtension
 from harv.models.parameterizations.fourier import FourierGaiaAstrometry, FourierRV
 from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
-from harv.periodogram.grid import _data_t_span
-from harv.periodogram.grid import frequency_grid as get_frequency_grid
+from harv.periodogram.grid import _data_time_span, frequency_grid
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
     validate_extension_priors,
@@ -89,8 +88,8 @@ class PeriodogramResult(eqx.Module):
     frequency: NFrequency
     delta_ln_likelihood: NFloatArray
     ln_likelihood_base: Float[jax.Array, ""] | NFloatArray
-    t_span: ScalarQTime
-    t_ref: ScalarQTime
+    time_span: ScalarQTime
+    time_ref: ScalarQTime
     _: KW_ONLY
     per_dataset: dict[str, NFloatArray] | None = None
     n_terms: int = eqx.field(static=True, default=1)
@@ -226,9 +225,9 @@ def _bind_prior_params(
     """Bind concrete values into every ``LinearPriorCallable`` in *linear_priors*.
 
     Values are injected into the dict a callable prior is *resolved against*,
-    never into ``nl_values``. That distinction is load-bearing: ``parallax`` is
+    never into ``nonlinear_values``. That distinction is load-bearing: ``parallax`` is
     a linear parameter of :class:`~harv.models.FourierGaiaAstrometry`, and
-    ``log_prob``'s auto mode pulls any linear name out of ``nl_values`` and
+    ``log_prob``'s auto mode pulls any linear name out of ``nonlinear_values`` and
     reclassifies it as an explicit, *non-marginalized* column. Supplying a
     parallax that way would silently fix the parallax column in both the trial
     and base models -- a different model, not a resolved prior.
@@ -430,7 +429,7 @@ def _dataset_delta_lnl(
 
 def periodogram(
     data: AbstractData | AbstractDatasetContainer,
-    frequency_grid: NFrequency | None = None,
+    grid: NFrequency | None = None,
     *,
     prior: HarvPrior | Mapping[str, HarvPrior | Literal[False]] | Literal[False],
     period_min: ScalarQTime | None = None,
@@ -463,19 +462,21 @@ def periodogram(
     Occam factor grows without bound, so Delta diverges rather than approaching the
     profile statistic. Pass ``prior=False`` to compute the profile statistic directly.
     The recommended amplitude priors here scale with period the same way
-    harv's Keplerian priors do — ``sigma_K0``/``P0`` for RV (semi-amplitude, falling as
-    ``P^(-1/3)``) and ``sigma_a0``/``P0`` for astrometry (semi-major axis, rising as
-    ``P^(2/3)``). Pass ``sigma_amp`` instead for the constant-amplitude case, which is
-    the one comparable *in shape* to a profile-likelihood periodogram.
+    harv's Keplerian priors do — ``sigma_K0``/``period_ref`` for RV (semi-amplitude,
+    falling as ``P^(-1/3)``) and ``sigma_a0``/``period_ref`` for astrometry
+    (semi-major axis, rising as ``P^(2/3)``). Pass ``sigma_amp`` instead for the
+    constant-amplitude case, which is the one comparable *in shape* to a
+    profile-likelihood periodogram.
 
     Parameters
     ----------
     data
         `~harv.data.RVData`, `~harv.data.GaiaAstrometryData`, or a dataset
         container holding them.
-    frequency_grid
-        Explicit frequency grid. Mutually exclusive with the grid keywords
-        (``period_min``, ``period_max``, ``n_grid``).
+    grid
+        Explicit frequency grid, as built by :func:`frequency_grid`. Mutually
+        exclusive with the grid keywords (``period_min``, ``period_max``,
+        ``n_grid``).
     prior
         REQUIRED. ``False`` selects **profile mode**: no priors at all, every
         linear column fitted by generalized least squares, and
@@ -496,7 +497,7 @@ def periodogram(
         (``LinearPriorCallable``) are resolved per trial period.
     period_min, period_max, samples_per_peak, n_grid
         Grid construction keywords, forwarded to :func:`frequency_grid`
-        (``period_min`` is required when ``frequency_grid`` is not given).
+        (``period_min`` is required when ``grid`` is not given).
     n_terms
         Number of Fourier terms (harmonics of the trial frequency).
         ``n_terms >= 2`` absorbs eccentricity distortion of the orbit shape.
@@ -529,7 +530,8 @@ def periodogram(
     Examples
     --------
     RV, period-dependent semi-amplitude prior (recommended). ``sigma_K0`` is the
-    semi-amplitude expected *at* ``P0`` for the companion being searched for, not a
+    semi-amplitude expected *at* ``period_ref`` for the companion being searched
+    for, not a
     global width — see :class:`~harv.models.priors.PeriodDependentKPrior`:
 
     >>> from unxt import Q
@@ -541,14 +543,15 @@ def periodogram(
     >>> prior = hm.FourierRV(n_terms=2).default_prior(
     ...     **rv_grid,
     ...     sigma_K0=Q(1.0, "km/s"),
-    ...     P0=Q(1.0, "yr"),
+    ...     period_ref=Q(1.0, "yr"),
     ...     sigma_v0=Q(10.0, "km/s"),
     ... )
     >>> result = hp.periodogram(data, prior=prior, period_min=Q(5.0, "day"))
     >>> result.delta_ln_likelihood.shape == result.frequency.shape
     True
 
-    RV, flat amplitude prior — swap ``sigma_K0``/``P0`` for a single ``sigma_amp``:
+    RV, flat amplitude prior — swap ``sigma_K0``/``period_ref`` for a single
+    ``sigma_amp``:
 
     >>> flat = hm.FourierRV(n_terms=2).default_prior(
     ...     **rv_grid, sigma_amp=Q(30.0, "km/s"), sigma_v0=Q(10.0, "km/s")
@@ -582,7 +585,7 @@ def periodogram(
     prior needs a parallax to convert it to an angle — supply one via ``prior_params``:
 
     >>> gaia_tilted = hm.FourierGaiaAstrometry(n_terms=2).default_prior(
-    ...     **gaia_grid, sigma_a0=Q(0.1, "AU"), P0=Q(1.0, "yr")
+    ...     **gaia_grid, sigma_a0=Q(0.1, "AU"), period_ref=Q(1.0, "yr")
     ... )
     >>> res = hp.periodogram(
     ...     gaia, prior=gaia_tilted, period_min=Q(20.0, "day"),
@@ -603,7 +606,7 @@ def periodogram(
 
     Many sources at once. ``periodogram`` is safe under ``jax.jit`` and
     ``jax.vmap`` provided the frequency grid is *shape-fixed* -- an explicit
-    ``frequency_grid``, or ``period_min``/``period_max``/``n_grid`` all given.
+    ``grid``, or ``period_min``/``period_max``/``n_grid`` all given.
     A grid whose size is derived from each source's own baseline cannot be
     traced, since ``n_grid`` is then an output shape. Batching also requires
     one observation count across the stacked sources; differing counts retrace
@@ -617,7 +620,7 @@ def periodogram(
     ... ]
     >>> batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
     >>> grid = hp.frequency_grid(
-    ...     t_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=128
+    ...     time_span=Q(1000.0, "day"), period_min=Q(5.0, "day"), n_grid=128
     ... )
     >>> run = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))
     >>> run(batched).delta_ln_likelihood.shape
@@ -650,7 +653,7 @@ def periodogram(
             "least one harmonic of the trial frequency; with none, the trial "
             "model is the base model and every Delta would be zero."
         )
-    if frequency_grid is not None:
+    if grid is not None:
         conflicting = period_min, period_max, samples_per_peak, n_grid
         if any(arg is not None for arg in conflicting):
             raise TypeError(
@@ -665,7 +668,7 @@ def periodogram(
         grid_kwargs: dict[str, Any] = {}
         if samples_per_peak is not None:
             grid_kwargs["samples_per_peak"] = samples_per_peak
-        frequency_grid = get_frequency_grid(
+        grid = frequency_grid(
             data,
             period_min=period_min,
             period_max=period_max,
@@ -683,7 +686,7 @@ def periodogram(
         ds_prior = _resolve_per_dataset(prior, "prior", name)
         ds_ext = _resolve_per_dataset(extensions, "extensions", name)
         delta, lnl0, eff = _dataset_delta_lnl(
-            d, ds_prior, tuple(ds_ext), frequency_grid, n_terms, prior_params
+            d, ds_prior, tuple(ds_ext), grid, n_terms, prior_params
         )
         per_dataset[name] = delta
         base_lnls.append(lnl0)
@@ -692,16 +695,16 @@ def periodogram(
     total_delta = jnp.sum(jnp.stack(list(per_dataset.values())), axis=0)
     total_lnl0 = functools.reduce(jnp.add, base_lnls)
 
-    time_unit = str((1.0 / frequency_grid[:1]).unit)
+    time_unit = str((1.0 / grid[:1]).unit)
 
-    # t_ref is always set by AbstractData.__check_init__ / the containers:
-    t_ref = cast("ScalarQTime", data.t_ref)
+    # time_ref is always set by AbstractData.__check_init__ / the containers:
+    time_ref = cast("ScalarQTime", data.time_ref)
     return PeriodogramResult(
-        frequency=frequency_grid,
+        frequency=grid,
         delta_ln_likelihood=total_delta,
         ln_likelihood_base=total_lnl0,
-        t_span=Q(_data_t_span(data, time_unit), time_unit),
-        t_ref=t_ref,
+        time_span=Q(_data_time_span(data, time_unit), time_unit),
+        time_ref=time_ref,
         per_dataset=per_dataset if is_container else None,
         n_terms=eff_terms,
         statistic="profile" if prior is False else "marginal",

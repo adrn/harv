@@ -71,58 +71,62 @@ class RVModel(AbstractComponentModel):
         return arr_obs, arr_obs_err
 
     def _solve_kepler(
-        self, nl_values: dict[str, Any], data: RVData
+        self, nonlinear_values: dict[str, Any], data: RVData
     ) -> tuple[jax.Array, jax.Array]:
         """Solve Kepler's equation from nonlinear parameter values.
 
         Returns (sin_f, cos_f) as unit-stripped arrays.
         """
-        period = nl_values["period"]
-        phase_peri = nl_values["phase_peri"]
+        period = nonlinear_values["period"]
+        phase_peri = nonlinear_values["phase_peri"]
         # Fourier parameterizations never reach here (dispatched in
         # _base_design_matrix), so they need no eccentricity():
         eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
-            nl_values
+            nonlinear_values
         )
 
-        t_peri = phase_peri * period
-        dt = (data.time - data.t_ref) - t_peri
+        time_peri = phase_peri * period
+        dt = (data.time - data.time_ref) - time_peri
         M = mean_anomaly(dt, period)
         sin_f, cos_f = true_anomaly_from_mean(M, eccentricity)
         return ustrip(AllowValue, "", sin_f), ustrip(AllowValue, "", cos_f)
 
     def _mean_longitude(
-        self, nl_values: dict[str, Any], data: RVData
+        self, nonlinear_values: dict[str, Any], data: RVData
     ) -> tuple[jax.Array, jax.Array]:
-        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - t_ref)/P``.
+        """(sin M, cos M) of the mean longitude ``M = 2*pi*(t - time_ref)/P``.
 
         Kepler-free path used by Fourier parameterizations: no periastron
         phase (absorbed into the linear amplitude pairs) and no Kepler solve.
         """
-        M = mean_anomaly(data.time - data.t_ref, nl_values["period"])
+        M = mean_anomaly(data.time - data.time_ref, nonlinear_values["period"])
         m_rad = ustrip(AllowValue, "rad", M)
         return jnp.sin(m_rad), jnp.cos(m_rad)
 
-    def _base_design_matrix(self, nl_values: dict[str, Any], data: RVData) -> jax.Array:
+    def _base_design_matrix(
+        self, nonlinear_values: dict[str, Any], data: RVData
+    ) -> jax.Array:
         # Fourier parameterizations are Kepler-free: their basis is the mean
         # longitude, not the true anomaly (trace-time dispatch, no runtime cost).
         if isinstance(self.parameterization, FourierRV):
-            sin_f, cos_f = self._mean_longitude(nl_values, data)
+            sin_f, cos_f = self._mean_longitude(nonlinear_values, data)
         else:
-            sin_f, cos_f = self._solve_kepler(nl_values, data)
-        nl_stripped = self.parameterization.strip_nl_for_design(nl_values)
-        X = self.parameterization.design_matrix(sin_f, cos_f, nl_stripped)
+            sin_f, cos_f = self._solve_kepler(nonlinear_values, data)
+        nonlinear_stripped = self.parameterization.strip_nonlinear_for_design(
+            nonlinear_values
+        )
+        X = self.parameterization.design_matrix(sin_f, cos_f, nonlinear_stripped)
         # Ensure the design matrix is a plain JAX array (rv_shape may return
         # dimensionless Quantity via quax dispatch)
         return jnp.asarray(ustrip(AllowValue, "", X))
 
     def predict_at_times(
         self,
-        times: BatchQTime,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
         linear_values: dict[str, jax.Array],
+        times: BatchQTime,
         *,
-        t_ref: ScalarQTime,
+        time_ref: ScalarQTime,
         obs_unit: str = "km/s",
     ) -> jax.Array:
         """Predicted RV at arbitrary *times*, no observed-data object required.
@@ -130,7 +134,7 @@ class RVModel(AbstractComponentModel):
         Internally constructs an :class:`~harv.data.RVData` shim at ``times``
         with dummy ``rv`` / ``rv_err`` (zeros / ones) and delegates to
         :meth:`predict`.  The dummy obs are never read by the prediction path
-        (``_full_design_matrix`` only consumes ``data.time`` and ``data.t_ref``;
+        (``_full_design_matrix`` only consumes ``data.time`` and ``data.time_ref``;
         extensions read at most those fields too).  The returned array is in
         the same units the model's linear parameters are expressed in.
 
@@ -152,6 +156,6 @@ class RVModel(AbstractComponentModel):
             time=times,
             rv=Q(jnp.zeros(n), obs_unit),
             rv_err=Q(jnp.ones(n), obs_unit),
-            t_ref=t_ref,
+            time_ref=time_ref,
         )
-        return self.predict(nl_values, linear_values, dummy)
+        return self.predict(nonlinear_values, linear_values, dummy)

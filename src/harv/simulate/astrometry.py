@@ -27,9 +27,9 @@ from harv.custom_types import (
     ScalarQTime,
 )
 from harv.data import GaiaAstrometryData
-from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_ABFG
+from harv.kepler.orbits import astrometric_orbit_at_times, thiele_innes_unit
 
-__all__ = ["simulate_gaia_epoch_astrometry", "fake_parallax_factor"]
+__all__ = ("simulate_gaia_epoch_astrometry", "fake_parallax_factor")
 
 
 def fake_parallax_factor(
@@ -87,7 +87,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     # Orbital parameters
     period: ScalarQTime | None = None,
     eccentricity: float | None = None,
-    t_peri: ScalarQTime | None = None,
+    time_peri: ScalarQTime | None = None,
     arg_peri: ScalarQAngle | None = None,
     lon_asc_node: ScalarQAngle | None = None,
     inclination: ScalarQAngle | None = None,
@@ -101,7 +101,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     # Uncertainty
     al_error: ScalarQAngle | None = None,
     # Reference time
-    t_ref: ScalarQTime | None = None,
+    time_ref: ScalarQTime | None = None,
     seed: int = 42,
 ) -> tuple[GaiaAstrometryData, dict[str, Any]]:
     """Simulate Gaia-like along-scan epoch astrometry.
@@ -127,7 +127,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         Orbital period. If None, randomly drawn from [0, 3] years.
     eccentricity
         Orbital eccentricity. If None, randomly drawn from [0, 0.9].
-    t_peri
+    time_peri
         Time of periastron passage. If None, randomly drawn from [0, period].
     arg_peri
         Argument of periastron omega. If None, randomly drawn from [0, 2pi].
@@ -138,10 +138,10 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     semi_major_axis
         Semi-major axis in angular units. If None, randomly drawn from [0.5, 50] mas.
     alpha0
-        Small RA offset from reference position at t_ref. Default: 0 mas.
+        Small RA offset from reference position at time_ref. Default: 0 mas.
         This is a linear parameter, not the absolute RA.
     delta0
-        Small Dec offset from reference position at t_ref. Default: 0 mas.
+        Small Dec offset from reference position at time_ref. Default: 0 mas.
         This is a linear parameter, not the absolute Dec.
     mu_alpha
         Proper motion in RA. If None, randomly drawn ~ N(0, 10 mas/yr).
@@ -152,7 +152,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     al_error
         Along-scan measurement errors (1-sigma). If None, randomly drawn from
         U(0.02, 0.1) mas for each observation.
-    t_ref
+    time_ref
         Reference time for astrometry. If None, randomly chosen.
     seed
         Random seed for reproducibility. Default: 42.
@@ -163,7 +163,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         Simulated Gaia astrometry data container.
     true_params
         Dictionary of true parameter values used in simulation, including:
-        period, eccentricity, semi_major_axis, t_peri, alpha0, delta0, mu_alpha,
+        period, eccentricity, semi_major_axis, time_peri, alpha0, delta0, mu_alpha,
         mu_delta, parallax, A, B, F, G (Thiele-Innes), arg_peri, lon_asc_node,
         inclination.
 
@@ -209,8 +209,8 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     if eccentricity is None:
         eccentricity = rngs[2].uniform(0.0, 0.9)
 
-    if t_peri is None:
-        t_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
+    if time_peri is None:
+        time_peri = Q(rngs[3].uniform(0.0, ustrip(period.unit, period)), period.unit)
 
     if arg_peri is None:
         arg_peri = Q(rngs[4].uniform(0, 2 * np.pi), "rad")
@@ -239,8 +239,8 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     if jnp.ndim(al_error) == 0:
         al_error = Q(jnp.full(n_obs, ustrip("mas", al_error)), "mas")
 
-    if t_ref is None:
-        t_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
+    if time_ref is None:
+        time_ref = Q(rng.uniform(0, ustrip(baseline.unit, baseline)), baseline.unit)
 
     # Observation times over baseline
     if times is None:
@@ -248,9 +248,9 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
             jnp.sort(rng.uniform(0.0, ustrip(baseline.unit, baseline), n_obs)),
             baseline.unit,
         )
-        times = dt + t_ref
+        times = dt + time_ref
     else:
-        dt = times - t_ref
+        dt = times - time_ref
 
     # Compute true along-scan positions
     cos_psi = jnp.cos(scan_angle)
@@ -276,7 +276,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         times,
         period,
         eccentricity,
-        t_peri,
+        time_peri,
         arg_peri,
         cos_i,
         lon_asc_node,
@@ -285,7 +285,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
     y_orbit = uconvert("mas", sin_psi * delta_ra + cos_psi * delta_dec)
 
     # Thiele-Innes constants for true_params output
-    A, B, F, G = thiele_innes_ABFG(
+    A, B, F, G = thiele_innes_unit(
         jnp.cos(arg_peri),
         jnp.sin(arg_peri),
         jnp.cos(lon_asc_node),
@@ -305,7 +305,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         "period": period,
         "eccentricity": eccentricity,
         "semi_major_axis": semi_major_axis,
-        "t_peri": t_peri,
+        "time_peri": time_peri,
         "alpha0": alpha0,
         "delta0": delta0,
         "mu_alpha": mu_alpha,
@@ -326,7 +326,7 @@ def simulate_gaia_epoch_astrometry(  # noqa: C901
         al_position_err=al_error,
         scan_angle=scan_angle,
         parallax_factor=jnp.asarray(parallax_factor),
-        t_ref=t_ref,
+        time_ref=time_ref,
     )
 
     return data, true_params

@@ -28,35 +28,35 @@ class Jitter(AbstractExtension):
 
     Parameters
     ----------
-    param_unit
+    obs_unit
         Physical unit string for the jitter parameter metadata. Default ``""``
         (dimensionless / observation units).
 
     Examples
     --------
     >>> from harv.models.extensions import Jitter
-    >>> j = Jitter(param_unit="km/s")
+    >>> j = Jitter(obs_unit="km/s")
     >>> j.extra_params()[0].unit
     'km/s'
     """
 
-    param_unit: str = eqx.field(static=True, default="")
+    obs_unit: str = eqx.field(static=True, default="")
 
     def extra_params(self) -> tuple[ParamInfo, ...]:
         """Parameters introduced by this extension."""
-        return (ParamInfo("jitter", self.param_unit),)
+        return (ParamInfo("jitter", self.obs_unit),)
 
     def modify_covariance(
         self,
         cov: jax.Array,
         data: Any,  # noqa: ARG002
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Add jitter**2 in quadrature to the diagonal variances.
 
         Works on both 1-d (diagonal) and 2-d (full) covariance representations.
         """
-        s2 = nl_values["jitter"] ** 2
+        s2 = nonlinear_values["jitter"] ** 2
         if cov.ndim == 1:
             return cov + s2
 

@@ -3,7 +3,7 @@
 from .orbits import (
     mean_anomaly,
     rv_shape,
-    thiele_innes_ABFG,
+    thiele_innes_unit,
     true_anomaly_from_mean,
     astrometric_orbit_at_times,
     compute_true_anomaly_components,
@@ -19,7 +19,7 @@ from .masses import (
 from .nbody_system import AbstractNBodySystem, TwoBodySystem
 from .orientation import KeplerianOrientation
 
-__all__ = [
+__all__ = (
     "KeplerianBody",
     "KeplerianOrientation",
     "AbstractNBodySystem",
@@ -33,6 +33,6 @@ __all__ = [
     "mean_anomaly",
     "rv_shape",
     "semi_major_axis_physical",
-    "thiele_innes_ABFG",
+    "thiele_innes_unit",
     "true_anomaly_from_mean",
-]
+)

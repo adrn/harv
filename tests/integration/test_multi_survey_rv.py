@@ -18,7 +18,7 @@ from harv.distributions import QD
 from harv.models.extensions import MultiSurveyOffset
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
-from harv.simulate.rv import simulate_rv_multisurv_data
+from harv.simulate.rv import simulate_rv_multi_survey_data
 
 
 class TestMultiSurveyModel:
@@ -26,7 +26,7 @@ class TestMultiSurveyModel:
 
     def test_log_prob_finite(self):
         """Model returns a finite scalar at arbitrary parameters."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "espresso": Q(2.0, "km/s")},
             seed=1,
             n_obs_per_instrument=20,
@@ -53,12 +53,12 @@ class TestMultiSurveyModel:
             "phase_peri": 0.5,
             "arg_peri": Q(1.0, "rad"),
         }
-        log_lik = model.log_prob(nl, stacked, linear_priors=linear_priors)
-        assert jnp.isfinite(log_lik)
+        ln_lik = model.log_prob(nl, stacked, linear_priors=linear_priors)
+        assert jnp.isfinite(ln_lik)
 
     def test_log_prob_higher_than_single_instrument(self):
         """Multi-survey model with correct offset is higher than without."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "espresso": Q(10.0, "km/s")},
             seed=2,
             n_obs_per_instrument=30,
@@ -101,7 +101,7 @@ class TestMultiSurveyModel:
 
     def test_vmap_batch(self):
         """Vmap over a batch of parameter samples works correctly."""
-        source_data, _ = simulate_rv_multisurv_data(
+        source_data, _ = simulate_rv_multi_survey_data(
             instruments={"keck": None, "hires": Q(1.0, "km/s")},
             seed=3,
             n_obs_per_instrument=15,
@@ -146,7 +146,7 @@ class TestMultiSurveyRejectionSampler:
     @pytest.fixture
     def low_snr_data(self):
         """Low-SNR multi-survey RV data: K/sigma ~ 1, rejection sampling tractable."""
-        source_data, true = simulate_rv_multisurv_data(
+        source_data, true = simulate_rv_multi_survey_data(
             instruments={"keck": None, "harps": Q(2.0, "km/s")},
             seed=7,
             n_obs_per_instrument=20,
@@ -185,7 +185,7 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=500_000, seed=10)
+        samples = sampler.run(stacked, n_prior_samples=500_000, key=jax.random.key(10))
 
         period_samples = uconvert("day", samples["period"])
         period_true = uconvert("day", truth["period"])
@@ -202,7 +202,7 @@ class TestMultiSurveyRejectionSampler:
         assert jnp.all(jnp.abs(K_samples - K_true).value < 1.0)
 
         assert samples.n_samples > 0
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
 
     def test_samples_have_correct_keys(self, low_snr_data):
         """Samples object has all expected parameter keys, including offset."""
@@ -215,12 +215,12 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=50_000, seed=11)
+        samples = sampler.run(stacked, n_prior_samples=50_000, key=jax.random.key(11))
 
         keys = samples.keys()
         for nonlinear_key in (
             "period",
-            "log_period",
+            "log10_period",
             "eccentricity",
             "phase_peri",
             "arg_peri",
@@ -241,7 +241,7 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        samples = sampler.run(stacked, n_prior_samples=50_000, seed=12)
+        samples = sampler.run(stacked, n_prior_samples=50_000, key=jax.random.key(12))
         assert "keck" not in samples.keys()  # noqa: SIM118
 
     def test_reproducibility(self, low_snr_data):
@@ -255,8 +255,8 @@ class TestMultiSurveyRejectionSampler:
             harps=QD(dist.Normal(0.0, 5.0), "km/s"),
         )
         sampler, stacked, _ = self._make_sampler(source_data, prior)
-        s1 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
-        s2 = sampler.run(stacked, n_prior_samples=20_000, seed=20)
+        s1 = sampler.run(stacked, n_prior_samples=20_000, key=jax.random.key(20))
+        s2 = sampler.run(stacked, n_prior_samples=20_000, key=jax.random.key(20))
 
         assert s1.n_samples == s2.n_samples
         if s1.n_samples > 0:

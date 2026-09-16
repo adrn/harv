@@ -1,7 +1,7 @@
 """Plotting utilities."""
 
 __all__ = (
-    "get_t_grid",
+    "get_time_grid",
     "plot_gaia_astrometry",
     "plot_gaia_sky_orbit",
     "plot_rv",
@@ -53,8 +53,8 @@ def plot_timeseries_errorbar(
     *,
     time_unit: str | None = None,
     obs_unit: str | None = None,
-    t_ref: Any | None = None,
-    relative_to_t_ref: bool = False,
+    time_ref: Any | None = None,
+    relative_to_time_ref: bool = False,
     phase_fold: ScalarQTime | None = None,
     xlabel: str | None = None,
     ylabel: str | None = None,
@@ -70,12 +70,12 @@ def plot_timeseries_errorbar(
         Quantity arrays for time, observation, and observation uncertainty.
     time_unit, obs_unit
         Unit strings for axes.
-    t_ref
+    time_ref
         Reference epoch (Quantity or None).
-    relative_to_t_ref
-        Whether to subtract ``t_ref`` from times before plotting.
+    relative_to_time_ref
+        Whether to subtract ``time_ref`` from times before plotting.
     phase_fold
-        If provided, a period Quantity. Plot ``(time - t_ref) / phase_fold mod 1``
+        If provided, a period Quantity. Plot ``(time - time_ref) / phase_fold mod 1``
         on the x-axis instead of absolute time.
     xlabel, ylabel
         Axis label overrides.
@@ -97,21 +97,21 @@ def plot_timeseries_errorbar(
         obs_unit: str = str(obs.unit)
 
     if phase_fold is not None:
-        t_ref_val = ustrip(time_unit, t_ref) if t_ref is not None else 0.0
+        time_ref_val = ustrip(time_unit, time_ref) if time_ref is not None else 0.0
         x = (
-            (ustrip(time_unit, time) - t_ref_val) / ustrip(time_unit, phase_fold)
+            (ustrip(time_unit, time) - time_ref_val) / ustrip(time_unit, phase_fold)
         ) % 1.0
         _xlabel = "orbital phase"
 
     else:
         x = ustrip(time_unit, time)
 
-        if relative_to_t_ref and t_ref is not None:
-            x = x - ustrip(time_unit, t_ref)
+        if relative_to_time_ref and time_ref is not None:
+            x = x - ustrip(time_unit, time_ref)
 
         _xlabel = (
-            f"time $-$ t_ref [{time_unit}]"
-            if relative_to_t_ref
+            f"time $-$ time_ref [{time_unit}]"
+            if relative_to_time_ref
             else f"time [{time_unit}]"
         )
 
@@ -133,14 +133,14 @@ def plot_timeseries_errorbar(
     return ax
 
 
-def get_t_grid(
+def get_time_grid(
     times: BatchQTime,
     period: ScalarQTime,
     *,
     span_buffer_factor: float = 0.1,
     n_points_per_period: int = 256,
-    max_t_grid: int | None = int(1e6),
-    min_t_grid: int | None = None,
+    max_time_grid: int | None = int(1e6),
+    min_time_grid: int | None = None,
 ) -> NTime:
     """Dense time grid spanning the observation baseline with a small buffer.
 
@@ -160,9 +160,9 @@ def get_t_grid(
         (10% on each side).
     n_points_per_period
         Number of grid points per orbital period.  Default: 256.
-    max_t_grid
+    max_time_grid
         Maximum number of grid points. Default: 1e6. Set to None to disable.
-    min_t_grid
+    min_time_grid
         Minimum number of grid points. Default: None. Set to None to disable.
 
     Returns
@@ -173,14 +173,14 @@ def get_t_grid(
     --------
     >>> from unxt import Q
     >>> times = Q([0.0, 50.0, 100.0], "day")
-    >>> t_grid = get_t_grid(times, Q(30.0, "day"))
-    >>> len(t_grid) > 128
+    >>> time_grid = get_time_grid(times, Q(30.0, "day"))
+    >>> len(time_grid) > 128
     True
     """
     time_unit = str(times.unit)
-    t_vals = np.asarray(times.value)
-    t_min, t_max = t_vals.min(), t_vals.max()
-    span = t_max - t_min
+    time_vals = np.asarray(times.value)
+    time_min, time_max = time_vals.min(), time_vals.max()
+    span = time_max - time_min
 
     p_val = float(ustrip(time_unit, period))
     dt = p_val / n_points_per_period
@@ -190,13 +190,27 @@ def get_t_grid(
 
     # Points to resolve the period across the buffered baseline, then clamp
     n_grid = int(np.ceil(full / dt)) + 1
-    if max_t_grid is not None:
-        n_grid = min(n_grid, max_t_grid)
-    if min_t_grid is not None:
-        n_grid = max(n_grid, min_t_grid)
+    if max_time_grid is not None:
+        n_grid = min(n_grid, max_time_grid)
+    if min_time_grid is not None:
+        n_grid = max(n_grid, min_time_grid)
 
-    grid = np.linspace(t_min - buffer, t_max + buffer, n_grid)
+    grid = np.linspace(time_min - buffer, time_max + buffer, n_grid)
     return Q(grid, time_unit)
+
+
+def _default_gaia_model(model: Any) -> Any:
+    """Fall back to a bare ``GaiaAstrometryModel()`` when the caller passes none.
+
+    Imported lazily to keep :mod:`harv.plot` importable without pulling in the
+    models layer (and to avoid the import cycle through
+    :mod:`harv.models.astrometry`).
+    """
+    if model is not None:
+        return model
+    from harv.models.astrometry import GaiaAstrometryModel  # noqa: PLC0415
+
+    return GaiaAstrometryModel()
 
 
 def get_alpha(n: int) -> float:
@@ -291,7 +305,7 @@ def _component_sample_params(
             samples_dict[qualified] if qualified in samples_dict else samples_dict[name]
         )
 
-    nl_for_model: dict[str, Any] = {}
+    nonlinear_for_model: dict[str, Any] = {}
     for name in comp_model._all_nonlinear_names():
         if (
             name not in samples.nonlinear
@@ -299,7 +313,7 @@ def _component_sample_params(
         ):
             continue
         value = _lookup(samples.nonlinear, name)[i]
-        nl_for_model[name] = (
+        nonlinear_for_model[name] = (
             value if base_nl_units.get(name, "") else ustrip(str(value.unit), value)
         )
 
@@ -310,10 +324,10 @@ def _component_sample_params(
         value = _lookup(samples.linear, name)[i]
         linear_stripped[name] = jnp.asarray(ustrip(linear_units[name], value))
 
-    return nl_for_model, linear_stripped
+    return nonlinear_for_model, linear_stripped
 
 
-def _strip_multisurvey_offsets(model: Any) -> Any:
+def _strip_multi_survey_offsets(model: Any) -> Any:
     """Return a copy of *model* with any MultiSurveyOffset extension removed.
 
     The offset extension's ``indicator_matrix`` is fixed to the original
@@ -340,7 +354,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     n_samples: int | None = 128,
     time_grid: BatchQTime | None = None,
     show_signal_components: bool = False,
-    relative_to_t_ref: bool = False,
+    relative_to_time_ref: bool = False,
     relative_to_median_v_sys: bool = False,
     phase_fold_median: bool = False,
     apply_median_offsets: bool = True,
@@ -391,22 +405,22 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     time_grid
         Explicit time grid used to evaluate and plot the posterior orbit curves.
         When provided, this is used instead of the default phase grid or
-        :func:`get_t_grid`. If ``phase_fold_median=True``, the supplied time grid
+        :func:`get_time_grid`. If ``phase_fold_median=True``, the supplied time grid
         is converted to phase using the reference sample's period and periastron time.
     show_signal_components
         Whether to plot the Keplerian signal and the combined extension-driven
         contribution as separate curves instead of plotting their sum. This
         decomposition view is only supported for time-domain RV plots with
         observed data. Default: ``False``.
-    relative_to_t_ref
-        Whether to plot time relative to the reference epoch (t_ref) of the data.
+    relative_to_time_ref
+        Whether to plot time relative to the reference epoch (time_ref) of the data.
     relative_to_median_v_sys
         Whether to shift all curves by the median systemic velocity (v_sys) of the
         samples, so that the curves show only the relative RV variations. Only applies
         when a "v_sys" parameter is present in the samples. Default: False.
     phase_fold_median
         If ``True``, fold data and model to orbital phase using the sample closest to
-        the median period. Phase zero is set to that sample's ``t_peri`` value. Only
+        the median period. Phase zero is set to that sample's ``time_peri`` value. Only
         that single reference orbit curve is drawn — plotting multiple samples on a
         phase axis defined by one period is misleading when the posterior has period
         spread. When plot-aware extensions are present, the reference sample's
@@ -527,22 +541,22 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         str(_data.rv.unit) if _data is not None else str(samples["rv_semiamp"].unit)
     )
 
-    # Extract median period and t_ref for phase-folding and plotting
+    # Extract median period and time_ref for phase-folding and plotting
     median_period = Q["time"].from_(  # ty: ignore[unresolved-reference]
         jnp.median(samples["period"])
     )
     ref_idx = int(jnp.argmin(jnp.abs(samples["period"] - median_period)))
     ref_period = samples["period"][ref_idx]
-    ref_t_peri = samples["t_peri"][ref_idx]
+    ref_time_peri = samples["time_peri"][ref_idx]
 
     # When phase-folding, only the reference sample defines the phase axis so
     # plotting other samples (at different periods) would be misleading.
     draw_indices = [ref_idx] if phase_fold_median else range(n_draw)
     orbit_style.setdefault("alpha", get_alpha(len(draw_indices)))
 
-    t_ref = Q(
-        samples.metadata.get("t_ref", 0.0),
-        samples.metadata.get("t_ref_unit", time_unit),
+    time_ref = Q(
+        samples.metadata.get("time_ref", 0.0),
+        samples.metadata.get("time_ref_unit", time_unit),
     )
 
     # Per-instrument median offsets sourced directly from any MultiSurveyOffset
@@ -574,10 +588,10 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             ds_err = jnp.asarray(ustrip(rv_unit, ds.rv_err))
             per_sample_eff_err: list[Any] = []
             for i in draw_indices:
-                nl_i, _lin_i = _component_sample_params(
+                nonlinear_i, _lin_i = _component_sample_params(
                     samples, comp_model, ds, ds_name, i
                 )
-                cov = comp_model._full_obs_err(ds_err, nl_i, ds)
+                cov = comp_model._full_obs_err(ds_err, nonlinear_i, ds)
                 eff = jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov))
                 per_sample_eff_err.append(eff)
             if per_sample_eff_err:
@@ -614,10 +628,10 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             # Subtract the reference sample's structured extension contribution
             # (trend at data times + GP conditional mean at data times) so the
             # observed RV folds cleanly onto the Keplerian orbit overlay.
-            nl_ref, lin_ref = _component_sample_params(
+            nonlinear_ref, linear_ref = _component_sample_params(
                 samples, comp_model_for_instr, rv_data, instr_name, ref_idx
             )
-            curve_model = _strip_multisurvey_offsets(comp_model_for_instr)
+            curve_model = _strip_multi_survey_offsets(comp_model_for_instr)
             # Keplerian + trend contribution at data times (no offsets,
             # no zero-point — those are part of the *model* prediction, not the
             # noise we want to subtract).
@@ -635,16 +649,16 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             # Baseline Keplerian-only prediction (no extensions at all).
             kepler_only_model = eqx.tree_at(lambda m: m.extensions, curve_model, ())
             y_full = trend_only_model.predict_at_times(
+                nonlinear_ref,
+                linear_ref,
                 rv_data.time,
-                nl_ref,
-                lin_ref,
-                t_ref=rv_data.t_ref,
+                time_ref=rv_data.time_ref,
             )
             y_kepler = kepler_only_model.predict_at_times(
+                nonlinear_ref,
+                linear_ref,
                 rv_data.time,
-                nl_ref,
-                lin_ref,
-                t_ref=rv_data.t_ref,
+                time_ref=rv_data.time_ref,
             )
             trend_contrib = y_full - y_kepler  # bare jax array in rv_unit
 
@@ -656,12 +670,12 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             for ext in comp_model_for_instr.extensions:
                 if isinstance(ext, GP):
                     hp = _get_extension_sample_values(samples, (ext,), ref_idx)
-                    t_unit_ext = ext.time_unit or time_unit
+                    time_unit_ext = ext.time_unit or time_unit
                     gp_contrib = gp_contrib + jnp.asarray(
                         ext.conditional_mean(
                             residuals_full,
-                            jnp.asarray(ustrip(t_unit_ext, rv_data.time)),
-                            jnp.asarray(ustrip(t_unit_ext, rv_data.time)),
+                            jnp.asarray(ustrip(time_unit_ext, rv_data.time)),
+                            jnp.asarray(ustrip(time_unit_ext, rv_data.time)),
                             err_data_arr,
                             hp,
                         )
@@ -676,7 +690,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         instr_style.setdefault("label", label)
 
         phase_fold = ref_period if phase_fold_median else None
-        phase_zero = ref_t_peri if phase_fold_median else t_ref
+        phase_zero = ref_time_peri if phase_fold_median else time_ref
 
         plot_timeseries_errorbar(
             rv_data.time,
@@ -684,8 +698,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             rv_err,
             time_unit=time_unit,
             obs_unit=rv_unit,
-            t_ref=phase_zero,
-            relative_to_t_ref=relative_to_t_ref,
+            time_ref=phase_zero,
+            relative_to_time_ref=relative_to_time_ref,
             phase_fold=phase_fold,
             ax=ax,
             **instr_style,
@@ -708,8 +722,8 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 rv_err_wide,
                 time_unit=time_unit,
                 obs_unit=rv_unit,
-                t_ref=phase_zero,
-                relative_to_t_ref=relative_to_t_ref,
+                time_ref=phase_zero,
+                relative_to_time_ref=relative_to_time_ref,
                 phase_fold=phase_fold,
                 ax=ax,
                 **wide_style,
@@ -721,12 +735,11 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         # Common reference-time grid defined by the chosen reference sample,
         # unless the user explicitly provides a plotting grid.
         if time_grid is None:
-            t_grid = ref_t_peri + Q(phase_grid, "") * ref_period
+            time_grid = ref_time_peri + Q(phase_grid, "") * ref_period
             x_plot = phase_grid
         else:
-            t_grid = time_grid
             x_plot = (
-                (ustrip(time_unit, t_grid) - float(ustrip(time_unit, ref_t_peri)))
+                (ustrip(time_unit, time_grid) - float(ustrip(time_unit, ref_time_peri)))
                 / float(ustrip(time_unit, ref_period))
             ) % 1.0
 
@@ -738,21 +751,20 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         }
 
     else:
-        # don't phase fold:
-        if time_grid is not None:
-            t_grid = time_grid
-        elif rv_datasets:
-            all_times = Q["time"].from_(  # ty: ignore[unresolved-reference]
-                jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
-            )
-            t_grid = get_t_grid(all_times, median_period)
-        else:
-            t_grid = ref_t_peri + Q(phase_grid, "") * median_period
+        # don't phase fold: keep an explicit time_grid, otherwise build one.
+        if time_grid is None:
+            if rv_datasets:
+                all_times = Q["time"].from_(  # ty: ignore[unresolved-reference]
+                    jnp.concatenate([rv_data.time for rv_data in rv_datasets.values()])
+                )
+                time_grid = get_time_grid(all_times, median_period)
+            else:
+                time_grid = ref_time_peri + Q(phase_grid, "") * median_period
 
-        x_plot = ustrip(time_unit, t_grid)
+        x_plot = ustrip(time_unit, time_grid)
 
-        if relative_to_t_ref:
-            x_plot = x_plot - ustrip(time_unit, t_ref)
+        if relative_to_time_ref:
+            x_plot = x_plot - ustrip(time_unit, time_ref)
 
         ax_set_info = {
             "xlabel": f"time [{time_unit}]",
@@ -775,28 +787,28 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     ) -> tuple[jax.Array, jax.Array, bool]:
         """Return (kepler_rv_array, extension_rv_array, has_extension_signal).
 
-        Both arrays are in rv_unit, bare jax arrays of shape len(t_grid).
+        Both arrays are in rv_unit, bare jax arrays of shape len(time_grid).
         """
-        nl_i, lin_i = _component_sample_params(
+        nonlinear_i, linear_i = _component_sample_params(
             samples, comp_model, rv_data_ref, instr_name, i
         )
-        curve_model = _strip_multisurvey_offsets(comp_model)
+        curve_model = _strip_multi_survey_offsets(comp_model)
         # Keplerian-only baseline (no design-matrix extensions).
         kepler_only = eqx.tree_at(lambda m: m.extensions, curve_model, ())
         y_kepler = kepler_only.predict_at_times(
-            t_grid,
-            nl_i,
-            lin_i,
-            t_ref=rv_data_ref.t_ref,
+            nonlinear_i,
+            linear_i,
+            time_grid,
+            time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
         # Full design-matrix prediction (Keplerian + trend + any other
         # design-matrix extension).
         y_full = curve_model.predict_at_times(
-            t_grid,
-            nl_i,
-            lin_i,
-            t_ref=rv_data_ref.t_ref,
+            nonlinear_i,
+            linear_i,
+            time_grid,
+            time_ref=rv_data_ref.time_ref,
             obs_unit=rv_unit,
         )
         ext_curve = y_full - y_kepler
@@ -810,16 +822,16 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
                 if isinstance(ext, GP):
                     # Residuals against the *full* deterministic prediction at
                     # the data times.
-                    y_at_data = curve_model.predict(nl_i, lin_i, rv_data_ref)
+                    y_at_data = curve_model.predict(nonlinear_i, linear_i, rv_data_ref)
                     residuals = jnp.asarray(
                         ustrip(rv_unit, rv_data_ref.rv) - jnp.asarray(y_at_data)
                     )
-                    t_unit_ext = ext.time_unit or time_unit
+                    time_unit_ext = ext.time_unit or time_unit
                     hp = _get_extension_sample_values(samples, (ext,), i)
                     gp_grid = ext.conditional_mean(
                         residuals,
-                        jnp.asarray(ustrip(t_unit_ext, rv_data_ref.time)),
-                        jnp.asarray(ustrip(t_unit_ext, t_grid)),
+                        jnp.asarray(ustrip(time_unit_ext, rv_data_ref.time)),
+                        jnp.asarray(ustrip(time_unit_ext, time_grid)),
                         err_data_arr,
                         hp,
                     )
@@ -889,19 +901,19 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             time=Q(jnp.zeros(1), time_unit),
             rv=Q(jnp.zeros(1), rv_unit),
             rv_err=Q(jnp.ones(1), rv_unit),
-            t_ref=t_ref,
+            time_ref=time_ref,
         )
         comp_model_for_curve = model if isinstance(model, _RVModel) else _RVModel()
-        curve_model = _strip_multisurvey_offsets(comp_model_for_curve)
+        curve_model = _strip_multi_survey_offsets(comp_model_for_curve)
         for i in draw_indices:
-            nl_i, lin_i = _component_sample_params(
+            nonlinear_i, linear_i = _component_sample_params(
                 samples, curve_model, dummy_data, "data", i
             )
             y_model = curve_model.predict_at_times(
-                t_grid,
-                nl_i,
-                lin_i,
-                t_ref=t_ref,
+                nonlinear_i,
+                linear_i,
+                time_grid,
+                time_ref=time_ref,
                 obs_unit=rv_unit,
             )
             ax.plot(
@@ -923,10 +935,10 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
 
 
 def plot_gaia_sky_orbit(
-    model: Any,
     samples: Samples,
-    *,
     data: GaiaAstrometryData | None = None,
+    model: Any = None,
+    *,
     n_grid: int = 500,
     errorbar_scale: float = 1.0,
     plot_kwargs: dict[str, Any] | None = None,
@@ -985,6 +997,8 @@ def plot_gaia_sky_orbit(
     """
     _, plt = get_mpl("plot_gaia_sky_orbit")
 
+    model = _default_gaia_model(model)
+
     if len(samples) != 1:
         msg = (
             f"plot_gaia_sky_orbit expects exactly one posterior sample, but "
@@ -1037,11 +1051,11 @@ def plot_gaia_sky_orbit(
 
     period_q = nl["period"]  # Q[time]
     phase_peri_v = float(ustrip(AllowValue, "", samples["phase_peri"][0]))
-    t_peri_q = phase_peri_v * period_q
+    time_peri_q = phase_peri_v * period_q
 
     # Smooth orbit curve over one full period, anchored at periastron.
     phi_grid = np.linspace(0.0, 1.0, n_grid)
-    times_grid = t_peri_q + Q(phi_grid, "") * period_q
+    times_grid = time_peri_q + Q(phi_grid, "") * period_q
     delta_ra_grid, delta_dec_grid = model.predict_orbit_sky(nl, lin, times_grid)
 
     orbit_style = {**_DEFAULT_LINE_STYLE, "color": "#555555", **plot_kwargs}
@@ -1186,12 +1200,7 @@ def plot_gaia_astrometry(
         )
         raise ValueError(msg)
 
-    if model is None:
-        from harv.models.astrometry import (  # noqa: PLC0415
-            GaiaAstrometryModel as _GaiaAstrometryModel,
-        )
-
-        model = _GaiaAstrometryModel()
+    model = _default_gaia_model(model)
 
     return_fig = axes is None
     if axes is None:
@@ -1224,14 +1233,14 @@ def plot_gaia_astrometry(
     err_obs = np.asarray(ustrip(obs_unit, data.al_position_err))
     for ext in model.extensions:
         if isinstance(ext, GP):
-            t_unit = ext.time_unit or str(data.time.unit)
-            t_data = jnp.asarray(ustrip(t_unit, data.time))
+            time_unit = ext.time_unit or str(data.time.unit)
+            time_data = jnp.asarray(ustrip(time_unit, data.time))
             hp = _get_extension_sample_values(samples, (ext,), 0)
             gp_mean = np.asarray(
                 ext.conditional_mean(
                     jnp.asarray(residual),
-                    t_data,
-                    t_data,
+                    time_data,
+                    time_data,
                     jnp.asarray(err_obs),
                     hp,
                 )
@@ -1256,7 +1265,7 @@ def plot_gaia_astrometry(
     ax_resid.set_title("Along-scan residual vs time")
 
     # --- Panel 1: sky-projected orbit (delegated) ---
-    plot_gaia_sky_orbit(model, samples, data=data, ax=ax_sky, **sky_orbit_kwargs)
+    plot_gaia_sky_orbit(samples, data, model, ax=ax_sky, **sky_orbit_kwargs)
     ax_sky.set_title("Sky-projected orbit")
 
     if return_fig:

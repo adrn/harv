@@ -63,7 +63,7 @@ usually need two pieces:
 1. The extension attached to the model, and
 1. A matching prior entry for every extra parameter introduced by that extension.
 
-For example, adding `Jitter(param_unit="km/s")` to the model is not enough on its own;
+For example, adding `Jitter(obs_unit="km/s")` to the model is not enough on its own;
 you also need a `jitter=...` prior in the corresponding `HarvPrior`.
 
 For joint models, extension-parameter names are component-qualified, such as
@@ -104,7 +104,7 @@ periodograms for a whole population of sources in one traced call:
 
 ```python
 batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
-grid = hp.frequency_grid(t_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
+grid = hp.frequency_grid(time_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
 results = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))(batched)
 ```
 
@@ -133,12 +133,14 @@ The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns `Na
 there.
 
 `NaN` does not behave like a rejected sample. It propagates through the `max` reduction
-the rejection step normalizes by, so `max_log_likelihood`, `logZ_int`, and
-`logZ_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
+the rejection step normalizes by, so `max_ln_likelihood`, `ln_Z_int`, and
+`ln_Z_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
 raised. Pass `ignore_non_finite=True` so those draws are treated as rejections:
 
 ```python
-samples = sampler.run(data, n_prior_samples=1_000_000, ignore_non_finite=True)
+samples = sampler.run(
+    data, key=jax.random.key(0), n_prior_samples=1_000_000, ignore_non_finite=True
+)
 ```
 
 This is not specific to `EcoswEsinwRV` -- any prior that can produce a non-finite

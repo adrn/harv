@@ -32,7 +32,9 @@ is identical either way; jax picks the accelerator at runtime.
 ### Radial velocity modeling
 
 ```python
+import jax
 from unxt import Q
+
 import harv
 import harv.models as hm
 
@@ -57,7 +59,7 @@ sampler = harv.RejectionSampler(prior, harv.RVModel())
 # Inspect how each parameter will be treated before running:
 print(sampler.summary())   # which params are marginalized vs. sampled
 
-samples = sampler.run(data, n_prior_samples=1_000_000, seed=42)
+samples = sampler.run(data, n_prior_samples=1_000_000, key=jax.random.key(42))
 
 # Inspect results — quantities carry units:
 print(f"Accepted {samples.n_samples} posterior samples")
@@ -91,7 +93,7 @@ prior = hm.StandardGaiaAstrometry().default_prior(
 )
 
 sampler = harv.RejectionSampler(prior, harv.GaiaAstrometryModel())
-samples = sampler.run(astro_data, n_prior_samples=1_000_000, seed=42)
+samples = sampler.run(astro_data, n_prior_samples=1_000_000, key=jax.random.key(42))
 ```
 
 ### MCMC continuation
@@ -99,10 +101,15 @@ samples = sampler.run(astro_data, n_prior_samples=1_000_000, seed=42)
 When the rejection sampler returns a small number of samples, you can refine with
 NumPyro MCMC, started from the posterior samples:
 
-```py
+```python
 from harv.samplers import NumpyroSampler
 
-samples = sampler.run(n_prior_samples=1_000_000, max_posterior_samples=128)
-mcmc_sampler = NumpyroSampler(model=model, prior=prior)
-mcmc_samples = mcmc_sampler.run(samples, seed=0)
+samples = sampler.run(
+    data,
+    key=jax.random.key(42),
+    n_prior_samples=1_000_000,
+    max_posterior_samples=128,
+)
+mcmc_sampler = NumpyroSampler(prior, harv.RVModel())
+mcmc_samples = mcmc_sampler.run(data, key=jax.random.key(0), init_samples=samples)
 ```

@@ -3,7 +3,7 @@
 Covers:
 
 - :meth:`HarvPrior.sample` — keys, shapes, units, optional ``ln_prior``,
-  ``data_type`` propagation, JointModel support.
+  ``model_type`` propagation, JointModel support.
 - :func:`make_prior_cache` — chunked HDF5 write with round-trip via
   :meth:`Samples.from_hdf5`.
 - :meth:`RejectionSampler.run_with_samples` — in-memory and HDF5-path
@@ -61,13 +61,13 @@ def _rv_prior_with_jitter() -> HarvPrior:
 
 class TestHarvPriorSample:
     def test_returns_samples_container(self):
-        samples = _rv_prior().sample(jr.key(0), 100, model=RVModel())
+        samples = _rv_prior().sample(100, key=jr.key(0), model=RVModel())
         assert isinstance(samples, Samples)
         assert samples.n_samples == 100
-        assert samples.data_type == "RVModel"
+        assert samples.model_type == "RVModel"
 
     def test_keys_match_base_nonlinear(self):
-        samples = _rv_prior().sample(jr.key(0), 64, model=RVModel())
+        samples = _rv_prior().sample(64, key=jr.key(0), model=RVModel())
         assert set(samples.nonlinear) == {
             "period",
             "eccentricity",
@@ -79,7 +79,7 @@ class TestHarvPriorSample:
         assert samples.linear == {}
 
     def test_period_units_round_trip(self):
-        samples = _rv_prior().sample(jr.key(0), 32, model=RVModel())
+        samples = _rv_prior().sample(32, key=jr.key(0), model=RVModel())
         assert str(samples.nonlinear["period"].unit) == "d"
         # Period values lie inside [period_min, period_max).
         values = np.asarray(samples.nonlinear["period"].value)
@@ -88,14 +88,14 @@ class TestHarvPriorSample:
 
     def test_extension_nonlinear_drawn(self):
         """Jitter (extension nonlinear) appears in the sample dict."""
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
-        samples = _rv_prior_with_jitter().sample(jr.key(0), 50, model=model)
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
+        samples = _rv_prior_with_jitter().sample(50, key=jr.key(0), model=model)
         assert "jitter" in samples.nonlinear
         assert samples.nonlinear["jitter"].shape == (50,)
 
     def test_return_logprobs_populates_ln_prior(self):
         samples = _rv_prior().sample(
-            jr.key(0), 32, model=RVModel(), return_logprobs=True
+            32, key=jr.key(0), model=RVModel(), return_logprobs=True
         )
         assert samples.ln_prior is not None
         assert samples.ln_prior.shape == (32,)
@@ -103,7 +103,7 @@ class TestHarvPriorSample:
         assert samples.ln_likelihood is None
 
     def test_ln_prior_omitted_by_default(self):
-        samples = _rv_prior().sample(jr.key(0), 32, model=RVModel())
+        samples = _rv_prior().sample(32, key=jr.key(0), model=RVModel())
         assert samples.ln_prior is None
         assert samples.ln_likelihood is None
 
@@ -118,7 +118,7 @@ class TestHarvPriorSample:
             sigma_pos=Q(100.0, "mas"),
             sigma_vtan=Q(50.0, "km/s"),
         )
-        samples = prior.sample(jr.key(0), 24, model=GaiaAstrometryModel())
+        samples = prior.sample(24, key=jr.key(0), model=GaiaAstrometryModel())
         assert "parallax" in samples.linear
         assert samples.linear["parallax"].shape == (24,)
         assert str(samples.linear["parallax"].unit) == "mas"
@@ -131,8 +131,8 @@ class TestHarvPriorSample:
             sigma_v0=Q(50.0, "km/s"),
         )
         joint = JointModel.for_sb2(prior)
-        samples = prior.sample(jr.key(0), 16, model=joint)
-        assert samples.data_type == "JointModel"
+        samples = prior.sample(16, key=jr.key(0), model=joint)
+        assert samples.model_type == "JointModel"
         assert samples.n_samples == 16
 
 
@@ -157,7 +157,7 @@ class TestMakePriorCache:
             "arg_peri",
         }
         assert str(loaded.nonlinear["period"].unit) == "d"
-        assert loaded.data_type == "RVModel"
+        assert loaded.model_type == "RVModel"
 
     def test_writes_ln_prior_when_requested(self, tmp_path: Path):
         path = tmp_path / "cache.h5"
@@ -177,7 +177,7 @@ class TestMakePriorCache:
     def test_with_extension(self, tmp_path: Path):
         """Extension nonlinear params (jitter) make it into the cache."""
         path = tmp_path / "cache.h5"
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         make_prior_cache(
             _rv_prior_with_jitter(),
             model,
@@ -230,7 +230,7 @@ class TestMakePriorCache:
             prior, RVModel(), batch_size=200, marginalized_names=("rv_semiamp",)
         )
         out = sampler.run_with_samples(
-            _rv_data(), path, seed=0, randomize_prior_order=False
+            _rv_data(), path, key=jax.random.key(0), randomize_prior_order=False
         )
         assert out.n_samples > 0
 
@@ -260,9 +260,9 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         model = RVModel()
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
 
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert isinstance(out, Samples)
         # Linear params get resampled from the conditional posterior.
         assert set(out.linear) == {"rv_semiamp", "v_sys"}
@@ -271,9 +271,11 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         model = RVModel()
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
 
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42, return_logprobs=True)
+        out = sampler.run_with_samples(
+            _rv_data(), pri, key=jax.random.key(42), return_logprobs=True
+        )
         assert out.ln_likelihood is not None
         assert out.ln_prior is not None
         assert out.ln_likelihood.shape == (out.n_samples,)
@@ -283,26 +285,26 @@ class TestRunWithSamplesInMemory:
         prior = _rv_prior()
         sampler = RejectionSampler(prior, RVModel(), batch_size=200)
         # Build a Samples missing the 'eccentricity' key.
-        pri = prior.sample(jr.key(0), 50, model=RVModel())
+        pri = prior.sample(50, key=jr.key(0), model=RVModel())
         broken_nonlinear = {
             k: v for k, v in pri.nonlinear.items() if k != "eccentricity"
         }
         broken = Samples(
             nonlinear=broken_nonlinear,
             linear=pri.linear,
-            data_type=pri.data_type,
+            model_type=pri.model_type,
             linear_extension_names=pri.linear_extension_names,
         )
         with pytest.raises(ValueError, match="Missing"):
-            sampler.run_with_samples(_rv_data(), broken, seed=42)
+            sampler.run_with_samples(_rv_data(), broken, key=jax.random.key(42))
 
     def test_extension_in_memory(self):
         """In-memory branch handles a Jitter extension."""
         prior = _rv_prior_with_jitter()
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
-        pri = prior.sample(jr.key(0), 1000, model=model)
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        pri = prior.sample(1000, key=jr.key(0), model=model)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert "jitter" in out.nonlinear
 
     def test_superset_samples_extra_keys_ignored(self):
@@ -312,13 +314,13 @@ class TestRunWithSamplesInMemory:
         sampler ignores the extra ``jitter`` key rather than raising.
         """
         prior_j = _rv_prior_with_jitter()
-        model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
-        pri = prior_j.sample(jr.key(0), 1000, model=model_j)
+        model_j = RVModel(extensions=(Jitter(obs_unit="km/s"),))
+        pri = prior_j.sample(1000, key=jr.key(0), model=model_j)
         assert "jitter" in pri.nonlinear  # the extra key
 
         prior_nj = _rv_prior()
         sampler = RejectionSampler(prior_nj, RVModel(), batch_size=200)
-        out = sampler.run_with_samples(_rv_data(), pri, seed=0)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(0))
         assert out.n_samples > 0
         assert "jitter" not in out.nonlinear
 
@@ -332,13 +334,15 @@ class TestRunWithSamplesInMemory:
         """
         prior = _rv_prior()
         marg = ("rv_semiamp",)
-        pri = prior.sample(jr.key(0), 1000, model=RVModel(), marginalized_names=marg)
+        pri = prior.sample(
+            1000, key=jr.key(0), model=RVModel(), marginalized_names=marg
+        )
         assert "v_sys" in pri.linear
 
         sampler = RejectionSampler(
             prior, RVModel(), batch_size=200, marginalized_names=marg
         )
-        out = sampler.run_with_samples(_rv_data(), pri, seed=42)
+        out = sampler.run_with_samples(_rv_data(), pri, key=jax.random.key(42))
         assert out.n_samples > 0
 
 
@@ -346,7 +350,7 @@ class TestRunWithSamplesFromHdf5:
     def test_disk_matches_in_memory_sequential(self, tmp_path: Path):
         """With randomize_prior_order=False, disk path and in-memory must agree."""
         prior = _rv_prior_with_jitter()
-        model = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         sampler = RejectionSampler(prior, model, batch_size=200)
 
         path = tmp_path / "cache.h5"
@@ -362,9 +366,9 @@ class TestRunWithSamplesFromHdf5:
 
         data = _rv_data()
         disk = sampler.run_with_samples(
-            data, path, seed=42, randomize_prior_order=False
+            data, path, key=jax.random.key(42), randomize_prior_order=False
         )
-        mem = sampler.run_with_samples(data, loaded, seed=42)
+        mem = sampler.run_with_samples(data, loaded, key=jax.random.key(42))
 
         # Same set of accepted samples (same seed, same sample order, same logL).
         assert disk.n_samples == mem.n_samples
@@ -389,9 +393,9 @@ class TestRunWithSamplesFromHdf5:
         )
 
         data = _rv_data()
-        disk_rand = sampler.run_with_samples(data, path, seed=42)
+        disk_rand = sampler.run_with_samples(data, path, key=jax.random.key(42))
         disk_seq = sampler.run_with_samples(
-            data, path, seed=42, randomize_prior_order=False
+            data, path, key=jax.random.key(42), randomize_prior_order=False
         )
         # Acceptance counts may differ (per-position uniforms hit different
         # rows), but should be within a reasonable factor of each other.
@@ -417,10 +421,10 @@ class TestRunWithSamplesFromHdf5:
 
         data = _rv_data()
         out_str = sampler.run_with_samples(
-            data, str(path), seed=7, randomize_prior_order=False
+            data, str(path), key=jax.random.key(7), randomize_prior_order=False
         )
         out_path = sampler.run_with_samples(
-            data, path, seed=7, randomize_prior_order=False
+            data, path, key=jax.random.key(7), randomize_prior_order=False
         )
         assert out_str.n_samples == out_path.n_samples
 
@@ -432,7 +436,7 @@ class TestRunWithSamplesFromHdf5:
         extra key is ignored and consumption succeeds.
         """
         prior_j = _rv_prior_with_jitter()
-        model_j = RVModel(extensions=(Jitter(param_unit="km/s"),))
+        model_j = RVModel(extensions=(Jitter(obs_unit="km/s"),))
         path = tmp_path / "cache.h5"
         make_prior_cache(
             prior_j,
@@ -449,6 +453,6 @@ class TestRunWithSamplesFromHdf5:
         # Should succeed because the cache has *extra* keys (jitter), which
         # are unused. The expected_keys is a subset of available. Verify:
         out = sampler.run_with_samples(
-            _rv_data(), path, seed=0, randomize_prior_order=False
+            _rv_data(), path, key=jax.random.key(0), randomize_prior_order=False
         )
         assert out.n_samples > 0

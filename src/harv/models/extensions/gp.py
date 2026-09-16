@@ -62,7 +62,7 @@ class GP(AbstractExtension):
         self,
         cov: jax.Array,
         data: Any,
-        nl_values: dict[str, Any],
+        nonlinear_values: dict[str, Any],
     ) -> jax.Array:
         """Add the GP kernel matrix ``K(t, t')`` to the covariance.
 
@@ -76,7 +76,7 @@ class GP(AbstractExtension):
             t = jnp.asarray(ustrip(AllowValue, "", data.time))
 
         # Build kernel and evaluate
-        kernel = self.kernel_builder(nl_values)
+        kernel = self.kernel_builder(nonlinear_values)
         K = kernel(t, t)
 
         # Promote diagonal to full if needed

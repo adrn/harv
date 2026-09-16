@@ -5,10 +5,10 @@ Covers:
 - :func:`harv.samplers.rejection._top_k_indices` — descending order, static
   output shape, non-finite handling, behaviour under ``jit`` / ``vmap``.
 - :attr:`Samples.weight` and ``samples["weight"]`` — reconstruction from
-  ``ln_likelihood`` plus the ``logZ_int`` / ``n_prior_samples`` evidence
+  ``ln_likelihood`` plus the ``ln_Z_int`` / ``n_prior_samples`` evidence
   metadata, and the guards for missing metadata and batched ``Samples``.
 - :func:`harv.samplers.rejection._prior_monte_carlo_evidence_stats` — the
-  ``logZ_int_ess`` Kish effective sample size against a direct computation.
+  ``ln_Z_int_ess`` Kish effective sample size against a direct computation.
 - :meth:`RejectionSampler.run` / :meth:`RejectionSampler.run_with_samples`
   with ``top_k=`` — fixed output length across datasets (vs. rejection's
   data-dependent length), ``weight_captured``, invariance to
@@ -72,9 +72,9 @@ def _weighted_samples(ln_lik: np.ndarray, *, n_prior: int | None = None) -> Samp
     return Samples(
         nonlinear={"period": Q(jnp.arange(len(ln_lik), dtype=ln_lik_arr.dtype), "day")},
         linear={},
-        data_type="RVModel",
+        model_type="RVModel",
         metadata={
-            "logZ_int": float(stats["logZ_int"]),
+            "ln_Z_int": float(stats["ln_Z_int"]),
             "n_prior_samples": int(n_prior if n_prior is not None else len(ln_lik)),
         },
         ln_likelihood=ln_lik_arr,
@@ -134,29 +134,29 @@ class TestTopKIndices:
 
 
 class TestEvidenceStats:
-    """``logZ_int_ess`` is the Kish ESS of the importance weights."""
+    """``ln_Z_int_ess`` is the Kish ESS of the importance weights."""
 
     def test_ess_matches_direct_computation(self):
-        """``logZ_int_ess`` equals a plain ``(sum w)^2 / sum w^2`` on weights."""
+        """``ln_Z_int_ess`` equals a plain ``(sum w)^2 / sum w^2`` on weights."""
         with jax.enable_x64(new_val=True):
             ll = np.asarray(jr.normal(jr.key(3), (500,), dtype=jnp.float64)) * 3.0
             stats = _prior_monte_carlo_evidence_stats(jnp.asarray(ll))
             w = np.exp(ll - ll.max())
             expected = w.sum() ** 2 / (w**2).sum()
             np.testing.assert_allclose(
-                float(stats["logZ_int_ess"]), expected, rtol=1e-10
+                float(stats["ln_Z_int_ess"]), expected, rtol=1e-10
             )
 
     def test_flat_likelihood_gives_ess_equal_to_m(self):
         """Equal weights are the maximally efficient case: ESS == M."""
         stats = _prior_monte_carlo_evidence_stats(jnp.zeros(64))
-        np.testing.assert_allclose(float(stats["logZ_int_ess"]), 64.0, rtol=1e-5)
+        np.testing.assert_allclose(float(stats["ln_Z_int_ess"]), 64.0, rtol=1e-5)
 
     def test_delta_likelihood_gives_ess_of_one(self):
         """One sample dominating everything is the worst case: ESS == 1."""
         ll = jnp.asarray([0.0, *([-200.0] * 99)])
         stats = _prior_monte_carlo_evidence_stats(ll)
-        np.testing.assert_allclose(float(stats["logZ_int_ess"]), 1.0, rtol=1e-5)
+        np.testing.assert_allclose(float(stats["ln_Z_int_ess"]), 1.0, rtol=1e-5)
 
 
 class TestWeightDerivedKey:
@@ -184,7 +184,7 @@ class TestWeightDerivedKey:
             nonlinear={"period": Q(jnp.arange(50.0), "day")},
             linear={},
             metadata={
-                "logZ_int": float(stats["logZ_int"]),
+                "ln_Z_int": float(stats["ln_Z_int"]),
                 "n_prior_samples": 100,
             },
             ln_likelihood=jnp.asarray(ll),
@@ -222,7 +222,7 @@ class TestWeightDerivedKey:
         samples = Samples(
             nonlinear={"period": Q(jnp.arange(4.0), "day")},
             linear={},
-            metadata={"logZ_int": -1.0, "n_prior_samples": 4},
+            metadata={"ln_Z_int": -1.0, "n_prior_samples": 4},
         )
         with pytest.raises(ValueError, match="requires ln_likelihood"):
             _ = samples.weight
@@ -257,7 +257,9 @@ class TestRunWithTopK:
     def test_returns_exactly_k_samples(self):
         """The output length is ``top_k``, not a function of the data."""
         sampler = _sampler()
-        samples = sampler.run(_rv_data(), n_prior_samples=1000, top_k=16, seed=0)
+        samples = sampler.run(
+            _rv_data(), n_prior_samples=1000, top_k=16, key=jax.random.key(0)
+        )
         assert samples.n_samples == 16
         assert samples["period"].shape == (16,)
 
@@ -277,12 +279,12 @@ class TestRunWithTopK:
         once other tests in the session compile anything.
         """
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 1000, model=RVModel())
+        library = _rv_prior().sample(1000, key=jr.key(1), model=RVModel())
 
         shapes = []
         for seed in range(3):
             samples = sampler.run_with_samples(
-                _rv_data(seed=seed), library, top_k=16, seed=0
+                _rv_data(seed=seed), library, top_k=16, key=jax.random.key(0)
             )
             assert samples.n_samples == 16
             shapes.append(
@@ -298,10 +300,10 @@ class TestRunWithTopK:
         than only asserted about in prose.
         """
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 1000, model=RVModel())
+        library = _rv_prior().sample(1000, key=jr.key(1), model=RVModel())
         lengths = {
             sampler.run_with_samples(
-                _rv_data(seed=seed, noise=noise), library, seed=0
+                _rv_data(seed=seed, noise=noise), library, key=jax.random.key(0)
             ).n_samples
             for seed, noise in ((0, 2.0), (1, 10.0), (2, 30.0))
         }
@@ -310,7 +312,9 @@ class TestRunWithTopK:
     def test_weights_are_non_increasing(self):
         """Rows come back ordered by decreasing weight."""
         sampler = _sampler()
-        samples = sampler.run(_rv_data(), n_prior_samples=1000, top_k=32, seed=0)
+        samples = sampler.run(
+            _rv_data(), n_prior_samples=1000, top_k=32, key=jax.random.key(0)
+        )
         w = np.asarray(samples["weight"])
         assert np.all(np.diff(w) <= 1e-12)
 
@@ -325,19 +329,21 @@ class TestRunWithTopK:
             _rv_data(),
             n_prior_samples=1000,
             top_k=8,
-            seed=0,
+            key=jax.random.key(0),
             return_logprobs=False,
             return_evidence_stats=False,
         )
         assert samples.ln_likelihood is not None
         assert samples.ln_prior is not None
-        for key in ("logZ_int", "logZ_int_ess", "n_prior_samples", "weight_captured"):
+        for key in ("ln_Z_int", "ln_Z_int_ess", "n_prior_samples", "weight_captured"):
             assert key in samples.metadata
 
     def test_weight_captured_equals_weight_sum(self):
         """The metadata scalar is exactly the sum of the returned weights."""
         sampler = _sampler()
-        samples = sampler.run(_rv_data(), n_prior_samples=1000, top_k=32, seed=0)
+        samples = sampler.run(
+            _rv_data(), n_prior_samples=1000, top_k=32, key=jax.random.key(0)
+        )
         np.testing.assert_allclose(
             samples.metadata["weight_captured"],
             float(samples["weight"].sum()),
@@ -347,7 +353,9 @@ class TestRunWithTopK:
     def test_weight_captured_is_one_when_k_equals_library_size(self):
         """Nothing truncated means all of the posterior mass survives."""
         sampler = _sampler()
-        samples = sampler.run(_rv_data(), n_prior_samples=1000, top_k=1000, seed=0)
+        samples = sampler.run(
+            _rv_data(), n_prior_samples=1000, top_k=1000, key=jax.random.key(0)
+        )
         np.testing.assert_allclose(samples.metadata["weight_captured"], 1.0, rtol=1e-4)
 
     def test_low_capture_is_reported_not_hidden(self):
@@ -359,11 +367,13 @@ class TestRunWithTopK:
         these samples are *not* posterior estimates.  See ``docs/sharp-bits.md``.
         """
         sampler = _sampler(batch_size=1000)
-        library = _rv_prior().sample(jr.key(1), 4000, model=RVModel())
+        library = _rv_prior().sample(4000, key=jr.key(1), model=RVModel())
         # Few, noisy observations -> broad likelihood -> large ESS.
         data = _rv_data(4, seed=7, noise=10.0)
-        samples = sampler.run_with_samples(data, library, top_k=16, seed=0)
-        assert samples.metadata["logZ_int_ess"] > 100.0
+        samples = sampler.run_with_samples(
+            data, library, top_k=16, key=jax.random.key(0)
+        )
+        assert samples.metadata["ln_Z_int_ess"] > 100.0
         assert samples.metadata["weight_captured"] < 0.5
 
     def test_selection_is_invariant_to_prior_order(self, tmp_path: Path):
@@ -380,10 +390,10 @@ class TestRunWithTopK:
         )
         data = _rv_data(seed=7)
         shuffled = sampler.run_with_samples(
-            data, path, top_k=16, seed=3, randomize_prior_order=True
+            data, path, top_k=16, key=jax.random.key(3), randomize_prior_order=True
         )
         sequential = sampler.run_with_samples(
-            data, path, top_k=16, seed=3, randomize_prior_order=False
+            data, path, top_k=16, key=jax.random.key(3), randomize_prior_order=False
         )
         np.testing.assert_allclose(
             np.sort(np.asarray(shuffled["period"].value)),
@@ -404,11 +414,13 @@ class TestRunWithTopK:
         """
         n_library = 5000
         sampler = _sampler(batch_size=1000)
-        library = _rv_prior().sample(jr.key(1), n_library, model=RVModel())
+        library = _rv_prior().sample(n_library, key=jr.key(1), model=RVModel())
         data = _rv_data(10, seed=7, noise=2.0)
 
-        topk = sampler.run_with_samples(data, library, top_k=n_library, seed=0)
-        rejected = sampler.run_with_samples(data, library, seed=0)
+        topk = sampler.run_with_samples(
+            data, library, top_k=n_library, key=jax.random.key(0)
+        )
+        rejected = sampler.run_with_samples(data, library, key=jax.random.key(0))
 
         np.testing.assert_allclose(topk.metadata["weight_captured"], 1.0, rtol=1e-4)
         w = np.asarray(topk["weight"])
@@ -424,15 +436,19 @@ class TestRunWithTopK:
         """Weights and parameters keep float64 under x64, not silent float32."""
         with jax.enable_x64(new_val=True):
             sampler = _sampler()
-            library = _rv_prior().sample(jr.key(1), 500, model=RVModel())
-            samples = sampler.run_with_samples(_rv_data(), library, top_k=8, seed=0)
+            library = _rv_prior().sample(500, key=jr.key(1), model=RVModel())
+            samples = sampler.run_with_samples(
+                _rv_data(), library, top_k=8, key=jax.random.key(0)
+            )
             assert samples["period"].value.dtype == np.float64
             assert samples["weight"].dtype == np.float64
 
     def test_rejection_path_is_unchanged(self):
         """Omitting ``top_k`` still gives a data-dependent rejection result."""
         sampler = _sampler()
-        samples = sampler.run(_rv_data(), n_prior_samples=1000, top_k=None, seed=0)
+        samples = sampler.run(
+            _rv_data(), n_prior_samples=1000, top_k=None, key=jax.random.key(0)
+        )
         assert samples.n_samples > 0
         assert "weight_captured" not in samples.metadata
 
@@ -449,7 +465,7 @@ class TestTopKErrors:
                 n_prior_samples=500,
                 top_k=8,
                 max_posterior_samples=8,
-                seed=0,
+                key=jax.random.key(0),
             )
 
     @pytest.mark.parametrize("top_k", [0, -1])
@@ -457,19 +473,27 @@ class TestTopKErrors:
         """``top_k`` must ask for at least one sample."""
         sampler = _sampler()
         with pytest.raises(ValueError, match="positive integer"):
-            sampler.run(_rv_data(), n_prior_samples=500, top_k=top_k, seed=0)
+            sampler.run(
+                _rv_data(), n_prior_samples=500, top_k=top_k, key=jax.random.key(0)
+            )
 
     def test_rejects_top_k_larger_than_library(self):
         """A short return would defeat the fixed-shape contract."""
         sampler = _sampler()
         with pytest.raises(ValueError, match="exceeds the number of prior samples"):
-            sampler.run(_rv_data(), n_prior_samples=500, top_k=501, seed=0)
+            sampler.run(
+                _rv_data(), n_prior_samples=500, top_k=501, key=jax.random.key(0)
+            )
 
     def test_run_with_samples_rejects_conflicting_arguments(self):
         """The same validation applies on the pre-computed-library path."""
         sampler = _sampler()
-        library = _rv_prior().sample(jr.key(1), 500, model=RVModel())
+        library = _rv_prior().sample(500, key=jr.key(1), model=RVModel())
         with pytest.raises(ValueError, match="mutually exclusive"):
             sampler.run_with_samples(
-                _rv_data(), library, top_k=8, max_posterior_samples=8, seed=0
+                _rv_data(),
+                library,
+                top_k=8,
+                max_posterior_samples=8,
+                key=jax.random.key(0),
             )

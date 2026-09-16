@@ -17,7 +17,7 @@ import harv.periodogram as hp
 from harv.data import SourceData
 from harv.distributions import QuantityDistribution as QD
 from harv.models.astrometry import GaiaAstrometryModel
-from harv.models.priors.custom_priors import (
+from harv.models.priors.callables import (
     PeriodDependentKPrior,
     PeriodDependentSemiMajorAxisPrior,
 )
@@ -112,7 +112,9 @@ class TestPeriodDependentAmplitudePrior:
         plumbing, and tilts Delta relative to a constant-scale prior.
         """
         data = _rv()
-        k_prior = PeriodDependentKPrior(sigma_K0=Q(30.0, "km/s"), P0=Q(1.0, "yr"))
+        k_prior = PeriodDependentKPrior(
+            sigma_K0=Q(30.0, "km/s"), period_ref=Q(1.0, "yr")
+        )
         tilted = hm.FourierRV(n_terms=1).default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(5000.0, "day"),
@@ -208,7 +210,7 @@ GAIA_BASE = {k: v for k, v in GAIA_KW.items() if k != "sigma_amp"}
 def _gaia_tilted_prior(n_terms: int = 1, **extra: object):
     """Gaia prior whose amplitudes need a parallax to resolve."""
     return hm.FourierGaiaAstrometry(n_terms=n_terms).default_prior(
-        **GAIA_BASE, sigma_a0=Q(0.1, "AU"), P0=Q(1.0, "yr"), **extra
+        **GAIA_BASE, sigma_a0=Q(0.1, "AU"), period_ref=Q(1.0, "yr"), **extra
     )
 
 
@@ -280,14 +282,14 @@ class TestPriorParams:
 
 
 class TestAmplitudeScaleSelection:
-    """sigma_K0/P0 and sigma_amp are mutually exclusive alternatives."""
+    """sigma_K0/period_ref and sigma_amp are mutually exclusive alternatives."""
 
     def test_period_dependent_is_available_for_rv(self):
         prior = hm.FourierRV(n_terms=1).default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(5000.0, "day"),
             sigma_K0=Q(0.15, "km/s"),
-            P0=Q(1.0, "yr"),
+            period_ref=Q(1.0, "yr"),
             sigma_v0=Q(50.0, "km/s"),
         )
         assert isinstance(prior.linear_priors["cos_amp_1"], PeriodDependentKPrior)
@@ -301,7 +303,7 @@ class TestAmplitudeScaleSelection:
     def test_both_scales_is_an_error(self):
         with pytest.raises(TypeError, match="Cannot specify both"):
             hm.FourierRV(n_terms=1).default_prior(
-                **RV_KW, sigma_K0=Q(0.15, "km/s"), P0=Q(1.0, "yr")
+                **RV_KW, sigma_K0=Q(0.15, "km/s"), period_ref=Q(1.0, "yr")
             )
 
     def test_half_a_scale_is_an_error(self):
@@ -315,7 +317,7 @@ class TestAmplitudeScaleSelection:
 
     def test_overriding_every_amplitude_needs_no_scale(self):
         """A complete set of per-column overrides is a complete specification."""
-        kp = PeriodDependentKPrior(sigma_K0=Q(0.15, "km/s"), P0=Q(1.0, "yr"))
+        kp = PeriodDependentKPrior(sigma_K0=Q(0.15, "km/s"), period_ref=Q(1.0, "yr"))
         prior = hm.FourierRV(n_terms=1).default_prior(
             period_min=Q(1.0, "day"),
             period_max=Q(5000.0, "day"),
