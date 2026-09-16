@@ -40,7 +40,7 @@ from harv.samplers._prior_resolution import (
 from harv.samplers._prior_resolution import (
     validate_extension_priors as _validate_extension_priors,
 )
-from harv.samplers.base import AbstractSampler, _fresh_key, _validate_data
+from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.samples import MIN_EVIDENCE_ESS, Samples, _assess_resolution
 
 __all__ = ("RejectionSampler",)
@@ -449,10 +449,10 @@ class RejectionSampler(AbstractSampler):
         self,
         data: InputData,
         *,
+        key: jax.Array,
         n_prior_samples: int,
         max_posterior_samples: int | None = None,
         top_k: int | None = None,
-        key: jax.Array | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
@@ -490,8 +490,8 @@ class RejectionSampler(AbstractSampler):
             because the weight column is reconstructed from them. Default
             ``None`` (ordinary rejection).
         key
-            PRNG key (``jax.random.key(0)``).  If not specified, a fresh
-            unpredictable key is drawn, so each run differs.
+            PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
+            entropy of its own, so a run is reproducible from its key alone.
         ignore_non_finite
             If ``True``, any ``NaN`` or infinite log-likelihood values are
             treated as rejected samples by replacing them with ``-inf`` before
@@ -534,7 +534,6 @@ class RejectionSampler(AbstractSampler):
         )
 
         # if not specified, draw a different key each run:
-        key = _fresh_key() if key is None else key
         sample_key, rej_key = jr.split(key)
 
         # generate prior samples and evaluate (marginalized) log likelihoods in batches
@@ -818,9 +817,9 @@ class RejectionSampler(AbstractSampler):
         data: InputData,
         prior_samples: "Samples | str | os.PathLike[str]",
         *,
+        key: jax.Array,
         max_posterior_samples: int | None = None,
         top_k: int | None = None,
-        key: jax.Array | None = None,
         ignore_non_finite: bool = False,
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
@@ -890,7 +889,6 @@ class RejectionSampler(AbstractSampler):
             verbose=self.verbose,
         )
 
-        key = _fresh_key() if key is None else key
         rej_key = jr.fold_in(key, 1)
 
         if isinstance(prior_samples, Samples):

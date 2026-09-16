@@ -39,7 +39,7 @@ from harv.models.component import (
 )
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
-from harv.samplers.base import AbstractSampler, _fresh_key, _validate_data
+from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.rejection import (
     _prepare_sampler_model,
     _wrap_unit_values,
@@ -276,8 +276,8 @@ class NumpyroSampler(AbstractSampler):
         self,
         data: InputData,
         *,
+        key: jax.Array,
         init_samples: "Samples | None" = None,
-        key: jax.Array | None = None,
         marginalized: bool = True,
         extra_model: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         extra_init_params: dict[str, Any] | None = None,
@@ -300,8 +300,8 @@ class NumpyroSampler(AbstractSampler):
             Posterior samples produced by rejection sampling, used to set the
             initial positions for each MCMC chain.
         key
-            PRNG key (``jax.random.key(0)``).  If not specified, a fresh
-            unpredictable key is drawn, so each run differs.
+            PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
+            entropy of its own, so a run is reproducible from its key alone.
         marginalized
             If ``True`` (default), linear parameters are analytically
             marginalized in the likelihood and conditionally sampled
@@ -422,7 +422,7 @@ class NumpyroSampler(AbstractSampler):
         )
 
         # Create and run MCMC
-        rng_key = _fresh_key() if key is None else key
+        rng_key = key
 
         kernel_instance = kernel(numpyro_model)
         mcmc = _numpyro_infer.MCMC(
@@ -455,7 +455,7 @@ class NumpyroSampler(AbstractSampler):
         samples: "Samples",
         data: InputData,
         *,
-        key: jax.Array | None = None,
+        key: jax.Array,
         max_passes: int = 10,
         tol: float = 1e-4,
     ) -> "Samples":
@@ -483,8 +483,8 @@ class NumpyroSampler(AbstractSampler):
         data
             Observed data (same shape/type as :meth:`run`).
         key
-            PRNG key (``jax.random.key(0)``).  If not specified, a fresh
-            unpredictable key is drawn, so each run differs.
+            PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
+            entropy of its own, so a run is reproducible from its key alone.
         max_passes
             Maximum number of BFGS restarts per sample. The wrapped
             ``jax.scipy.optimize.minimize`` BFGS often quits early when its line
@@ -533,7 +533,7 @@ class NumpyroSampler(AbstractSampler):
             marginalized_names=effective_marginalized_names,
         )
 
-        rng_key = _fresh_key() if key is None else key
+        rng_key = key
 
         per_sample_maps: list[dict[str, jax.Array]] = []
         for i in range(samples.n_samples):

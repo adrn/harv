@@ -267,7 +267,7 @@ class TestNumpyroSamplerOptimize:
             metadata={},
         )
         with pytest.raises(ValueError, match="no samples"):
-            rv_sampler.optimize(empty, rv_data_and_truth)
+            rv_sampler.optimize(empty, rv_data_and_truth, key=jax.random.key(0))
 
 
 # ---------------------------------------------------------------------------

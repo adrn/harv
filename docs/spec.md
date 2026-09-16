@@ -226,7 +226,7 @@ src/harv/
 │   ├── joint.py             # JointModel (composition of components)
 │   └── _helpers.py          # PriorDist, LinearPriorCallable, _needs_explicit_sampling
 ├── samplers/
-│   ├── base.py              # AbstractSampler (shared base), _fresh_key
+│   ├── base.py              # AbstractSampler (shared base)
 │   ├── rejection.py         # RejectionSampler
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
 │   ├── samples.py           # Samples container, pad_and_stack_samples
@@ -844,11 +844,14 @@ violates one is a bug in the code, not an exception to the rule.
 
 1. **Masses are `m_<role>`:** `m_primary`, `m_total`, `m_companion`, `m_body`.
 
-1. **RNG:** the JAX-facing API takes `key: jax.Array`
-   (`RejectionSampler.run`, `NumpyroSampler.run`/`.optimize`,
-   `HarvPrior.sample`, `make_prior_cache`). `harv.simulate.*` is NumPy-backed
-   (`np.random.SeedSequence`) and takes `seed: int`. `key=None` means "a fresh
-   unpredictable key", via `harv.samplers.base._fresh_key`.
+1. **RNG:** the JAX-facing API takes a **required** `key: jax.Array`
+   (`RejectionSampler.run`/`.run_with_samples`, `NumpyroSampler.run`/`.optimize`,
+   `HarvPrior.sample`, `make_prior_cache`), keyword-only everywhere except
+   `HarvPrior.sample`, which takes it positionally like `jax.random.*`. There is
+   no default and harv never draws entropy of its own, so a run is reproducible
+   from its key alone -- the same reason `jax.random` has no implicit global
+   state. `harv.simulate.*` is NumPy-backed (`np.random.SeedSequence`) and takes
+   `seed: int`.
 
 1. **Abbreviate only when the abbreviation is itself a domain term.** `arg_peri`,
    `pmra`, `rv`, `lon_asc_node` qualify. `nl_` (nonlinear) and `multisurv` did
@@ -1660,10 +1663,10 @@ single component model, or `dict[component_name, tuple[Extension, ...]]` for a
 sampler.run(
     data: AbstractData | AbstractDatasetContainer,
     *,
+    key: jax.Array,              # required -- harv draws no entropy of its own
     n_prior_samples: int,
     max_posterior_samples: int | None = None,
     top_k: int | None = None,
-    key: jax.Array | None = None,
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
     return_evidence_stats: bool = False,
@@ -1858,9 +1861,9 @@ sampler.run_with_samples(
     data: AbstractData | AbstractDatasetContainer,
     prior_samples: Samples | str | os.PathLike,
     *,
+    key: jax.Array,              # required
     max_posterior_samples: int | None = None,
     top_k: int | None = None,
-    key: jax.Array | None = None,
     ignore_non_finite: bool = False,
     return_logprobs: bool = False,
     return_evidence_stats: bool = False,
@@ -1963,7 +1966,7 @@ Two model variants are supported via `marginalized`:
   conditionally sampled afterward to populate the returned `Samples`.
 - `marginalized=False`: MCMC samples all parameters jointly (nonlinear + linear).
 
-### `NumpyroSampler.optimize(samples, data, *, key=None, max_passes=10, tol=1e-4) -> Samples`
+### `NumpyroSampler.optimize(samples, data, *, key, max_passes=10, tol=1e-4) -> Samples`
 
 Refines each input sample to the local posterior MAP using BFGS via
 `numpyro.optim.Minimize` (which wraps `jax.scipy.optimize.minimize`) with an
@@ -2613,7 +2616,9 @@ prior = hm.StandardRV().default_prior(
     sigma_K0=Q(30.0, "km/s"),
     sigma_v0=Q(10.0, "km/s"),
 )
-samples = RejectionSampler(prior, RVModel()).run(data, n_prior_samples=100_000)
+samples = RejectionSampler(prior, RVModel()).run(
+    data, key=jax.random.key(0), n_prior_samples=100_000
+)
 ```
 
 ### Hierarchical inference bookkeeping (interim priors)
@@ -3099,10 +3104,12 @@ prior = hm.StandardRV().default_prior(
     sigma_v0=Q(10, "km/s"),
 )
 sampler = RejectionSampler(prior, RVModel())
-samples = sampler.run(data, n_prior_samples=500_000)
+samples = sampler.run(data, key=jax.random.key(0), n_prior_samples=500_000)
 
 # With max posterior samples:
-samples = sampler.run(data, n_prior_samples=500_000, max_posterior_samples=128)
+samples = sampler.run(
+    data, key=jax.random.key(0), n_prior_samples=500_000, max_posterior_samples=128
+)
 
 # --- RV with custom extensions and parameterization ---
 from harv.models.parameterizations.rv import EcoswEsinwRV
@@ -3110,7 +3117,7 @@ sampler = RejectionSampler(
     prior,
     RVModel(parameterization=EcoswEsinwRV(), extensions=(Jitter(obs_unit="km/s"),)),
 )
-samples = sampler.run(data, n_prior_samples=500_000)
+samples = sampler.run(data, key=jax.random.key(0), n_prior_samples=500_000)
 
 # --- Periodogram-informed interim period prior ---
 import harv.periodogram as hp
@@ -3130,7 +3137,9 @@ prior = hm.StandardRV().default_prior(
     sigma_K0=Q(30, "km/s"),
     sigma_v0=Q(10, "km/s"),
 )
-samples = RejectionSampler(prior, RVModel()).run(data, n_prior_samples=100_000)
+samples = RejectionSampler(prior, RVModel()).run(
+    data, key=jax.random.key(0), n_prior_samples=100_000
+)
 samples = hp.attach_interim_period_prior(  # for population reweighting
     samples, prior.nonlinear_priors["period"]
 )
@@ -3145,7 +3154,7 @@ prior = hm.StandardGaiaAstrometry().default_prior(
     sigma_vtan=Q(200, "km/s"),
 )
 sampler = RejectionSampler(prior, GaiaAstrometryModel())
-samples = sampler.run(gaia_data, n_prior_samples=1_000_000)
+samples = sampler.run(gaia_data, key=jax.random.key(0), n_prior_samples=1_000_000)
 
 # --- Joint astrometry + RV ---
 # All linear-prior keys must be qualified ("rv.rv_semiamp", "astro.parallax", etc.)
@@ -3157,7 +3166,9 @@ joint = JointModel.for_rv_and_gaia(
 )
 sampler = RejectionSampler(joint_prior, joint)
 samples = sampler.run(
-    SourceData(rv=rv_data, astro=gaia_data), n_prior_samples=1_000_000
+    SourceData(rv=rv_data, astro=gaia_data),
+    key=jax.random.key(0),
+    n_prior_samples=1_000_000
 )
 
 # --- MCMC continuation ---

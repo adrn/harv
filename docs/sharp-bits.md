@@ -138,7 +138,9 @@ the rejection step normalizes by, so `max_ln_likelihood`, `ln_Z_int`, and
 raised. Pass `ignore_non_finite=True` so those draws are treated as rejections:
 
 ```python
-samples = sampler.run(data, n_prior_samples=1_000_000, ignore_non_finite=True)
+samples = sampler.run(
+    data, key=jax.random.key(0), n_prior_samples=1_000_000, ignore_non_finite=True
+)
 ```
 
 This is not specific to `EcoswEsinwRV` -- any prior that can produce a non-finite

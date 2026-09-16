@@ -63,7 +63,7 @@ class TestSingleComponentValidation:
     def test_numpyro_run_rejects_bare_dict(self):
         sampler = NumpyroSampler(_rv_prior(), RVModel())
         with pytest.raises(TypeError, match="AbstractData"):
-            sampler.run({"time": [1, 2, 3]}, init_samples=None)
+            sampler.run({"time": [1, 2, 3]}, key=jax.random.key(0))
 
 
 class TestJointValidation:

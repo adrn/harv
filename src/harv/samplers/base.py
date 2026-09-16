@@ -6,11 +6,7 @@ concrete subclass, since the rejection and MCMC algorithms have fundamentally
 different ``run()`` signatures and internal state.
 """
 
-import uuid
-
 import equinox as eqx
-import jax
-import jax.random as jr
 
 from harv.data.containers import AbstractDatasetContainer
 from harv.data.datasets import AbstractData
@@ -20,16 +16,6 @@ from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
 
 __all__ = ("AbstractSampler",)
-
-
-def _fresh_key() -> jax.Array:
-    """Draw an unpredictable PRNG key, for when the caller passes ``key=None``.
-
-    harv's JAX-facing API takes ``key: jax.Array`` (``harv.simulate.*`` is
-    NumPy-backed and keeps ``seed: int``); ``None`` means "a different draw each
-    run", which needs entropy from outside JAX.  See ``docs/spec.md``.
-    """
-    return jr.key(uuid.uuid4().int >> 96)
 
 
 def _validate_data(

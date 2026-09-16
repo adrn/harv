@@ -101,10 +101,15 @@ samples = sampler.run(astro_data, n_prior_samples=1_000_000, key=jax.random.key(
 When the rejection sampler returns a small number of samples, you can refine with
 NumPyro MCMC, started from the posterior samples:
 
-```py
+```python
 from harv.samplers import NumpyroSampler
 
-samples = sampler.run(n_prior_samples=1_000_000, max_posterior_samples=128)
-mcmc_sampler = NumpyroSampler(model=model, prior=prior)
-mcmc_samples = mcmc_sampler.run(samples, key=jax.random.key(0))
+samples = sampler.run(
+    data,
+    key=jax.random.key(42),
+    n_prior_samples=1_000_000,
+    max_posterior_samples=128,
+)
+mcmc_sampler = NumpyroSampler(prior, harv.RVModel())
+mcmc_samples = mcmc_sampler.run(data, key=jax.random.key(0), init_samples=samples)
 ```
