@@ -1,9 +1,9 @@
 """Tests for the ``verbose`` flag that gates harv's advisory warnings.
 
-Advisory warnings report a normal, correctly-handled situation (here: a
-non-Gaussian linear prior that cannot be analytically marginalized and so is
-sampled explicitly).  Per ``docs/spec.md`` -> "Warnings and verbosity", they are
-silent unless the caller opts in with ``verbose=True``.
+Advisory warnings report a normal, correctly-handled situation (here: a linear
+prior from outside the Gaussian family, which cannot be analytically marginalized
+and so is sampled explicitly).  Per ``docs/spec.md`` -> "Warnings and
+verbosity", they are silent unless the caller opts in with ``verbose=True``.
 """
 
 import warnings
@@ -21,7 +21,7 @@ from harv.models.priors import HarvPrior
 from harv.models.rv import RVModel
 from harv.samplers.rejection import RejectionSampler
 
-_MATCH = "Non-Gaussian linear prior"
+_MATCH = "cannot be analytically marginalized"
 
 
 def _unmarginalizable_prior() -> HarvPrior:

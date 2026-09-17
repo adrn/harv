@@ -35,7 +35,9 @@ __all__ = (
     "build_marginalized",
 )
 
+import math
 from collections.abc import Callable
+from typing import final
 
 import equinox as eqx
 import jax
@@ -43,18 +45,26 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 from jax.scipy.linalg import cho_solve
-from jax.scipy.special import log_ndtr, logsumexp, ndtr, ndtri
+from jax.scipy.special import log_ndtr, logsumexp
 
 from harv.stats.numpyro_ext import MarginalizedLinear
 
-# Gauss-Legendre rule for the Plackett integral in :func:`_ln_phi2`. Fixed at
-# import time so the quadrature is a static constant: the rule must not depend
-# on traced values or the whole module stops being jit/vmap-safe.
+# Gauss-Legendre rule for the Plackett integral in :func:`_ln_phi2`. Built once
+# at import so the quadrature is a static constant: the rule must not depend on
+# traced values or the whole module stops being jit/vmap-safe.
+#
+# Held as *numpy* rather than JAX arrays, so that only the node *values* are
+# fixed at import and the dtype is still decided where they are used.
+# ``jnp.asarray`` here would bake in whatever precision JAX happened to be
+# configured for at import, pinning the quadrature to float32 for the life of
+# any process that does ``import harv`` before
+# ``jax.config.update("jax_enable_x64", True)`` -- degrading ``_ln_bvn_rect``
+# from 7e-14 to 5e-6 nats while :func:`_signed_logsumexp_guarded` still sized
+# its budget from the float64 operands, leaving the guard ~20 nats too
+# permissive in exactly the regime it exists for.
 _GL_N = 64
-_GL_NODES, _GL_WEIGHTS = (
-    jnp.asarray(x) for x in np.polynomial.legendre.leggauss(_GL_N)
-)
-_LN_GL_WEIGHTS = jnp.log(_GL_WEIGHTS)
+_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(_GL_N)
+_LN_GL_WEIGHTS = np.log(_GL_WEIGHTS)
 
 # ``asin`` is evaluated at the correlation, so keep it strictly inside (-1, 1).
 _RHO_MAX = 1.0 - 1e-12
@@ -74,7 +84,7 @@ _Z_SENTINEL = 40.0
 
 # Held back from the float-precision budget in :func:`_signed_logsumexp_guarded`
 # so that any surviving value stands ~100x above the cancellation noise floor.
-_CANCELLATION_MARGIN = jnp.log(100.0)
+_CANCELLATION_MARGIN = math.log(100.0)
 
 
 # -------------------------------------------------------------------------
@@ -82,7 +92,7 @@ _CANCELLATION_MARGIN = jnp.log(100.0)
 # -------------------------------------------------------------------------
 
 
-def _signed_logsumexp_guarded(terms: jax.Array, signs: jax.Array) -> jax.Array:
+def _signed_logsumexp_guarded(terms: jax.Array, weights: jax.Array) -> jax.Array:
     r"""Log of a signed sum of exponentials, or ``-inf`` if it cancelled away.
 
     A probability built as an alternating sum is only meaningful while the total
@@ -103,11 +113,33 @@ def _signed_logsumexp_guarded(terms: jax.Array, signs: jax.Array) -> jax.Array:
     surviving as -18.9). Holding back ``ln(100)`` means anything returned stands
     a factor of 100 above the noise floor, and so carries at most ~1% relative
     error, or ~0.01 nats.
+
+    ``weights`` carries the sign of each term and may also carry magnitude (see
+    :func:`_ln_phi2`), so the largest term is measured as
+    ``terms + ln|weights|``. That expression feeds a comparison only -- no
+    gradient flows through it, and a ``-ln 0 = -inf`` from a zero weight is
+    harmless -- so it is taken under ``stop_gradient`` and never puts a ``log``
+    of a differentiated value into the graph.
+
+    The sum is formed here rather than by ``logsumexp(terms, b=weights)``,
+    which is otherwise the same computation, because ``logsumexp`` masks out
+    zero weights when it picks its shift and so reports a *zero* derivative
+    with respect to a weight that happens to vanish -- silently wrong at the
+    one point :func:`_ln_phi2` needs it (``rho = 0``). Shifting by a
+    ``stop_gradient`` maximum is equally overflow-safe (every exponent is
+    non-positive and the weights are bounded) and differentiates correctly in
+    both ``terms`` and ``weights``.
     """
-    out, sign = logsumexp(terms, b=signs, return_sign=True)
+    amax = jax.lax.stop_gradient(jnp.max(terms))
+    total = jnp.sum(weights * jnp.exp(terms - amax))
     budget = -jnp.log(jnp.finfo(terms.dtype).eps) - _CANCELLATION_MARGIN
-    trustworthy = out > jnp.max(terms) - budget
-    return jnp.where((sign > 0) & trustworthy, out, -jnp.inf)
+    scaled = jax.lax.stop_gradient(terms + jnp.log(jnp.abs(weights)))
+    # The substituted 1.0 keeps ``log`` off a non-positive total: a cancelled
+    # sum is discarded below, and without it the unselected branch of the
+    # ``where`` would hand back an infinite derivative.
+    positive = total > 0
+    out = jnp.log(jnp.where(positive, total, 1.0)) + amax
+    return jnp.where(positive & (out > jnp.max(scaled) - budget), out, -jnp.inf)
 
 
 def _ln_ndtr_interval(lo_z: jax.Array, hi_z: jax.Array) -> jax.Array:
@@ -163,18 +195,28 @@ def _ln_phi2(a: jax.Array, b: jax.Array, rho: jax.Array) -> jax.Array:
     cos2 = jnp.cos(theta) ** 2
     expo = -(a**2 - 2.0 * a * b * sin_t + b**2) / (2.0 * cos2)
 
-    # ln|I|: the integrand is strictly positive and the weights are positive,
-    # so the only sign in the integral comes from the orientation of [0, half].
-    ln_abs_integral = jnp.log(jnp.abs(half) / (4.0 * jnp.pi)) + logsumexp(
-        _LN_GL_WEIGHTS + expo
-    )
+    # ln J, where the integral is ``half * J`` and J > 0: the integrand is
+    # strictly positive and the weights are positive, so the only sign in the
+    # integral comes from the orientation of [0, half].
+    #
+    # ``half`` is carried as the *weight* of this term rather than folded in as
+    # ``ln|half|``. The two are equal -- ``logsumexp(b=[1, half])`` computes
+    # ``ln|Phi(a)Phi(b) + half * J|`` either way -- but ``log|half|`` has an
+    # infinite derivative at ``half = 0``, so the gradient of the whole
+    # rectangle probability came out NaN at exactly ``rho = 0``. That is not a
+    # measure-zero curiosity: ``rho`` is *exactly* zero whenever the two
+    # constrained columns are supported on disjoint rows with no shared column,
+    # because the ``X^T C^-1 X`` cross term is then an exact zero. In this form
+    # the derivative at ``half = 0`` is J = phi(a) phi(b), which is the correct
+    # ``dPhi_2/drho`` there.
+    ln_j = -jnp.log(4.0 * jnp.pi) + logsumexp(_LN_GL_WEIGHTS + expo)
 
     # The two contributions have opposite signs for rho < 0 and cancel hard
     # there, so this sum needs the same precision guard as the outer
     # inclusion-exclusion in :func:`_ln_bvn_rect`.
     return _signed_logsumexp_guarded(
-        jnp.stack([log_ndtr(a) + log_ndtr(b), ln_abs_integral]),
-        jnp.stack([jnp.ones_like(half), jnp.sign(half)]),
+        jnp.stack([log_ndtr(a) + log_ndtr(b), ln_j]),
+        jnp.stack([jnp.ones_like(half), half]),
     )
 
 
@@ -258,6 +300,7 @@ def _ln_bvn_rect(
     return _signed_logsumexp_guarded(jnp.stack(terms), jnp.asarray(signs))
 
 
+@final
 class ResolvedLinearPrior(eqx.Module):
     """A per-parameter linear prior resolved to arrays, ready to marginalize.
 
@@ -275,6 +318,25 @@ class ResolvedLinearPrior(eqx.Module):
     at trace time, because it selects the closed form used for ``Z_post``. The
     bound *values* stay ordinary leaves, so a ``LinearPriorCallable`` may return
     a traced bound.
+
+    Examples
+    --------
+    The signed SB2 pair ``K_1 > 0``, ``K_2 < 0``, under a zero-mean prior:
+
+    >>> import jax.numpy as jnp
+    >>> from harv.stats.marginalized import ResolvedLinearPrior
+    >>> prior = ResolvedLinearPrior(
+    ...     loc=jnp.zeros((1, 2)),
+    ...     scale=jnp.full((1, 2), 30.0),
+    ...     ln_weights=jnp.zeros(1),
+    ...     low=jnp.array([0.0, -jnp.inf]),
+    ...     high=jnp.array([jnp.inf, 0.0]),
+    ...     low_finite=(True, False),
+    ...     high_finite=(False, True),
+    ...     names=("K_1", "K_2"),
+    ... )
+    >>> prior.n_components, prior.constrained, prior.is_plain_gaussian
+    (1, (0, 1), False)
     """
 
     loc: jax.Array  # (C, k) prior means
@@ -423,30 +485,21 @@ def _ln_post_normalizer(
 def _trunc_normal_draw(
     key: jax.Array, mean: jax.Array, sd: jax.Array, lo: jax.Array, hi: jax.Array
 ) -> jax.Array:
-    """Exact draw from a scalar normal truncated to ``[lo, hi]``, by inverse CDF.
+    """Exact draw from a scalar normal truncated to ``[lo, hi]``.
 
-    Infinite bounds work unchanged: ``ndtr(-inf) = 0`` and ``ndtr(inf) = 1``.
+    Delegates to numpyro, whose truncated normal reflects around the base
+    location instead of inverting the CDF on the probability scale, and so
+    stays exact deep in a tail: measured against ``scipy.stats.truncnorm`` at
+    a lower bound 8, 12 and 20 sigma above the mean it reproduces the truncated
+    mean and standard deviation, where a probability-scale inverse CDF piles
+    every draw onto the bound (sd 0.049 against 0.12 at 8 sigma, and exactly 0
+    past 12). Infinite bounds pass through unchanged.
+
+    The clip is not redundant: callers rely on "every draw is inside the box"
+    absolutely -- :func:`_sample_truncated_gaussian` conditions the remaining
+    coordinates on these values -- and rounding can land a draw a hair outside.
     """
-    p_lo = ndtr((lo - mean) / sd)
-    p_hi = ndtr((hi - mean) / sd)
-    u = jax.random.uniform(key, dtype=mean.dtype)
-    # Clamp into the representable *open* unit interval: in float32 a tail
-    # truncation makes p_lo round up to 1.0 for some u, and ndtri(1.0) is +inf,
-    # which then poisons the conditional draw of the remaining coordinates. The
-    # clamp caps a draw at roughly +/-5.2 sigma in float32 (+/-8.2 in float64).
-    eps = jnp.finfo(mean.dtype).eps
-    prob = jnp.clip(p_lo + u * (p_hi - p_lo), eps, 1.0 - eps)
-    draw = mean + sd * ndtri(prob)
-    # Callers rely on "every draw is inside the box" absolutely, and rounding in
-    # ndtr/ndtri can land a hair outside it. Clipping makes the invariant exact.
-    #
-    # ponytail: the probability-scale inverse CDF loses resolution when the
-    # truncation sits many sigma from the mean (p_lo -> 1), which starts to
-    # matter past ~6 sigma in float64 (~4 in float32) and piles draws near the
-    # bound. That regime
-    # is one where the data contradict the constraint, so the draw is rejected
-    # on its likelihood anyway. Upgrade path: invert in log space via the upper
-    # tail, which needs a hand-rolled ndtri_exp -- JAX has no such primitive.
+    draw = dist.TruncatedNormal(mean, sd, low=lo, high=hi).sample(key)
     return jnp.clip(draw, lo, hi)
 
 
@@ -507,17 +560,24 @@ def _bracket(
 ) -> tuple[jax.Array, jax.Array]:
     """A finite bisection bracket covering the support, in standardized units.
 
-    Extends 2 * ``_BISECT_HALF_WIDTH`` sigma past whichever bound is finite; the
-    standard normal mass beyond that is below ``exp(-288)``, so nothing
-    representable is lost.
+    The coordinates are standardized on the *conditional mean*, so the mass
+    sits around ``z = 0`` and the open end of a one-sided bracket is anchored
+    there, 2 * ``_BISECT_HALF_WIDTH`` sigma out. Anchoring it on the bound
+    instead -- ``[z_lo, z_lo + width]`` -- silently excludes the whole bulk
+    whenever the bound lies more than ``width`` sigma below the mean, which is
+    the *ordinary* case for a constraint the data do not fight: a signed SB2
+    prior with ``K_1 > 0`` and a conditional mean at +700 sigma bisected over
+    ``[-701, -677]`` and returned a draw three orders of magnitude too small.
+    The standard normal mass beyond 24 sigma of the mean is below ``exp(-288)``,
+    so nothing representable is lost at the other end.
     """
     width = 2.0 * _BISECT_HALF_WIDTH
     if lo_finite and hi_finite:
         return z_lo, z_hi
     if lo_finite:
-        return z_lo, z_lo + width
+        return z_lo, jnp.maximum(z_lo, 0.0) + width
     if hi_finite:
-        return z_hi - width, z_hi
+        return jnp.minimum(z_hi, 0.0) - width, z_hi
     return (
         jnp.full_like(z_lo, -_BISECT_HALF_WIDTH),
         jnp.full_like(z_hi, _BISECT_HALF_WIDTH),
@@ -631,6 +691,7 @@ def _sample_truncated_gaussian(
 # -------------------------------------------------------------------------
 
 
+@final
 class _GeneralizedConditional(eqx.Module):
     """Conditional posterior of the linear parameters, possibly truncated.
 
@@ -669,6 +730,16 @@ class _GeneralizedConditional(eqx.Module):
             jax.grad(lambda m, c: _ln_post_normalizer(m, c, self.prior)),
             in_axes=(0, 0),
         )(self.mean_untruncated, self.cov)
+        # When the box holds less conditional mass than the working precision
+        # can resolve, ``ln Z_post`` is -inf by design and its gradient is not
+        # defined. Fall back to the *untruncated* conditional mean, which is
+        # finite and inside no box in particular; such a parameter set has
+        # ``log_prob = -inf``, so the sampler rejects it and the fallback never
+        # reaches output -- the same argument :func:`_sample_truncated_gaussian`
+        # makes for its own fallback. Without this, a NaN here propagates
+        # through ``linear_log_prior_correction`` and poisons the whole batch's
+        # evidence and top-k selection.
+        grad_ln_z = jnp.where(jnp.isfinite(grad_ln_z), grad_ln_z, 0.0)
         means = self.mean_untruncated + jnp.einsum("cij,cj->ci", self.cov, grad_ln_z)
         return jnp.einsum("c,ci->i", jnp.exp(self.ln_component_weights), means)
 
@@ -690,6 +761,7 @@ class _GeneralizedConditional(eqx.Module):
         )
 
 
+@final
 class GeneralizedMarginalizedLinear(eqx.Module):
     r"""Linear marginalization under a truncated and/or mixture Gaussian prior.
 
@@ -718,6 +790,37 @@ class GeneralizedMarginalizedLinear(eqx.Module):
     across components even under a shared box, so it does not cancel.
 
     See ``docs/spec.md`` §Support-constrained and mixture linear priors.
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> import numpyro.distributions as dist
+    >>> from harv.stats.marginalized import ResolvedLinearPrior, build_marginalized
+    >>> design = jnp.array([[1.0, 1.0], [0.5, 1.0], [-0.5, 1.0], [-1.0, 1.0]])
+    >>> err = jnp.full(4, 0.2)
+    >>> obs = design @ jnp.array([2.0, -1.0])
+
+    A prior that forbids the sign the data want costs marginal likelihood:
+
+    >>> def marg(low):
+    ...     prior = ResolvedLinearPrior(
+    ...         jnp.zeros((1, 2)), jnp.full((1, 2), 5.0), jnp.zeros(1),
+    ...         jnp.asarray(low), jnp.full(2, jnp.inf),
+    ...         tuple(bool(v) for v in jnp.isfinite(jnp.asarray(low))),
+    ...         (False, False), ("slope", "offset"),
+    ...     )
+    ...     return build_marginalized(design, prior, dist.Normal(0.0, err))
+    >>> allowed = marg([0.0, -jnp.inf]).log_prob(obs)
+    >>> forbidden = marg([4.0, -jnp.inf]).log_prob(obs)
+    >>> bool(allowed > forbidden)
+    True
+
+    ``conditional`` respects the same support:
+
+    >>> import jax
+    >>> draw = marg([0.0, -jnp.inf]).conditional(obs).sample(jax.random.key(0))
+    >>> bool(draw[0] >= 0.0)
+    True
     """
 
     inner: MarginalizedLinear
@@ -740,7 +843,20 @@ class GeneralizedMarginalizedLinear(eqx.Module):
         )
         ln_z_prior = _ln_prior_normalizer(self.prior)
         ln_w = self.prior.ln_weights
-        return logsumexp(ln_w + ln_p + ln_z_post) - logsumexp(ln_w + ln_z_prior)
+        # ``ln Z_prior`` collapses to -inf once a finite bound standardizes past
+        # ~38 sigma of the prior mean, where both ``log_ndtr`` values underflow
+        # to -0.0. Subtracting it would give +inf, or NaN when ``ln Z_post``
+        # underflowed too, and either poisons the sampler's ``logsumexp``
+        # evidence and top-k comparison across the whole batch. -inf is the
+        # honest answer and the direction this module always errs in: a prior
+        # keeping ``e**-316`` of its own mass inside the box describes a draw
+        # that should be rejected. Written as a double ``where`` so the
+        # unselected branch cannot contribute a ``0 * inf`` gradient (the same
+        # reason :func:`_standardize_bounds` sanitizes before dividing).
+        den = logsumexp(ln_w + ln_z_prior)
+        ok = jnp.isfinite(den)
+        num = logsumexp(ln_w + ln_p + ln_z_post)
+        return jnp.where(ok, num - jnp.where(ok, den, 0.0), -jnp.inf)
 
     def conditional(self, value: jax.Array) -> _GeneralizedConditional:
         """Conditional posterior over the linear parameters given ``value``."""
@@ -753,7 +869,19 @@ class GeneralizedMarginalizedLinear(eqx.Module):
         # it gives the data, times the share of its conditional that survives
         # the truncation.
         ln_w = self.prior.ln_weights + ln_p + ln_z_post
-        return _GeneralizedConditional(mean, cov, ln_w - logsumexp(ln_w), self.prior)
+        # Every component's ``ln Z_post`` can underflow to -inf at once (by
+        # design, see :func:`_signed_logsumexp_guarded`), and ``-inf - (-inf)``
+        # is NaN. Fall back to equal weights: the draw is rejected on its
+        # ``log_prob`` either way, and a NaN escaping here reaches users through
+        # ``sample_conditional_linear(use_mean=True)`` and through the
+        # marginalized log-prob's Jacobian correction.
+        total = logsumexp(ln_w)
+        ln_w = jnp.where(
+            jnp.isfinite(total),
+            ln_w - jnp.where(jnp.isfinite(total), total, 0.0),
+            -jnp.log(ln_w.shape[0]),
+        )
+        return _GeneralizedConditional(mean, cov, ln_w, self.prior)
 
 
 def build_marginalized(
@@ -767,6 +895,26 @@ def build_marginalized(
     single Gaussian, so that the overwhelmingly common path is bit-identical to
     the pre-existing code and costs nothing extra. Anything else gets the
     :class:`GeneralizedMarginalizedLinear` wrapper.
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> import numpyro.distributions as dist
+    >>> from harv.stats import MarginalizedLinear
+    >>> from harv.stats.marginalized import ResolvedLinearPrior, build_marginalized
+    >>> design = jnp.array([[1.0, 1.0], [0.5, 1.0], [-1.0, 1.0]])
+    >>> data_dist = dist.Normal(0.0, jnp.full(3, 0.2))
+    >>> def prior(low_finite):
+    ...     low = jnp.array([0.0, -jnp.inf]) if low_finite else jnp.full(2, -jnp.inf)
+    ...     return ResolvedLinearPrior(
+    ...         jnp.zeros((1, 2)), jnp.ones((1, 2)), jnp.zeros(1),
+    ...         low, jnp.full(2, jnp.inf), (low_finite, False), (False, False),
+    ...         ("a", "b"),
+    ...     )
+    >>> type(build_marginalized(design, prior(False), data_dist)) is MarginalizedLinear
+    True
+    >>> type(build_marginalized(design, prior(True), data_dist)).__name__
+    'GeneralizedMarginalizedLinear'
     """
     if prior.is_plain_gaussian:
         return MarginalizedLinear(

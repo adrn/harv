@@ -67,9 +67,16 @@ This integral removes the linear parameters from the expensive outer sampling lo
 their prior family permits analytic marginalization.
 
 In `harv`, linear parameters are defined by how they enter the design matrix, not by how
-they must be sampled. If a linear parameter has a Gaussian prior, it can usually be
-marginalized analytically. If it has a non-Gaussian prior, it is sampled explicitly
-instead.
+they must be sampled. The priors that can be marginalized analytically are the Gaussian
+family read broadly: a `Normal`, a truncated Normal (including `HalfNormal`, and so any
+positivity or sign constraint), or a mixture of those sharing one support. Anything
+outside that family, such as a `Uniform` or a `Gamma`, is sampled explicitly instead.
+
+Being marginalizable is not quite the same as being marginalized. A linear parameter
+whose value is read by another parameter's prior has to stay explicitly sampled, because
+a marginalized parameter has no sampled value to read. That is why `parallax` is sampled
+explicitly under the Gaia defaults even though its `HalfNormal` prior could be
+marginalized: the semi-major-axis and proper-motion priors both depend on it.
 
 ## JAX
 

@@ -1110,6 +1110,12 @@ semi-amplitudes, which nothing reads, are marginalized. Keys may be
 component-qualified (`"astro.parallax"`), so a dependency resolves inside the
 declaring prior's namespace first and then at the top level.
 
+A *Fixed* prior is never a sample site. On the marginalized path it enters the
+marginalized set and is reclassified, with its value extracted, by
+`AbstractComponentModel._handle_delta_priors`; under `marginalized=False` it is
+recorded with `numpyro.deterministic`. Sampling it would hand NUTS a site whose
+log-prob is `-inf` almost everywhere — stuck chains with no error.
+
 Explicitly-sampled linear priors must have their values present in the `values`
 dict alongside the nonlinear parameters. The model extracts them automatically in
 auto mode.
@@ -1159,6 +1165,25 @@ explicit sampling (see §Linear prior classification):
 | `PeriodDependentKPrior`             | `("period", "eccentricity")`            |
 | `PeriodDependentSemiMajorAxisPrior` | `("period", "eccentricity", "parallax")`|
 | `ParallaxDependentProperMotionPrior`| `("parallax",)`                         |
+
+A callable may also declare `support`, one of `"real"` (the default),
+`"positive"` or `"negative"`, saying which support the distribution it returns
+will have. Like `requires` this is *static* metadata read at trace time, not
+inferred from the returned object, and it is what lets the samplers treat a
+callable that returns a truncated prior correctly without calling it first:
+
+- under `marginalized=False` the parameter gets its **own** sample site rather
+  than a slot in the joint `_linear` MVN, which can only carry an untruncated
+  single Gaussian (see §Scope);
+- warm-start init values are un-transformed with the matching bijector, so a
+  `support="positive"` site starting from `K = 28` starts at `log 28` and not
+  at `28` interpreted as an unconstrained coordinate.
+
+Undeclared means unconstrained, so an existing callable needs no change; a
+callable that returns a truncated prior *without* declaring `support` is still
+marginalized correctly, but on the `marginalized=False` path it raises
+`NotImplementedError` from the joint MVN. Declaring an unrecognized value raises
+`ValueError`.
 
 `requires` is optional and defaults to `()`, so a user-supplied callable needs no
 change. Omitting it on a callable that *does* read a linear parameter reproduces the
@@ -2382,6 +2407,12 @@ but has nothing periodogram-specific in it:
   `biject_to` and hence `NumpyroSampler` MCMC continuation work. Caveat: the
   gradient of `log_prob` is discontinuous at the knots (acceptable for NUTS
   in practice).
+- The edge knots must survive a round trip through `exp`/`log`, which can land
+  an ulp outside the domain. `support` and `log_prob` apply the **same**
+  tolerance, derived from `jnp.finfo(dtype).eps` rather than hard-coded, so
+  they never disagree about an edge value — a period sitting exactly on the
+  domain edge would otherwise pass `log_prob` and still be rejected by
+  `biject_to(support)` under NUTS.
 
 Wrapped in a `QD` (e.g. `QD(LogGridDensity(...), "day")`) it is a **drop-in
 period prior**: pass it via the `period=` override of any `default_prior(...)`
@@ -2450,7 +2481,7 @@ The bivariate rectangle probability uses Plackett's identity written in
 fixed 64-node Gauss-Legendre rule resolves for all `|rho| < 1`. The rule is a
 module constant, so the whole path is `jit` / `vmap` / `grad` safe.
 
-Two numerical properties are contractual, and both are pinned by tests:
+Four numerical properties are contractual, and each is pinned by tests:
 
 - **Signed sums collapse to `-inf` past the working precision rather than
   returning a value they cannot justify.** Corner-wise inclusion-exclusion
@@ -2468,6 +2499,28 @@ Two numerical properties are contractual, and both are pinned by tests:
   help because `where` evaluates both branches under `grad`. Unbounded sides are
   neutralized *before* dividing, using the static finiteness flags, and replaced
   by a sentinel afterwards.
+- **A vanishing correlation is an ordinary point, not a singularity.** `rho` is
+  *exactly* zero whenever the two constrained columns are supported on disjoint
+  rows with no shared column — two components each carrying their own `v_sys`,
+  say — because the `X^T C^-1 X` cross term is then an exact zero. Plackett's
+  integral term is therefore carried as a signed *weight* rather than folded
+  into the log as `ln|arcsin rho|`, whose derivative is infinite there. Both
+  forms give the same value, but the second gives `NaN` gradients at a point a
+  joint model reaches routinely.
+- **A degenerate normalizer scores `-inf`, never `+inf` or `NaN`.** `ln Z_prior`
+  underflows once a finite bound standardizes far enough from the prior mean,
+  and every component's `ln Z_post` can collapse at once by the guard above.
+  Both are reported as `-inf`, and the conditional's component weights and
+  truncated mean fall back to finite values whose draws are rejected on their
+  log-prob. A `NaN` escaping either would propagate through the rejection
+  sampler's `logsumexp` evidence and top-K comparison across the whole batch.
+
+The quadrature constants are held as NumPy arrays, not JAX arrays, so their
+dtype is decided where they are *used*. Materializing them at import would pin
+them to float32 whenever `import harv` precedes
+`jax.config.update("jax_enable_x64", True)`, costing eight orders of magnitude
+of accuracy while the cancellation guard still sized its budget from the
+float64 operands — see §Core design principles, Double precision.
 
 #### Conditional draws
 
@@ -2482,9 +2535,16 @@ harv already calls, and both are **exact** for up to two constrained parameters:
   coordinates, and zero when nothing is truncated.
 - `.sample(key)` draws the constrained coordinates first, then the remainder from
   one exact Gaussian conditional. One constrained coordinate is a 1-D truncated
-  normal; two use the closed-form rectangle CDF inverted by fixed-step
-  bisection. **No Gibbs and no rejection loop** -- both would be biased or
-  unbounded exactly where the constraint bites. Measured: in a quadrant holding
+  normal (numpyro's, which reflects around the base location and so stays exact
+  tens of sigma into a tail, where a probability-scale inverse CDF piles every
+  draw onto the bound); two use the closed-form rectangle CDF inverted by
+  fixed-step bisection. The bisection bracket is anchored on the conditional
+  mean rather than on the bound: the coordinates are standardized on the mean,
+  so a bracket running `[bound, bound + 24]` excludes the entire posterior bulk
+  whenever the bound lies further than that below the mean. That is the ordinary
+  case for a constraint the data do not fight, and the resulting draws are wrong
+  by orders of magnitude. **No Gibbs and no rejection loop** -- both would be
+  biased or unbounded exactly where the constraint bites. Measured: in a quadrant holding
   `Z_post ~ 4e-5`, rejection sampling kept 17 of 400,000 draws while the exact
   sampler returned a full set matching the analytic truncated mean.
 
@@ -2528,7 +2588,16 @@ wrong, and it has a dedicated brute-force test.
 - Non-marginalized numpyro models (`marginalized=False`) sample a truncated prior
   as its own site, but cannot place one in the joint `_linear` MVN (a truncated
   MVN is not a numpyro distribution) and raise `NotImplementedError` if asked to.
-  Mixtures are not sampleable as a single explicit site either.
+  Mixtures are not sampleable as a single explicit site either. A
+  `LinearPriorCallable` that resolves to a truncated prior takes the same
+  own-site route as a directly-supplied one, which is how signed SB2
+  semi-amplitudes work on this path; it is identified by the static `support`
+  it declares (see §The `LinearPriorCallable` contract), since the callable
+  itself is resolved only inside the trace.
+- One linear parameter takes one *scalar* prior. A batched `loc`/`scale` raises
+  `ValueError` rather than being read as an equal-weight mixture, whose weights
+  would not sum to one; a mixture is declared with `dist.MixtureSameFamily`,
+  which carries explicit weights.
 
 ______________________________________________________________________
 

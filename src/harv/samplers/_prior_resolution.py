@@ -159,10 +159,32 @@ def resolve_effective_marginalized_names(
         )
 
     if verbose:
+        # The explicit set has two populations and they want different fixes.
+        # Saying "cannot be analytically marginalized" about a pinned name is
+        # simply false -- `parallax` under the Gaia defaults is a HalfNormal,
+        # which this package marginalizes fine; it stays explicit only because
+        # another prior's callable reads its sampled value. The wording and the
+        # precedence both match `RejectionSampler.summary()`, so the two
+        # introspection surfaces agree and point at the same fix: a pinned name
+        # whose prior *also* cannot be marginalized is reported as
+        # unmarginalizable, because dropping the dependency would not help.
+        read_by_prior = sorted(
+            n
+            for n in explicit
+            if n in pinned and _can_marginalize(effective_linear_prior[n])
+        )
+        unmarginalizable = sorted(explicit - set(read_by_prior))
+        clauses = []
+        if unmarginalizable:
+            clauses.append(f"{unmarginalizable} cannot be analytically marginalized")
+        if read_by_prior:
+            clauses.append(
+                f"{read_by_prior} is read by another prior's callable "
+                "(see its `requires`), so it has no marginalized value to read"
+            )
         warnings.warn(
-            f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
-            f"marginalized and will be sampled explicitly. Marginalized parameters: "
-            f"{resolved_names}",
+            f"Linear prior(s) will be sampled explicitly: {' and '.join(clauses)}. "
+            f"Marginalized parameters: {resolved_names}",
             stacklevel=3,
         )
     return resolved_names

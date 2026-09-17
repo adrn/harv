@@ -18,6 +18,7 @@ from scipy.stats import multivariate_normal as smvn
 from scipy.stats import norm, truncnorm
 
 from harv.stats import MarginalizedLinear
+from harv.stats import marginalized as m
 from harv.stats.marginalized import (
     GeneralizedMarginalizedLinear,
     ResolvedLinearPrior,
@@ -426,14 +427,16 @@ def test_conditional_draws_reproduce_the_analytic_truncated_mean(
 
 
 def test_deep_tail_truncation_still_returns_finite_in_box_draws(sampling_problem):
-    """The guarantee that survives even where float32 cannot resolve the tail.
+    """The guarantee that has to hold however little mass the box holds.
 
-    ``b1 >= 0`` sits about 4 sigma above this fixture's conditional mean, so the
-    inverse CDF saturates and draws pile up near the bound (documented on
-    ``_trunc_normal_draw``). Distributional accuracy is gone, but the two
-    properties callers actually depend on must hold: every draw is inside the
-    box, and nothing is NaN -- a single NaN would propagate into the returned
-    posterior samples for the whole batch.
+    ``b1 >= 0`` sits about 4 sigma above this fixture's conditional mean, and
+    the two-dimensional rectangle probability bottoms out at its precision
+    floor well before the marginal draws do. Whatever the bisection can or
+    cannot resolve, the two properties callers depend on must hold: every draw
+    is inside the box, and nothing is NaN -- a single NaN would propagate into
+    the returned posterior samples for the whole batch.
+    (Distributional accuracy in the tail is pinned separately, by
+    ``test_deep_tail_draws_match_the_analytic_truncated_moments``.)
     """
     design, obs, data_dist = sampling_problem
     prior = _prior([0.0, 0.0, -INF], [INF, INF, INF], k=3)
@@ -549,3 +552,186 @@ def test_log_prob_is_jit_vmap_and_grad_safe(problem, low, high):
     assert np.all(np.isfinite(np.asarray(grad)))
     # A truncated prior's log-prob must actually respond to the prior width.
     assert np.any(np.abs(np.asarray(grad)) > 1e-8)
+
+
+def test_log_prob_grad_survives_a_block_diagonal_design():
+    """Two constrained columns with no shared support give ``rho`` *exactly* 0.
+
+    This is the joint-model shape -- two components, each with its own
+    ``v_sys`` -- so the exact zero in ``X^T C^-1 X`` is ordinary rather than
+    contrived, and the whole marginalized path has to differentiate through it.
+    """
+    n = 8
+    design = np.zeros((2 * n, 2))
+    design[:n, 0] = 1.0
+    design[n:, 1] = 1.0
+    err = jnp.full(2 * n, 0.5)
+    obs = jnp.asarray(np.concatenate([np.full(n, 2.0), np.full(n, -2.0)]))
+    static = _prior([0.0, -INF], [INF, 0.0])
+
+    def ln_prob(scale):
+        prior = ResolvedLinearPrior(
+            static.loc,
+            scale,
+            static.ln_weights,
+            static.low,
+            static.high,
+            static.low_finite,
+            static.high_finite,
+            static.names,
+        )
+        marg = build_marginalized(jnp.asarray(design), prior, dist.Normal(0.0, err))
+        return marg.log_prob(obs)
+
+    scale = jnp.full((1, 2), 3.0)
+    assert np.isfinite(float(jax.jit(ln_prob)(scale)))
+    grad = np.asarray(jax.grad(ln_prob)(scale))
+    assert np.all(np.isfinite(grad)), grad
+
+
+# ---------------------------------------------------------------------------
+# Regressions: the failure modes that were silent
+# ---------------------------------------------------------------------------
+
+
+def test_bisection_bracket_covers_a_far_away_conditional_mean():
+    """A bound far *below* the conditional mean must not drag draws into the tail.
+
+    The bracket used to be anchored on the bound (``[z_lo, z_lo + 24]``), which
+    excludes the entire posterior bulk whenever the bound lies more than ~12
+    sigma below the conditional mean -- the ordinary case for a constraint the
+    data do not fight. The oracle is ``scipy.stats.truncnorm`` on the first
+    coordinate's own marginal, which the truncation leaves untouched here.
+    """
+    rng = np.random.default_rng(11)
+    n = 24
+    design = np.stack([rng.normal(size=n), np.ones(n)], axis=1)
+    err = np.full(n, 0.2)
+    obs = design @ np.array([30.0, -15.0]) + err * rng.normal(size=n)
+
+    prior = _prior([0.0, -INF], [INF, INF], loc=[[0.0, 0.0]], scale=[[50.0, 50.0]], k=2)
+    cond = build_marginalized(
+        jnp.asarray(design), prior, dist.Normal(0.0, jnp.asarray(err))
+    ).conditional(jnp.asarray(obs))
+
+    mean = np.asarray(cond.mean)
+    sd = np.sqrt(np.diag(np.asarray(cond.cov)[0]))
+    # The bound is hundreds of sigma away, so the constraint is inactive and
+    # the marginal is the untruncated conditional.
+    assert mean[0] / sd[0] > 100.0
+
+    n_draws = 20_000
+    draws = np.asarray(
+        jax.vmap(cond.sample)(jax.random.split(jax.random.key(0), n_draws))
+    )
+    ref_m, ref_s = truncnorm.stats(
+        -mean[0] / sd[0], np.inf, loc=mean[0], scale=sd[0], moments="mv"
+    )
+    assert draws[:, 0].mean() == pytest.approx(ref_m, abs=5 * np.sqrt(ref_s / n_draws))
+    assert draws[:, 0].std() == pytest.approx(np.sqrt(ref_s), rel=0.05)
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi"),
+    [([0.0, -0.4], [INF, INF]), ([-1.0, -0.4], [2.0, INF]), ([-INF, 0.2], [1.0, INF])],
+)
+def test_rect_gradient_is_finite_at_exactly_zero_correlation(lo, hi):
+    """``rho`` is *exactly* 0 whenever the constrained columns share no support.
+
+    Two components with their own ``v_sys`` give exact zeros in the
+    ``X^T C^-1 X`` cross term, so this is a reachable point, not a measure-zero
+    curiosity. The value was always right; the gradient used to be NaN, which
+    is what NUTS sees on the marginalized path.
+    """
+
+    def f(rho):
+        return _ln_bvn_rect(
+            jnp.asarray(lo),
+            jnp.asarray(hi),
+            rho,
+            lo_finite=tuple(bool(v) for v in np.isfinite(lo)),
+            hi_finite=tuple(bool(v) for v in np.isfinite(hi)),
+        )
+
+    got = float(jax.grad(f)(0.0))
+    assert np.isfinite(got)
+    # Central difference against the value, which was never in doubt.
+    h = 1e-5
+    ref = (float(f(h)) - float(f(-h))) / (2 * h)
+    assert got == pytest.approx(ref, rel=1e-6, abs=1e-9)
+
+
+def test_conditional_stays_finite_when_every_component_underflows(problem):
+    """``ln_w - logsumexp(ln_w)`` is ``-inf - (-inf)`` when ``Z_post`` collapses.
+
+    ``_signed_logsumexp_guarded`` produces that ``-inf`` deliberately, so the
+    normalization has to survive it. A NaN here reaches users twice over:
+    through ``sample_conditional_linear(use_mean=True)``, and through the
+    marginalized log-prob's Jacobian correction, where it turns a would-be
+    ``-inf`` into a NaN that poisons the whole batch's evidence.
+    """
+    design, _, obs, data_dist = problem
+    # Both coordinates forced to the sign the data most dislike.
+    prior = _prior([6.0, 6.0], [INF, INF], loc=[[0.0, 0.0]], scale=[[0.5, 0.5]])
+    marg = build_marginalized(jnp.asarray(design), prior, data_dist)
+
+    cond = marg.conditional(jnp.asarray(obs))
+    assert np.all(np.isfinite(np.asarray(cond.ln_component_weights)))
+    assert np.all(np.isfinite(np.asarray(cond.mean)))
+    assert float(marg.log_prob(jnp.asarray(obs))) == -INF
+
+
+def test_log_prob_is_neg_inf_when_the_prior_normalizer_underflows(problem):
+    """A prior keeping no representable mass in its own box scores ``-inf``.
+
+    It used to score ``+inf`` (or NaN when ``Z_post`` had gone too), and either
+    propagates through the rejection sampler's ``logsumexp`` evidence and top-k
+    comparison across the entire batch. ``-inf`` is the direction this module
+    always errs in.
+    """
+    design, _, obs, data_dist = problem
+    prior = _prior([0.0, -INF], [INF, INF], loc=[[-5.0, 0.0]], scale=[[0.05, 5.0]])
+    got = float(
+        build_marginalized(jnp.asarray(design), prior, data_dist).log_prob(
+            jnp.asarray(obs)
+        )
+    )
+    assert got == -INF
+
+
+def test_quadrature_constants_are_not_pinned_to_an_import_time_dtype():
+    """Kept as numpy so x64 enabled *after* ``import harv`` still applies.
+
+    As JAX arrays these froze at float32 whenever ``import harv`` preceded
+    ``jax.config.update("jax_enable_x64", True)``, silently costing eight orders
+    of magnitude of accuracy in ``_ln_bvn_rect`` while
+    ``_signed_logsumexp_guarded`` still sized its budget from the float64
+    operands. See ``docs/spec.md`` -> Double precision.
+    """
+    for const in (m._GL_NODES, m._GL_WEIGHTS, m._LN_GL_WEIGHTS):
+        assert isinstance(const, np.ndarray)
+        assert not isinstance(const, jax.Array)
+    assert isinstance(m._CANCELLATION_MARGIN, float)
+
+
+def test_deep_tail_draws_match_the_analytic_truncated_moments():
+    """The regime a probability-scale inverse CDF cannot reach.
+
+    With the bound 8 sigma above the mean the old hand-rolled draw saturated
+    and piled every sample onto the bound (sd 0.049 against the true 0.12);
+    numpyro's truncated normal reflects instead and stays exact.
+    """
+    n_draws = 20_000
+    prior = _prior([8.0], [INF], loc=[[0.0]], scale=[[1.0]], k=1)
+    design = jnp.ones((4, 1))
+    err = jnp.full(4, 1e6)  # no information: the conditional is the prior
+    cond = build_marginalized(design, prior, dist.Normal(0.0, err)).conditional(
+        jnp.zeros(4)
+    )
+    draws = np.asarray(
+        jax.vmap(cond.sample)(jax.random.split(jax.random.key(0), n_draws))
+    )[:, 0]
+    ref_m, ref_v = truncnorm.stats(8.0, np.inf, moments="mv")
+    assert draws.min() >= 8.0
+    assert draws.mean() == pytest.approx(ref_m, abs=5 * np.sqrt(ref_v / n_draws))
+    assert draws.std() == pytest.approx(np.sqrt(ref_v), rel=0.05)

@@ -8,8 +8,10 @@ from typing import Any, NamedTuple, cast
 
 import equinox as eqx
 import jax
+import numpyro
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
+from numpyro.distributions import constraints
 from numpyro.distributions.truncated import (
     LeftTruncatedDistribution,
     RightTruncatedDistribution,
@@ -170,6 +172,33 @@ def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
     return frozenset(pinned)
 
 
+_CALLABLE_SUPPORTS: dict[str, constraints.Constraint] = {
+    "real": constraints.real,
+    "positive": constraints.greater_than(0.0),
+    "negative": constraints.less_than(0.0),
+}
+
+
+def _callable_prior_constraint(d: LinearPriorCallable) -> constraints.Constraint:
+    """The support a :data:`LinearPriorCallable` declares, as a constraint.
+
+    A callable is resolved only at trace time, but the *support* of what it
+    returns is static metadata it declares up front (see ``docs/spec.md`` ->
+    The LinearPriorCallable contract), which is what lets the sampler pick the
+    right bijector for a callable that is sampled explicitly rather than
+    marginalized. Undeclared means unconstrained, so existing callables need no
+    change.
+    """
+    supp = getattr(d, "support", "real")
+    if supp not in _CALLABLE_SUPPORTS:
+        msg = (
+            f"{type(d).__name__} declares support={supp!r}; a linear prior "
+            f"callable may declare one of {sorted(_CALLABLE_SUPPORTS)}."
+        )
+        raise ValueError(msg)
+    return _CALLABLE_SUPPORTS[supp]
+
+
 def _is_plain_gaussian_prior(d: LinearPriorDist) -> bool:
     """Whether a linear prior can join the non-marginalized model's ``_linear`` MVN.
 
@@ -184,9 +213,18 @@ def _is_plain_gaussian_prior(d: LinearPriorDist) -> bool:
     inner = d.distribution if isinstance(d, QuantityDistribution) else d
     if isinstance(inner, dist.Normal):
         return True
-    # Callables are assumed to return a plain Normal (the default ones do);
-    # ``_parse_linear_prior`` raises clearly at trace time if one does not.
-    return _is_callable_prior(d)
+    # A callable is resolved only at trace time, but whether it *can* return a
+    # truncated prior is static: it says so by declaring ``support`` (see
+    # ``docs/spec.md`` -> The LinearPriorCallable contract). Without the
+    # declaration a callable is assumed to return a plain Normal, as the
+    # defaults do, and ``_parse_linear_prior`` raises clearly if it does not.
+    # Reading ``support`` here is what keeps ``signed_semiamp=True`` working on
+    # the ``marginalized=False`` path: ``PeriodDependentKPrior(support=...)``
+    # gets its own truncated site instead of being forced into the joint
+    # ``_linear`` MVN, which can only carry an untruncated single Gaussian.
+    if _is_callable_prior(d):
+        return getattr(d, "support", "real") == "real"
+    return False
 
 
 def _needs_explicit_sampling(
@@ -246,7 +284,49 @@ def _with_derived_eccentricity(
     return {**param_values, "eccentricity": ecc}
 
 
-def _parse_linear_prior(resolved: Any, target_unit: str, name: str) -> _ParsedPrior:
+def _check_shared_mixture_support(parsed: _ParsedPrior, name: str) -> None:
+    """Reject a mixture whose components do not share one truncation box.
+
+    Sharing the support is what lets the indicator factor out of the mixture
+    sum; per-component bounds make ``Z_mix`` *wrong* rather than merely
+    unsupported (see ``docs/spec.md`` -> Mixtures). numpyro's own
+    ``MixtureSameFamily`` refuses a component whose support depends on its
+    parameters, so this is normally unreachable -- but that check is a bare
+    ``assert`` and vanishes under ``python -O``, and the failure it guards is
+    silent.
+    """
+    if jnp.ndim(parsed.low) != 0 or jnp.ndim(parsed.high) != 0:
+        msg = (
+            f"Linear prior for {name!r} is a mixture whose components have "
+            "different truncation bounds; every component must share one "
+            "`low` and `high`."
+        )
+        raise ValueError(msg)
+
+
+def _check_scalar_prior(loc: jax.Array, scale: jax.Array, name: str) -> None:
+    """Reject a batched prior on a single linear parameter.
+
+    One parameter takes one scalar prior. Reading a length-``C`` batch as
+    ``C`` equally-weighted components would multiply the parameter's total
+    prior weight by ``C``; a mixture is declared with ``MixtureSameFamily``,
+    which carries explicit weights.
+    """
+    if loc.size != 1 or scale.size != 1:
+        msg = (
+            f"Linear prior for {name!r} is batched (loc/scale of shape "
+            f"{tuple(loc.shape)}/{tuple(scale.shape)}), but one linear "
+            "parameter takes one scalar prior. To give it a mixture prior, use "
+            "`dist.MixtureSameFamily`, which carries explicit weights; a bare "
+            "batch has none, so reading it as an equal-weight mixture would "
+            "leave the parameter's total prior weight above one."
+        )
+        raise ValueError(msg)
+
+
+def _parse_linear_prior(
+    resolved: Any, target_unit: str, name: str, *, _batched: bool = False
+) -> _ParsedPrior:
     """Parse one resolved linear prior into loc/scale/bounds in ``target_unit``.
 
     Accepts a ``Normal``, a ``HalfNormal``, any of numpyro's three truncated
@@ -256,6 +336,12 @@ def _parse_linear_prior(resolved: Any, target_unit: str, name: str) -> _ParsedPr
     ``HalfNormal(s)`` is parsed as ``TruncatedNormal(0, s, low=0)`` rather than
     special-cased: they are the same distribution, and the truncation machinery
     needs no help to handle it.
+
+    ``_batched`` is set only by the mixture branch's recursive call, where a
+    batched ``loc``/``scale`` *is* the component axis. Everywhere else a batch
+    is a mistake: one linear parameter gets one prior, and quietly reading a
+    length-``C`` batch as ``C`` equally-weighted components would inflate the
+    total prior weight to ``C``.
     """
     prior_unit: str | None = None
     if isinstance(resolved, QuantityDistribution):
@@ -276,8 +362,9 @@ def _parse_linear_prior(resolved: Any, target_unit: str, name: str) -> _ParsedPr
         wrapped = (
             QuantityDistribution(inner, prior_unit) if prior_unit is not None else inner
         )
-        parsed = _parse_linear_prior(wrapped, target_unit, name)
+        parsed = _parse_linear_prior(wrapped, target_unit, name, _batched=True)
         n_comp = probs.shape[-1]
+        _check_shared_mixture_support(parsed, name)
         return _ParsedPrior(
             loc=jnp.broadcast_to(parsed.loc, (n_comp,)),
             scale=jnp.broadcast_to(parsed.scale, (n_comp,)),
@@ -328,9 +415,13 @@ def _parse_linear_prior(resolved: Any, target_unit: str, name: str) -> _ParsedPr
         )
         raise TypeError(msg)
 
+    loc, scale = jnp.atleast_1d(jnp.squeeze(loc)), jnp.atleast_1d(jnp.squeeze(scale))
+    if not _batched:
+        _check_scalar_prior(loc, scale, name)
+
     return _ParsedPrior(
-        loc=jnp.atleast_1d(jnp.squeeze(loc)),
-        scale=jnp.atleast_1d(jnp.squeeze(scale)),
+        loc=loc,
+        scale=scale,
         ln_weights=jnp.zeros(1),
         low=jnp.squeeze(low),
         high=jnp.squeeze(high),
@@ -470,3 +561,95 @@ def _explicit_joint_mvn(resolved: ResolvedLinearPrior) -> dist.MultivariateNorma
     return dist.MultivariateNormal(
         loc=resolved.loc[0], scale_tril=jnp.diag(resolved.scale[0])
     )
+
+
+def _sample_explicit_linear_prior(
+    name: str,
+    prior_dist: Any,
+    target_unit: str,
+    nonlinear_values: dict[str, Any],
+    extra_values: dict[str, Any] | None = None,
+    *,
+    site_name: str | None = None,
+    parameterization: Any | None = None,
+) -> jax.Array:
+    """Sample one explicit (non-marginalized) linear prior in a numpyro model.
+
+    Unifies the cases that would otherwise need separate code paths:
+
+    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are sampled
+      directly via ``numpyro.sample``; if a ``QuantityDistribution`` is provided the
+      result is unit-stripped to ``target_unit``.
+    * Callable priors (e.g. :class:`PeriodDependentKPrior`) are resolved at the
+      current ``nonlinear_values`` / ``extra_values`` and then sampled. The
+      resolver returns values already expressed in ``target_unit``, so no further
+      unit-strip is performed, and truncation survives -- which is what lets a
+      callable declaring ``support="positive"`` be sampled on the
+      ``marginalized=False`` path instead of being forced into the joint
+      ``_linear`` MVN, where a truncated Gaussian has no representation.
+    * ``Delta`` priors are recorded with ``numpyro.deterministic``: the value is
+      fixed, not distributed.
+
+    Parameters
+    ----------
+    name
+        Site name passed to ``numpyro.sample``.
+    prior_dist
+        The prior specification.
+    target_unit
+        Unit string the returned value must be expressed in.  ``""`` for
+        dimensionless.
+    nonlinear_values
+        Already-sampled nonlinear (and previously-sampled explicit-linear)
+        values, keyed by bare parameter name.  Used by callable priors.
+    extra_values
+        Optional ``Q``-wrapped versions of values that callable priors may
+        consume to evaluate unit-aware dependencies; ``None`` when no such
+        values are needed (e.g. for shared explicit-linear priors).
+    site_name
+        Optional site name to use within numpyro.
+    parameterization
+        Parameterization the values came from, used to derive ``eccentricity`` for
+        callable priors that need it.  ``None`` for *shared* joint priors, where the
+        components need not agree on a parameterization and there is no unambiguous
+        answer; per-component priors pass their own.
+
+    Returns
+    -------
+        The sampled value, unit-stripped to ``target_unit``.
+    """
+    _site = site_name if site_name is not None else name
+
+    # A ``Delta`` prior fixes the value rather than distributing it. Sampling it
+    # as a site would hand NUTS a log-prob that is -inf almost everywhere --
+    # stuck chains, no error -- so it is recorded as what the classification
+    # table calls it, *Fixed* (see ``docs/spec.md`` -> Linear prior
+    # classification). The marginalized path reaches the same place through
+    # ``AbstractComponentModel._handle_delta_priors``.
+    inner = _unwrap_dist(prior_dist) if not _is_callable_prior(prior_dist) else None
+    if isinstance(inner, dist.Delta):
+        value = jnp.asarray(inner.v)
+        if isinstance(prior_dist, QuantityDistribution) and target_unit:
+            value = jnp.asarray(
+                ustrip(target_unit, Q(value, cast("str", prior_dist.unit)))
+            )
+        return cast("jax.Array", numpyro.deterministic(_site, value))
+
+    if _is_callable_prior(prior_dist):
+        resolved = _resolve_linear_priors(
+            {name: prior_dist},
+            nonlinear_values,
+            {name: target_unit},
+            extra_values=extra_values,
+            parameterization=parameterization,
+        )
+        return cast(
+            "jax.Array",
+            numpyro.sample(_site, _explicit_scalar_dist(resolved)),
+        )
+
+    # Direct sampling for plain Distribution / QuantityDistribution priors.
+    raw = cast("jax.Array", numpyro.sample(_site, _unwrap_dist(prior_dist)))
+    if isinstance(prior_dist, QuantityDistribution) and target_unit:
+        raw = jnp.asarray(ustrip(target_unit, Q(raw, cast("str", prior_dist.unit))))
+    return raw

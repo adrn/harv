@@ -52,8 +52,11 @@ JAX arrays.
 parameters can be marginalized analytically. But just because a parameter is linear does
 not mean it must be marginalized. You can often specify a list of `marginalized_names`
 to control which linear parameters are marginalized and which are sampled explicitly.
-Or, if you pass a custom prior for a linear parameter that is not Gaussian, it will be
-sampled explicitly by default.
+Or, if you pass a custom prior for a linear parameter from outside the Gaussian family,
+it will be sampled explicitly by default. Truncated Normals and mixtures of Normals are
+*inside* that family, so a positivity constraint does not by itself cost you the
+marginalization. `RejectionSampler.summary()` prints the classification it will use,
+including which parameters stay explicit only because another prior reads them.
 
 ## Extensions require both a model extension and a prior entry
 

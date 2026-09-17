@@ -375,15 +375,19 @@ class RejectionSampler(AbstractSampler):
             if name not in explicit:
                 status = "marginalized"
                 n_marginalized += 1
+            elif not _can_marginalize(d):
+                # Tested before the pinned case: a pinned parameter whose prior
+                # also cannot be marginalized must read "sampled", because the
+                # fix the other label points at -- drop the dependency -- would
+                # change nothing while the prior itself stays unmarginalizable.
+                status = "sampled"
             elif name in pinned:
                 # Marginalizable in itself, but another prior's callable reads
                 # its sampled value (e.g. parallax under the Gaia defaults), so
-                # it has to stay explicit. Distinguished from the two cases
-                # below because the fix is different: drop the dependency, not
+                # it has to stay explicit. Distinguished from the cases either
+                # side because the fix is different: drop the dependency, not
                 # the prior or the `marginalized_names` entry.
                 status = "sampled (read by prior)"
-            elif not _can_marginalize(d):
-                status = "sampled"
             else:
                 status = "sampled (could marg.)"
             linear_rows.append((name, status, dist_name, unit))

@@ -20,24 +20,21 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 from unxt import Q
-from unxt.quantity import ustrip
 
 from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
-    _explicit_scalar_dist,
     _is_callable_prior,
     _is_plain_gaussian_prior,
     _needs_explicit_sampling,
     _parse_linear_prior,
-    _unwrap_dist,
+    _sample_explicit_linear_prior,
     pinned_linear_names,
 )
 from harv.models.component import (
     AbstractComponentModel,
     _MargBuildingBlocks,
-    _resolve_linear_priors,
     _sample_nonlinear_params,
 )
 from harv.models.extensions.base import ParamInfo
@@ -101,78 +98,6 @@ def _priors_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     return bool(eqx.tree_equal(a, b))
-
-
-def _sample_explicit_linear_prior(
-    name: str,
-    prior_dist: Any,
-    target_unit: str,
-    nonlinear_values: dict[str, Any],
-    extra_values: dict[str, Any] | None = None,
-    *,
-    site_name: str | None = None,
-    parameterization: Any | None = None,
-) -> jax.Array:
-    """Sample one explicit (non-marginalized) linear prior in a numpyro model.
-
-    Unifies two cases that previously needed separate code paths:
-
-    * Plain ``dist.Distribution`` or :class:`QuantityDistribution` priors are sampled
-      directly via ``numpyro.sample``; if a ``QuantityDistribution`` is provided the
-      result is unit-stripped to ``target_unit``.
-    * Callable priors (e.g. :class:`PeriodDependentKPrior`) are resolved to a
-      :class:`numpyro.distributions.distributions.Normal` at the current
-      ``nonlinear_values`` /
-      ``extra_values`` and then sampled.  The resolver returns values already expressed
-      in ``target_unit``, so no further unit-strip is performed.
-
-    Parameters
-    ----------
-    name
-        Site name passed to ``numpyro.sample``.
-    prior_dist
-        The prior specification.
-    target_unit
-        Unit string the returned value must be expressed in.  ``""`` for
-        dimensionless.
-    nonlinear_values
-        Already-sampled nonlinear (and previously-sampled explicit-linear)
-        values, keyed by bare parameter name.  Used by callable priors.
-    extra_values
-        Optional ``Q``-wrapped versions of values that callable priors may
-        consume to evaluate unit-aware dependencies; ``None`` when no such
-        values are needed (e.g. for shared explicit-linear priors).
-    site_name
-        Optional site name to use within numpyro.
-    parameterization
-        Parameterization the values came from, used to derive ``eccentricity`` for
-        callable priors that need it.  ``None`` for *shared* joint priors, where the
-        components need not agree on a parameterization and there is no unambiguous
-        answer; per-component priors pass their own.
-
-    Returns
-    -------
-        The sampled value, unit-stripped to ``target_unit``.
-    """
-    _site = site_name if site_name is not None else name
-    if _is_callable_prior(prior_dist):
-        resolved = _resolve_linear_priors(
-            {name: prior_dist},
-            nonlinear_values,
-            {name: target_unit},
-            extra_values=extra_values,
-            parameterization=parameterization,
-        )
-        return cast(
-            "jax.Array",
-            numpyro.sample(_site, _explicit_scalar_dist(resolved)),
-        )
-
-    # Direct sampling for plain Distribution / QuantityDistribution priors.
-    raw = cast("jax.Array", numpyro.sample(_site, _unwrap_dist(prior_dist)))
-    if isinstance(prior_dist, QuantityDistribution) and target_unit:
-        raw = jnp.asarray(ustrip(target_unit, Q(raw, cast("str", prior_dist.unit))))
-    return raw
 
 
 @final
@@ -1380,10 +1305,15 @@ class JointModel(eqx.Module):
             for site_name, cname, base in _explicit_slots:
                 d = _comp_explicit_lp[cname][base]
                 pu = _comp_param_units[cname]
-                raw = numpyro.sample(site_name, _unwrap_dist(d))
-                target_u = pu.get(base, "")
-                if isinstance(d, QuantityDistribution) and target_u:
-                    raw = ustrip(target_u, Q(raw, str(d.unit)))
+                raw = _sample_explicit_linear_prior(
+                    base,
+                    d,
+                    pu.get(base, ""),
+                    comp_nl[cname],
+                    extra_values=linear_by_comp[cname],
+                    site_name=site_name,
+                    parameterization=joint.components[cname].parameterization,
+                )
                 _record(cname, base, jnp.asarray(raw), is_shared=base in shared_lin_set)
 
             # Sample all Gaussian linear params jointly as a single _linear site.

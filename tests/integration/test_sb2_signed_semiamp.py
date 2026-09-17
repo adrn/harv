@@ -22,7 +22,7 @@ import harv.models.joint
 from harv.data import RVData, SystemData
 from harv.kepler.orbits import rv_at_times
 from harv.models import JointModel, default_sb2_prior
-from harv.samplers import RejectionSampler
+from harv.samplers import NumpyroSampler, RejectionSampler
 
 TRUE = {
     "period": Q(137.0, "day"),
@@ -364,3 +364,59 @@ def _monte_carlo_ln_prob(joint, prior, nonlinear, data, n_draws=400_000, seed=0)
 
     top = ln_like.max()
     return top + np.log(np.mean(np.exp(ln_like - top)))
+
+
+# ---------------------------------------------------------------------------
+# End to end: the signed prior must recover the injected amplitudes
+# ---------------------------------------------------------------------------
+
+
+def test_signed_priors_recover_the_injected_semiamplitudes(data):
+    """The check every other test in this file was missing.
+
+    Each of the tests above asserts a *sign* or a *classification*; none asserts
+    a value, and a bisection bracket anchored on the bound rather than on the
+    conditional mean satisfied all of them while returning
+    ``primary.rv_semiamp`` of about 4 km/s for an injected 28. The constraint is
+    inactive here -- the data put the conditional mean hundreds of sigma inside
+    the allowed quadrant -- which is precisely the regime that was broken.
+    """
+    prior = _prior(signed=True)
+    samples = RejectionSampler(prior, JointModel.for_sb2(prior=prior)).run(
+        data, key=jax.random.key(2), n_prior_samples=300_000, top_k=128
+    )
+    k_1 = float(np.median(np.asarray(samples["primary.rv_semiamp"].value)))
+    k_2 = float(np.median(np.asarray(samples["secondary.rv_semiamp"].value)))
+    assert k_1 == pytest.approx(TRUE["K_primary"].value, rel=0.15)
+    assert k_2 == pytest.approx(-TRUE["K_secondary"].value, rel=0.15)
+
+
+def test_signed_priors_work_on_the_non_marginalized_mcmc_path(data):
+    """``marginalized=False`` must survive a callable that returns a truncation.
+
+    The joint ``_linear`` MVN can only carry an untruncated single Gaussian, so
+    ``PeriodDependentKPrior(support=...)`` has to be routed to its own site --
+    and its init value has to be un-transformed with the support it declares,
+    or the chain starts at ``exp(K)`` and never comes back. See ``docs/spec.md``
+    -> Scope and -> The ``LinearPriorCallable`` contract.
+    """
+    prior = _prior(signed=True)
+    joint = JointModel.for_sb2(prior=prior)
+    init = RejectionSampler(prior, joint).run(
+        data, key=jax.random.key(3), n_prior_samples=300_000, top_k=64
+    )
+    posterior = NumpyroSampler(prior, joint).run(
+        data,
+        key=jax.random.key(5),
+        init_samples=init,
+        num_warmup=200,
+        num_samples=200,
+        num_chains=1,
+        marginalized=False,
+    )
+    k_1 = np.asarray(posterior["primary.rv_semiamp"].value)
+    k_2 = np.asarray(posterior["secondary.rv_semiamp"].value)
+    assert np.all(k_1 > 0.0)
+    assert np.all(k_2 < 0.0)
+    assert float(np.median(k_1)) == pytest.approx(TRUE["K_primary"].value, rel=0.15)
+    assert float(np.median(k_2)) == pytest.approx(-TRUE["K_secondary"].value, rel=0.15)

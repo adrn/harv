@@ -27,8 +27,10 @@ from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
+    _callable_prior_constraint,
     _evaluate_nonlinear_log_prior,
     _explicit_scalar_dist,
+    _is_callable_prior,
     _is_plain_gaussian_prior,
     _unwrap_dist,
 )
@@ -77,23 +79,30 @@ def _unconstrain_init_params(
     (natural) space, so we must apply the inverse transform before
     passing them to the MCMC kernel.
     """
-    site_dists: dict[str, dist.Distribution] = {}
+    site_supports: dict[str, Any] = {}
     for name, d in prior.nonlinear_priors.items():
-        site_dists[name] = _unwrap_dist(d)
+        site_supports[name] = _unwrap_dist(d).support
     if isinstance(effective_linear_prior, dict):
         for name, d in effective_linear_prior.items():
             if isinstance(d, dist.Distribution | QuantityDistribution):
-                site_dists[name] = _unwrap_dist(d)
+                site_supports[name] = _unwrap_dist(d).support
+            elif _is_callable_prior(d):
+                # A callable that is sampled explicitly (rather than
+                # marginalized) still gets a bijector, and its support is the
+                # one it declares statically -- without this the init value
+                # would be read as if it were already unconstrained, so a
+                # `support="positive"` site starting at K = 28 would begin at
+                # exp(28) instead.
+                site_supports[name] = _callable_prior_constraint(d)
     if nonlinear_extension_priors:
         for model_key, d in nonlinear_extension_priors.items():
-            site_dists[model_key] = _unwrap_dist(d)
+            site_supports[model_key] = _unwrap_dist(d).support
 
     out: dict[str, Any] = {}
     for name, val in init_params.items():
-        d = site_dists.get(name)
-        if d is not None:
-            transform = biject_to(d.support)
-            out[name] = transform.inv(jnp.asarray(val))
+        support = site_supports.get(name)
+        if support is not None:
+            out[name] = biject_to(support).inv(jnp.asarray(val))
         else:
             out[name] = val
     return out

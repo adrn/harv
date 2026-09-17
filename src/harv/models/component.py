@@ -29,6 +29,7 @@ from harv.models._helpers import (
     _is_plain_gaussian_prior,
     _needs_explicit_sampling,
     _resolve_linear_priors,
+    _sample_explicit_linear_prior,
     _unwrap_dist,
     _with_derived_eccentricity,
     pinned_linear_names,
@@ -992,7 +993,7 @@ def _build_marginalized_component_model(
     return model_fn
 
 
-def _build_full_component_model(  # noqa: C901
+def _build_full_component_model(
     component: AbstractComponentModel,
     nonlinear_priors: dict[str, PriorDist],
     data: AbstractData,
@@ -1025,17 +1026,19 @@ def _build_full_component_model(  # noqa: C901
         values = _sample_nonlinear_params(nonlinear_priors)
         nonlinear_values = _apply_unit_conversions(values, nonlinear_priors, component)
 
-        # Sample non-Gaussian linear params individually
+        # Sample non-Gaussian linear params individually. Callables land here
+        # too when they declare a non-real support, because a truncated
+        # Gaussian cannot go into the joint ``_linear`` MVN below.
         linear_values: dict[str, Any] = {}
         for name, d in explicit_lp.items():
-            target_u = param_units.get(name, "")
-            raw = numpyro.sample(
+            linear_values[name] = _sample_explicit_linear_prior(
                 name,
-                _unwrap_dist(d),
+                d,
+                param_units.get(name, ""),
+                nonlinear_values,
+                extra_values=linear_values,
+                parameterization=component.parameterization,
             )
-            if isinstance(d, QuantityDistribution) and target_u:
-                raw = ustrip(target_u, Q(raw, cast("str", d.unit)))
-            linear_values[name] = raw
 
         # Sample Gaussian linear params jointly
         if gaussian_names:

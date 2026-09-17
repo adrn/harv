@@ -4,10 +4,12 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 import pytest
 from numpyro import handlers
+from unxt import Q
 
 from harv.distributions import QuantityDistribution as QD
 from harv.models import RVModel
 from harv.models.extensions import Jitter, MonomialTrend
+from harv.models.priors.callables import PeriodDependentKPrior
 
 # Re-alias shared fixtures to shorter names used throughout this module.
 nonlinear_priors = pytest.fixture(name="nonlinear_priors")(
@@ -192,3 +194,89 @@ class TestNumpyroModelUnitConversion:
             trace = handlers.trace(model_fn).get_trace()
 
         assert jnp.isfinite(_get_factor_value(trace, "ln_lik"))
+
+
+class TestNumpyroModelFullExplicitLinearSites:
+    """Linear priors the joint ``_linear`` MVN cannot represent.
+
+    That MVN is a single untruncated Gaussian, so a truncated prior, a callable
+    that returns one, and a ``Delta`` each need their own treatment (see
+    ``docs/spec.md`` -> Scope, and -> Linear prior classification).
+    """
+
+    def test_truncated_linear_prior_gets_its_own_site(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        priors = {
+            **linear_priors,
+            "rv_semiamp": QD(dist.TruncatedNormal(0.0, 30.0, low=0.0), "km/s"),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert float(trace["rv_semiamp"]["value"]) >= 0.0
+        # v_sys is still an ordinary Gaussian, so it keeps the joint MVN.
+        assert trace["_linear"]["type"] == "sample"
+        assert jnp.shape(trace["_linear"]["value"]) == (1,)
+
+    def test_callable_declaring_a_support_gets_its_own_site(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """The signed-SB2 case: a callable resolving to a truncated Normal.
+
+        Classifying it by its static ``support`` keeps it out of the MVN, which
+        would otherwise raise ``NotImplementedError`` at trace time.
+        """
+        priors = {
+            **linear_priors,
+            "rv_semiamp": PeriodDependentKPrior(
+                Q(30.0, "km/s"), Q(1.0, "yr"), support="positive"
+            ),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert float(trace["rv_semiamp"]["value"]) >= 0.0
+
+    def test_callable_without_a_support_still_joins_the_mvn(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """No declaration means unconstrained, so nothing existing changes."""
+        priors = {
+            **linear_priors,
+            "rv_semiamp": PeriodDependentKPrior(Q(30.0, "km/s"), Q(1.0, "yr")),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "deterministic"
+        assert jnp.shape(trace["_linear"]["value"]) == (2,)
+
+    def test_delta_linear_prior_is_deterministic_not_a_sample_site(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """A fixed value must not become a NUTS site whose log-prob is -inf.
+
+        Sampling ``Delta`` would give stuck chains with no error at all -- the
+        classification table calls this prior *Fixed*, not *sampled*.
+        """
+        priors = {**linear_priors, "v_sys": QD(dist.Delta(3.0), "km/s")}
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["v_sys"]["type"] == "deterministic"
+        assert float(trace["v_sys"]["value"]) == pytest.approx(3.0)
