@@ -13,8 +13,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from harv.models._helpers import (
+    LinearRole,
     _can_marginalize,
     _needs_explicit_sampling,
+    classify_linear_prior,
     pinned_linear_names,
 )
 from harv.models.component import AbstractComponentModel
@@ -163,17 +165,19 @@ def resolve_effective_marginalized_names(
         # Saying "cannot be analytically marginalized" about a pinned name is
         # simply false -- `parallax` under the Gaia defaults is a HalfNormal,
         # which this package marginalizes fine; it stays explicit only because
-        # another prior's callable reads its sampled value. The wording and the
-        # precedence both match `RejectionSampler.summary()`, so the two
-        # introspection surfaces agree and point at the same fix: a pinned name
-        # whose prior *also* cannot be marginalized is reported as
-        # unmarginalizable, because dropping the dependency would not help.
-        read_by_prior = sorted(
-            n
+        # another prior's callable reads its sampled value. Both surfaces render
+        # the role rather than re-deriving the precedence, so this warning and
+        # `RejectionSampler.summary()` cannot disagree.
+        roles = {
+            n: classify_linear_prior(
+                effective_linear_prior[n], name=n, pinned_names=pinned
+            )
             for n in explicit
-            if n in pinned and _can_marginalize(effective_linear_prior[n])
+        }
+        read_by_prior = sorted(n for n, r in roles.items() if r is LinearRole.PINNED)
+        unmarginalizable = sorted(
+            n for n, r in roles.items() if r is LinearRole.EXPLICIT
         )
-        unmarginalizable = sorted(explicit - set(read_by_prior))
         clauses = []
         if unmarginalizable:
             clauses.append(f"{unmarginalizable} cannot be analytically marginalized")

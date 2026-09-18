@@ -26,9 +26,7 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
     _is_callable_prior,
-    _is_plain_gaussian_prior,
     _needs_explicit_sampling,
-    _parse_linear_prior,
     _sample_explicit_linear_prior,
     pinned_linear_names,
 )
@@ -1197,9 +1195,13 @@ class JointModel(eqx.Module):
     ) -> Callable[[], None]:
         """Build a full (non-marginalized) numpyro model for the joint model.
 
-        Both nonlinear and linear parameters are sampled. Gaussian linear
-        priors are sampled jointly across all components; non-Gaussian linear
-        priors are sampled individually.
+        Both nonlinear and linear parameters are sampled, each linear parameter
+        as its own site. Per-component priors are independent, so a single joint
+        site would carry a diagonal covariance and be the same distribution; one
+        site each is that distribution without the machinery, and it accepts
+        every prior family :func:`_sample_explicit_linear_prior` handles rather
+        than only the untruncated single Gaussians one ``MultivariateNormal``
+        can express.
         """
         joint = self
         shared = self._shared_param_names()
@@ -1210,9 +1212,7 @@ class JointModel(eqx.Module):
             else dict.fromkeys(self.component_names)
         )
 
-        # Pre-classify each component's linear priors.
-        _comp_gaussian_lp: dict[str, dict[str, Any]] = {}
-        _comp_explicit_lp: dict[str, dict[str, Any]] = {}
+        _comp_lp: dict[str, dict[str, Any]] = {}
         _comp_param_units: dict[str, dict[str, str]] = {}
         for comp_name, comp in self.components.items():
             lp = per_comp_lp[comp_name]
@@ -1222,19 +1222,11 @@ class JointModel(eqx.Module):
                     "has no linear_priors"
                 )
                 raise ValueError(msg)
-            gaussian: dict[str, Any] = {}
-            explicit: dict[str, Any] = {}
-            for n, d in lp.items():
-                if not _is_plain_gaussian_prior(d):
-                    explicit[n] = d
-                else:
-                    gaussian[n] = d
-            _comp_gaussian_lp[comp_name] = gaussian
-            _comp_explicit_lp[comp_name] = explicit
+            _comp_lp[comp_name] = lp
             _comp_param_units[comp_name] = comp._linear_param_units(data[comp_name])
 
-        # Build ordered slot lists for both Gaussian and explicit (non-Gaussian)
-        # linear parameters.  Each slot is ``(site_name, comp_name, base_name)``:
+        # Build the ordered slot list.  Each slot is
+        # ``(site_name, comp_name, base_name)``:
         #
         # * Names in ``shared_linear_params`` appear ONCE with ``site_name ==
         #   base_name``, owned by the first component that holds them.
@@ -1265,10 +1257,14 @@ class JointModel(eqx.Module):
                         slots.append((f"{comp_name}.{base}", comp_name, base))
             return slots
 
-        _gaussian_slots = _build_slots(_comp_gaussian_lp)
-        _explicit_slots = _build_slots(_comp_explicit_lp)
+        # Plain priors before callables, so a callable sees the values it
+        # declares in ``requires`` (see ``_linear_sampling_order``).
+        _slots = sorted(
+            _build_slots(_comp_lp),
+            key=lambda slot: _is_callable_prior(_comp_lp[slot[1]][slot[2]]),
+        )
 
-        def model_fn() -> None:  # noqa: C901
+        def model_fn() -> None:
             # Sample all nonlinear params
             values = _sample_nonlinear_params(nonlinear_priors)
 
@@ -1290,81 +1286,36 @@ class JointModel(eqx.Module):
             linear_by_comp: dict[str, dict[str, jax.Array]] = {
                 c: {} for c in joint.component_names
             }
+            # The same draws, ``Q``-wrapped, for callable priors to read: they
+            # are written against unit-aware values (see the
+            # ``LinearPriorCallable`` contract).
+            linear_q_by_comp: dict[str, dict[str, Any]] = {
+                c: {} for c in joint.component_names
+            }
 
             def _record(
                 cname: str, base: str, value: jax.Array, *, is_shared: bool
             ) -> None:
-                if is_shared:
-                    for c in joint.component_names:
-                        linear_by_comp[c][base] = value
-                else:
-                    linear_by_comp[cname][base] = value
+                unit = _comp_param_units[cname].get(base, "")
+                as_q = Q(value, unit) if unit else value
+                targets = joint.component_names if is_shared else (cname,)
+                for c in targets:
+                    linear_by_comp[c][base] = value
+                    linear_q_by_comp[c][base] = as_q
 
-            # Sample explicit (non-Gaussian) linear priors using the resolved
-            # site names (qualified for per-component, bare for shared).
-            for site_name, cname, base in _explicit_slots:
-                d = _comp_explicit_lp[cname][base]
-                pu = _comp_param_units[cname]
+            for site_name, cname, base in _slots:
+                if base in shared_lin_set and base in linear_by_comp[cname]:
+                    continue  # a shared parameter is drawn once, by its owner
                 raw = _sample_explicit_linear_prior(
                     base,
-                    d,
-                    pu.get(base, ""),
+                    _comp_lp[cname][base],
+                    _comp_param_units[cname].get(base, ""),
                     comp_nl[cname],
-                    extra_values=linear_by_comp[cname],
+                    extra_values=linear_q_by_comp[cname],
                     site_name=site_name,
                     parameterization=joint.components[cname].parameterization,
                 )
                 _record(cname, base, jnp.asarray(raw), is_shared=base in shared_lin_set)
-
-            # Sample all Gaussian linear params jointly as a single _linear site.
-            if _gaussian_slots:
-                # Resolve per-component priors and combine into one MVN.
-                all_locs: list[Any] = []
-                all_scales: list[Any] = []
-                for _, cname, base in _gaussian_slots:
-                    d = _comp_gaussian_lp[cname][base]
-                    pu = _comp_param_units[cname]
-                    target_u = pu.get(base, "")
-
-                    # Resolve callable priors against the owning component's
-                    # nonlinear + already-sampled-explicit values.
-                    param_values = dict(comp_nl[cname])
-                    param_values.update(linear_by_comp[cname])
-                    if callable(d) and not isinstance(
-                        d, dist.Distribution | QuantityDistribution
-                    ):
-                        resolved = d(param_values)
-                    else:
-                        resolved = d
-
-                    parsed = _parse_linear_prior(resolved, target_u, base)
-                    if (
-                        parsed.low_finite
-                        or parsed.high_finite
-                        or parsed.ln_weights.shape[0] > 1
-                    ):
-                        msg = (
-                            "Non-marginalized numpyro models "
-                            "(`marginalized=False`) support only untruncated "
-                            "Gaussian linear priors; got a truncated or mixture "
-                            f"prior for {base!r}. Use `marginalized=True`, where "
-                            "both are supported analytically."
-                        )
-                        raise NotImplementedError(msg)
-                    all_locs.append(parsed.loc[0])
-                    all_scales.append(parsed.scale[0])
-
-                mvn = dist.MultivariateNormal(
-                    loc=jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in all_locs]),
-                    scale_tril=jnp.diag(
-                        jnp.stack([jnp.squeeze(jnp.asarray(x)) for x in all_scales])
-                    ),
-                )
-                linear_vec = cast("jax.Array", numpyro.sample("_linear", mvn))
-                for i, (site_name, cname, base) in enumerate(_gaussian_slots):
-                    v = linear_vec[i]
-                    numpyro.deterministic(site_name, v)
-                    _record(cname, base, v, is_shared=base in shared_lin_set)
 
             # Evaluate explicit log-likelihood per component
             ln_lik = jnp.zeros(())

@@ -91,7 +91,12 @@ class TestNumpyroModelFull:
         assert callable(model_fn)
 
     def test_model_traces(self, rv_data, nonlinear_priors, linear_priors):
-        """Full model has both nonlinear and linear sample sites."""
+        """Full model has a sample site per parameter, nonlinear and linear.
+
+        Each linear parameter gets its own named site. The priors are
+        independent, so the joint site this replaced carried a diagonal
+        covariance and was the same distribution.
+        """
         model = RVModel()
         model_fn = model.numpyro_model(
             nonlinear_priors, rv_data, linear_priors, marginalized=False
@@ -100,15 +105,11 @@ class TestNumpyroModelFull:
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
 
-        # Nonlinear params
         assert "period" in trace
         assert "eccentricity" in trace
-        # Linear params (sampled jointly as _linear)
-        assert "_linear" in trace
-        assert trace["_linear"]["type"] == "sample"
-        # Deterministic sites for individual linear params
-        assert "rv_semiamp" in trace
-        assert "v_sys" in trace
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert trace["v_sys"]["type"] == "sample"
+        assert "_linear" not in trace
 
     def test_log_lik_is_finite(self, rv_data, nonlinear_priors, linear_priors):
         model = RVModel()
@@ -219,18 +220,12 @@ class TestNumpyroModelFullExplicitLinearSites:
 
         assert trace["rv_semiamp"]["type"] == "sample"
         assert float(trace["rv_semiamp"]["value"]) >= 0.0
-        # v_sys is still an ordinary Gaussian, so it keeps the joint MVN.
-        assert trace["_linear"]["type"] == "sample"
-        assert jnp.shape(trace["_linear"]["value"]) == (1,)
+        assert trace["v_sys"]["type"] == "sample"
 
-    def test_callable_declaring_a_support_gets_its_own_site(
+    def test_callable_resolving_to_a_truncated_prior_respects_its_support(
         self, rv_data, nonlinear_priors, linear_priors
     ):
-        """The signed-SB2 case: a callable resolving to a truncated Normal.
-
-        Classifying it by its static ``support`` keeps it out of the MVN, which
-        would otherwise raise ``NotImplementedError`` at trace time.
-        """
+        """The signed-SB2 case: a callable resolving to a truncated Normal."""
         priors = {
             **linear_priors,
             "rv_semiamp": PeriodDependentKPrior(
@@ -246,10 +241,10 @@ class TestNumpyroModelFullExplicitLinearSites:
         assert trace["rv_semiamp"]["type"] == "sample"
         assert float(trace["rv_semiamp"]["value"]) >= 0.0
 
-    def test_callable_without_a_support_still_joins_the_mvn(
+    def test_callable_without_a_support_is_unconstrained(
         self, rv_data, nonlinear_priors, linear_priors
     ):
-        """No declaration means unconstrained, so nothing existing changes."""
+        """No declaration means unconstrained, so the site spans the real line."""
         priors = {
             **linear_priors,
             "rv_semiamp": PeriodDependentKPrior(Q(30.0, "km/s"), Q(1.0, "yr")),
@@ -260,8 +255,8 @@ class TestNumpyroModelFullExplicitLinearSites:
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
 
-        assert trace["rv_semiamp"]["type"] == "deterministic"
-        assert jnp.shape(trace["_linear"]["value"]) == (2,)
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert isinstance(trace["rv_semiamp"]["fn"], dist.Normal)
 
     def test_delta_linear_prior_is_deterministic_not_a_sample_site(
         self, rv_data, nonlinear_priors, linear_priors

@@ -18,9 +18,10 @@ from unxt.quantity import ustrip
 from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
-    _can_marginalize,
+    LinearRole,
     _evaluate_nonlinear_log_prior,
     _unwrap_dist,
+    classify_linear_prior,
     pinned_linear_names,
 )
 from harv.models.component import AbstractComponentModel
@@ -370,26 +371,25 @@ class RejectionSampler(AbstractSampler):
         pinned = pinned_linear_names(dict(eff_linear))
         linear_rows: list[tuple[str, ...]] = []
         n_marginalized = 0
+        # Each row renders the parameter's role (see `classify_linear_prior`),
+        # which owns the precedence between these cases, plus the one thing the
+        # role cannot know: whether the *user* excluded a marginalizable name
+        # via `marginalized_names`.
+        _status = {
+            LinearRole.EXPLICIT: "sampled",
+            LinearRole.PINNED: "sampled (read by prior)",
+            LinearRole.FIXED: "sampled (could marg.)",
+            LinearRole.MARGINALIZED: "sampled (could marg.)",
+        }
         for name, d in eff_linear.items():
             dist_name, unit = _describe_prior(d)
             if name not in explicit:
                 status = "marginalized"
                 n_marginalized += 1
-            elif not _can_marginalize(d):
-                # Tested before the pinned case: a pinned parameter whose prior
-                # also cannot be marginalized must read "sampled", because the
-                # fix the other label points at -- drop the dependency -- would
-                # change nothing while the prior itself stays unmarginalizable.
-                status = "sampled"
-            elif name in pinned:
-                # Marginalizable in itself, but another prior's callable reads
-                # its sampled value (e.g. parallax under the Gaia defaults), so
-                # it has to stay explicit. Distinguished from the cases either
-                # side because the fix is different: drop the dependency, not
-                # the prior or the `marginalized_names` entry.
-                status = "sampled (read by prior)"
             else:
-                status = "sampled (could marg.)"
+                status = _status[
+                    classify_linear_prior(d, name=name, pinned_names=pinned)
+                ]
             linear_rows.append((name, status, dist_name, unit))
 
         # Sampled = all nonlinear params + the linear params not marginalized.

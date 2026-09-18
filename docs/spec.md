@@ -1116,6 +1116,15 @@ marginalized set and is reclassified, with its value extracted, by
 recorded with `numpyro.deterministic`. Sampling it would hand NUTS a site whose
 log-prob is `-inf` almost everywhere — stuck chains with no error.
 
+One classifier decides the row, and the **order of its tests is normative**:
+a prior outside the marginalizable family is *Non-Gaussian* first, before the
+pinned test, because the fix the *Pinned* row implies — drop the dependency —
+would leave a `Gamma` prior that still cannot be marginalized. Then *Pinned*,
+then *Fixed*, then *Marginalized*. `RejectionSampler.summary()` and the
+`verbose=True` advisory both render that one classification rather than
+re-deriving it, so the two introspection surfaces cannot disagree about a
+parameter or point at different fixes.
+
 Explicitly-sampled linear priors must have their values present in the `values`
 dict alongside the nonlinear parameters. The model extracts them automatically in
 auto mode.
@@ -1169,21 +1178,14 @@ explicit sampling (see §Linear prior classification):
 A callable may also declare `support`, one of `"real"` (the default),
 `"positive"` or `"negative"`, saying which support the distribution it returns
 will have. Like `requires` this is *static* metadata read at trace time, not
-inferred from the returned object, and it is what lets the samplers treat a
-callable that returns a truncated prior correctly without calling it first:
+inferred from the returned object, because the sampler needs the answer before
+it can call the callable. It is used to pick the bijector for warm-start init
+values: a `support="positive"` site starting from `K = 28` must start at
+`log 28`, not at `28` read as an unconstrained coordinate.
 
-- under `marginalized=False` the parameter gets its **own** sample site rather
-  than a slot in the joint `_linear` MVN, which can only carry an untruncated
-  single Gaussian (see §Scope);
-- warm-start init values are un-transformed with the matching bijector, so a
-  `support="positive"` site starting from `K = 28` starts at `log 28` and not
-  at `28` interpreted as an unconstrained coordinate.
-
-Undeclared means unconstrained, so an existing callable needs no change; a
-callable that returns a truncated prior *without* declaring `support` is still
-marginalized correctly, but on the `marginalized=False` path it raises
-`NotImplementedError` from the joint MVN. Declaring an unrecognized value raises
-`ValueError`.
+Undeclared means unconstrained, so an existing callable needs no change, and a
+callable that returns a truncated prior without declaring `support` is still
+marginalized correctly. Declaring an unrecognized value raises `ValueError`.
 
 `requires` is optional and defaults to `()`, so a user-supplied callable needs no
 change. Omitting it on a callable that *does* read a linear parameter reproduces the
@@ -1310,9 +1312,14 @@ method that returns a no-argument callable suitable for `numpyro.infer.MCMC`:
   `numpyro.sample`, samples non-Gaussian linear params explicitly, then
   calls `model.log_prob(values)` in auto mode so that Gaussian linear params
   are analytically marginalized.
-- **Full** (`marginalized=False`): samples all params (nonlinear + linear).
-  Gaussian linear params are sampled jointly from their MVN; non-Gaussian
-  ones are sampled individually.
+- **Full** (`marginalized=False`): samples all params (nonlinear + linear),
+  each linear parameter as its own named site. The priors are independent per
+  parameter, so one joint site would carry a diagonal covariance and be the same
+  distribution; a site each is that distribution without the extra machinery,
+  and it accepts every prior family — truncated, mixture-free callables,
+  `Delta` — rather than only the untruncated single Gaussians one
+  `MultivariateNormal` can express. Plain priors are drawn before callables, so
+  a callable sees the values named in its `requires`.
 
 `JointModel.numpyro_model` composes per-component log-probs with shared
 nonlinear sampling.
@@ -2496,9 +2503,11 @@ Four numerical properties are contractual, and each is pinned by tests:
   over-weights, and only discards weight already below the precision floor.
 - **Infinite bounds never enter the arithmetic.** `(-inf - loc) / scale` would
   differentiate to `NaN` via `0 * inf`, and a `jnp.where` on the bound does not
-  help because `where` evaluates both branches under `grad`. Unbounded sides are
-  neutralized *before* dividing, using the static finiteness flags, and replaced
-  by a sentinel afterwards.
+  help because `where` evaluates both branches under `grad`. An unbounded side is
+  therefore never *computed*: because the finiteness flags are static, those
+  slots are filled with a literal infinity, which is a constant carrying no
+  gradient path. `log_ndtr(±inf)` is exact, and the infinite corners of the
+  bivariate rectangle are reduced statically before the quadrature sees them.
 - **A vanishing correlation is an ordinary point, not a singularity.** `rho` is
   *exactly* zero whenever the two constrained columns are supported on disjoint
   rows with no shared column — two components each carrying their own `v_sys`,
@@ -2585,15 +2594,12 @@ wrong, and it has a dedicated brute-force test.
   the means and scales. **Mixture linear priors inside a `JointModel` raise
   `NotImplementedError`** -- their components would multiply across the joint
   slot layout.
-- Non-marginalized numpyro models (`marginalized=False`) sample a truncated prior
-  as its own site, but cannot place one in the joint `_linear` MVN (a truncated
-  MVN is not a numpyro distribution) and raise `NotImplementedError` if asked to.
-  Mixtures are not sampleable as a single explicit site either. A
-  `LinearPriorCallable` that resolves to a truncated prior takes the same
-  own-site route as a directly-supplied one, which is how signed SB2
-  semi-amplitudes work on this path; it is identified by the static `support`
-  it declares (see §The `LinearPriorCallable` contract), since the callable
-  itself is resolved only inside the trace.
+- Non-marginalized numpyro models (`marginalized=False`) sample a truncated
+  prior as its own site, which is how signed SB2 semi-amplitudes work on that
+  path, whether the prior is supplied directly or returned by a
+  `LinearPriorCallable`. A **mixture** is the one family that is not sampleable
+  as a single site and raises `NotImplementedError`; marginalize it instead,
+  where mixtures are supported.
 - One linear parameter takes one *scalar* prior. A batched `loc`/`scale` raises
   `ValueError` rather than being read as an equal-weight mixture, whose weights
   would not sum to one; a mixture is declared with `dist.MixtureSameFamily`,

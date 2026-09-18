@@ -3,8 +3,11 @@
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
-from unxt import Q
+import pytest
+from numpyro import handlers
+from unxt import Q, ustrip
 
+import harv.models as hm
 from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import thiele_innes_unit
 from harv.models.astrometry import GaiaAstrometryModel
@@ -256,3 +259,59 @@ class TestGaiaAstrometryModelThieleInnes:
         )
 
         assert jnp.allclose(orbit_std, orbit_ti, atol=1e-5)
+
+
+class TestFullNumpyroModelWithTheGaiaDefaults:
+    """The `marginalized=False` path under the stock Gaia defaults.
+
+    Three of the six default linear priors are callables, and two of those read
+    ``parallax``, whose own prior is a ``HalfNormal``. That combination used to
+    raise ``KeyError``: ``parallax`` was drawn into the explicit group while the
+    callables were resolved against the *nonlinear* values only, so the value
+    they needed was never in the dict they were handed. Now every linear
+    parameter is one site, plain priors are drawn before callables, and the
+    drawn values are passed along unit-aware.
+    """
+
+    @staticmethod
+    def _default_prior() -> hm.HarvPrior:
+        return hm.StandardGaiaAstrometry().default_prior(
+            period_min=Q(100.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(1.0, "AU"),
+            sigma_parallax=Q(10.0, "mas"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+        )
+
+    def test_every_linear_param_is_its_own_sample_site(self):
+        data = _make_astro_data()
+        prior = self._default_prior()
+        model_fn = GaiaAstrometryModel().numpyro_model(
+            prior.nonlinear_priors, data, prior.linear_priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        for name in GaiaAstrometryModel()._all_linear_names():
+            assert trace[name]["type"] == "sample", name
+        assert "_linear" not in trace
+        assert jnp.isfinite(trace["ln_lik"]["fn"].log_prob(trace["ln_lik"]["value"]))
+
+    def test_parallax_is_positive_and_read_by_the_callables(self):
+        """`parallax` must be drawn before the priors that scale with it."""
+        data = _make_astro_data()
+        prior = self._default_prior()
+        model_fn = GaiaAstrometryModel().numpyro_model(
+            prior.nonlinear_priors, data, prior.linear_priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=3):
+            trace = handlers.trace(model_fn).get_trace()
+
+        parallax = float(trace["parallax"]["value"])
+        assert parallax > 0.0
+        # sigma_mu = sigma_v0[AU/yr] * parallax, so the proper-motion site's own
+        # scale pins that it saw the drawn parallax rather than a default.
+        sigma_pm = float(trace["pmra"]["fn"].scale)
+        expected = float(ustrip("AU/yr", Q(50.0, "km/s")) * parallax)
+        assert sigma_pm == pytest.approx(expected, rel=1e-10)

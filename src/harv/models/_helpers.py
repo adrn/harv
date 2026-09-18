@@ -4,6 +4,7 @@ __all__: tuple[str, ...] = ()
 
 import itertools
 from collections.abc import Callable
+from enum import Enum
 from typing import Any, NamedTuple, cast
 
 import equinox as eqx
@@ -115,22 +116,85 @@ _MARGINALIZABLE = (
 )
 
 
+class LinearRole(Enum):
+    """How the samplers will treat one linear parameter.
+
+    One value per parameter, decided by :func:`classify_linear_prior`. Having a
+    single classifier rather than a family of booleans is deliberate: the
+    *precedence* between these cases is the part that is easy to get wrong, and
+    it now lives in exactly one ``if`` chain. ``RejectionSampler.summary()`` and
+    the ``verbose=True`` advisory both render this enum, so the two
+    introspection surfaces cannot disagree.
+    """
+
+    MARGINALIZED = "marginalized"
+    """Integrated out analytically."""
+
+    PINNED = "pinned"
+    """Marginalizable, but another prior's callable reads its sampled value."""
+
+    FIXED = "fixed"
+    """A ``Delta``: the value is fixed rather than integrated or sampled."""
+
+    EXPLICIT = "explicit"
+    """Outside the family the likelihood can integrate out."""
+
+
+def classify_linear_prior(
+    d: LinearPriorDist,
+    *,
+    name: str = "",
+    pinned_names: frozenset[str] = frozenset(),
+) -> LinearRole:
+    """Classify one linear prior into the role the samplers will give it.
+
+    The order of the tests is the whole content of this function:
+
+    1. A prior outside the Gaussian family cannot be integrated out at all, so
+       it is ``EXPLICIT`` **first**. Testing ``pinned`` before this would label a
+       ``Gamma`` prior on a pinned parameter as "read by another prior", whose
+       documented fix -- drop the dependency -- would change nothing.
+    2. A name another callable reads is ``PINNED``: a marginalized parameter has
+       no sampled value for the callable to read, so it must stay explicit (see
+       :func:`pinned_linear_names`). This is the only exception to "marginalize
+       whatever you can".
+    3. A ``Delta`` is ``FIXED``. It joins the marginalized set and is then
+       reclassified, with its value extracted, by
+       ``AbstractComponentModel._handle_delta_priors``; short-circuiting it to
+       explicit here would skip that extraction and leave the value unset. Under
+       ``marginalized=False`` it becomes a ``numpyro.deterministic`` site.
+    4. Everything else is ``MARGINALIZED``: a ``Normal``, a truncated Normal
+       (including ``HalfNormal``), a Gaussian mixture, or a callable returning
+       one of those. Truncated and mixture priors became marginalizable when
+       :mod:`harv.stats.marginalized` was added; before that only plain Normals
+       were.
+
+    Passing no ``name``/``pinned_names`` answers the question "*can* the math
+    integrate this out", ignoring the pinning policy -- which is what an explicit
+    ``marginalized_names`` request is gated on.
+    """
+    inner = d.distribution if isinstance(d, QuantityDistribution) else d
+    marginalizable = isinstance(inner, (*_MARGINALIZABLE, dist.Delta)) or (
+        # A callable is resolved at evaluation time; assume it returns something
+        # marginalizable and let ``_parse_linear_prior`` complain if it does not.
+        _is_callable_prior(d)
+    )
+    if not marginalizable:
+        return LinearRole.EXPLICIT
+    if name and name in pinned_names:
+        return LinearRole.PINNED
+    if isinstance(inner, dist.Delta):
+        return LinearRole.FIXED
+    return LinearRole.MARGINALIZED
+
+
 def _can_marginalize(d: LinearPriorDist) -> bool:
     """Whether the likelihood *can* integrate this linear prior out analytically.
 
-    This is a statement about the math only -- see
-    :func:`_needs_explicit_sampling` for what the auto-classification actually
-    chooses to do. Truncated and mixture Gaussians became marginalizable when
-    :mod:`harv.stats.marginalized` was added; before that only plain Normals
-    were.
+    A statement about the math only, ignoring the pinning policy; see
+    :func:`classify_linear_prior`.
     """
-    if isinstance(d, QuantityDistribution):
-        return isinstance(d.distribution, (*_MARGINALIZABLE, dist.Delta))
-    if isinstance(d, (*_MARGINALIZABLE, dist.Delta)):
-        return True
-    # A LinearPriorCallable is resolved at evaluation time; assume it returns
-    # something marginalizable and let ``_parse_linear_prior`` complain if not.
-    return _is_callable_prior(d)
+    return classify_linear_prior(d) is not LinearRole.EXPLICIT
 
 
 def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
@@ -199,32 +263,26 @@ def _callable_prior_constraint(d: LinearPriorCallable) -> constraints.Constraint
     return _CALLABLE_SUPPORTS[supp]
 
 
-def _is_plain_gaussian_prior(d: LinearPriorDist) -> bool:
-    """Whether a linear prior can join the non-marginalized model's ``_linear`` MVN.
+def _linear_sampling_order(prior_dict: LinearPriorDict) -> tuple[str, ...]:
+    """Order linear parameter names so a callable prior sees what it reads.
 
-    Distinct from both :func:`_can_marginalize` and
-    :func:`_needs_explicit_sampling`, and the distinction is load-bearing. On the
-    ``marginalized=False`` path the Gaussian linear parameters are drawn from one
-    joint ``MultivariateNormal`` site, which can only represent an *untruncated*
-    single Gaussian. A truncated or mixture prior is perfectly samplable there --
-    numpyro has a bijector for a truncated Normal -- just not as part of that one
-    MVN, so it gets its own site instead.
+    On the ``marginalized=False`` path every linear parameter gets its own
+    sample site, and a :data:`LinearPriorCallable` is resolved against the
+    values drawn so far. A callable may read other parameters (it says so in
+    ``requires``; see :func:`pinned_linear_names`), while a plain distribution
+    reads nothing, so drawing every plain prior before any callable satisfies
+    each declared dependency in a single pass.
+
+    A callable that reads *another callable's* parameter is not ordered
+    correctly by this rule, and gets the documented ``KeyError`` from the
+    callable itself. None of harv's own callables do that: their ``requires``
+    name nonlinear parameters plus ``parallax``, whose prior is an ordinary
+    ``HalfNormal``.
     """
-    inner = d.distribution if isinstance(d, QuantityDistribution) else d
-    if isinstance(inner, dist.Normal):
-        return True
-    # A callable is resolved only at trace time, but whether it *can* return a
-    # truncated prior is static: it says so by declaring ``support`` (see
-    # ``docs/spec.md`` -> The LinearPriorCallable contract). Without the
-    # declaration a callable is assumed to return a plain Normal, as the
-    # defaults do, and ``_parse_linear_prior`` raises clearly if it does not.
-    # Reading ``support`` here is what keeps ``signed_semiamp=True`` working on
-    # the ``marginalized=False`` path: ``PeriodDependentKPrior(support=...)``
-    # gets its own truncated site instead of being forced into the joint
-    # ``_linear`` MVN, which can only carry an untruncated single Gaussian.
-    if _is_callable_prior(d):
-        return getattr(d, "support", "real") == "real"
-    return False
+    return tuple(
+        [n for n in prior_dict if not _is_callable_prior(prior_dict[n])]
+        + [n for n in prior_dict if _is_callable_prior(prior_dict[n])]
+    )
 
 
 def _needs_explicit_sampling(
@@ -235,23 +293,16 @@ def _needs_explicit_sampling(
 ) -> bool:
     """True if a linear prior entry must be sampled explicitly by the sampler.
 
-    This is the *auto-mode default*. It returns ``False`` for everything
-    :func:`_can_marginalize` accepts, except names in ``pinned_names`` -- those
-    are read by another prior's callable and so must be drawn explicitly (see
-    :func:`pinned_linear_names`).
+    The *auto-mode default*: the two roles that cannot be integrated out are
+    ``EXPLICIT`` and ``PINNED``. ``FIXED`` answers ``False`` because it is
+    reclassified later with its value extracted; see
+    :func:`classify_linear_prior`.
 
-    ``dist.Delta`` deliberately answers ``False`` here even though its value is
-    fixed rather than integrated. It enters the marginalized set and is then
-    reclassified, with its value extracted, by
-    ``AbstractComponentModel._handle_delta_priors``. Short-circuiting it to
-    explicit here would skip that extraction and leave the value unset.
-
-    A user may still override this per sampler via ``marginalized_names``, which
-    is gated on :func:`_can_marginalize` instead.
+    A user may override this per sampler via ``marginalized_names``, which is
+    gated on :func:`_can_marginalize` instead.
     """
-    if name and name in pinned_names:
-        return True
-    return not _can_marginalize(d)
+    role = classify_linear_prior(d, name=name, pinned_names=pinned_names)
+    return role in (LinearRole.EXPLICIT, LinearRole.PINNED)
 
 
 def _with_derived_eccentricity(
@@ -535,31 +586,6 @@ def _explicit_scalar_dist(resolved: ResolvedLinearPrior) -> dist.Distribution:
         scale,
         low=resolved.low[0] if resolved.low_finite[0] else None,
         high=resolved.high[0] if resolved.high_finite[0] else None,
-    )
-
-
-def _explicit_joint_mvn(resolved: ResolvedLinearPrior) -> dist.MultivariateNormal:
-    """The joint MVN for the non-marginalized numpyro model's ``_linear`` site.
-
-    Only the untruncated single-Gaussian case is representable as one MVN.
-    Truncated and mixture priors are rejected rather than quietly dropped: a
-    truncated MVN is not a numpyro distribution, and silently sampling the
-    untruncated one would return out-of-support linear values while the
-    marginalized path honoured the bound.
-    """
-    if resolved.n_components > 1 or resolved.constrained:
-        offenders = tuple(resolved.names[i] for i in resolved.constrained) or (
-            resolved.names
-        )
-        msg = (
-            "Non-marginalized numpyro models (`marginalized=False`) support only "
-            "untruncated Gaussian linear priors; got a truncated or mixture "
-            f"prior for {offenders}. Use `marginalized=True`, where both are "
-            "supported analytically."
-        )
-        raise NotImplementedError(msg)
-    return dist.MultivariateNormal(
-        loc=resolved.loc[0], scale_tril=jnp.diag(resolved.scale[0])
     )
 
 

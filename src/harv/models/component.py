@@ -24,14 +24,12 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
-    _explicit_joint_mvn,
     _explicit_scalar_dist,
-    _is_plain_gaussian_prior,
+    _linear_sampling_order,
     _needs_explicit_sampling,
     _resolve_linear_priors,
     _sample_explicit_linear_prior,
     _unwrap_dist,
-    _with_derived_eccentricity,
     pinned_linear_names,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
@@ -1001,73 +999,42 @@ def _build_full_component_model(
 ) -> Callable[[], None]:
     """Build an explicit (non-marginalized) numpyro model.
 
-    Both nonlinear and linear parameters are sampled. Linear parameters
-    that have Gaussian priors are sampled jointly from their MVN; those
-    with non-Gaussian priors (e.g. HalfNormal) are sampled individually.
+    Both nonlinear and linear parameters are sampled, each linear parameter as
+    its own site. The priors are independent per parameter, so a single joint
+    site would carry a diagonal covariance and be the same distribution; one
+    site each is that distribution written without the machinery, and it accepts
+    every prior family ``_sample_explicit_linear_prior`` handles rather than
+    only the untruncated single Gaussians an ``MultivariateNormal`` can express.
     """
     if linear_priors is None:
         msg = "Cannot build full numpyro model without linear_priors"
         raise ValueError(msg)
 
-    # Classify linear priors: Gaussian (can go into joint MVN) vs
-    # non-Gaussian (must be sampled individually).
-    gaussian_lp: dict[str, PriorDist | LinearPriorCallable] = {}
-    explicit_lp: dict[str, PriorDist] = {}
-    for name, d in linear_priors.items():
-        if not _is_plain_gaussian_prior(d):
-            explicit_lp[name] = d
-        else:
-            gaussian_lp[name] = d
-
     param_units = component._linear_param_units(data)
-    gaussian_names = list(gaussian_lp.keys())
+    ordered_linear = _linear_sampling_order(linear_priors)
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(nonlinear_priors)
         nonlinear_values = _apply_unit_conversions(values, nonlinear_priors, component)
 
-        # Sample non-Gaussian linear params individually. Callables land here
-        # too when they declare a non-real support, because a truncated
-        # Gaussian cannot go into the joint ``_linear`` MVN below.
+        # Two views of the same draws: unit-stripped for the likelihood, and
+        # ``Q``-wrapped for any callable prior that reads them (the callables
+        # are written against unit-aware values -- see the
+        # ``LinearPriorCallable`` contract).
         linear_values: dict[str, Any] = {}
-        for name, d in explicit_lp.items():
-            linear_values[name] = _sample_explicit_linear_prior(
+        linear_q: dict[str, Any] = {}
+        for name in ordered_linear:
+            unit = param_units.get(name, "")
+            raw = _sample_explicit_linear_prior(
                 name,
-                d,
-                param_units.get(name, ""),
+                linear_priors[name],
+                unit,
                 nonlinear_values,
-                extra_values=linear_values,
+                extra_values=linear_q,
                 parameterization=component.parameterization,
             )
-
-        # Sample Gaussian linear params jointly
-        if gaussian_names:
-            # Resolve callable priors (e.g. parallax-dependent proper motion)
-            resolved_lp: dict[str, PriorDist | LinearPriorCallable] = {}
-            for name, d in gaussian_lp.items():
-                if callable(d) and not isinstance(
-                    d, dist.Distribution | QuantityDistribution
-                ):
-                    resolved_lp[name] = d(
-                        _with_derived_eccentricity(
-                            dict(nonlinear_values), component.parameterization
-                        )
-                    )
-                else:
-                    resolved_lp[name] = d
-            gaussian_units = {n: param_units.get(n, "") for n in gaussian_names}
-            mvn = _explicit_joint_mvn(
-                _resolve_linear_priors(
-                    resolved_lp,
-                    nonlinear_values,
-                    gaussian_units,
-                    parameterization=component.parameterization,
-                )
-            )
-            linear_vec = jnp.atleast_1d(numpyro.sample("_linear", mvn))
-            for i, lname in enumerate(gaussian_names):
-                numpyro.deterministic(lname, linear_vec[i])
-                linear_values[lname] = linear_vec[i]
+            linear_values[name] = raw
+            linear_q[name] = Q(raw, unit) if unit else raw
 
         # Evaluate explicit log-likelihood
         numpyro.factor(

@@ -76,12 +76,6 @@ _RHO_MAX = 1.0 - 1e-12
 _BISECT_STEPS = 60
 _BISECT_HALF_WIDTH = 12.0
 
-# Stand-in for an infinite standardized bound. Phi(-40) underflows to zero even
-# in float64, so this is indistinguishable from infinity in every expression it
-# feeds, while keeping actual infinities out of the arithmetic -- see
-# :func:`_standardize_bounds`.
-_Z_SENTINEL = 40.0
-
 # Held back from the float-precision budget in :func:`_signed_logsumexp_guarded`
 # so that any surviving value stands ~100x above the cancellation noise floor.
 _CANCELLATION_MARGIN = math.log(100.0)
@@ -375,31 +369,39 @@ def _standardize_bounds(
 ) -> tuple[jax.Array, jax.Array]:
     r"""Standardize the truncation box, keeping infinities out of the arithmetic.
 
-    Returning ``(low - center) / scale`` directly would put ``-inf`` in the
-    graph, and differentiating it gives ``NaN`` rather than zero: the derivative
-    of ``(-inf - loc) / scale`` with respect to ``scale`` is infinite, and an
-    unconstrained parameter contributes an upstream derivative of zero, so the
-    chain rule produces ``0 * inf``. A ``jnp.where`` on the bound value does not
-    help, because ``where`` evaluates both branches when differentiated.
+    Computing ``(low - center) / scale`` on an unbounded side would put ``-inf``
+    in the graph, and differentiating it gives ``NaN`` rather than zero: the
+    derivative of ``(-inf - loc) / scale`` with respect to ``scale`` is infinite,
+    and an unconstrained parameter contributes an upstream derivative of zero, so
+    the chain rule produces ``0 * inf``. A ``jnp.where`` on the bound value does
+    not help, because ``where`` evaluates both branches when differentiated.
 
-    So the unbounded sides are neutralized *before* dividing -- the sanitized
-    bound array is built from the static finiteness flags and holds no
-    infinities -- and the sentinel is substituted afterwards. Both branches of
-    the resulting ``where`` are finite, so gradients flow cleanly.
+    The fix is that an unbounded side is never *computed*: because
+    ``low_finite`` / ``high_finite`` are static, the unbounded slots are filled
+    with a literal infinity, which is a constant with no gradient path at all.
+    Downstream this is exact -- ``log_ndtr(inf) == 0`` and
+    ``log_ndtr(-inf) == -inf`` are the right answers, and :func:`_ln_bvn_rect`
+    reduces the infinite corners statically before any of them reaches the
+    quadrature.
     """
-    low_sane = jnp.asarray(
-        [prior.low[i] if f else 0.0 for i, f in enumerate(prior.low_finite)]
+
+    def standardize(
+        bounds: jax.Array, finite: tuple[bool, ...], unbounded: float
+    ) -> jax.Array:
+        return jnp.stack(
+            [
+                (bounds[i] - center[..., i]) / scale[..., i]
+                if f
+                else jnp.full_like(scale[..., i], unbounded)
+                for i, f in enumerate(finite)
+            ],
+            axis=-1,
+        )
+
+    return (
+        standardize(prior.low, prior.low_finite, -jnp.inf),
+        standardize(prior.high, prior.high_finite, jnp.inf),
     )
-    high_sane = jnp.asarray(
-        [prior.high[i] if f else 0.0 for i, f in enumerate(prior.high_finite)]
-    )
-    z_lo = jnp.where(
-        jnp.asarray(prior.low_finite), (low_sane - center) / scale, -_Z_SENTINEL
-    )
-    z_hi = jnp.where(
-        jnp.asarray(prior.high_finite), (high_sane - center) / scale, _Z_SENTINEL
-    )
-    return z_lo, z_hi
 
 
 def _ln_prior_normalizer(prior: ResolvedLinearPrior) -> jax.Array:

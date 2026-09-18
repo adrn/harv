@@ -31,7 +31,6 @@ from harv.models._helpers import (
     _evaluate_nonlinear_log_prior,
     _explicit_scalar_dist,
     _is_callable_prior,
-    _is_plain_gaussian_prior,
     _unwrap_dist,
 )
 from harv.models.component import (
@@ -667,9 +666,9 @@ class NumpyroSampler(AbstractSampler):
 
         # Include init values for explicit (non-marginalized) linear params.
         # For both the marginalized and non-marginalized cases, any linear param
-        # with a non-Gaussian prior (needs_explicit_sampling) must be included in
-        # init_params because the numpyro model samples it explicitly rather than
-        # analytically marginalizing it.
+        # not marginalized away must be included in init_params, because the
+        # numpyro model draws it from its own site rather than integrating it
+        # out. On the full model that is all of them.
         if isinstance(effective_linear_prior, dict):
             explicit_linear_name_set = (
                 {
@@ -678,11 +677,9 @@ class NumpyroSampler(AbstractSampler):
                     if name not in set(effective_marginalized_names or ())
                 }
                 if marginalized
-                else {
-                    name
-                    for name, prior_dist in effective_linear_prior.items()
-                    if not _is_plain_gaussian_prior(prior_dist)
-                }
+                # The full model samples *every* linear parameter as its own
+                # site, so every one of them needs an init value.
+                else set(effective_linear_prior)
             )
             for name, d in effective_linear_prior.items():
                 if name not in explicit_linear_name_set:
@@ -709,36 +706,6 @@ class NumpyroSampler(AbstractSampler):
 
         if extra_model is not None:
             init_params.update(extra_init_params)  # ty: ignore[no-matching-overload]
-
-        if (
-            not marginalized
-            and extra_model is None
-            and isinstance(effective_linear_prior, dict)
-        ):
-            # Full model: include init values for _linear site.
-            gaussian_name_pairs = [
-                (name, _resolve_sample_linear_name(name))
-                for name in effective_linear_prior
-                if _is_plain_gaussian_prior(effective_linear_prior[name])
-            ]
-            gaussian_name_pairs = [
-                (name, sample_name)
-                for name, sample_name in gaussian_name_pairs
-                if sample_name is not None
-            ]
-            if gaussian_name_pairs:
-                linear_arr = np.column_stack(
-                    [
-                        np.asarray(samples.linear[sample_name].value)
-                        for _, sample_name in gaussian_name_pairs
-                    ]
-                )
-                if _scalar_init:
-                    init_params["_linear"] = jnp.asarray(linear_arr[0])
-                else:
-                    init_params["_linear"] = jnp.stack(
-                        [jnp.asarray(linear_arr[i]) for i in indices]
-                    )
 
         return init_params
 
