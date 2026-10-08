@@ -773,6 +773,16 @@ ______________________________________________________________________
   extension from one `SourceData.indicator_data_by_type` call, so their row
   order agrees, with the reference instrument chosen from a configured
   preference order.
+- **SB2 runs** (`kind = "sb2"`), needed for SDSS-V, where double-lined
+  sources are identified in advance and routed to their own run. Each source
+  becomes a `SystemData(primary=RVData, secondary=RVData)` fit with
+  `JointModel.for_sb2` and `default_sb2_prior` (both already in harv; the
+  shared prior cache works because `make_prior_cache` accepts a
+  `JointModel`). Open questions: how the input table encodes the two
+  components (a component column with one row per component-epoch, or paired
+  `rv`/`rv2` columns per epoch), how component-qualified parameter names
+  (`primary.rv_semiamp`) appear as summary columns, a derived mass-ratio
+  column, and a two-component RV panel in the viewer.
 - **Joint RV + Gaia astrometry runs**, with `kind = "joint"` and
   `JointModel.for_rv_and_gaia`.
 - **Iterative rejection reruns** for under-resolved, multimodal sources (a
