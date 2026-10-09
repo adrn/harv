@@ -11,6 +11,7 @@ concepts
 sharp-bits
 tutorials/index
 api/index
+math-notes/index
 at-scale
 benchmarks
 running-benchmarks
@@ -54,6 +55,7 @@ individual systems are not well-constrained.
 - Read about some  **{doc}`key concepts <concepts>`**.
 - New to JAX, NumPyro, or unxt? Check **{doc}`sharp-bits`**.
 - Looking up a specific class or function? Use the **{doc}`api/index`**.
+- Want math? See the **{doc}`math notes <math-notes/index>`**.
 
 
 ## Installation

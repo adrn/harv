@@ -78,6 +78,9 @@ a marginalized parameter has no sampled value to read. That is why `parallax` is
 explicitly under the Gaia defaults even though its `HalfNormal` prior could be
 marginalized: the semi-major-axis and proper-motion priors both depend on it.
 
+For how the truncated and mixture cases are actually computed, see
+{doc}`math-notes/constrained-linear-priors`.
+
 ## JAX
 
 `harv` is built on JAX. That has a few practical consequences.
