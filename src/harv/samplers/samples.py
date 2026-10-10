@@ -6,8 +6,9 @@ rejection sampling with dict-like access, unit handling, and analysis tools.
 
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, final, overload
 
 import equinox as eqx
 import h5py
@@ -26,7 +27,11 @@ from harv.models.parameterizations.gaia import (
 )
 from harv.samplers.conversion import convert_parameterization
 
-__all__ = ("Samples", "pad_and_stack_samples")
+__all__ = ("SampleColumns", "Samples", "pad_and_stack_samples")
+
+# Column names reserved for the per-sample log-probabilities in
+# :meth:`Samples.to_columns`; no parameter may use them.
+_LOGPROB_COLUMNS = ("ln_likelihood", "ln_prior")
 
 # Default minimum evidence effective sample size (ln_Z_int_ess) below which a
 # rejection run is reported as under-resolved: the marginal-likelihood integral
@@ -279,6 +284,60 @@ class _MetadataView(Mapping[str, Any]):
 
     def __repr__(self) -> str:
         return f"_MetadataView({dict(self.items())!r})"
+
+
+@final
+@dataclass(frozen=True)
+class SampleColumns:
+    """A :class:`Samples` as plain NumPy columns, plus what is needed to rebuild it.
+
+    Produced by :meth:`Samples.to_columns` and consumed by
+    :meth:`Samples.from_columns`. It is the format-neutral mapping between a
+    ``Samples`` and a table: every file format harv or a downstream package
+    writes (HDF5 here, Parquet in hq) is built on it, so the structure of a
+    ``Samples`` is defined in one place.
+
+    Parameters
+    ----------
+    columns
+        Every nonlinear and linear parameter, keyed by name, plus
+        ``"ln_likelihood"`` and ``"ln_prior"`` when the ``Samples`` carries
+        them. Arrays keep the ``Samples``' full shape: 1-D for a flat
+        ``Samples``, ``(*batch_shape, n_samples)`` for a batched one.
+    units
+        Unit string for every parameter (``""`` for dimensionless). The
+        log-probability columns are dimensionless and have no entry.
+    nonlinear_names, linear_names
+        Which columns are nonlinear and which linear parameters, in order.
+    model_type, linear_extension_names, metadata
+        The ``Samples`` fields of the same names. ``metadata`` holds only
+        JSON-friendly scalars.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.samplers import Samples
+    >>> samples = Samples(
+    ...     nonlinear={"period": Q([100.0, 101.0], "day")},
+    ...     linear={"v_sys": Q([5.0, 5.1], "km/s")},
+    ...     model_type="RVModel",
+    ... )
+    >>> cols = samples.to_columns()
+    >>> cols.nonlinear_names, cols.linear_names
+    (('period',), ('v_sys',))
+    >>> cols.columns["period"]
+    array([100., 101.])
+    >>> Samples.from_columns(cols).n_samples
+    2
+    """
+
+    columns: dict[str, np.ndarray]
+    units: dict[str, str]
+    nonlinear_names: tuple[str, ...]
+    linear_names: tuple[str, ...]
+    model_type: str
+    linear_extension_names: tuple[str, ...]
+    metadata: dict[str, int | float | str | bool]
 
 
 class Samples(eqx.Module):
@@ -1494,8 +1553,139 @@ class Samples(eqx.Module):
         """
         return self.companion_mass(m_primary, sin_i=1.0)
 
+    def to_columns(self) -> SampleColumns:
+        """Flatten to plain NumPy columns plus the structure needed to rebuild.
+
+        This is the format-neutral mapping between a ``Samples`` and a table;
+        :meth:`to_hdf5` is built on it, and so is any downstream writer (e.g.
+        hq's Parquet results). :meth:`from_columns` inverts it exactly.
+
+        Returns
+        -------
+            A :class:`SampleColumns`. Arrays keep the full shape of the
+            parameter arrays, so a batched ``Samples`` round-trips too.
+
+        Raises
+        ------
+        ValueError
+            If a parameter is named ``"ln_likelihood"`` or ``"ln_prior"``
+            (reserved for the log-probability columns), or if a name appears
+            in both ``nonlinear`` and ``linear``.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 101.0], "day")},
+        ...     linear={"v_sys": Q([5.0, 5.1], "km/s")},
+        ...     model_type="RVModel",
+        ... )
+        >>> cols = samples.to_columns()
+        >>> list(cols.columns), cols.units["v_sys"]
+        (['period', 'v_sys'], 'km / s')
+        """
+        reserved = [k for k in (*self.nonlinear, *self.linear) if k in _LOGPROB_COLUMNS]
+        if reserved:
+            msg = (
+                f"Parameter name(s) {reserved} are reserved for the per-sample "
+                f"log-probability columns {_LOGPROB_COLUMNS}."
+            )
+            raise ValueError(msg)
+        overlap = sorted(set(self.nonlinear) & set(self.linear))
+        if overlap:
+            msg = f"Parameter name(s) {overlap} appear in both nonlinear and linear."
+            raise ValueError(msg)
+
+        columns: dict[str, np.ndarray] = {}
+        units: dict[str, str] = {}
+        for group in (self.nonlinear, self.linear):
+            for name, qty in group.items():
+                columns[name] = np.asarray(qty.value)
+                units[name] = str(qty.unit)
+        for name in _LOGPROB_COLUMNS:
+            value = getattr(self, name)
+            if value is not None:
+                columns[name] = np.asarray(value)
+
+        # The metadata invariant says only JSON-friendly scalars live here
+        # (Q-valued entries in split form); anything else is out of contract
+        # and is dropped, as to_hdf5 always has.
+        metadata = {
+            k: v for k, v in self.metadata.items() if isinstance(v, int | float | str)
+        }
+        return SampleColumns(
+            columns=columns,
+            units=units,
+            nonlinear_names=tuple(self.nonlinear),
+            linear_names=tuple(self.linear),
+            model_type=self.model_type,
+            linear_extension_names=self.linear_extension_names,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def from_columns(cls, columns: SampleColumns) -> "Samples":
+        """Rebuild a ``Samples`` from :meth:`to_columns` output.
+
+        Columns may be any array-like (NumPy arrays from a file reader, for
+        instance); they are converted to JAX arrays. Numpy scalars in
+        ``metadata`` (as h5py and pyarrow return them) are converted to Python
+        scalars, as the static ``metadata`` field requires.
+
+        Parameters
+        ----------
+        columns
+            The flattened samples.
+
+        Returns
+        -------
+            The reconstructed ``Samples``. A named parameter with no column or
+            no unit raises ``KeyError`` naming it.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> samples = Samples(
+        ...     nonlinear={"period": Q([100.0, 101.0], "day")},
+        ...     linear={"v_sys": Q([5.0, 5.1], "km/s")},
+        ...     model_type="RVModel",
+        ... )
+        >>> Samples.from_columns(samples.to_columns())["v_sys"]
+        Quantity(Array([5. , 5.1], dtype=float64), unit='km / s')
+        """
+
+        def _quantities(group: tuple[str, ...]) -> dict[str, Q]:
+            return {
+                name: Q(jnp.asarray(columns.columns[name]), columns.units[name])
+                for name in group
+            }
+
+        logprobs = {
+            name: jnp.asarray(columns.columns[name])
+            if name in columns.columns
+            else None
+            for name in _LOGPROB_COLUMNS
+        }
+        return cls(
+            nonlinear=_quantities(columns.nonlinear_names),
+            linear=_quantities(columns.linear_names),
+            model_type=columns.model_type,
+            linear_extension_names=columns.linear_extension_names,
+            # Readers (h5py, pyarrow) return numpy scalars, which equinox treats
+            # as arrays in a static field; coerce them to Python scalars.
+            metadata={
+                k: v.item() if isinstance(v, np.generic) else v
+                for k, v in columns.metadata.items()
+            },
+            **logprobs,
+        )
+
     def to_hdf5(self, filename: str | Path) -> None:
         """Save samples to HDF5 file.
+
+        Built on :meth:`to_columns`: parameters go to ``nonlinear/`` and
+        ``linear/`` datasets with a ``unit`` attribute, the log-probabilities to
+        top-level datasets, and the rest to attributes of ``metadata/``.
 
         Parameters
         ----------
@@ -1511,46 +1701,37 @@ class Samples(eqx.Module):
         >>> reloaded.n_samples == samples.n_samples  # doctest: +SKIP
         True
         """
-        filename = Path(filename)
+        cols = self.to_columns()
 
         with h5py.File(filename, "w") as f:
-            # Store nonlinear parameters -- each as a dataset with a unit attr.
-            nonlinear_group = f.create_group("nonlinear")
-            for key, qty in self.nonlinear.items():
-                ds = nonlinear_group.create_dataset(key, data=np.asarray(qty.value))
-                ds.attrs["unit"] = str(qty.unit)
+            for group_name, names in (
+                ("nonlinear", cols.nonlinear_names),
+                ("linear", cols.linear_names),
+            ):
+                group = f.create_group(group_name)
+                for name in names:
+                    ds = group.create_dataset(name, data=cols.columns[name])
+                    ds.attrs["unit"] = cols.units[name]
 
-            # Store linear parameters -- each as a dataset with a unit attr.
-            linear_group = f.create_group("linear")
-            for key, qty in self.linear.items():
-                ds = linear_group.create_dataset(key, data=np.asarray(qty.value))
-                ds.attrs["unit"] = str(qty.unit)
+            for name in _LOGPROB_COLUMNS:
+                if name in cols.columns:
+                    f.create_dataset(name, data=cols.columns[name])
 
-            # Store optional per-sample log-probabilities (dimensionless).
-            if self.ln_likelihood is not None:
-                f.create_dataset("ln_likelihood", data=np.asarray(self.ln_likelihood))
-            if self.ln_prior is not None:
-                f.create_dataset("ln_prior", data=np.asarray(self.ln_prior))
-
-            # Store metadata
             meta_group = f.create_group("metadata")
-            meta_group.attrs["model_type"] = self.model_type
+            meta_group.attrs["model_type"] = cols.model_type
             meta_group.attrs["linear_extension_names"] = ",".join(
-                self.linear_extension_names
+                cols.linear_extension_names
             )
             meta_group.attrs["n_samples"] = self.n_samples
-
-            # Store custom metadata.  The Samples invariant says metadata
-            # holds only JSON-friendly scalars (Q-valued entries live in
-            # split form: ``<name>`` value + ``<name>_unit`` string), so a
-            # single branch covers everything.
-            for key, value in self.metadata.items():
-                if isinstance(value, int | float | str):
-                    meta_group.attrs[key] = value
+            for key, value in cols.metadata.items():
+                meta_group.attrs[key] = value
 
     @classmethod
     def from_hdf5(cls, filename: str | Path) -> "Samples":
         """Load samples from HDF5 file.
+
+        Reads the layout :meth:`to_hdf5` writes into a :class:`SampleColumns`
+        and rebuilds with :meth:`from_columns`.
 
         Parameters
         ----------
@@ -1569,72 +1750,47 @@ class Samples(eqx.Module):
         >>> samples.model_type  # doctest: +SKIP
         'rv'
         """
-        filename = Path(filename)
-
         with h5py.File(filename, "r") as f:
             meta = f["metadata"]
 
-            model_type: str = meta.attrs.get("model_type", "")
-
+            # ``offset_names`` is the pre-rename spelling of
+            # ``linear_extension_names`` in older files.
             raw_extra = meta.attrs.get("linear_extension_names", "") or meta.attrs.get(
                 "offset_names", ""
             )
-            linear_extension_names: tuple[str, ...] = (
-                tuple(raw_extra.split(",")) if raw_extra else ()
-            )
+            structural = {
+                "linear_extension_names",
+                "offset_names",
+                "n_samples",
+                "model_type",
+            }
+            metadata = {k: v for k, v in meta.attrs.items() if k not in structural}
 
-            # Load custom metadata.  HDF5 attrs and the in-memory metadata
-            # dict share one convention -- bare ``<name>`` value plus
-            # ``<name>_unit`` string for Q-valued entries -- so attrs load
-            # one-for-one with no reassembly.
-            metadata: dict[str, Any] = {}
-            for key in meta.attrs:
-                if key in [
-                    "linear_extension_names",
-                    "offset_names",
-                    "n_samples",
-                    "model_type",
-                ]:
-                    continue
-                value = meta.attrs[key]
-                # h5py hands back numpy scalars (np.int64, np.float64) for
-                # numeric attributes. ``metadata`` is eqx.field(static=True),
-                # and equinox treats a numpy scalar as an array: storing one
-                # there breaks hashing and jit-cache keys, and warns. Coercing
-                # to a Python scalar also makes write -> read round-trip, and
-                # matches the invariant to_hdf5 enforces on the way out (only
-                # JSON-friendly int/float/str reach the file). Anything genuinely
-                # non-scalar in a file is out of contract; leaving it alone lets
-                # equinox say so rather than silently corrupting the cache key.
-                metadata[key] = value.item() if isinstance(value, np.generic) else value
-
-            nonlinear: dict[str, Q] = {}
-            for key in f["nonlinear"]:
-                ds = f["nonlinear"][key]
-                unit = ds.attrs.get("unit", "")
-                nonlinear[key] = Q(jnp.array(ds[:]), unit)
-
-            linear: dict[str, Q] = {}
-            for key in f["linear"]:
-                ds = f["linear"][key]
-                unit = ds.attrs.get("unit", "")
-                linear[key] = Q(jnp.array(ds[:]), unit)
+            columns: dict[str, np.ndarray] = {}
+            units: dict[str, str] = {}
+            names: dict[str, tuple[str, ...]] = {}
+            for group_name in ("nonlinear", "linear"):
+                group = f[group_name]
+                names[group_name] = tuple(group)
+                for key in group:
+                    columns[key] = group[key][:]
+                    units[key] = group[key].attrs.get("unit", "")
 
             # Optional per-sample log-probabilities (absent in older files).
-            ln_likelihood = (
-                jnp.array(f["ln_likelihood"][:]) if "ln_likelihood" in f else None
-            )
-            ln_prior = jnp.array(f["ln_prior"][:]) if "ln_prior" in f else None
+            for name in _LOGPROB_COLUMNS:
+                if name in f:
+                    columns[name] = f[name][:]
 
-        return cls(
-            nonlinear=nonlinear,
-            linear=linear,
-            model_type=model_type,
-            linear_extension_names=linear_extension_names,
-            metadata=metadata,
-            ln_likelihood=ln_likelihood,
-            ln_prior=ln_prior,
-        )
+            cols = SampleColumns(
+                columns=columns,
+                units=units,
+                nonlinear_names=names["nonlinear"],
+                linear_names=names["linear"],
+                model_type=meta.attrs.get("model_type", ""),
+                linear_extension_names=tuple(raw_extra.split(",")) if raw_extra else (),
+                metadata=metadata,
+            )
+        return cls.from_columns(cols)
 
     def to_arviz(
         self, params: list[str] | None = None, labels: dict[str, str] | None = None
