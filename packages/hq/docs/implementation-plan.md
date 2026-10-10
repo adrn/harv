@@ -215,7 +215,10 @@ table (the spec said columns were dropped first, which would hide the flag
 columns cuts need); a missing source ID is a built-in cut; `prepare` raises
 `ValueError` when no source survives; the shared fixtures are `rv_run` and
 `gaia_run` in `packages/hq/tests/conftest.py`; and the 10^5-row timing test
-uses a loose 60 s bound.
+uses a loose 60 s bound. The prepared data records `model_file_sha256` (the
+spec originally omitted it), since `select_rows` lives in the model file; so
+`make_provenance` no longer has an `include_model_file` switch, and phase 3's
+stages refuse prepared data built from a different `prior.py`.
 
 `prepare.py`:
 

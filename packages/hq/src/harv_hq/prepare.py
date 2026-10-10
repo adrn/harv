@@ -140,9 +140,7 @@ def prepare(
 
     data_id = uuid.uuid4().hex
     metadata = {
-        "provenance": make_provenance(
-            config, include_model_file=False, data_id=data_id
-        ),
+        "provenance": make_provenance(config, data_id=data_id),
         "kind": kind,
         "data_id": data_id,
     }

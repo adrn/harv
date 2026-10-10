@@ -765,7 +765,7 @@ prior cache) with these keys:
 | ------------------------------------------- | -------------------------------------------------------------------------- |
 | `hq_version`, `harv_version`, `jax_version` | Package versions                                                           |
 | `config_sha256`                             | sha256 of `hq.toml` bytes                                                  |
-| `model_file_sha256`                         | sha256 of the model file bytes (absent on the prepared data)               |
+| `model_file_sha256`                         | sha256 of the model file bytes                                             |
 | `data_id`                                   | The `data_id` of the prepared data                                         |
 | `prior_cache_id`                            | A uuid4 written into the prior cache when it was built (result parts only) |
 | `created`                                   | ISO 8601 UTC timestamp                                                     |
@@ -773,7 +773,10 @@ prior cache) with these keys:
 A stage refuses to build on outputs whose `config_sha256`,
 `model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
 ones, raising `harv_hq.ProvenanceError` that names the mismatched field and
-file. The fix is `--overwrite` on that stage. Version differences are logged
+file. The prepared data records `model_file_sha256` too, because the model
+file's `select_rows` decides which rows were prepared: any edit to `prior.py`,
+including a prior-only change, requires `hq prepare --overwrite` before later
+stages will run. The fix is `--overwrite` on that stage. Version differences are logged
 but not refused. `run_mcmc` also refuses a `summary.parquet` whose `created`
 is older than the newest rejection part.
 

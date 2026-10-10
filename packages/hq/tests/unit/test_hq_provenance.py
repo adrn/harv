@@ -40,8 +40,7 @@ def test_make_provenance_keys(config):
 
 
 def test_make_provenance_optional_keys(config):
-    record = make_provenance(config, include_model_file=False)
-    assert "model_file_sha256" not in record
+    record = make_provenance(config)
     assert "data_id" not in record
     assert "prior_cache_id" not in record
 
@@ -69,8 +68,8 @@ def test_check_refuses_a_missing_field(config):
 
 
 def test_check_ignores_fields_not_expected(config):
-    expected = make_provenance(config, include_model_file=False)
-    found = {**expected, "model_file_sha256": "anything"}
+    expected = make_provenance(config, data_id="d1")
+    found = {**expected, "prior_cache_id": "anything"}
     check_provenance(found, expected, path="data.parquet")
 
 
