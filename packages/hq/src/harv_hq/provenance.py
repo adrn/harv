@@ -52,7 +52,6 @@ def sha256_file(path: str | os.PathLike) -> str:
 def make_provenance(
     config: Config,
     *,
-    include_model_file: bool = True,
     data_id: str | None = None,
     prior_cache_id: str | None = None,
 ) -> dict[str, Any]:
@@ -62,10 +61,8 @@ def make_provenance(
     ----------
     config
         The run configuration; ``hq.toml`` and the model file are hashed.
-    include_model_file
-        Whether to record ``model_file_sha256`` (the prepared data does not:
-        it depends on the model file only through ``select_rows``, and is
-        refused on ``config_sha256`` and ``data_id`` instead).
+        Every output records both, the prepared data included: the model
+        file's ``select_rows`` decides which rows were prepared.
     data_id
         The prepared data's ``data_id``, when the output depends on it.
     prior_cache_id
@@ -81,9 +78,8 @@ def make_provenance(
         "harv_version": harv.__version__,
         "jax_version": jax.__version__,
         "config_sha256": sha256_file(config.config_path),
+        "model_file_sha256": sha256_file(config.run.model_file),
     }
-    if include_model_file:
-        record["model_file_sha256"] = sha256_file(config.run.model_file)
     if data_id is not None:
         record["data_id"] = data_id
     if prior_cache_id is not None:

@@ -16,6 +16,7 @@ from harv_hq import prepare as prepare_module
 from harv_hq._parquet_io import read_metadata, read_parquet
 from harv_hq.cli import main
 from harv_hq.prepare import PreparedData
+from harv_hq.provenance import check_provenance, make_provenance, sha256_file
 
 
 def kept_rows(table, sid):
@@ -97,11 +98,24 @@ class TestRV:
         meta = read_metadata(rv_run.run_dir / "data.parquet")
         assert meta["kind"] == "rv"
         assert meta["provenance"]["data_id"] == meta["data_id"]
-        assert "model_file_sha256" not in meta["provenance"]
+        assert meta["provenance"]["model_file_sha256"] == sha256_file(
+            rv_run.run_dir / "prior.py"
+        )
         for name in ("data_index.parquet", "catalog.parquet"):
             assert read_metadata(rv_run.run_dir / name)["data_id"] == meta["data_id"]
         time_field = pq.read_schema(rv_run.run_dir / "data.parquet").field("time")
         assert time_field.metadata[b"scale"] == b"tcb"
+
+    def test_editing_the_model_file_makes_prepared_data_stale(self, rv_run):
+        """select_rows lives in prior.py, so an edit must force a re-prepare."""
+        run = Run(rv_run.run_dir)
+        run.prepare()
+        meta = read_metadata(rv_run.run_dir / "data.parquet")
+        prior = rv_run.run_dir / "prior.py"
+        prior.write_text(prior.read_text() + "\n# tightened cuts\n")
+        current = make_provenance(run.config, data_id=meta["data_id"])
+        with pytest.raises(ProvenanceError, match="model_file_sha256"):
+            check_provenance(meta["provenance"], current, path="data.parquet")
 
     def test_overwrite(self, rv_run):
         run = Run(rv_run.run_dir)
