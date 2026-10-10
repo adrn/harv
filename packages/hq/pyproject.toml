@@ -1,0 +1,53 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling>=1.27", "hatch-vcs"]
+
+[project]
+name = "harv-hq"
+dynamic = ["version"]
+description = "Pipelines, catalog preparation, and visualization for running harv on large samples."
+authors = [
+    { name = "adrn", email = "583379+adrn@users.noreply.github.com" },
+]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">= 3.12"
+readme = {"file" = "README.md", "content-type" = "text/markdown"}
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+# hq is released in lockstep with harv from the same git tag (see the root
+# pyproject's [tool.uv.workspace]). TODO: pin harv to this package's own version
+# at build time before the first release.
+dependencies = [
+    "harv",
+]
+
+[project.urls]
+Homepage = "https://github.com/adrn/harv"
+"Source Code" = "https://github.com/adrn/harv/tree/main/packages/hq"
+"Bug Tracker" = "https://github.com/adrn/harv/issues"
+
+[tool.uv.sources]
+harv = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harv_hq"]
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/harv_hq/_version.py"
+
+[tool.hatch.version]
+source = "vcs"
+# The git repository (and its tags) live two levels up, at the harv repo root.
+raw-options = { root = "../.." }

@@ -70,6 +70,15 @@ override-dependencies = [
     "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git"
 ]
 
+# harv-hq (packages/hq) is the pipeline/catalog/visualization companion package.
+# It lives in this repo so harv API changes and the matching hq fixes land
+# together, and it is released in lockstep with harv. See packages/hq/docs/spec.md.
+[tool.uv.workspace]
+members = ["packages/hq"]
+
+[tool.uv.sources]
+harv-hq = { workspace = true }
+
 [dependency-groups]
 extra = [
     "gaiaunlimited @ git+https://github.com/gaia-unlimited/gaiaunlimited.git",
@@ -140,6 +149,9 @@ test = [
     "scikit-learn>=1.5",
     "arviz>=1.0.0",
     "tinygp>=0.3.1",
+    # The workspace companion package, so CI runs packages/hq/tests against
+    # every harv change.
+    "harv-hq",
 ]
 nox = [
     "nox>=2026.4.10",
@@ -205,7 +217,7 @@ addopts = [
 ]
 xfail_strict = true
 log_cli_level = "INFO"
-testpaths = ["README.md", "tests", "src"]
+testpaths = ["README.md", "tests", "src", "packages/hq/tests"]
 markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.mark.raises
 # Warnings are errors: harv tracks fast-moving upstreams (jax, unxt, numpyro) and a
 # deprecation that only prints is a deprecation nobody acts on. Add a narrow
@@ -321,7 +333,7 @@ src = ["src"]
         "F401",  # 'Imported but unused'
         "I001",  # 'Import block is un-sorted or un-formatted' ignored because we may have to import in a particular, not-alphabetical order.
     ]
-    "tests/**/*.py" = [
+    "{tests,packages/*/tests}/**/*.py" = [
         "ARG002", # Unused argument
         "ANN202", # Missing type annotation"
         "D",  # documentation not important for tests
@@ -377,7 +389,7 @@ src = ["src"]
 
     [tool.ruff.lint.isort]
     case-sensitive = true
-    known-first-party = ["harv"]
+    known-first-party = ["harv", "harv_hq"]
 
 [tool.ty.rules]
 
