@@ -217,7 +217,7 @@ addopts = [
 ]
 xfail_strict = true
 log_cli_level = "INFO"
-testpaths = ["README.md", "tests", "src", "packages/hq/tests"]
+testpaths = ["README.md", "tests", "src", "packages/hq/tests", "packages/hq/src"]
 markers = ["raises"] # Tells pytest to not raise a warning if you use @pytest.mark.raises
 # Warnings are errors: harv tracks fast-moving upstreams (jax, unxt, numpyro) and a
 # deprecation that only prints is a deprecation nobody acts on. Add a narrow
@@ -247,6 +247,10 @@ source = [
     "src/harv",
     "*/site-packages/harv",
 ]
+source_hq = [
+    "packages/hq/src/harv_hq",
+    "*/site-packages/harv_hq",
+]
 
 [tool.coverage.run]
 # Ensures code coverage is measured for branches (conditional statements with different outcomes) in your code.
@@ -254,6 +258,7 @@ branch = true
 parallel = true
 omit = [
     "src/harv/_version.py",
+    "packages/hq/src/harv_hq/_version.py",
 ]
 
 [tool.coverage.report]
@@ -322,6 +327,7 @@ src = ["src"]
     ]
     exclude = [
         "src/harv/_version.py",
+        "packages/hq/src/harv_hq/_version.py",
         "docs/conf.py",
         "docs/tutorials/data/*"
     ]

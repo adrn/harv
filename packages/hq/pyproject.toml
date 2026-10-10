@@ -29,9 +29,17 @@ classifiers = [
 # hq is released in lockstep with harv from the same git tag (see the root
 # pyproject's [tool.uv.workspace]). TODO: pin harv to this package's own version
 # at build time before the first release.
+# Each phase adds the dependencies it imports (see docs/implementation-plan.md).
 dependencies = [
+    "astropy>=6.1",
     "harv",
+    "jax>=0.8.1",
+    "numpy>=2.0",
+    "pyarrow>=17",
 ]
+
+[project.scripts]
+hq = "harv_hq.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/adrn/harv"

@@ -1,0 +1,38 @@
+# hq run configuration. Every key is documented in harv-hq's spec,
+# "Configuration (hq.toml)". Relative paths resolve against this directory.
+
+[run]
+name = "my-rv-run"
+kind = "rv"
+seed = 42
+model_file = "prior.py"
+
+[data]
+# One row per RV measurement, readable by astropy.table.Table.read.
+file = "observations.fits"
+source_id = "source_id"
+time = "time"         # barycentric times
+time_format = "jd"    # astropy Time format
+time_scale = "tdb"    # astropy Time scale; converted to TCB
+rv = "rv"
+rv_err = "rv_err"
+rv_unit = "km/s"      # used only if the column carries no unit
+
+[prepare]
+min_n_obs = 3
+
+# Optional: one row per source, joined onto the results for the viewer.
+# [catalog]
+# file = "catalog.fits"
+# source_id = "source_id"
+# columns = ["bp_rp", "abs_g"]
+
+[prior_cache]
+n_samples = 10_000_000
+
+[rejection]
+top_k = 512
+
+# Optional: MCMC follow-up of sources the rejection sampler under-resolves.
+# [mcmc]
+# select = "under_resolved"
