@@ -340,16 +340,6 @@ class SampleColumns:
     metadata: dict[str, int | float | str | bool]
 
 
-def _python_scalar(value: Any) -> Any:
-    """Coerce a numpy scalar (as h5py or pyarrow return) to the Python scalar.
-
-    ``Samples.metadata`` is ``eqx.field(static=True)``, and equinox treats a numpy
-    scalar as an array: storing one there breaks hashing and jit-cache keys, and
-    warns. Anything else passes through unchanged.
-    """
-    return value.item() if isinstance(value, np.generic) else value
-
-
 class Samples(eqx.Module):
     """Container for posterior samples.
 
@@ -1629,7 +1619,7 @@ class Samples(eqx.Module):
             nonlinear_names=tuple(self.nonlinear),
             linear_names=tuple(self.linear),
             model_type=self.model_type,
-            linear_extension_names=tuple(self.linear_extension_names),
+            linear_extension_names=self.linear_extension_names,
             metadata=metadata,
         )
 
@@ -1649,12 +1639,8 @@ class Samples(eqx.Module):
 
         Returns
         -------
-            The reconstructed ``Samples``.
-
-        Raises
-        ------
-        ValueError
-            If a named parameter has no column or no unit.
+            The reconstructed ``Samples``. A named parameter with no column or
+            no unit raises ``KeyError`` naming it.
 
         Examples
         --------
@@ -1667,15 +1653,6 @@ class Samples(eqx.Module):
         >>> Samples.from_columns(samples.to_columns())["v_sys"]
         Quantity(Array([5. , 5.1], dtype=float64), unit='km / s')
         """
-        names = (*columns.nonlinear_names, *columns.linear_names)
-        missing_columns = [n for n in names if n not in columns.columns]
-        missing_units = [n for n in names if n not in columns.units]
-        if missing_columns or missing_units:
-            msg = (
-                "SampleColumns is missing parameter data: columns for "
-                f"{missing_columns}, units for {missing_units}."
-            )
-            raise ValueError(msg)
 
         def _quantities(group: tuple[str, ...]) -> dict[str, Q]:
             return {
@@ -1693,8 +1670,13 @@ class Samples(eqx.Module):
             nonlinear=_quantities(columns.nonlinear_names),
             linear=_quantities(columns.linear_names),
             model_type=columns.model_type,
-            linear_extension_names=tuple(columns.linear_extension_names),
-            metadata={k: _python_scalar(v) for k, v in columns.metadata.items()},
+            linear_extension_names=columns.linear_extension_names,
+            # Readers (h5py, pyarrow) return numpy scalars, which equinox treats
+            # as arrays in a static field; coerce them to Python scalars.
+            metadata={
+                k: v.item() if isinstance(v, np.generic) else v
+                for k, v in columns.metadata.items()
+            },
             **logprobs,
         )
 
@@ -1721,7 +1703,7 @@ class Samples(eqx.Module):
         """
         cols = self.to_columns()
 
-        with h5py.File(Path(filename), "w") as f:
+        with h5py.File(filename, "w") as f:
             for group_name, names in (
                 ("nonlinear", cols.nonlinear_names),
                 ("linear", cols.linear_names),
@@ -1768,7 +1750,7 @@ class Samples(eqx.Module):
         >>> samples.model_type  # doctest: +SKIP
         'rv'
         """
-        with h5py.File(Path(filename), "r") as f:
+        with h5py.File(filename, "r") as f:
             meta = f["metadata"]
 
             # ``offset_names`` is the pre-rename spelling of

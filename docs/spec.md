@@ -2384,8 +2384,8 @@ Samples.from_columns(columns: SampleColumns) -> Samples   # classmethod
 - `from_columns` accepts any array-like columns and converts them to JAX
   arrays, converts numpy scalars in `metadata` to Python scalars (file readers
   such as h5py and pyarrow return numpy scalars, which the static field cannot
-  hold), and raises `ValueError` naming any parameter without a column or a
-  unit.
+  hold). A named parameter with no column or no unit raises `KeyError` naming
+  it.
 
 `Samples.from_columns(samples.to_columns())` reproduces `samples` exactly:
 values, units, parameter order, log-probabilities, `model_type`,

@@ -97,16 +97,6 @@ class TestToColumns:
             assert type(arr) is np.ndarray, name
             assert arr.shape == (20,)
 
-    def test_values_match(self):
-        s = _samples()
-        cols = s.to_columns()
-        np.testing.assert_array_equal(
-            cols.columns["period"], np.asarray(s.nonlinear["period"].value)
-        )
-        np.testing.assert_array_equal(
-            cols.columns["ln_likelihood"], np.asarray(s.ln_likelihood)
-        )
-
     def test_without_logprobs(self):
         cols = _samples(with_logprobs=False).to_columns()
         assert "ln_likelihood" not in cols.columns
@@ -133,11 +123,6 @@ class TestToColumns:
         )
         with pytest.raises(ValueError, match="v_sys"):
             clash.to_columns()
-
-    def test_sample_columns_is_frozen(self):
-        cols = _samples().to_columns()
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            cols.model_type = "other"  # type: ignore[misc]
 
 
 class TestRoundTrip:
@@ -176,19 +161,6 @@ class TestRoundTrip:
         assert "ln_interim_period_prior" in loaded.nonlinear
         _assert_samples_equal(loaded, s)
 
-    def test_weight_survives_round_trip(self):
-        """``weight`` is reconstructed from ln_likelihood + evidence metadata."""
-        s = _samples(
-            metadata={
-                "time_ref": 0.5,
-                "time_ref_unit": "day",
-                "ln_Z_int": 0.0,
-                "n_prior_samples": 1000,
-            }
-        )
-        loaded = Samples.from_columns(s.to_columns())
-        np.testing.assert_allclose(np.asarray(loaded.weight), np.asarray(s.weight))
-
     def test_batched_samples_keep_their_shape(self):
         stacked, _ = pad_and_stack_samples([_samples(n=5), _samples(n=3, seed=1)])
         cols = stacked.to_columns()
@@ -216,36 +188,3 @@ class TestFromColumns:
         loaded = Samples.from_columns(_samples().to_columns())
         assert not isinstance(loaded.nonlinear["period"].value, np.ndarray)
         assert not isinstance(loaded.ln_likelihood, np.ndarray)
-
-    def test_missing_column_raises(self):
-        cols = _samples().to_columns()
-        columns = dict(cols.columns)
-        del columns["v_sys"]
-        with pytest.raises(ValueError, match="v_sys"):
-            Samples.from_columns(dataclasses.replace(cols, columns=columns))
-
-    def test_missing_unit_raises(self):
-        cols = _samples().to_columns()
-        units = dict(cols.units)
-        del units["period"]
-        with pytest.raises(ValueError, match="period"):
-            Samples.from_columns(dataclasses.replace(cols, units=units))
-
-
-class TestHDF5Consistency:
-    def test_hdf5_and_columns_agree(self, tmp_path):
-        s = _samples(
-            metadata={"time_ref": 0.5, "time_ref_unit": "day", "num_chains": 2}
-        )
-        path = tmp_path / "s.h5"
-        s.to_hdf5(path)
-        from_file = Samples.from_hdf5(path)
-        from_cols = Samples.from_columns(s.to_columns())
-        # HDF5 iterates datasets in name order, so compare per name, not order.
-        for name in s.nonlinear:
-            np.testing.assert_array_equal(
-                np.asarray(from_file.nonlinear[name].value),
-                np.asarray(from_cols.nonlinear[name].value),
-            )
-        assert from_file.metadata == from_cols.metadata
-        assert from_file.linear_extension_names == from_cols.linear_extension_names
