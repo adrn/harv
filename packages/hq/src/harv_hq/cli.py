@@ -59,6 +59,20 @@ def _prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prior_cache(args: argparse.Namespace) -> int:
+    Run(args.run_dir).make_prior_cache(overwrite=args.overwrite)
+    return 0
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.workers != 1 or args.mpi:
+        sys.exit("hq run: --workers and --mpi are not implemented yet; use --shard")
+    Run(args.run_dir).run_rejection(
+        shard=args.shard, overwrite=args.overwrite, retry_failed=args.retry_failed
+    )
+    return 0
+
+
 def _init(args: argparse.Namespace) -> int:
     run_dir = init_run(args.run_dir, kind=args.kind)
     print(f"Created {run_dir / 'hq.toml'} and {run_dir / 'prior.py'}")  # noqa: T201
@@ -95,22 +109,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="replace existing prepared data (invalidates every later stage)",
     )
 
-    p = add("prior-cache", "build the shared prior cache", _not_implemented)
-    p.add_argument("--overwrite", action="store_true")
+    p = add("prior-cache", "build the shared prior cache", _prior_cache)
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="rebuild an existing cache (invalidates every result built on it)",
+    )
 
-    for name, help_ in (
-        ("run", "run the rejection sampler on every source"),
-        ("mcmc", "run MCMC follow-up on selected sources"),
+    for name, help_, handler in (
+        ("run", "run the rejection sampler on every source", _run),
+        ("mcmc", "run MCMC follow-up on selected sources", _not_implemented),
     ):
-        p = add(name, help_, _not_implemented)
+        p = add(name, help_, handler)
         mode = p.add_mutually_exclusive_group()
         mode.add_argument(
             "--shard", type=parse_shard, default=(0, 1), help="process slice i of N"
         )
         mode.add_argument("--mpi", action="store_true", help="one slice per MPI rank")
         p.add_argument("--workers", type=int, default=1, help="local worker processes")
-        p.add_argument("--overwrite", action="store_true")
-        p.add_argument("--retry-failed", action="store_true")
+        p.add_argument(
+            "--overwrite",
+            action="store_true",
+            help="move existing results to results/superseded-* and start over",
+        )
+        p.add_argument(
+            "--retry-failed",
+            action="store_true",
+            help="also rerun sources whose newest result is failed",
+        )
         p.add_argument(
             "--no-compact",
             dest="compact",

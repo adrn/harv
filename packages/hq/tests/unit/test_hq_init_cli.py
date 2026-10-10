@@ -44,8 +44,6 @@ def test_cli_init(tmp_path, capsys):
 @pytest.mark.parametrize(
     "argv",
     [
-        ["prior-cache"],
-        ["run", "--shard", "1/4"],
         ["mcmc", "--mpi"],
         ["compact", "--stage", "mcmc"],
         ["summarize"],
