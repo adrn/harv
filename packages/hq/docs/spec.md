@@ -137,10 +137,27 @@ ______________________________________________________________________
 ## Configuration (`hq.toml`)
 
 The run configuration is a TOML file parsed with the standard-library
-`tomllib`. It is loaded into a frozen `harv_hq.Config` object. Validation is
-strict: unknown keys, wrong types, and missing required keys raise
+`tomllib`. It is loaded into a frozen `harv_hq.Config` object with
+`Config.from_file(path)`. Validation is strict: unknown tables and keys, wrong
+types, missing required tables and keys, and invalid values raise
 `harv_hq.ConfigError` naming the offending key and table. Keys marked
 "required" have no default.
+
+Beyond types, these values are checked: `run.kind`, `mcmc.select`, and
+`mcmc.chain_method` (`"sequential"`, `"parallel"`, or `"vectorized"`) against
+their allowed values; `data.time_format` and `data.time_scale` against
+astropy's `Time.FORMATS` and `Time.SCALES`; every count and size
+(`min_n_obs`, `n_samples`, `top_k`, `batch_size`, `num_*`, `flush_*`,
+`compact_n_sources`) must be positive; and `[data]` must hold the keys of
+`run.kind` and none of the other kind's. An integer is accepted where a float
+is expected, but a boolean is never accepted as a number.
+
+Each table is an attribute of `Config` holding a frozen dataclass of its keys
+(`config.run.seed`, `config.data.rv`, ...). The optional `[catalog]` and
+`[mcmc]` tables are `None` when absent; the other optional tables take their
+defaults. Path values (`run.model_file`, `data.file`, `catalog.file`) are
+stored as absolute `pathlib.Path`s, and `config.run_dir` is the directory
+holding `hq.toml`.
 
 ### `[run]`
 
@@ -394,8 +411,11 @@ does not depend on shard layout, process count, or execution order:
 key = jax.random.fold_in(jax.random.key(seed), stable_hash(source_id))
 ```
 
-`stable_hash` is the first 4 bytes of the sha256 of `str(source_id)`, read as
-an unsigned 32-bit integer. Stage keys are split from it with
+`harv_hq.stable_hash(source_id)` is the first 4 bytes of the sha256 of
+`str(source_id)` (UTF-8 encoded), read as a big-endian unsigned 32-bit
+integer. Integer and string IDs that print the same hash the same. It is also
+the way to select a reproducible subset of sources, e.g.
+`stable_hash(id) % 100 == 0` in `select_rows`. Stage keys are split from it with
 `jax.random.fold_in(key, stage)`, with `stage` 0 for rejection and 1 for MCMC.
 The prior cache uses `jax.random.fold_in(jax.random.key(seed), 2**32 - 1)`.
 
@@ -408,7 +428,7 @@ CLI subcommand is a thin wrapper around one method. Stages run in this order:
 
 | CLI                       | Method                 | Reads                                                    | Writes                                                  |
 | ------------------------- | ---------------------- | -------------------------------------------------------- | ------------------------------------------------------- |
-| `hq init RUN_DIR`         | `harv_hq.init_run`     | nothing                                                  | `hq.toml`, `prior.py`                                   |
+| `hq init RUN_DIR --kind`  | `harv_hq.init_run`     | nothing                                                  | `hq.toml`, `prior.py`                                   |
 | `hq prepare`              | `Run.prepare`          | `[data]`, `[catalog]` inputs                             | `data.parquet`, `data_index.parquet`, `catalog.parquet` |
 | `hq prior-cache`          | `Run.make_prior_cache` | `prior.py`                                               | `prior_cache.h5`                                        |
 | `hq run`                  | `Run.run_rejection`    | `data*.parquet`, `prior_cache.h5`                        | `results/rejection/*.parquet`                           |
@@ -879,6 +899,8 @@ ______________________________________________________________________
 import harv_hq
 
 harv_hq.init_run(run_dir, *, kind)          # writes hq.toml + prior.py templates
+config = harv_hq.Config.from_file(path)     # loads and validates an hq.toml
+harv_hq.stable_hash(source_id) -> int       # see "Per-source randomness"
 run = harv_hq.Run(run_dir)                  # loads and validates hq.toml
 run.config                                  # harv_hq.Config (frozen)
 run.prepare(*, overwrite=False)
@@ -899,6 +921,12 @@ harv_hq.create_app(run_dir) -> fastapi.FastAPI
 # Exceptions
 harv_hq.ConfigError, harv_hq.ProvenanceError
 ```
+
+`ConfigError` subclasses `ValueError` (an invalid `hq.toml` or model file);
+`ProvenanceError` subclasses `RuntimeError` (an output built from different
+inputs). `init_run(run_dir, *, kind)` creates `run_dir` if needed, refuses a
+non-empty one with `FileExistsError`, and returns it as a `Path`; `hq init`
+takes `--kind rv|gaia_astrometry` (default `rv`).
 
 `SourceResult` is a frozen dataclass with fields `source_id`, `data`
 (`RVData | GaiaAstrometryData`), `rejection` and `mcmc` (`Samples | None`),
