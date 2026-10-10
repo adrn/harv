@@ -255,7 +255,7 @@ src/harv/
 │   ├── base.py              # AbstractSampler (shared base)
 │   ├── rejection.py         # RejectionSampler
 │   ├── numpyro.py           # NumpyroSampler (MCMC with warm-start)
-│   ├── samples.py           # Samples container, pad_and_stack_samples
+│   ├── samples.py           # Samples container, SampleColumns, pad_and_stack_samples
 │   ├── conversion.py        # convert_parameterization
 │   ├── prior_cache.py       # make_prior_cache
 │   └── _prior_resolution.py # shared marginalized/explicit-name resolution (private)
@@ -2327,7 +2327,10 @@ the first entry.
 - `thiele_innes_to_campbell() -> Samples` — convenience wrapper for the Gaia
   `ThieleInnesGaiaAstrometry -> StandardGaiaAstrometry` conversion.
 - `to_arviz(params=None)` -- export to `arviz.InferenceData`
-- `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence
+- `to_columns() -> SampleColumns` / `Samples.from_columns(columns)` -- flat
+  NumPy columns plus structure; see "`to_columns` / `from_columns`" below
+- `to_hdf5(filename)` / `from_hdf5(filename)` -- HDF5 persistence, built on
+  `to_columns`; see "`to_hdf5` / `from_hdf5`" below
 - `plot_corner(params=None, truths=None, **kwargs)` — corner plot via arviz
 - `ln_posterior -> jax.Array` — per-sample log-posterior (`ln_prior +
   ln_likelihood`); raises `ValueError` if either was not stored
@@ -2342,6 +2345,63 @@ the first entry.
   is missing, or if the `Samples` is batched — `pad_and_stack_samples` inherits
   metadata from the first entry only, so a stacked normalization would be
   silently wrong for the others. Also reachable as `samples["weight"]`.
+
+#### `to_columns` / `from_columns`
+
+The format-neutral mapping between a `Samples` and a table. Every persistence
+format is built on it (`to_hdf5` here; Parquet results in `harv-hq`), so the
+structure of a `Samples` is defined in one place and no writer reassembles one
+by hand.
+
+```python
+@final
+@dataclass(frozen=True)
+class SampleColumns:                 # exported from harv.samplers
+    columns: dict[str, np.ndarray]
+    units: dict[str, str]
+    nonlinear_names: tuple[str, ...]
+    linear_names: tuple[str, ...]
+    model_type: str
+    linear_extension_names: tuple[str, ...]
+    metadata: dict[str, int | float | str | bool]
+
+Samples.to_columns() -> SampleColumns
+Samples.from_columns(columns: SampleColumns) -> Samples   # classmethod
+```
+
+- `columns` holds every nonlinear and linear parameter (including extra
+  columns such as `ln_interim_period_prior`), in `nonlinear` then `linear`
+  order, plus `ln_likelihood` and `ln_prior` when the `Samples` carries them.
+  Arrays are NumPy and keep the full parameter shape: 1-D for a flat
+  `Samples`, `(*batch_shape, n_samples)` for a batched one.
+- `units` maps every parameter to its unit string (`""` for dimensionless).
+  The two log-probability columns are dimensionless and have no entry.
+- `metadata` is a copy holding only the JSON-friendly scalars the `metadata`
+  invariant allows; anything else is dropped, as `to_hdf5` always has.
+- `to_columns` raises `ValueError` if a parameter is named `ln_likelihood` or
+  `ln_prior` (reserved for the log-probability columns), or if a name appears
+  in both `nonlinear` and `linear`.
+- `from_columns` accepts any array-like columns and converts them to JAX
+  arrays, converts numpy scalars in `metadata` to Python scalars (file readers
+  such as h5py and pyarrow return numpy scalars, which the static field cannot
+  hold), and raises `ValueError` naming any parameter without a column or a
+  unit.
+
+`Samples.from_columns(samples.to_columns())` reproduces `samples` exactly:
+values, units, parameter order, log-probabilities, `model_type`,
+`linear_extension_names`, and `metadata`.
+
+#### `to_hdf5` / `from_hdf5`
+
+`to_hdf5(filename)` writes one `Samples` per file from `to_columns()`:
+parameters as datasets under `nonlinear/` and `linear/` with a `unit`
+attribute, `ln_likelihood` / `ln_prior` as top-level datasets when present, and
+`model_type`, the comma-joined `linear_extension_names`, `n_samples`, and every
+`metadata` entry as attributes of `metadata/`. `from_hdf5(filename)` reads that
+layout into a `SampleColumns` and returns `Samples.from_columns(...)`. Files
+written before the `linear_extension_names` rename, which store it as
+`offset_names`, still load. HDF5 iterates datasets in name order, so parameters
+come back sorted by name within each group.
 
 #### Sample analysis
 

@@ -9,7 +9,7 @@ from .conversion import convert_parameterization
 from .numpyro import NumpyroSampler
 from .prior_cache import make_prior_cache
 from .rejection import RejectionSampler
-from .samples import Samples, pad_and_stack_samples
+from .samples import SampleColumns, Samples, pad_and_stack_samples
 
 # NOTE: ``QD`` / ``QuantityDistribution`` live in :mod:`harv.distributions` and
 # ``HarvPrior`` / ``default_sb2_prior`` in :mod:`harv.models.priors`.  They are
@@ -20,6 +20,7 @@ __all__ = (
     "AbstractSampler",
     "NumpyroSampler",
     "RejectionSampler",
+    "SampleColumns",
     "Samples",
     "convert_parameterization",
     "make_prior_cache",
