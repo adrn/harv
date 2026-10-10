@@ -356,8 +356,9 @@ def select_rows(table: astropy.table.Table) -> numpy.ndarray:
     """Boolean mask of input rows to keep, at prepare time."""
 ```
 
-Built-in cuts that always apply first: finite time, observation, and
-uncertainty, and uncertainty strictly positive.
+Built-in cuts that always apply first: a non-missing source ID, finite (and
+non-masked) time, observation, and uncertainty, and uncertainty strictly
+positive.
 
 ```python
 def select_for_mcmc(row: dict[str, Any]) -> bool:
@@ -444,8 +445,11 @@ Every CLI subcommand takes `--run-dir` (default: the current directory).
 
 ### `prepare`
 
-1. Read the `[data]` table, keeping only the configured columns.
-1. Apply the built-in cuts and then `select_rows`, if defined.
+1. Read the `[data]` table.
+1. Apply the built-in cuts and then `select_rows`, if defined. `select_rows`
+   receives the full input table, every column included, so it can cut on
+   flags and other columns the config does not map. Only the configured
+   columns are kept after the cuts.
 1. Convert times to TCB with astropy `Time`, and store them as MJD (TCB) in
    days.
 1. Sort all rows by `(source_id, time)` once, and find source boundaries from
@@ -455,8 +459,10 @@ Every CLI subcommand takes `--run-dir` (default: the current directory).
 1. Write `data.parquet`, `data_index.parquet`, and `catalog.parquet`.
 
 `prepare` refuses to overwrite existing prepared files unless
-`overwrite=True` (`--overwrite`), because doing so invalidates every
-downstream output.
+`overwrite=True` (`--overwrite`), raising `FileExistsError`, because doing so
+invalidates every downstream output. It raises `ValueError` if no source is
+left after the cuts and `min_n_obs`. The counts of input rows, rows kept,
+sources, and sources dropped are logged.
 
 #### `data.parquet`
 
@@ -759,7 +765,7 @@ prior cache) with these keys:
 | ------------------------------------------- | -------------------------------------------------------------------------- |
 | `hq_version`, `harv_version`, `jax_version` | Package versions                                                           |
 | `config_sha256`                             | sha256 of `hq.toml` bytes                                                  |
-| `model_file_sha256`                         | sha256 of the model file bytes (absent on the prepared data)               |
+| `model_file_sha256`                         | sha256 of the model file bytes                                             |
 | `data_id`                                   | The `data_id` of the prepared data                                         |
 | `prior_cache_id`                            | A uuid4 written into the prior cache when it was built (result parts only) |
 | `created`                                   | ISO 8601 UTC timestamp                                                     |
@@ -767,7 +773,10 @@ prior cache) with these keys:
 A stage refuses to build on outputs whose `config_sha256`,
 `model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
 ones, raising `harv_hq.ProvenanceError` that names the mismatched field and
-file. The fix is `--overwrite` on that stage. Version differences are logged
+file. The prepared data records `model_file_sha256` too, because the model
+file's `select_rows` decides which rows were prepared: any edit to `prior.py`,
+including a prior-only change, requires `hq prepare --overwrite` before later
+stages will run. The fix is `--overwrite` on that stage. Version differences are logged
 but not refused. `run_mcmc` also refuses a `summary.parquet` whose `created`
 is older than the newest rejection part.
 
@@ -936,7 +945,11 @@ takes `--kind rv|gaia_astrometry` (default `rv`).
 `Run`, `Config`, and `SourceResult` are `@final`, following the
 abstract-final pattern; hq has no abstract bases in this version.
 
-The CLI entry point is the `hq` console script, built with `argparse`.
+The CLI entry point is the `hq` console script, built with `argparse`. It
+logs at `INFO` to stderr, and reports `ConfigError`, `ProvenanceError`,
+`FileExistsError`, and `FileNotFoundError` as a one-line message
+(`hq <command>: <message>`) with a non-zero exit status instead of a
+traceback.
 
 ______________________________________________________________________
 

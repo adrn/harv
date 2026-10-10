@@ -25,7 +25,7 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
 | —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
 | 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Implemented on branch `hq-phase1`, awaiting merge |
-| 2     | prepare, `read_source`, `read_sources`                 | Not started                                       |
+| 2     | prepare, `read_source`, `read_sources`                 | Implemented on branch `hq-phase2`, awaiting merge |
 | 3     | prior cache, serial rejection, result parts, resume    | Not started                                       |
 | 4     | execution modes: shards, pool, MPI                     | Not started                                       |
 | 5     | compaction, summarize, status                          | Not started                                       |
@@ -205,7 +205,20 @@ config that loads.
 
 ______________________________________________________________________
 
-## Phase 2: prepare, read_source, read_sources
+## Phase 2: prepare, read_source, read_sources — awaiting merge
+
+Implemented on branch `hq-phase2` (stacked on `hq-phase1`). Deviations from
+the text below, all recorded in the spec where they are public: `Run` is
+introduced here with only `prepare()` (later phases add their methods), and
+the CLI reports user errors in one line; `select_rows` receives the full input
+table (the spec said columns were dropped first, which would hide the flag
+columns cuts need); a missing source ID is a built-in cut; `prepare` raises
+`ValueError` when no source survives; the shared fixtures are `rv_run` and
+`gaia_run` in `packages/hq/tests/conftest.py`; and the 10^5-row timing test
+uses a loose 60 s bound. The prepared data records `model_file_sha256` (the
+spec originally omitted it), since `select_rows` lives in the model file; so
+`make_provenance` no longer has an `include_model_file` switch, and phase 3's
+stages refuse prepared data built from a different `prior.py`.
 
 `prepare.py`:
 
