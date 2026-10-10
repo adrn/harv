@@ -148,10 +148,15 @@ class TestPaths:
         assert config.catalog.file == tmp_path.resolve() / "cat.fits"
 
     def test_absolute_paths_are_kept(self, tmp_path):
+        # Outside the run directory, and absolute on every platform: on
+        # Windows "/scratch/..." has no drive, so it is not absolute there.
+        data_file = (tmp_path / "scratch" / "obs.fits").resolve()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
         text = MINIMAL_RV.replace(
-            'file = "obs.fits"', 'file = "/scratch/survey/obs.fits"'
+            'file = "obs.fits"', f'file = "{data_file.as_posix()}"'
         )
-        assert load(tmp_path, text).data.file == Path("/scratch/survey/obs.fits")
+        assert load(run_dir, text).data.file == data_file
 
 
 class TestErrors:
