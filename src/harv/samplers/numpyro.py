@@ -16,7 +16,7 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
-from numpyro.distributions import biject_to
+from numpyro.distributions import biject_to, constraints
 from numpyro.infer import SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.initialization import init_to_value
@@ -27,7 +27,6 @@ from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
-    _callable_prior_constraint,
     _evaluate_nonlinear_log_prior,
     _explicit_scalar_dist,
     _is_callable_prior,
@@ -86,13 +85,16 @@ def _unconstrain_init_params(
             if isinstance(d, dist.Distribution | QuantityDistribution):
                 site_supports[name] = _unwrap_dist(d).support
             elif _is_callable_prior(d):
-                # A callable that is sampled explicitly (rather than
-                # marginalized) still gets a bijector, and its support is the
-                # one it declares statically -- without this the init value
-                # would be read as if it were already unconstrained, so a
-                # `support="positive"` site starting at K = 28 would begin at
-                # exp(28) instead.
-                site_supports[name] = _callable_prior_constraint(d)
+                # A callable sampled explicitly still needs a bijector, and its
+                # support is the one it declares statically (it cannot be read
+                # off the return value, which only exists at trace time).
+                # Without this the init value would be read as if it were
+                # already unconstrained, so a `support="positive"` site
+                # starting at K = 28 would begin at exp(28).
+                site_supports[name] = {
+                    "positive": constraints.greater_than(0.0),
+                    "negative": constraints.less_than(0.0),
+                }.get(getattr(d, "support", "real"), constraints.real)
     if nonlinear_extension_priors:
         for model_key, d in nonlinear_extension_priors.items():
             site_supports[model_key] = _unwrap_dist(d).support

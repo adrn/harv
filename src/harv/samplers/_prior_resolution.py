@@ -14,7 +14,6 @@ from typing import Any
 
 from harv.models._helpers import (
     LinearRole,
-    _can_marginalize,
     _needs_explicit_sampling,
     classify_linear_prior,
     pinned_linear_names,
@@ -104,7 +103,7 @@ def resolve_effective_marginalized_names(
     """Resolve and validate the effective marginalized linear parameter subset.
 
     A name the user asked to marginalize is honoured whenever the math allows it
-    (:func:`~harv.models._helpers._can_marginalize`), which is a weaker test than
+    (the role alone, ignoring pinning), which is a weaker test than
     the auto-mode default: a truncated ``parallax`` pinned by a callable stays
     explicit *by default*, but an explicit ``marginalized_names=("parallax",)``
     is respected -- and then the dependent callable raises its own ``KeyError``,
@@ -140,7 +139,7 @@ def resolve_effective_marginalized_names(
         for name in names_to_check
         if (
             # An explicit request only needs the math to support it...
-            not _can_marginalize(effective_linear_prior[name])
+            classify_linear_prior(effective_linear_prior[name]) is LinearRole.EXPLICIT
             if marginalized_names is not None
             # ...whereas auto mode also respects Delta and `requires` pinning.
             else _needs_explicit_sampling(

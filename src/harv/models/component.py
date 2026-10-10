@@ -25,7 +25,7 @@ from harv.models._helpers import (
     LinearPriorCallable,
     PriorDist,
     _explicit_scalar_dist,
-    _linear_sampling_order,
+    _is_callable_prior,
     _needs_explicit_sampling,
     _resolve_linear_priors,
     _sample_explicit_linear_prior,
@@ -1011,7 +1011,12 @@ def _build_full_component_model(
         raise ValueError(msg)
 
     param_units = component._linear_param_units(data)
-    ordered_linear = _linear_sampling_order(linear_priors)
+    # Plain priors before callables, so a callable sees the values it declares
+    # in ``requires``. A plain distribution reads nothing, so one pass is
+    # enough; ``sorted`` is stable, so False (plain) comes first.
+    ordered_linear = sorted(
+        linear_priors, key=lambda n: _is_callable_prior(linear_priors[n])
+    )
 
     def model_fn() -> None:
         values = _sample_nonlinear_params(nonlinear_priors)

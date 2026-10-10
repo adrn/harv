@@ -12,7 +12,6 @@ import jax
 import numpyro
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
-from numpyro.distributions import constraints
 from numpyro.distributions.truncated import (
     LeftTruncatedDistribution,
     RightTruncatedDistribution,
@@ -188,15 +187,6 @@ def classify_linear_prior(
     return LinearRole.MARGINALIZED
 
 
-def _can_marginalize(d: LinearPriorDist) -> bool:
-    """Whether the likelihood *can* integrate this linear prior out analytically.
-
-    A statement about the math only, ignoring the pinning policy; see
-    :func:`classify_linear_prior`.
-    """
-    return classify_linear_prior(d) is not LinearRole.EXPLICIT
-
-
 def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
     """Linear params that must stay explicitly sampled because something reads them.
 
@@ -236,55 +226,6 @@ def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
     return frozenset(pinned)
 
 
-_CALLABLE_SUPPORTS: dict[str, constraints.Constraint] = {
-    "real": constraints.real,
-    "positive": constraints.greater_than(0.0),
-    "negative": constraints.less_than(0.0),
-}
-
-
-def _callable_prior_constraint(d: LinearPriorCallable) -> constraints.Constraint:
-    """The support a :data:`LinearPriorCallable` declares, as a constraint.
-
-    A callable is resolved only at trace time, but the *support* of what it
-    returns is static metadata it declares up front (see ``docs/spec.md`` ->
-    The LinearPriorCallable contract), which is what lets the sampler pick the
-    right bijector for a callable that is sampled explicitly rather than
-    marginalized. Undeclared means unconstrained, so existing callables need no
-    change.
-    """
-    supp = getattr(d, "support", "real")
-    if supp not in _CALLABLE_SUPPORTS:
-        msg = (
-            f"{type(d).__name__} declares support={supp!r}; a linear prior "
-            f"callable may declare one of {sorted(_CALLABLE_SUPPORTS)}."
-        )
-        raise ValueError(msg)
-    return _CALLABLE_SUPPORTS[supp]
-
-
-def _linear_sampling_order(prior_dict: LinearPriorDict) -> tuple[str, ...]:
-    """Order linear parameter names so a callable prior sees what it reads.
-
-    On the ``marginalized=False`` path every linear parameter gets its own
-    sample site, and a :data:`LinearPriorCallable` is resolved against the
-    values drawn so far. A callable may read other parameters (it says so in
-    ``requires``; see :func:`pinned_linear_names`), while a plain distribution
-    reads nothing, so drawing every plain prior before any callable satisfies
-    each declared dependency in a single pass.
-
-    A callable that reads *another callable's* parameter is not ordered
-    correctly by this rule, and gets the documented ``KeyError`` from the
-    callable itself. None of harv's own callables do that: their ``requires``
-    name nonlinear parameters plus ``parallax``, whose prior is an ordinary
-    ``HalfNormal``.
-    """
-    return tuple(
-        [n for n in prior_dict if not _is_callable_prior(prior_dict[n])]
-        + [n for n in prior_dict if _is_callable_prior(prior_dict[n])]
-    )
-
-
 def _needs_explicit_sampling(
     d: PriorDist | LinearPriorCallable,
     *,
@@ -296,10 +237,8 @@ def _needs_explicit_sampling(
     The *auto-mode default*: the two roles that cannot be integrated out are
     ``EXPLICIT`` and ``PINNED``. ``FIXED`` answers ``False`` because it is
     reclassified later with its value extracted; see
-    :func:`classify_linear_prior`.
-
-    A user may override this per sampler via ``marginalized_names``, which is
-    gated on :func:`_can_marginalize` instead.
+    :func:`classify_linear_prior`. A user may override this per sampler via
+    ``marginalized_names``, which is gated on the role alone.
     """
     role = classify_linear_prior(d, name=name, pinned_names=pinned_names)
     return role in (LinearRole.EXPLICIT, LinearRole.PINNED)
@@ -333,46 +272,6 @@ def _with_derived_eccentricity(
     if ecc is None:
         return param_values
     return {**param_values, "eccentricity": ecc}
-
-
-def _check_shared_mixture_support(parsed: _ParsedPrior, name: str) -> None:
-    """Reject a mixture whose components do not share one truncation box.
-
-    Sharing the support is what lets the indicator factor out of the mixture
-    sum; per-component bounds make ``Z_mix`` *wrong* rather than merely
-    unsupported (see ``docs/spec.md`` -> Mixtures). numpyro's own
-    ``MixtureSameFamily`` refuses a component whose support depends on its
-    parameters, so this is normally unreachable -- but that check is a bare
-    ``assert`` and vanishes under ``python -O``, and the failure it guards is
-    silent.
-    """
-    if jnp.ndim(parsed.low) != 0 or jnp.ndim(parsed.high) != 0:
-        msg = (
-            f"Linear prior for {name!r} is a mixture whose components have "
-            "different truncation bounds; every component must share one "
-            "`low` and `high`."
-        )
-        raise ValueError(msg)
-
-
-def _check_scalar_prior(loc: jax.Array, scale: jax.Array, name: str) -> None:
-    """Reject a batched prior on a single linear parameter.
-
-    One parameter takes one scalar prior. Reading a length-``C`` batch as
-    ``C`` equally-weighted components would multiply the parameter's total
-    prior weight by ``C``; a mixture is declared with ``MixtureSameFamily``,
-    which carries explicit weights.
-    """
-    if loc.size != 1 or scale.size != 1:
-        msg = (
-            f"Linear prior for {name!r} is batched (loc/scale of shape "
-            f"{tuple(loc.shape)}/{tuple(scale.shape)}), but one linear "
-            "parameter takes one scalar prior. To give it a mixture prior, use "
-            "`dist.MixtureSameFamily`, which carries explicit weights; a bare "
-            "batch has none, so reading it as an equal-weight mixture would "
-            "leave the parameter's total prior weight above one."
-        )
-        raise ValueError(msg)
 
 
 def _parse_linear_prior(
@@ -415,7 +314,6 @@ def _parse_linear_prior(
         )
         parsed = _parse_linear_prior(wrapped, target_unit, name, _batched=True)
         n_comp = probs.shape[-1]
-        _check_shared_mixture_support(parsed, name)
         return _ParsedPrior(
             loc=jnp.broadcast_to(parsed.loc, (n_comp,)),
             scale=jnp.broadcast_to(parsed.scale, (n_comp,)),
@@ -467,8 +365,14 @@ def _parse_linear_prior(
         raise TypeError(msg)
 
     loc, scale = jnp.atleast_1d(jnp.squeeze(loc)), jnp.atleast_1d(jnp.squeeze(scale))
-    if not _batched:
-        _check_scalar_prior(loc, scale, name)
+    if not _batched and (loc.size != 1 or scale.size != 1):
+        msg = (
+            f"Linear prior for {name!r} is batched (loc/scale of shape "
+            f"{tuple(loc.shape)}/{tuple(scale.shape)}), but one linear "
+            "parameter takes one scalar prior. Use `dist.MixtureSameFamily` "
+            "for a mixture, which carries explicit weights."
+        )
+        raise ValueError(msg)
 
     return _ParsedPrior(
         loc=loc,

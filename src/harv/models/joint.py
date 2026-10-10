@@ -1258,7 +1258,7 @@ class JointModel(eqx.Module):
             return slots
 
         # Plain priors before callables, so a callable sees the values it
-        # declares in ``requires`` (see ``_linear_sampling_order``).
+        # declares in ``requires``. ``sorted`` is stable, so plain comes first.
         _slots = sorted(
             _build_slots(_comp_lp),
             key=lambda slot: _is_callable_prior(_comp_lp[slot[1]][slot[2]]),

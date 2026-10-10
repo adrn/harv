@@ -16,8 +16,7 @@ from unxt import Q
 from harv.distributions import QD
 from harv.models._helpers import (
     LinearRole,
-    _can_marginalize,
-    _linear_sampling_order,
+    _is_callable_prior,
     _needs_explicit_sampling,
     classify_linear_prior,
 )
@@ -83,19 +82,7 @@ class TestPrecedence:
 
 
 class TestDerivedPredicates:
-    """The two booleans callers still use must stay consistent with the roles."""
-
-    @pytest.mark.parametrize(
-        ("prior", "expected"),
-        [
-            (QD(dist.Normal(0.0, 1.0), "km/s"), True),
-            (QD(dist.HalfNormal(1.0), "mas"), True),
-            (QD(dist.Delta(3.0), "km/s"), True),
-            (QD(dist.Uniform(0.0, 1.0), "km/s"), False),
-        ],
-    )
-    def test_can_marginalize_ignores_pinning(self, prior, expected):
-        assert _can_marginalize(prior) is expected
+    """The boolean callers still use must stay consistent with the roles."""
 
     def test_needs_explicit_sampling_covers_explicit_and_pinned(self):
         assert _needs_explicit_sampling(QD(dist.Uniform(0.0, 1.0), "km/s"))
@@ -114,12 +101,17 @@ class TestDerivedPredicates:
 
 
 def test_sampling_order_puts_plain_priors_before_callables():
-    """A callable must be resolved after the values its ``requires`` names."""
+    """A callable must be resolved after the values its ``requires`` names.
+
+    Both numpyro model builders order their sample sites this way, with a
+    stable sort on ``_is_callable_prior``; this pins the predicate that sort
+    keys on.
+    """
     priors = {
         "pmra": ParallaxDependentProperMotionPrior(Q(50.0, "km/s")),
         "parallax": QD(dist.HalfNormal(10.0), "mas"),
         "ra0": QD(dist.Normal(0.0, 100.0), "mas"),
     }
-    order = _linear_sampling_order(priors)
+    order = sorted(priors, key=lambda n: _is_callable_prior(priors[n]))
     assert order.index("parallax") < order.index("pmra")
     assert set(order) == set(priors)

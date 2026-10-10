@@ -66,9 +66,6 @@ _GL_N = 64
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(_GL_N)
 _LN_GL_WEIGHTS = np.log(_GL_WEIGHTS)
 
-# ``asin`` is evaluated at the correlation, so keep it strictly inside (-1, 1).
-_RHO_MAX = 1.0 - 1e-12
-
 # Bisection steps used to invert a conditional CDF in
 # :meth:`_TruncatedConditional.sample`. 60 steps bisects a 12-sigma bracket to
 # below float64 resolution; the count is static so the loop has a fixed trip
@@ -89,40 +86,27 @@ _CANCELLATION_MARGIN = math.log(100.0)
 def _signed_logsumexp_guarded(terms: jax.Array, weights: jax.Array) -> jax.Array:
     r"""Log of a signed sum of exponentials, or ``-inf`` if it cancelled away.
 
-    A probability built as an alternating sum is only meaningful while the total
-    stays within the working precision of its largest term. Past that the
-    surviving digits are roundoff, and measured in float32 the result comes out
-    *finite and far too high* -- a true ``ln P`` of -44 reported as -17 -- which
-    would over-weight a draw the truncation is meant to forbid. Returning
-    ``-inf`` errs the other way and only ever discards weight that was already
-    below the precision floor.
+    An alternating sum is only meaningful while the total stays within the
+    working precision of its largest term. Past that the surviving digits are
+    roundoff, and the result comes out *finite and far too high* (in float32, a
+    true ``ln P`` of -44 reported as -17), which would over-weight a draw the
+    truncation is meant to forbid. ``-inf`` errs the other way and discards
+    only weight already below the precision floor.
 
-    The budget is ``-ln(eps)`` for the working dtype -- about 36 nats in the
-    float64 harv runs in, 16 in float32 -- less ``_CANCELLATION_MARGIN``. It is
-    derived from the dtype rather than hard-coded so the guard stays correct if
-    a caller drops to single precision. The margin is not padding: the test has
-    to be made against the *computed* total, which is itself the quantity
-    corrupted by the cancellation, so a bare ``-ln(eps)`` threshold lets values
-    sitting on the noise floor pass by a hair (measured in float32: a true -26.7
-    surviving as -18.9). Holding back ``ln(100)`` means anything returned stands
-    a factor of 100 above the noise floor, and so carries at most ~1% relative
-    error, or ~0.01 nats.
+    The budget is ``-ln(eps)`` for the working dtype, derived rather than
+    hard-coded so it tightens in single precision, less
+    ``_CANCELLATION_MARGIN``. The margin is not padding: the test can only be
+    made against the *computed* total, which is itself what the cancellation
+    corrupts, so a bare ``-ln(eps)`` threshold lets noise-floor values through.
 
-    ``weights`` carries the sign of each term and may also carry magnitude (see
+    ``weights`` carries each term's sign and may carry magnitude too (see
     :func:`_ln_phi2`), so the largest term is measured as
-    ``terms + ln|weights|``. That expression feeds a comparison only -- no
-    gradient flows through it, and a ``-ln 0 = -inf`` from a zero weight is
-    harmless -- so it is taken under ``stop_gradient`` and never puts a ``log``
-    of a differentiated value into the graph.
-
-    The sum is formed here rather than by ``logsumexp(terms, b=weights)``,
-    which is otherwise the same computation, because ``logsumexp`` masks out
-    zero weights when it picks its shift and so reports a *zero* derivative
-    with respect to a weight that happens to vanish -- silently wrong at the
-    one point :func:`_ln_phi2` needs it (``rho = 0``). Shifting by a
-    ``stop_gradient`` maximum is equally overflow-safe (every exponent is
-    non-positive and the weights are bounded) and differentiates correctly in
-    both ``terms`` and ``weights``.
+    ``terms + ln|weights|`` under ``stop_gradient`` -- it feeds a comparison
+    only, where a ``-ln 0`` is harmless. The sum is formed by hand rather than
+    with ``logsumexp(terms, b=weights)`` because that masks zero weights when
+    choosing its shift, and so reports a *zero* derivative with respect to a
+    weight that vanishes -- silently wrong at the one point :func:`_ln_phi2`
+    needs it (``rho = 0``).
     """
     amax = jax.lax.stop_gradient(jnp.max(terms))
     total = jnp.sum(weights * jnp.exp(terms - amax))
@@ -180,7 +164,8 @@ def _ln_phi2(a: jax.Array, b: jax.Array, rho: jax.Array) -> jax.Array:
     for them. :func:`_ln_bvn_rect` reduces those corners analytically first,
     branching on static finiteness flags.
     """
-    rho = jnp.clip(rho, -_RHO_MAX, _RHO_MAX)
+    # ``arcsin`` is evaluated at the correlation, so keep it inside (-1, 1).
+    rho = jnp.clip(rho, -1.0 + 1e-12, 1.0 - 1e-12)
     half = jnp.arcsin(rho)
 
     # Map the fixed [-1, 1] rule onto [0, half].
@@ -189,51 +174,19 @@ def _ln_phi2(a: jax.Array, b: jax.Array, rho: jax.Array) -> jax.Array:
     cos2 = jnp.cos(theta) ** 2
     expo = -(a**2 - 2.0 * a * b * sin_t + b**2) / (2.0 * cos2)
 
-    # ln J, where the integral is ``half * J`` and J > 0: the integrand is
-    # strictly positive and the weights are positive, so the only sign in the
-    # integral comes from the orientation of [0, half].
-    #
-    # ``half`` is carried as the *weight* of this term rather than folded in as
-    # ``ln|half|``. The two are equal -- ``logsumexp(b=[1, half])`` computes
-    # ``ln|Phi(a)Phi(b) + half * J|`` either way -- but ``log|half|`` has an
-    # infinite derivative at ``half = 0``, so the gradient of the whole
-    # rectangle probability came out NaN at exactly ``rho = 0``. That is not a
-    # measure-zero curiosity: ``rho`` is *exactly* zero whenever the two
-    # constrained columns are supported on disjoint rows with no shared column,
-    # because the ``X^T C^-1 X`` cross term is then an exact zero. In this form
-    # the derivative at ``half = 0`` is J = phi(a) phi(b), which is the correct
-    # ``dPhi_2/drho`` there.
+    # The integral is ``half * J`` with J > 0. ``half`` is carried as this
+    # term's signed *weight* rather than folded in as ``ln|half|``: the two are
+    # equal, but ``log|half|`` has an infinite derivative at ``half = 0``, and
+    # ``rho`` is exactly zero whenever the two constrained columns share no
+    # design column, so the gradient there has to stay finite.
     ln_j = -jnp.log(4.0 * jnp.pi) + logsumexp(_LN_GL_WEIGHTS + expo)
 
     # The two contributions have opposite signs for rho < 0 and cancel hard
-    # there, so this sum needs the same precision guard as the outer
-    # inclusion-exclusion in :func:`_ln_bvn_rect`.
+    # there, so this sum needs the same guard as the outer inclusion-exclusion.
     return _signed_logsumexp_guarded(
         jnp.stack([log_ndtr(a) + log_ndtr(b), ln_j]),
         jnp.stack([jnp.ones_like(half), half]),
     )
-
-
-def _corner_kinds(
-    lo_finite: tuple[bool, ...], hi_finite: tuple[bool, ...]
-) -> list[tuple[float, tuple[bool, bool], tuple[int, int]]]:
-    """Enumerate the surviving corners of the inclusion-exclusion sum.
-
-    Returns ``(sign, (axis0_is_inf, axis1_is_inf), (side0, side1))`` per corner,
-    where a side indexes ``lo`` (0) or ``hi`` (1). A corner taking an *unbounded
-    lower* bound contributes exactly zero, so it is dropped here and never
-    reaches the quadrature; the flags that survive can therefore only mean
-    ``+inf``. Everything here is static: the *finiteness* of a truncation bound
-    is structural (it comes from the prior's support), even though its value may
-    be traced.
-    """
-    finite = (lo_finite, hi_finite)
-    out = []
-    for sign, sides in ((1.0, (1, 1)), (-1.0, (0, 1)), (-1.0, (1, 0)), (1.0, (0, 0))):
-        if any(sides[ax] == 0 and not finite[0][ax] for ax in (0, 1)):
-            continue  # an unbounded lower bound: Phi_2 is zero there
-        out.append((sign, tuple(not finite[sides[ax]][ax] for ax in (0, 1)), sides))
-    return out
 
 
 def _ln_bvn_rect(
@@ -253,43 +206,40 @@ def _ln_bvn_rect(
 
         \Phi_2(h_1,h_2) - \Phi_2(l_1,h_2) - \Phi_2(h_1,l_2) + \Phi_2(l_1,l_2)
 
-    combined with a signed ``logsumexp``. Corners involving ``-inf`` vanish and
-    are dropped statically, and corners with a ``+inf`` reduce to a univariate
-    ``log_ndtr``, so :func:`_ln_phi2` only ever sees finite arguments.
+    combined with a signed ``logsumexp``. The finiteness flags are static, so
+    every corner is reduced here, before the quadrature: a corner taking an
+    unbounded *lower* bound is exactly zero, one taking a single ``+inf``
+    reduces to a univariate ``log_ndtr``, and :func:`_ln_phi2` therefore only
+    ever sees finite arguments.
 
     Scalar-only in ``lo``/``hi``/``rho`` -- :func:`_ln_phi2` uses the trailing
     axis for its quadrature nodes. Batch with ``jax.vmap``.
 
-    ponytail: this cancels once the rectangle probability drops far enough below
-    its largest corner, so :func:`_signed_logsumexp_guarded` returns ``-inf``
-    past the precision floor rather than a value it cannot justify. Measured
-    against ``scipy`` in float64 over ``rho`` in (-0.999, 0.999): 7e-14 for
-    ``ln P`` above -8, 4e-11 above -20, and every *finite* result within 7e-5,
-    with the floor near ``ln P = -32``. See
-    ``tests/unit/stats/test_marginalized.py::test_ln_bvn_rect_matches_scipy``.
-    The floor is benign here -- a rectangle holding ``e**-32`` or less of the
-    conditional mass is a draw the sampler rejects either way, and erring to
-    ``-inf`` under-weights it rather than over-weighting it. Upgrade path if a
-    deeper floor is ever needed: integrate
-    ``phi(z) * [Phi(beta(h2,z)) - Phi(beta(l2,z))]`` over coordinate 1, which
-    never cancels, but needs an ``|rho|``-dependent node count to resolve the
-    inner step -- a different accuracy cliff, not a free win.
+    The sum cancels once the rectangle probability drops far below its largest
+    corner, so :func:`_signed_logsumexp_guarded` returns ``-inf`` past the
+    precision floor (near ``ln P = -32`` in float64) rather than a value it
+    cannot justify; accuracy above that is pinned by
+    ``test_ln_bvn_rect_matches_scipy``.
     """
+    axis0 = ((True, lo[0], lo_finite[0]), (False, hi[0], hi_finite[0]))
+    axis1 = ((True, lo[1], lo_finite[1]), (False, hi[1], hi_finite[1]))
+
     terms: list[jax.Array] = []
     signs: list[float] = []
-    for sign, (inf0, inf1), sides in _corner_kinds(lo_finite, hi_finite):
-        x0 = (lo, hi)[sides[0]][0]
-        x1 = (lo, hi)[sides[1]][1]
-        if inf0 and inf1:
-            term = jnp.zeros_like(rho)
-        elif inf0:
-            term = log_ndtr(x1)
-        elif inf1:
-            term = log_ndtr(x0)
-        else:
-            term = _ln_phi2(x0, x1, rho)
-        terms.append(term)
-        signs.append(sign)
+    for is_lo0, x0, finite0 in axis0:
+        for is_lo1, x1, finite1 in axis1:
+            if (is_lo0 and not finite0) or (is_lo1 and not finite1):
+                continue  # an unbounded lower bound: Phi_2 is zero there
+            if not finite0 and not finite1:
+                term = jnp.zeros_like(rho)
+            elif not finite0:
+                term = log_ndtr(x1)
+            elif not finite1:
+                term = log_ndtr(x0)
+            else:
+                term = _ln_phi2(x0, x1, rho)
+            terms.append(term)
+            signs.append(1.0 if is_lo0 == is_lo1 else -1.0)
 
     return _signed_logsumexp_guarded(jnp.stack(terms), jnp.asarray(signs))
 
@@ -369,20 +319,12 @@ def _standardize_bounds(
 ) -> tuple[jax.Array, jax.Array]:
     r"""Standardize the truncation box, keeping infinities out of the arithmetic.
 
-    Computing ``(low - center) / scale`` on an unbounded side would put ``-inf``
-    in the graph, and differentiating it gives ``NaN`` rather than zero: the
-    derivative of ``(-inf - loc) / scale`` with respect to ``scale`` is infinite,
-    and an unconstrained parameter contributes an upstream derivative of zero, so
-    the chain rule produces ``0 * inf``. A ``jnp.where`` on the bound value does
-    not help, because ``where`` evaluates both branches when differentiated.
-
-    The fix is that an unbounded side is never *computed*: because
-    ``low_finite`` / ``high_finite`` are static, the unbounded slots are filled
-    with a literal infinity, which is a constant with no gradient path at all.
-    Downstream this is exact -- ``log_ndtr(inf) == 0`` and
-    ``log_ndtr(-inf) == -inf`` are the right answers, and :func:`_ln_bvn_rect`
-    reduces the infinite corners statically before any of them reaches the
-    quadrature.
+    An unbounded side is never *computed*: ``(-inf - loc) / scale`` would
+    differentiate to ``NaN`` via ``0 * inf``, and a ``jnp.where`` does not help
+    because it evaluates both branches under ``grad``. Since the finiteness
+    flags are static, those slots are filled with a literal infinity, which is
+    a constant carrying no gradient path. ``log_ndtr(+-inf)`` is exact, and
+    :func:`_ln_bvn_rect` reduces the infinite corners before the quadrature.
     """
 
     def standardize(
@@ -489,17 +431,12 @@ def _trunc_normal_draw(
 ) -> jax.Array:
     """Exact draw from a scalar normal truncated to ``[lo, hi]``.
 
-    Delegates to numpyro, whose truncated normal reflects around the base
-    location instead of inverting the CDF on the probability scale, and so
-    stays exact deep in a tail: measured against ``scipy.stats.truncnorm`` at
-    a lower bound 8, 12 and 20 sigma above the mean it reproduces the truncated
-    mean and standard deviation, where a probability-scale inverse CDF piles
-    every draw onto the bound (sd 0.049 against 0.12 at 8 sigma, and exactly 0
-    past 12). Infinite bounds pass through unchanged.
-
-    The clip is not redundant: callers rely on "every draw is inside the box"
-    absolutely -- :func:`_sample_truncated_gaussian` conditions the remaining
-    coordinates on these values -- and rounding can land a draw a hair outside.
+    numpyro's truncated normal reflects around the base location rather than
+    inverting the CDF on the probability scale, so it stays exact tens of sigma
+    into a tail; infinite bounds pass through unchanged. The clip is not
+    redundant: :func:`_sample_truncated_gaussian` conditions the remaining
+    coordinates on these values, so "inside the box" has to hold absolutely and
+    rounding can land a draw a hair outside.
     """
     draw = dist.TruncatedNormal(mean, sd, low=lo, high=hi).sample(key)
     return jnp.clip(draw, lo, hi)
@@ -518,8 +455,6 @@ def _gaussian_conditional(
     ``mu_f + S_fo S_oo^-1 (x_o - mu_o)``, ``S_ff - S_fo S_oo^-1 S_of``. Index
     tuples are static, so this is plain fancy indexing rather than a gather.
     """
-    if not free_idx:
-        return jnp.zeros((0,)), jnp.zeros((0, 0))
     f = jnp.asarray(free_idx)
     s_ff = cov[f[:, None], f[None, :]]
     if not obs_idx:
@@ -555,35 +490,6 @@ def _bisect_inverse_cdf(
 
     a, b = jax.lax.fori_loop(0, _BISECT_STEPS, body, (lo_b, hi_b))
     return 0.5 * (a + b)
-
-
-def _bracket(
-    z_lo: jax.Array, z_hi: jax.Array, lo_finite: bool, hi_finite: bool
-) -> tuple[jax.Array, jax.Array]:
-    """A finite bisection bracket covering the support, in standardized units.
-
-    The coordinates are standardized on the *conditional mean*, so the mass
-    sits around ``z = 0`` and the open end of a one-sided bracket is anchored
-    there, 2 * ``_BISECT_HALF_WIDTH`` sigma out. Anchoring it on the bound
-    instead -- ``[z_lo, z_lo + width]`` -- silently excludes the whole bulk
-    whenever the bound lies more than ``width`` sigma below the mean, which is
-    the *ordinary* case for a constraint the data do not fight: a signed SB2
-    prior with ``K_1 > 0`` and a conditional mean at +700 sigma bisected over
-    ``[-701, -677]`` and returned a draw three orders of magnitude too small.
-    The standard normal mass beyond 24 sigma of the mean is below ``exp(-288)``,
-    so nothing representable is lost at the other end.
-    """
-    width = 2.0 * _BISECT_HALF_WIDTH
-    if lo_finite and hi_finite:
-        return z_lo, z_hi
-    if lo_finite:
-        return z_lo, jnp.maximum(z_lo, 0.0) + width
-    if hi_finite:
-        return jnp.minimum(z_hi, 0.0) - width, z_hi
-    return (
-        jnp.full_like(z_lo, -_BISECT_HALF_WIDTH),
-        jnp.full_like(z_hi, _BISECT_HALF_WIDTH),
-    )
 
 
 def _sample_truncated_gaussian(
@@ -637,28 +543,29 @@ def _sample_truncated_gaussian(
             lo_finite=lo_fin,
             hi_finite=hi_fin,
         )
+        # Bisection bracket. The coordinates are standardized on the
+        # conditional mean, so the mass sits at z = 0 and an open end is
+        # anchored there rather than on the bound: a bracket running
+        # ``[bound, bound + width]`` excludes the whole bulk whenever the bound
+        # lies further than that below the mean, which is the ordinary case for
+        # a constraint the data do not fight. Normal mass beyond 24 sigma of
+        # the mean is below ``exp(-288)``, so nothing representable is lost.
+        width = 2.0 * _BISECT_HALF_WIDTH
+        lo_b = z_lo[i] if lo_fin[0] else jnp.minimum(z_hi[i], 0.0) - width
+        hi_b = z_hi[i] if hi_fin[0] else jnp.maximum(z_lo[i], 0.0) + width
         u = jax.random.uniform(key_i, dtype=mean.dtype)
-        lo_b, hi_b = _bracket(z_lo[i], z_hi[i], lo_fin[0], hi_fin[0])
         z_i = _bisect_inverse_cdf(ln_rect_to, ln_total + jnp.log(u), lo_b, hi_b)
 
-        # When the box holds less conditional mass than the working precision can
-        # resolve, ``ln_total`` is -inf by design (see
-        # :func:`_signed_logsumexp_guarded`) and the bisection has no target to
-        # aim at. Fall back to coordinate ``i``'s own truncated marginal, which
-        # ignores the coupling to ``j`` but still lands inside the box -- the
-        # invariant callers depend on. Such a draw has ``log_prob = -inf``, so
-        # the sampler rejects it and the approximation never reaches output.
+        # When the box holds less mass than the precision can resolve,
+        # ``ln_total`` is -inf by design and bisection has no target. Fall back
+        # to coordinate i's own truncated marginal: it ignores the coupling to
+        # j but stays inside the box, and such a draw has ``log_prob = -inf``
+        # so the sampler rejects it before it reaches output.
         z_i = jnp.where(
             jnp.isfinite(ln_total),
             z_i,
-            (
-                _trunc_normal_draw(
-                    key_i,
-                    jnp.zeros_like(z_i),
-                    jnp.ones_like(z_i),
-                    z_lo[i],
-                    z_hi[i],
-                )
+            _trunc_normal_draw(
+                key_i, jnp.zeros_like(z_i), jnp.ones_like(z_i), z_lo[i], z_hi[i]
             ),
         )
         x_i = mean[i] + sd[i] * z_i
