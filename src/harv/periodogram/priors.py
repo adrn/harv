@@ -101,8 +101,9 @@ def _assemble_knots(
             f"delta_ln_likelihood is non-finite at {n_bad} of {delta.size} grid "
             "points, so no interim prior can be built from it. This usually means "
             "the periodogram was evaluated in float32 on data whose marginal "
-            "log-likelihoods overflow it; enable float64 with "
-            'jax.config.update("jax_enable_x64", True) and recompute.'
+            "log-likelihoods overflow it. harv enables float64 on import unless "
+            "JAX_ENABLE_X64 says otherwise, so this means it was opted out of; "
+            "unset JAX_ENABLE_X64 and recompute."
         )
 
     ln_p_min = (
