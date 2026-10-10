@@ -8,11 +8,18 @@ saying so.
 __all__ = ("main",)
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable, Sequence
 
-from harv_hq.config import KINDS
+from harv_hq.config import KINDS, ConfigError
 from harv_hq.init import init_run
+from harv_hq.provenance import ProvenanceError
+from harv_hq.run import Run
+
+# Errors that mean "the run directory or config is not in a state for this";
+# the CLI reports them in one line instead of a traceback.
+_USER_ERRORS = (ConfigError, ProvenanceError, FileExistsError, FileNotFoundError)
 
 
 def parse_shard(text: str) -> tuple[int, int]:
@@ -47,6 +54,11 @@ def _not_implemented(args: argparse.Namespace) -> int:
     sys.exit(f"hq {args.command}: not implemented yet")
 
 
+def _prepare(args: argparse.Namespace) -> int:
+    Run(args.run_dir).prepare(overwrite=args.overwrite)
+    return 0
+
+
 def _init(args: argparse.Namespace) -> int:
     run_dir = init_run(args.run_dir, kind=args.kind)
     print(f"Created {run_dir / 'hq.toml'} and {run_dir / 'prior.py'}")  # noqa: T201
@@ -76,8 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_dir", help="directory to create (must be new or empty)")
     p.add_argument("--kind", choices=KINDS, default="rv", help="run kind")
 
-    p = add("prepare", "prepare per-source data from the input table", _not_implemented)
-    p.add_argument("--overwrite", action="store_true")
+    p = add("prepare", "prepare per-source data from the input table", _prepare)
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace existing prepared data (invalidates every later stage)",
+    )
 
     p = add("prior-cache", "build the shared prior cache", _not_implemented)
     p.add_argument("--overwrite", action="store_true")
@@ -124,7 +140,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         The process exit status.
     """
     args = _build_parser().parse_args(argv)
-    return args.handler(args)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s"
+    )
+    try:
+        return args.handler(args)
+    except _USER_ERRORS as err:
+        sys.exit(f"hq {args.command}: {err}")
 
 
 if __name__ == "__main__":
