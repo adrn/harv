@@ -35,6 +35,24 @@ Updated as each phase lands. A phase is done when its PR is merged.
 
 ______________________________________________________________________
 
+## Reviewing each phase
+
+After implementing a phase on its branch, and before you open the PR, I give
+you a review guide for that branch. It is part of finishing the phase, like
+updating the Status table. Each guide covers, in this order:
+
+1. **What to read first**: the files in the order that makes them easiest to
+   follow, with the one or two functions in each that carry the logic.
+1. **Spec and plan changes**: every behavior change or deviation, so you can
+   accept or reject it before reviewing code that depends on it.
+1. **Questions to check**: the specific things most likely to be wrong
+   (formats on disk, error behavior, edge cases), each with where to look.
+1. **How to run it yourself**: the commands that exercise the phase end to
+   end on the test fixtures, and the tests that cover each behavior.
+1. **What is deliberately not done yet**, so it is not mistaken for a gap.
+
+______________________________________________________________________
+
 ## Module layout
 
 ```
@@ -47,8 +65,7 @@ packages/hq/src/harv_hq/
 ├── ids.py               # stable_hash, source_key, prior_cache_key
 ├── _parquet_io.py       # write_parquet / read_parquet: units, metadata, atomic rename
 ├── provenance.py        # provenance dict, check_provenance, ProvenanceError
-├── prepare.py           # prepare(), read_source(), read_sources()
-├── slicing.py           # source_order(), slice_ids(i, n)
+├── prepare.py           # prepare(), PreparedData (incl. slice_ids), read_source(s)
 ├── results.py           # PartWriter, ResultsIndex, samples <-> table conversion
 ├── summary_stats.py     # per-source summary statistics + weighted resample
 ├── rejection.py         # process one source: rejection
@@ -262,8 +279,8 @@ Implemented on branch `hq-phase3` (stacked on `hq-phase2`). Deviations from the
 text below: `Run.run_rejection` takes `shard`, `overwrite` and `retry_failed`
 for now (`workers`, `mpi` and `compact` arrive with phases 4 and 5; the CLI
 rejects `--workers`/`--mpi` until then), and `Run.load_source` returns
-`summary=None` until phase 5. `slicing.py` exposes one function,
-`slice_ids(prepared, shard)`. `Payload` carries separate `row_units` and
+`summary=None` until phase 5. Slicing is `PreparedData.slice_ids(shard)` (no
+`slicing.py` module). `Payload` carries separate `row_units` and
 `samples_units`. A shared `read_rows` helper in `_parquet_io` serves both
 `PreparedData` and the results reader. The writer also flushes when the loop
 is interrupted by an exception, so only a hard kill loses the buffer (spec
@@ -319,8 +336,8 @@ objects do not pickle cleanly across processes.
 `RejectionSampler`, compute `slice_ids(0, 1)` minus `ResultsIndex.done`,
 `read_sources` for the remaining IDs, loop, `PartWriter.add`, `close`.
 
-**`slicing.py`.** `source_order(run_dir)` sorts `data_index.parquet` by
-`(n_obs, source_id)`; `slice_ids(i, n)` is `order[i::n]`.
+**Slicing** (`PreparedData.slice_ids(shard)`): sorts the prepared sources by
+`(n_obs, source_id)` and returns `order[i::n]`.
 
 **Tests.** The tiny run end to end through rejection, producing several
 parts. Binaries recover their injected period within the posterior (loose

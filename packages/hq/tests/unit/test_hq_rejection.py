@@ -20,12 +20,10 @@ from harv_hq.results import PartWriter, Payload, ResultsIndex
 TOP_K = 64  # the fixtures' [rejection] top_k
 
 
-def prepared_run(fixture, *, flush_n_sources=4):
-    """Prepare the fixture's data and prior cache, with small result parts."""
+def prepared_run(fixture):
+    """Prepare the fixture's data and prior cache, with 4-source result parts."""
     config = fixture.run_dir / "hq.toml"
-    config.write_text(
-        config.read_text() + f"\n[results]\nflush_n_sources = {flush_n_sources}\n"
-    )
+    config.write_text(config.read_text() + "\n[results]\nflush_n_sources = 4\n")
     run = Run(fixture.run_dir)
     run.prepare()
     run.make_prior_cache()
@@ -40,16 +38,12 @@ def index(run):
     return ResultsIndex.build(stage_dir(run))
 
 
-def kept(fixture):
-    return {sid for sid, n in fixture.n_obs.items() if n >= 3}
-
-
 class TestEndToEnd:
     def test_every_source_gets_a_result_in_several_parts(self, rv_run):
         run = prepared_run(rv_run)
         run.run_rejection()
         records = index(run).records
-        assert set(records) == kept(rv_run)
+        assert set(records) == set(rv_run.kept)
         assert {r.status for r in records.values()} == {"ok"}
         assert {r.n_samples for r in records.values()} == {TOP_K}
         parts = sorted(stage_dir(run).glob("*.sources.parquet"))
@@ -127,7 +121,7 @@ class TestEndToEnd:
         table = ds.dataset(
             sorted(map(str, stage_dir(run).glob("*.samples.parquet"))), format="parquet"
         ).to_table(columns=["source_id", "period", "weight"])
-        assert table.num_rows == len(kept(rv_run)) * TOP_K
+        assert table.num_rows == len(set(rv_run.kept)) * TOP_K
 
     def test_gaia(self, gaia_run):
         run = prepared_run(gaia_run)
@@ -156,7 +150,7 @@ class TestFailuresAndResume:
         records = index(run).records
         failed = {sid for sid, r in records.items() if r.status == "failed"}
         assert bad in failed
-        assert len(records) == len(kept(rv_run))
+        assert len(records) == len(set(rv_run.kept))
         table = pq.read_table(records[bad].sources_path).to_pylist()
         row = next(r for r in table if r["source_id"] == bad)
         assert "boom: missing prior keys" in row["error"]
@@ -167,7 +161,7 @@ class TestFailuresAndResume:
         run.run_rejection()
         assert index(run).records[bad].status == "failed"
         run.run_rejection(retry_failed=True)
-        assert index(run).status_counts() == {"ok": len(kept(rv_run))}
+        assert index(run).status_counts() == {"ok": len(set(rv_run.kept))}
 
     def test_resume_after_an_interruption(self, rv_run, monkeypatch):
         run = prepared_run(rv_run)
@@ -194,8 +188,8 @@ class TestFailuresAndResume:
             lambda sid, *a, **k: rerun.append(sid) or original(sid, *a, **k),
         )
         run.run_rejection()
-        assert set(rerun) == kept(rv_run) - set(calls)
-        assert set(index(run).records) == kept(rv_run)
+        assert set(rerun) == set(rv_run.kept) - set(calls)
+        assert set(index(run).records) == set(rv_run.kept)
 
     def test_an_orphaned_samples_file_is_ignored(self, rv_run):
         run = prepared_run(rv_run)
@@ -207,9 +201,9 @@ class TestFailuresAndResume:
         sources.unlink()  # a crash between the two renames
         assert lost.isdisjoint(index(run).records)
         run.run_rejection()
-        assert set(index(run).records) == kept(rv_run)
+        assert set(index(run).records) == set(rv_run.kept)
 
-    def test_a_crash_loses_only_the_buffer(self, rv_run, tmp_path):
+    def test_a_crash_loses_only_the_buffer(self, tmp_path):
         writer = PartWriter(
             tmp_path / "rejection",
             stage="rejection",
@@ -240,7 +234,7 @@ class TestFailuresAndResume:
         superseded = list((run.run_dir / "results").glob("superseded-*-rejection"))
         assert len(superseded) == 1
         assert any(superseded[0].glob("*.sources.parquet"))
-        assert set(index(run).records) == kept(rv_run)
+        assert set(index(run).records) == set(rv_run.kept)
 
 
 class TestShards:
@@ -250,8 +244,8 @@ class TestShards:
         first = set(index(run).records)
         run.run_rejection(shard=(1, 2))
         assert first
-        assert first != kept(rv_run)
-        assert set(index(run).records) == kept(rv_run)
+        assert first != set(rv_run.kept)
+        assert set(index(run).records) == set(rv_run.kept)
         names = {p.name[:12] for p in stage_dir(run).glob("*.sources.parquet")}
         assert names == {"0000-of-0002", "0001-of-0002"}
 
@@ -290,7 +284,7 @@ def test_cli(rv_run):
     assert main(["run", "--run-dir", run_dir, "--shard", "0/1"]) == 0
     assert set(
         ResultsIndex.build(rv_run.run_dir / "results" / "rejection").records
-    ) == kept(rv_run)
+    ) == set(rv_run.kept)
     with pytest.raises(SystemExit) as excinfo:
         main(["run", "--run-dir", run_dir, "--workers", "2"])
     assert "not implemented yet" in str(excinfo.value.code)
@@ -304,6 +298,6 @@ def test_copy_of_a_run_directory_still_resumes(rv_run, tmp_path):
     shutil.copytree(run.run_dir, copy)
     moved = Run(copy)
     moved.run_rejection(shard=(1, 2))
-    assert set(ResultsIndex.build(copy / "results" / "rejection").records) == kept(
-        rv_run
+    assert set(ResultsIndex.build(copy / "results" / "rejection").records) == set(
+        rv_run.kept
     )

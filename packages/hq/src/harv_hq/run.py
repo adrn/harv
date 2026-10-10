@@ -25,7 +25,6 @@ from harv_hq.prepare import PreparedData, prepare
 from harv_hq.provenance import check_provenance, make_provenance
 from harv_hq.rejection import process_rejection
 from harv_hq.results import PartWriter, ResultsIndex, read_source_samples, supersede
-from harv_hq.slicing import slice_ids
 
 logger = logging.getLogger("harv_hq")
 
@@ -190,7 +189,7 @@ class Run:
         done = ResultsIndex.build(stage_dir, expected_provenance=part_provenance).done(
             retry_failed=retry_failed
         )
-        todo = [sid for sid in slice_ids(prepared, shard) if sid not in done]
+        todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
         i, n = shard
         log_handler, log_level = self._log_to_file(f"rejection-{i:04d}-of-{n:04d}.log")
         logger.info(
