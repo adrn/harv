@@ -16,6 +16,25 @@ other module calls `pyarrow.parquet.write_table` directly.
 
 ______________________________________________________________________
 
+## Status
+
+Updated as each phase lands. A phase is done when its PR is merged.
+
+| Phase | Scope                                                  | Status                                            |
+| ----- | ------------------------------------------------------ | ------------------------------------------------- |
+| 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
+| —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
+| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Implemented on branch `hq-phase1`, awaiting merge |
+| 2     | prepare, `read_source`, `read_sources`                 | Not started                                       |
+| 3     | prior cache, serial rejection, result parts, resume    | Not started                                       |
+| 4     | execution modes: shards, pool, MPI                     | Not started                                       |
+| 5     | compaction, summarize, status                          | Not started                                       |
+| 6     | MCMC follow-up                                         | Not started                                       |
+| 7     | web viewer                                             | Not started                                       |
+| 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
+
+______________________________________________________________________
+
 ## Module layout
 
 ```
@@ -64,7 +83,7 @@ phase's tests build on these.
 
 ______________________________________________________________________
 
-## Phase 0: harv prerequisite (PR against harv)
+## Phase 0: harv prerequisite (PR against harv) — done
 
 hq stores samples as columns; the mapping between a `Samples` and plain
 columns belongs to harv, so hq never reassembles a `Samples` by hand.
@@ -111,7 +130,7 @@ Samples.from_columns(columns: SampleColumns) -> Samples
 
 ______________________________________________________________________
 
-## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance
+## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance — awaiting merge
 
 Done: branch `hq-phase1`. Deviations from the text below, all recorded in the
 spec: config is loaded with `Config.from_file(path)` (there is no `Run` yet),
@@ -461,6 +480,16 @@ ______________________________________________________________________
 - An `hq` section in the harv Sphinx docs (`docs/hq/`): a getting-started page
   that runs the tiny example, and a page adapted from "Setting up a project"
   below.
+- A workflow tutorial (`docs/hq/workflow.md`) that walks through every stage in
+  order and covers re-running: which outputs each stage writes, what
+  `--overwrite`, `--retry-failed`, and `--no-compact` do, where superseded
+  results go (`results/superseded-*`) and when they can be deleted, which
+  downstream stages a change to `hq.toml`, `prior.py`, or the input data
+  invalidates (the provenance refusals), and how to start a stage over from
+  scratch. Written last so it describes the implemented behavior.
+- `hq --help` (the top-level parser's epilog) and each subcommand's help end
+  with a link to that tutorial. Earlier phases keep the per-subcommand help
+  text accurate for what they implement.
 - Release workflow: build both distributions in `release.yml`
   (`build-and-inspect-python-package` with `path: packages/hq`) and publish
   `harv-hq` with its own trusted publisher.
