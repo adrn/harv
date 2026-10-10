@@ -223,20 +223,6 @@ class ServeConfig:
     port: int = 8000
 
 
-# table name -> (dataclass, required table?)
-_TABLES: dict[str, tuple[type, bool]] = {
-    "run": (RunConfig, True),
-    "data": (DataConfig, True),
-    "prepare": (PrepareConfig, False),
-    "catalog": (CatalogConfig, False),
-    "prior_cache": (PriorCacheConfig, True),
-    "rejection": (RejectionConfig, True),
-    "mcmc": (MCMCConfig, False),
-    "results": (ResultsConfig, False),
-    "serve": (ServeConfig, False),
-}
-
-
 @final
 @dataclass(frozen=True)
 class Config:
@@ -336,6 +322,12 @@ class Config:
             if not isinstance(values, dict):
                 msg = f"[{name}] must be a table"
                 raise ConfigError(msg)
+            unknown = sorted(
+                set(values) - {f.name for f in dataclasses.fields(table_cls)}
+            )
+            if unknown:
+                msg = f"[{name}] unknown key(s) {unknown}"
+                raise ConfigError(msg)
             if name == "data":
                 values = _check_data_kind(values, raw["run"].get("kind"))
             tables[name] = _build_table(name, table_cls, values, run_dir)
@@ -343,13 +335,23 @@ class Config:
         return cls(config_path=config_path, **tables)
 
 
+# table name -> (dataclass, required?), from Config's own fields: a table is
+# required when its field has no default. Unknown keys are reported before the
+# [data] kind check, so a typo ("rv_er") is not mistaken for a missing key.
+_HINTS = typing.get_type_hints(Config)
+_TABLES: dict[str, tuple[type, bool]] = {
+    f.name: (
+        next((a for a in typing.get_args(_HINTS[f.name]) if a is not type(None)), None)
+        or _HINTS[f.name],
+        f.default is dataclasses.MISSING,
+    )
+    for f in dataclasses.fields(Config)
+    if f.name != "config_path"
+}
+
+
 def _check_data_kind(values: dict[str, Any], kind: Any) -> dict[str, Any]:
     """Reject the other kind's [data] keys, require this kind's, apply defaults."""
-    # Report a typo ("rv_er") as unknown before it can look like a missing key.
-    unknown = sorted(set(values) - {f.name for f in dataclasses.fields(DataConfig)})
-    if unknown:
-        msg = f"[data] unknown key(s) {unknown}"
-        raise ConfigError(msg)
     if kind not in _KIND_DATA_KEYS:
         return values  # RunConfig reports the bad kind
     for other, keys in _KIND_DATA_KEYS.items():
@@ -374,11 +376,6 @@ def _build_table(
 ) -> Any:
     fields = {f.name: f for f in dataclasses.fields(table_cls)}
     hints = typing.get_type_hints(table_cls)
-
-    unknown = sorted(set(values) - set(fields))
-    if unknown:
-        msg = f"[{name}] unknown key(s) {unknown}"
-        raise ConfigError(msg)
     required = [
         k
         for k, f in fields.items()

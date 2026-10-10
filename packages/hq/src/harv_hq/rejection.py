@@ -83,7 +83,6 @@ def process_rejection(
             stats, stat_units = summary_stats(
                 samples,
                 data,
-                weighted=True,
                 resample_key=resample_key,
                 min_evidence_ess=config.min_evidence_ess,
             )

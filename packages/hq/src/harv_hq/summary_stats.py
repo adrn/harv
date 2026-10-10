@@ -74,7 +74,6 @@ def summary_stats(
     samples: Samples,
     data: RVData | GaiaAstrometryData,
     *,
-    weighted: bool,
     resample_key: jax.Array | None = None,
     min_evidence_ess: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
@@ -87,12 +86,11 @@ def summary_stats(
         ``ln_prior`` (for the MAP sample).
     data
         The source's data (for period unimodality and phase coverage).
-    weighted
-        ``True`` for top-K rejection samples: percentiles use
-        ``Samples.weight``, and ``period_unimodal`` uses an equal-weight
-        resample drawn with ``resample_key``.
     resample_key
-        PRNG key for the resample; required when ``weighted``.
+        Pass it for weighted (top-K rejection) samples: percentiles then use
+        ``Samples.weight``, and ``period_unimodal`` uses an equal-weight
+        resample drawn with this key. ``None`` for equal-weight (MCMC)
+        samples.
     min_evidence_ess
         When given, adds ``well_resolved`` from
         ``Samples.acceptance_diagnostics`` (rejection only).
@@ -109,15 +107,12 @@ def summary_stats(
         diagnostics = samples.acceptance_diagnostics(min_evidence_ess=min_evidence_ess)
         stats["well_resolved"] = bool(diagnostics["well_resolved"])
 
+    weighted = resample_key is not None
     if weighted:
-        if resample_key is None:
-            msg = "weighted summary statistics need a resample_key"
-            raise ValueError(msg)
         equal = weighted_resample(samples, resample_key, samples.n_samples)
         weights = _normalized_weights(samples)
     else:
         equal = samples
-        weights = np.full(samples.n_samples, 1.0 / samples.n_samples)
     stats["period_unimodal"] = bool(equal.period_unimodal(data))
 
     # map_sample() without return_index returns a Samples; harv types it as a union.
@@ -129,18 +124,16 @@ def summary_stats(
     for name in samples.keys():  # noqa: SIM118 -- Samples.keys() adds derived keys
         values, unit = _value_and_unit(samples[name])
         map_value, _ = _value_and_unit(map_sample[name])
-        stats[f"map_{name}"] = float(map_value[0])
-        p16, p50, p84 = (
+        percentiles = (
             _weighted_percentiles(values, weights)
             if weighted
             else np.percentile(values, _PERCENTILES)
         )
-        stats[f"{name}_p16"], stats[f"{name}_p50"], stats[f"{name}_p84"] = (
-            float(p16),
-            float(p50),
-            float(p84),
-        )
-        if unit:
-            for column in (f"map_{name}", f"{name}_p16", f"{name}_p50", f"{name}_p84"):
+        columns = {f"map_{name}": map_value[0]} | {
+            f"{name}_p{q}": p for q, p in zip(_PERCENTILES, percentiles, strict=True)
+        }
+        for column, value in columns.items():
+            stats[column] = float(value)
+            if unit:
                 units[column] = unit
     return stats, units

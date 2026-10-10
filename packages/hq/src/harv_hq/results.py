@@ -8,13 +8,13 @@ every reader starts from the sources files and ignores anything else.
 """
 
 __all__ = (
-    "STAGES",
     "PartWriter",
     "Payload",
     "ResultRecord",
     "ResultsIndex",
     "read_source_samples",
     "samples_table",
+    "supersede",
 )
 
 import logging
@@ -22,6 +22,7 @@ import os
 import shutil
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,15 +33,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from harv.samplers import SampleColumns, Samples
-from harv_hq._parquet_io import read_metadata, read_rows, write_parquet
+from harv_hq._parquet_io import field_units, read_metadata, read_rows, write_parquet
 from harv_hq.provenance import check_provenance
 
 logger = logging.getLogger(__name__)
 
-STAGES = ("rejection", "mcmc")
 SOURCES_SUFFIX = ".sources.parquet"
 SAMPLES_SUFFIX = ".samples.parquet"
 SAMPLES_ROW_GROUP_SIZE = 131_072
+_INDEX_COLUMNS = ["source_id", "status", "finished", "samples_row_start", "n_samples"]
 
 
 @final
@@ -116,11 +117,6 @@ def samples_table(
     return pa.table(columns), dict(cols.units), structure, dict(cols.metadata)
 
 
-def _part_stem(shard: tuple[int, int]) -> str:
-    i, n = shard
-    return f"{i:04d}-of-{n:04d}-{uuid.uuid4().hex[:8]}"
-
-
 @final
 class PartWriter:
     """Buffer per-source payloads and write them as result parts.
@@ -161,7 +157,6 @@ class PartWriter:
         self.provenance = provenance
         self.flush_n_sources = flush_n_sources
         self.flush_seconds = flush_seconds
-        self.parts_written: list[Path] = []
         self._buffer: list[Payload] = []
         self._buffer_started = 0.0
         self._structure: dict[str, Any] | None = None
@@ -198,7 +193,8 @@ class PartWriter:
         """
         if not self._buffer:
             return
-        stem = _part_stem(self.shard)
+        i, n = self.shard
+        stem = f"{i:04d}-of-{n:04d}-{uuid.uuid4().hex[:8]}"
         rows: list[dict[str, Any]] = []
         tables: list[pa.Table] = []
         row_units: dict[str, str] = {}
@@ -236,7 +232,6 @@ class PartWriter:
             units={k: v for k, v in row_units.items() if k in sources.column_names},
             metadata=metadata,
         )
-        self.parts_written.append(sources_path)
         logger.info("%s: wrote part %s (%d sources)", self.stage, stem, len(rows))
         self._buffer = []
 
@@ -315,29 +310,17 @@ class ResultsIndex:
             if expected_provenance is not None:
                 found = read_metadata(path).get("provenance", {})
                 check_provenance(found, expected_provenance, path=path)
-            table = pq.read_table(
-                path,
-                columns=[
-                    "source_id",
-                    "status",
-                    "finished",
-                    "samples_row_start",
-                    "n_samples",
-                ],
-            )
-            for row, values in enumerate(
-                zip(*(table.column(i).to_pylist() for i in range(5)), strict=True)
-            ):
-                source_id, status, finished, start, n = values
-                current = records.get(source_id)
-                if current is None or finished > current.finished:
-                    records[source_id] = ResultRecord(
-                        status=status,
-                        finished=finished,
+            rows = pq.read_table(path, columns=_INDEX_COLUMNS).to_pylist()
+            for row, r in enumerate(rows):
+                current = records.get(r["source_id"])
+                if current is None or r["finished"] > current.finished:
+                    records[r["source_id"]] = ResultRecord(
+                        status=r["status"],
+                        finished=r["finished"],
                         sources_path=path,
                         row=row,
-                        samples_row_start=start,
-                        n_samples=n,
+                        samples_row_start=r["samples_row_start"],
+                        n_samples=r["n_samples"],
                     )
         return cls(records)
 
@@ -351,10 +334,7 @@ class ResultsIndex:
 
     def status_counts(self) -> dict[str, int]:
         """Number of sources per status."""
-        counts: dict[str, int] = {}
-        for record in self.records.values():
-            counts[record.status] = counts.get(record.status, 0) + 1
-        return counts
+        return dict(Counter(record.status for record in self.records.values()))
 
 
 def read_source_samples(record: ResultRecord) -> Samples:
@@ -383,11 +363,7 @@ def read_source_samples(record: ResultRecord) -> Samples:
     samples_file = pq.ParquetFile(record.samples_path)
     rows = read_rows(samples_file, record.samples_row_start, record.n_samples)
     meta = read_metadata(record.samples_path)
-    units = {
-        f.name: f.metadata[b"unit"].decode()
-        for f in samples_file.schema_arrow
-        if f.metadata and b"unit" in f.metadata
-    }
+    units = field_units(samples_file.schema_arrow)
     source_row = read_rows(
         pq.ParquetFile(record.sources_path), record.row, 1
     ).to_pylist()[0]
@@ -415,23 +391,19 @@ def read_source_samples(record: ResultRecord) -> Samples:
     )
 
 
-def supersede(stage_dir: Path) -> Path | None:
-    """Move a stage's results aside for ``--overwrite``; nothing is deleted.
+def supersede(stage_dir: Path) -> None:
+    """Move a stage's results to ``results/superseded-<timestamp>-<stage>``.
+
+    Used by ``--overwrite``; nothing is deleted.
 
     Parameters
     ----------
     stage_dir
         ``results/<stage>``.
-
-    Returns
-    -------
-        Where the results went (``results/superseded-<timestamp>-<stage>``),
-        or ``None`` if there were none.
     """
     if not stage_dir.is_dir() or not any(stage_dir.iterdir()):
-        return None
+        return
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     target = stage_dir.with_name(f"superseded-{stamp}-{stage_dir.name}")
     shutil.move(os.fspath(stage_dir), os.fspath(target))
     logger.info("moved %s to %s", stage_dir, target)
-    return target

@@ -9,6 +9,7 @@ calls ``pyarrow.parquet.write_table`` directly.
 
 __all__ = (
     "ParquetContents",
+    "field_units",
     "groups_spanning",
     "read_metadata",
     "read_parquet",
@@ -122,14 +123,20 @@ def read_parquet(
         omitted), and its decoded ``hq.*`` key-value metadata.
     """
     table = pq.read_table(path, columns=columns)
-    units = {
+    return ParquetContents(
+        table=table,
+        units=field_units(table.schema),
+        metadata=_decode(table.schema.metadata),
+    )
+
+
+def field_units(schema: pa.Schema) -> dict[str, str]:
+    """Each column's ``unit`` field metadata; columns without one are omitted."""
+    return {
         field.name: field.metadata[b"unit"].decode()
-        for field in table.schema
+        for field in schema
         if field.metadata and b"unit" in field.metadata
     }
-    return ParquetContents(
-        table=table, units=units, metadata=_decode(table.schema.metadata)
-    )
 
 
 def read_metadata(path: str | os.PathLike) -> dict[str, Any]:
@@ -163,13 +170,7 @@ def groups_spanning(starts: np.ndarray, first: int, n_rows: int) -> range:
     return range(lo, max(hi, lo + 1))
 
 
-def read_rows(
-    parquet_file: pq.ParquetFile,
-    first: int,
-    n_rows: int,
-    *,
-    starts: np.ndarray | None = None,
-) -> pa.Table:
+def read_rows(parquet_file: pq.ParquetFile, first: int, n_rows: int) -> pa.Table:
     """Read rows ``first`` to ``first + n_rows``, decoding only their row groups.
 
     Parameters
@@ -178,15 +179,12 @@ def read_rows(
         An open file.
     first, n_rows
         The row range.
-    starts
-        Cached :func:`row_group_starts` of the file, to skip recomputing it.
 
     Returns
     -------
         The rows, with the file's schema.
     """
-    if starts is None:
-        starts = row_group_starts(parquet_file)
+    starts = row_group_starts(parquet_file)
     groups = groups_spanning(starts, first, n_rows)
     table = parquet_file.read_row_groups(list(groups))
     return table.slice(first - int(starts[groups.start]), n_rows)

@@ -26,6 +26,7 @@ class RunFixture:
     table: Table  # the input table as written, before any cuts
     catalog: Table
     n_obs: dict  # source_id -> observations that survive the built-in cuts
+    kept: dict  # the n_obs entries that also pass min_n_obs (the prepared sources)
 
 
 def _rv_ids(n):
@@ -106,7 +107,10 @@ def rv_run(tmp_path):
         "observations.ecsv",
         extra='\n[catalog]\nfile = "catalog.ecsv"\nsource_id = "source_id"\n',
     )
-    return RunFixture(run_dir=run_dir, table=table, catalog=catalog, n_obs=n_obs)
+    kept = {sid: n for sid, n in n_obs.items() if n >= 3}  # template min_n_obs = 3
+    return RunFixture(
+        run_dir=run_dir, table=table, catalog=catalog, n_obs=n_obs, kept=kept
+    )
 
 
 @pytest.fixture
@@ -143,4 +147,6 @@ def gaia_run(tmp_path):
         text = text.replace(old, new)
     path.write_text(text)
     _write_config(run_dir, "gaia_astrometry", "epoch_astrometry.ecsv")
-    return RunFixture(run_dir=run_dir, table=table, catalog=Table(), n_obs=n_obs)
+    return RunFixture(  # every source has >= 12 epochs; template min_n_obs = 10
+        run_dir=run_dir, table=table, catalog=Table(), n_obs=n_obs, kept=n_obs
+    )

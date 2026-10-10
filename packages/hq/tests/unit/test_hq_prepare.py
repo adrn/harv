@@ -30,7 +30,7 @@ def kept_rows(table, sid):
 class TestRV:
     def test_round_trip(self, rv_run):
         Run(rv_run.run_dir).prepare()
-        kept = {sid: n for sid, n in rv_run.n_obs.items() if n >= 3}
+        kept = rv_run.kept
         data = read_sources(rv_run.run_dir, kept)
 
         assert list(data) == list(kept)
@@ -50,7 +50,7 @@ class TestRV:
         stored = dict(
             zip(index["source_id"].to_pylist(), index["n_obs"].to_pylist(), strict=True)
         )
-        assert stored == {sid: n for sid, n in rv_run.n_obs.items() if n >= 3}
+        assert stored == rv_run.kept
         # Row ranges tile data.parquet with no gaps.
         starts = index["row_start"].to_numpy()
         np.testing.assert_array_equal(
@@ -224,9 +224,7 @@ class TestReading:
 
         # Sources whose rows straddle a row-group boundary still come back whole.
         everything = prepared.read(prepared.source_ids)
-        assert {s: d.n_obs for s, d in everything.items()} == {
-            s: n for s, n in rv_run.n_obs.items() if n >= 3
-        }
+        assert {s: d.n_obs for s, d in everything.items()} == rv_run.kept
 
     def test_unknown_source(self, rv_run):
         Run(rv_run.run_dir).prepare()
@@ -264,7 +262,7 @@ def test_large_table_prepares_quickly(tmp_path, rv_run):
     table = Table(
         {
             "source_id": rng.integers(0, 10_000, n_rows),
-            "time": JD + rng.uniform(0, 1000, n_rows),
+            "time": 2_460_000.0 + rng.uniform(0, 1000, n_rows),
             "rv": rng.normal(0, 10, n_rows),
             "rv_err": np.full(n_rows, 1.0),
             "snr": np.full(n_rows, 50.0),
@@ -279,6 +277,3 @@ def test_large_table_prepares_quickly(tmp_path, rv_run):
     Run(rv_run.run_dir).prepare()
     assert time.perf_counter() - start < 60
     assert len(PreparedData(rv_run.run_dir).source_ids) > 9_000
-
-
-JD = 2_460_000.0
