@@ -3,10 +3,11 @@
 Nothing here runs unless ``--bench`` is passed. See ``docs/running-benchmarks.md``.
 """
 
-# x64 FIRST, before anything imports harv (and therefore JAX). harv deliberately
-# does not enable it -- docs/sharp-bits.md makes it the user's job -- and every
-# tutorial turns it on. float32 changes the sampler's *arithmetic*, not just its
-# precision, so a float32 timing would not describe how anyone runs harv.
+# x64 FIRST, before anything imports harv (and therefore JAX). harv enables it on
+# import anyway; setting it here means the flag is on before any array exists and
+# harv's advisory warning stays out of the benchmark output. float32 changes the
+# sampler's *arithmetic*, not just its precision, so a float32 timing would not
+# describe how anyone runs harv.
 # Safe here: the root conftest.py only installs import hooks and creates no arrays.
 import jax
 

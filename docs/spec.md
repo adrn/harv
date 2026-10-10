@@ -60,18 +60,31 @@ ______________________________________________________________________
 1. **No global state.** Component models close over data; samplers combine models and
    priors; random state passes explicitly as JAX key values.
 
-1. **Double precision.** harv is run with `jax.config.update("jax_enable_x64", True)`.
-   The marginalized likelihood is a Cholesky plus Woodbury path, and the
-   truncation normalizers add an alternating sum on top of it (see
-   §Support-constrained and mixture linear priors); neither survives float32
-   gracefully. Every tutorial enables x64 in its first cell and `conftest.py`
-   enables it for the whole test suite, so tolerances are set against the
-   precision harv actually runs at. harv does **not** set the flag on import --
-   a library mutating global JAX config as a side effect of being imported is
-   worse than asking for one line. Code that has a precision-dependent
-   threshold derives it from `jnp.finfo(dtype).eps` rather than hard-coding a
-   float64 constant, so it degrades honestly rather than silently if a caller
-   omits the flag.
+1. **Double precision, on by default.** `import harv` enables
+   `jax_enable_x64` and warns that it did, unless the caller has already
+   expressed a preference. The marginalized likelihood is a Cholesky plus
+   Woodbury path, the truncation normalizers add an alternating sum on top of
+   it (see §Support-constrained and mixture linear priors), and a barycentric
+   time in float32 has a resolution of 0.25 days: a BJD of 2460123.125 is
+   stored as 2460123.0. None of that survives float32.
+
+   Import is the only moment that works. JAX's flag is global and cannot be set
+   per array -- asking for a float64 array while it is off silently returns
+   float32 -- so harv cannot opt in locally, and no later moment repairs an
+   array already built at the wrong precision. A user's data object is
+   constructed before any sampler exists, so enabling it in a sampler would be
+   too late.
+
+   **Opting out:** set `JAX_ENABLE_X64` yourself and harv leaves it alone.
+   `JAX_ENABLE_X64=0` keeps float32 and accepts degraded results;
+   `JAX_ENABLE_X64=1`, or a `jax.config.update` before the import, means the
+   flip has already happened and no warning is emitted. `conftest.py` and
+   `benchmarks/conftest.py` both take the second route, so neither the suite
+   nor the benchmarks see the warning.
+
+   Code with a precision-dependent threshold still derives it from
+   `jnp.finfo(dtype).eps` rather than hard-coding a float64 constant, so it
+   degrades honestly rather than silently for a caller who opted out.
 
 ______________________________________________________________________
 

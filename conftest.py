@@ -7,10 +7,11 @@ from jaxtyping import install_import_hook
 from sybil import Sybil
 from sybil.parsers.markdown import PythonCodeBlockParser
 
-# harv is run in double precision -- the tutorials and docs all enable it, and the
-# marginalized likelihood is a Cholesky/Woodbury path whose conditioning does not
-# survive float32 gracefully. The suite must therefore test the precision harv
-# actually runs at, or its tolerances measure the wrong thing.
+# x64 before anything imports harv. harv enables it on import anyway, but doing it
+# here means the flag is on before any array exists and harv's advisory warning never
+# fires during the suite -- so `filterwarnings = ["error"]` needs no exception for
+# harv's own warning. The suite must test the precision harv actually runs at, or its
+# tolerances measure the wrong thing.
 jax.config.update(name="jax_enable_x64", val=True)
 
 pytest_collect_file = Sybil(

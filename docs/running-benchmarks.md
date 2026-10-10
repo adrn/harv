@@ -175,10 +175,10 @@ then `--bench-rounds` timed rounds. Every timed call is wrapped in
 `jax.block_until_ready` — on GPU, JAX dispatch is asynchronous, and without it
 the timer would measure how fast Python can enqueue work.
 
-float64 is pinned on (`benchmarks/conftest.py` sets it before harv is imported).
-harv does not enable x64 itself and {doc}`sharp-bits` makes it the user's job, but
-every tutorial turns it on, and float32 changes the sampler's *arithmetic* rather
-than just its precision — a float32 timing would not describe how anyone runs harv.
+float64 is pinned on. harv enables it on import anyway, but
+`benchmarks/conftest.py` sets it first so the import stays silent and the flag is on
+before any array exists. float32 changes the sampler's *arithmetic* rather than just
+its precision — a float32 timing would not describe how anyone runs harv.
 
 ## The grid
 

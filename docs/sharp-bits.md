@@ -4,19 +4,28 @@ This page lists some conventions, gotchas, and design choices that could be over
 
 See also the `unxt` sharp bits guide, since `harv` uses `unxt` extensively for unit handling: <https://unxt.readthedocs.io/en/latest/guides/sharp-bits.html>.
 
-## Work in float64
+## harv turns on float64 for you
 
 `harv` is designed for orbital inference problems where the likelihood can span a very
-large dynamic range. In practice, this means you should usually enable 64-bit JAX:
+large dynamic range, so importing it enables JAX's 64-bit mode and warns that it has
+done so:
 
 ```python
-import jax
-
-jax.config.update("jax_enable_x64", True)
+import harv  # enables jax_enable_x64 for the whole process
 ```
 
-Using float32 can lead to unstable likelihood evaluations, especially in rejection
-sampling and when working with broad priors or high-S/N data.
+This changes the default dtype of every JAX array created afterwards, including arrays
+belonging to other libraries in the same process, which is why the warning exists. To
+silence it, say so yourself before importing `harv`, with either the `JAX_ENABLE_X64=1`
+environment variable or `jax.config.update("jax_enable_x64", True)`.
+
+You can opt out with `JAX_ENABLE_X64=0`, but expect garbage. float32 gives unstable
+likelihood evaluations in rejection sampling and with broad priors or high-S/N data,
+and it is not only the likelihood: a barycentric time in float32 has a resolution of
+0.25 days, so a BJD of 2460123.125 silently becomes 2460123.0 the moment you build an
+`RVData`. JAX's flag is global and cannot be set per array, so `harv` cannot protect
+its own arrays from a float32 process, and switching it on later does not repair data
+already built.
 
 ## Public APIs are unit-aware
 
