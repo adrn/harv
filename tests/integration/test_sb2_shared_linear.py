@@ -289,11 +289,14 @@ class TestRejectionSamplerFlattening:
 class TestNumpyroSharedExplicitLinear:
     def test_shared_explicit_sampled_once(self, rv_data_primary, rv_data_secondary):
         """Shared explicit linear param appears exactly once in numpyro trace."""
-        # Use a non-Gaussian prior so v_sys is classified as explicit.
+        # Use a prior outside the Gaussian family so v_sys is classified as
+        # explicit. A HalfNormal would not do: truncated Gaussians are
+        # marginalized analytically now (see harv.stats.marginalized), so it
+        # would produce no sample site at all.
         linear_priors = {
             "primary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
             "secondary.rv_semiamp": QD(dist.Normal(5.0, 5.0), "km/s"),
-            "v_sys": QD(dist.HalfNormal(10.0), "km/s"),  # shared; HalfNormal → explicit
+            "v_sys": QD(dist.Uniform(-50.0, 50.0), "km/s"),  # shared; explicit
         }
         joint = JointModel(
             components={"primary": RVModel(), "secondary": RVModel()},

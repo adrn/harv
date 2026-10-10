@@ -453,7 +453,7 @@ class Samples(eqx.Module):
         ...     ln_likelihood=jnp.zeros(2),
         ... )
         >>> samples.weight
-        Array([0.25, 0.25], dtype=float32)
+        Array([0.25, 0.25], dtype=float64)
         >>> float(samples["weight"].sum())
         0.5
         """

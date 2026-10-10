@@ -18,9 +18,11 @@ from unxt.quantity import ustrip
 from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
+    LinearRole,
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
     _unwrap_dist,
+    classify_linear_prior,
+    pinned_linear_names,
 )
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
@@ -366,17 +368,28 @@ class RejectionSampler(AbstractSampler):
         explicit = set(
             _explicit_linear_names(eff_linear, prepared.effective_marginalized_names)
         )
+        pinned = pinned_linear_names(dict(eff_linear))
         linear_rows: list[tuple[str, ...]] = []
         n_marginalized = 0
+        # Each row renders the parameter's role (see `classify_linear_prior`),
+        # which owns the precedence between these cases, plus the one thing the
+        # role cannot know: whether the *user* excluded a marginalizable name
+        # via `marginalized_names`.
+        _status = {
+            LinearRole.EXPLICIT: "sampled",
+            LinearRole.PINNED: "sampled (read by prior)",
+            LinearRole.FIXED: "sampled (could marg.)",
+            LinearRole.MARGINALIZED: "sampled (could marg.)",
+        }
         for name, d in eff_linear.items():
             dist_name, unit = _describe_prior(d)
             if name not in explicit:
                 status = "marginalized"
                 n_marginalized += 1
-            elif _needs_explicit_sampling(d):
-                status = "sampled"
             else:
-                status = "sampled (could marg.)"
+                status = _status[
+                    classify_linear_prior(d, name=name, pinned_names=pinned)
+                ]
             linear_rows.append((name, status, dist_name, unit))
 
         # Sampled = all nonlinear params + the linear params not marginalized.
@@ -401,9 +414,13 @@ class RejectionSampler(AbstractSampler):
 
         lines.append("")
         lines.append("status legend: marginalized = integrated out analytically;")
-        lines.append("  sampled = drawn explicitly (non-Gaussian);")
+        lines.append("  sampled = drawn explicitly (prior cannot be marginalized);")
         lines.append(
-            "  sampled (could marg.) = Gaussian/linear but excluded via "
+            "  sampled (read by prior) = marginalizable, but another prior's "
+            "callable reads its value"
+        )
+        lines.append(
+            "  sampled (could marg.) = marginalizable but excluded via "
             "marginalized_names"
         )
         return "\n".join(lines)

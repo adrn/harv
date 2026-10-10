@@ -37,7 +37,7 @@ neither in scope yet:
    Normal, so the analytic linear marginalization is untouched.
 2. Marginalize numerically. ``p(a_0|P) = int N(a_0; 0, sigma_a(P, plx)) p(plx) d plx``
    is a scale mixture of Gaussians and therefore *not* Gaussian, which
-   ``_resolve_prior_to_mvn`` rejects. Doing it properly means evaluating Delta on a
+   ``_resolve_linear_priors`` rejects. Doing it properly means evaluating Delta on a
    quadrature grid in parallax and logsumexp-ing, multiplying the periodogram cost by
    the number of nodes.
 """

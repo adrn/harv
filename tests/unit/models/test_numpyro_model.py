@@ -4,10 +4,12 @@ import jax.numpy as jnp
 import numpyro.distributions as dist
 import pytest
 from numpyro import handlers
+from unxt import Q
 
 from harv.distributions import QuantityDistribution as QD
 from harv.models import RVModel
 from harv.models.extensions import Jitter, MonomialTrend
+from harv.models.priors.callables import PeriodDependentKPrior
 
 # Re-alias shared fixtures to shorter names used throughout this module.
 nonlinear_priors = pytest.fixture(name="nonlinear_priors")(
@@ -89,7 +91,12 @@ class TestNumpyroModelFull:
         assert callable(model_fn)
 
     def test_model_traces(self, rv_data, nonlinear_priors, linear_priors):
-        """Full model has both nonlinear and linear sample sites."""
+        """Full model has a sample site per parameter, nonlinear and linear.
+
+        Each linear parameter gets its own named site. The priors are
+        independent, so the joint site this replaced carried a diagonal
+        covariance and was the same distribution.
+        """
         model = RVModel()
         model_fn = model.numpyro_model(
             nonlinear_priors, rv_data, linear_priors, marginalized=False
@@ -98,15 +105,11 @@ class TestNumpyroModelFull:
         with handlers.seed(rng_seed=0):
             trace = handlers.trace(model_fn).get_trace()
 
-        # Nonlinear params
         assert "period" in trace
         assert "eccentricity" in trace
-        # Linear params (sampled jointly as _linear)
-        assert "_linear" in trace
-        assert trace["_linear"]["type"] == "sample"
-        # Deterministic sites for individual linear params
-        assert "rv_semiamp" in trace
-        assert "v_sys" in trace
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert trace["v_sys"]["type"] == "sample"
+        assert "_linear" not in trace
 
     def test_log_lik_is_finite(self, rv_data, nonlinear_priors, linear_priors):
         model = RVModel()
@@ -192,3 +195,83 @@ class TestNumpyroModelUnitConversion:
             trace = handlers.trace(model_fn).get_trace()
 
         assert jnp.isfinite(_get_factor_value(trace, "ln_lik"))
+
+
+class TestNumpyroModelFullExplicitLinearSites:
+    """Linear priors the joint ``_linear`` MVN cannot represent.
+
+    That MVN is a single untruncated Gaussian, so a truncated prior, a callable
+    that returns one, and a ``Delta`` each need their own treatment (see
+    ``docs/spec.md`` -> Scope, and -> Linear prior classification).
+    """
+
+    def test_truncated_linear_prior_gets_its_own_site(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        priors = {
+            **linear_priors,
+            "rv_semiamp": QD(dist.TruncatedNormal(0.0, 30.0, low=0.0), "km/s"),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert float(trace["rv_semiamp"]["value"]) >= 0.0
+        assert trace["v_sys"]["type"] == "sample"
+
+    def test_callable_resolving_to_a_truncated_prior_respects_its_support(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """The signed-SB2 case: a callable resolving to a truncated Normal."""
+        priors = {
+            **linear_priors,
+            "rv_semiamp": PeriodDependentKPrior(
+                Q(30.0, "km/s"), Q(1.0, "yr"), support="positive"
+            ),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert float(trace["rv_semiamp"]["value"]) >= 0.0
+
+    def test_callable_without_a_support_is_unconstrained(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """No declaration means unconstrained, so the site spans the real line."""
+        priors = {
+            **linear_priors,
+            "rv_semiamp": PeriodDependentKPrior(Q(30.0, "km/s"), Q(1.0, "yr")),
+        }
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["rv_semiamp"]["type"] == "sample"
+        assert isinstance(trace["rv_semiamp"]["fn"], dist.Normal)
+
+    def test_delta_linear_prior_is_deterministic_not_a_sample_site(
+        self, rv_data, nonlinear_priors, linear_priors
+    ):
+        """A fixed value must not become a NUTS site whose log-prob is -inf.
+
+        Sampling ``Delta`` would give stuck chains with no error at all -- the
+        classification table calls this prior *Fixed*, not *sampled*.
+        """
+        priors = {**linear_priors, "v_sys": QD(dist.Delta(3.0), "km/s")}
+        model_fn = RVModel().numpyro_model(
+            nonlinear_priors, rv_data, priors, marginalized=False
+        )
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(model_fn).get_trace()
+
+        assert trace["v_sys"]["type"] == "deterministic"
+        assert float(trace["v_sys"]["value"]) == pytest.approx(3.0)

@@ -6,6 +6,7 @@ import jax.random as jr
 import numpy as np
 import numpyro.distributions as dist
 import pytest
+from numpyro.distributions.transforms import biject_to
 from unxt import Q, ustrip
 
 import harv.models as hm
@@ -232,3 +233,42 @@ class TestArgConstraints:
             ln_density = jnp.asarray(np.log(density))
         d = LogGridDensity(ln_grid, ln_density, validate_args=True)
         assert np.isfinite(float(d.log_prob(float(np.exp(ln_grid[25])))))
+
+
+class TestEdgeTolerance:
+    """``support`` and ``log_prob`` must agree about the domain edges.
+
+    ``log(exp(ln_grid[0]))`` can land an ulp below the knot, so both accept a
+    round-trip slack. Applying it to only one of them is worse than applying it
+    to neither: a period sitting exactly on the edge then passes ``log_prob``
+    and is still rejected by ``biject_to(support)`` under NUTS.
+    """
+
+    @staticmethod
+    def _density() -> LogGridDensity:
+        return LogGridDensity(
+            jnp.log(jnp.array([137.3, 500.0, 2011.7])), jnp.array([0.0, 1.0, 0.0])
+        )
+
+    @pytest.mark.parametrize("edge", ["low", "high"])
+    def test_support_accepts_what_log_prob_accepts(self, edge):
+        d = self._density()
+        x = getattr(d, edge)
+        assert bool(d.support(x))
+        assert jnp.isfinite(d.log_prob(x))
+
+    @pytest.mark.parametrize("edge", ["low", "high"])
+    def test_bijector_round_trips_the_edge(self, edge):
+        """What NUTS actually does with an edge-valued starting point."""
+        d = self._density()
+        x = getattr(d, edge)
+        transform = biject_to(d.support)
+        assert jnp.isfinite(transform.inv(x))
+        assert jnp.isfinite(d.log_prob(transform(transform.inv(x))))
+
+    def test_values_well_outside_are_still_rejected(self):
+        """The slack is an ulp, not a licence to extrapolate."""
+        d = self._density()
+        for x in (jnp.asarray(137.0), jnp.asarray(2012.0)):
+            assert not bool(d.support(x))
+            assert d.log_prob(x) == -jnp.inf

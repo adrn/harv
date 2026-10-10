@@ -8,6 +8,7 @@ from unxt import Q, ustrip
 from harv.kepler import KeplerianOrientation
 from harv.kepler.orbits import (
     campbell_from_thiele_innes,
+    compute_true_anomaly_components,
     ecc_omega_from_ecosw_esinw,
     ecosw_esinw_from_ecc_omega,
     mean_anomaly,
@@ -352,3 +353,35 @@ class TestEcoswEsinwConversions:
         )
         assert ecc.shape == (2,)
         assert omega.shape == (2,)
+
+
+class TestRVShapeAntisymmetry:
+    """The identity the SB2 signed-semi-amplitude convention rests on.
+
+    ``rv_shape`` is exactly odd under ``arg_peri -> arg_peri + pi``:
+
+        S(omega + pi) == -S(omega)
+
+    so ``K * S(omega + pi)`` and ``(-K) * S(omega)`` are the same curve. That is
+    *why* a negative ``rv_semiamp`` expresses the SB2 secondary's antiphase
+    motion, and why ``(K_1, K_2, omega)`` and ``(-K_1, -K_2, omega + pi)`` are an
+    exact degeneracy that
+    :func:`~harv.models.default_sb2_prior` breaks with a sign constraint.
+    Pinned here because the whole convention silently rests on it.
+    """
+
+    @pytest.mark.parametrize("eccentricity", [0.0, 0.1, 0.45, 0.8])
+    @pytest.mark.parametrize("arg_peri", [0.0, 0.3, 1.9, 4.4, 6.0])
+    def test_shape_flips_sign_under_pi_shift(self, eccentricity, arg_peri):
+        period = Q(137.0, "day")
+        times = Q(jnp.linspace(0.0, 300.0, 17), "day")
+        sin_f, cos_f = compute_true_anomaly_components(
+            times, period, eccentricity, Q(11.0, "day")
+        )
+        base = ustrip("", rv_shape(sin_f, cos_f, eccentricity, Q(arg_peri, "rad")))
+        shifted = ustrip(
+            "", rv_shape(sin_f, cos_f, eccentricity, Q(arg_peri + jnp.pi, "rad"))
+        )
+        assert jnp.allclose(shifted, -base, atol=1e-6)
+        # Guard against the identity holding trivially on a null signal.
+        assert float(jnp.max(jnp.abs(base))) > 0.1

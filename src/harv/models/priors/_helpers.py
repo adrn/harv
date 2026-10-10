@@ -79,6 +79,7 @@ def _make_rv_semiamp_prior(
     rv_semiamp: LinearPriorDist | None = None,
     sigma_K0: ScalarQSpeed | None = None,
     period_ref: ScalarQTime = Q(1.0, "yr"),
+    support: str = "real",
 ) -> LinearPriorDist:
     if rv_semiamp is not None:
         if sigma_K0 is not None:
@@ -86,7 +87,11 @@ def _make_rv_semiamp_prior(
         return rv_semiamp
     if sigma_K0 is None:
         raise TypeError("Must specify either rv_semiamp or sigma_K0")
-    return PeriodDependentKPrior(sigma_K0=sigma_K0, period_ref=period_ref)
+    return PeriodDependentKPrior(
+        sigma_K0=sigma_K0,
+        period_ref=period_ref,
+        support=support,  # ty: ignore[invalid-argument-type]
+    )
 
 
 def _make_vsys_prior(

@@ -16,7 +16,7 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 from numpyro import infer as _numpyro_infer
-from numpyro.distributions import biject_to
+from numpyro.distributions import biject_to, constraints
 from numpyro.infer import SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.initialization import init_to_value
@@ -28,13 +28,14 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     PriorDist,
     _evaluate_nonlinear_log_prior,
-    _needs_explicit_sampling,
+    _explicit_scalar_dist,
+    _is_callable_prior,
     _unwrap_dist,
 )
 from harv.models.component import (
     AbstractComponentModel,
     _apply_unit_conversions,
-    _resolve_prior_to_mvn,
+    _resolve_linear_priors,
     _sample_nonlinear_params,
 )
 from harv.models.joint import JointModel
@@ -76,23 +77,33 @@ def _unconstrain_init_params(
     (natural) space, so we must apply the inverse transform before
     passing them to the MCMC kernel.
     """
-    site_dists: dict[str, dist.Distribution] = {}
+    site_supports: dict[str, Any] = {}
     for name, d in prior.nonlinear_priors.items():
-        site_dists[name] = _unwrap_dist(d)
+        site_supports[name] = _unwrap_dist(d).support
     if isinstance(effective_linear_prior, dict):
         for name, d in effective_linear_prior.items():
             if isinstance(d, dist.Distribution | QuantityDistribution):
-                site_dists[name] = _unwrap_dist(d)
+                site_supports[name] = _unwrap_dist(d).support
+            elif _is_callable_prior(d):
+                # A callable sampled explicitly still needs a bijector, and its
+                # support is the one it declares statically (it cannot be read
+                # off the return value, which only exists at trace time).
+                # Without this the init value would be read as if it were
+                # already unconstrained, so a `support="positive"` site
+                # starting at K = 28 would begin at exp(28).
+                site_supports[name] = {
+                    "positive": constraints.greater_than(0.0),
+                    "negative": constraints.less_than(0.0),
+                }.get(getattr(d, "support", "real"), constraints.real)
     if nonlinear_extension_priors:
         for model_key, d in nonlinear_extension_priors.items():
-            site_dists[model_key] = _unwrap_dist(d)
+            site_supports[model_key] = _unwrap_dist(d).support
 
     out: dict[str, Any] = {}
     for name, val in init_params.items():
-        d = site_dists.get(name)
-        if d is not None:
-            transform = biject_to(d.support)
-            out[name] = transform.inv(jnp.asarray(val))
+        support = site_supports.get(name)
+        if support is not None:
+            out[name] = biject_to(support).inv(jnp.asarray(val))
         else:
             out[name] = val
     return out
@@ -193,17 +204,14 @@ def _build_extra_numpyro_model(
 
         for name, prior_dist in explicit_callable_prior.items():
             target_unit = param_units.get(name, "")
-            resolved_prior = _resolve_prior_to_mvn(
+            resolved_prior = _resolve_linear_priors(
                 {name: prior_dist},
                 nonlinear_values,
                 {name: target_unit},
                 extra_values=explicit_linear_q,
                 parameterization=component.parameterization,
             )
-            raw = numpyro.sample(
-                name,
-                dist.Normal(resolved_prior.loc[0], resolved_prior.scale_tril[0, 0]),
-            )
+            raw = numpyro.sample(name, _explicit_scalar_dist(resolved_prior))
             explicit_linear_values[name] = raw
             explicit_linear_q[name] = Q(raw, target_unit) if target_unit else raw
 
@@ -660,9 +668,9 @@ class NumpyroSampler(AbstractSampler):
 
         # Include init values for explicit (non-marginalized) linear params.
         # For both the marginalized and non-marginalized cases, any linear param
-        # with a non-Gaussian prior (needs_explicit_sampling) must be included in
-        # init_params because the numpyro model samples it explicitly rather than
-        # analytically marginalizing it.
+        # not marginalized away must be included in init_params, because the
+        # numpyro model draws it from its own site rather than integrating it
+        # out. On the full model that is all of them.
         if isinstance(effective_linear_prior, dict):
             explicit_linear_name_set = (
                 {
@@ -671,11 +679,9 @@ class NumpyroSampler(AbstractSampler):
                     if name not in set(effective_marginalized_names or ())
                 }
                 if marginalized
-                else {
-                    name
-                    for name, prior_dist in effective_linear_prior.items()
-                    if _needs_explicit_sampling(prior_dist)
-                }
+                # The full model samples *every* linear parameter as its own
+                # site, so every one of them needs an init value.
+                else set(effective_linear_prior)
             )
             for name, d in effective_linear_prior.items():
                 if name not in explicit_linear_name_set:
@@ -702,36 +708,6 @@ class NumpyroSampler(AbstractSampler):
 
         if extra_model is not None:
             init_params.update(extra_init_params)  # ty: ignore[no-matching-overload]
-
-        if (
-            not marginalized
-            and extra_model is None
-            and isinstance(effective_linear_prior, dict)
-        ):
-            # Full model: include init values for _linear site.
-            gaussian_name_pairs = [
-                (name, _resolve_sample_linear_name(name))
-                for name in effective_linear_prior
-                if not _needs_explicit_sampling(effective_linear_prior[name])
-            ]
-            gaussian_name_pairs = [
-                (name, sample_name)
-                for name, sample_name in gaussian_name_pairs
-                if sample_name is not None
-            ]
-            if gaussian_name_pairs:
-                linear_arr = np.column_stack(
-                    [
-                        np.asarray(samples.linear[sample_name].value)
-                        for _, sample_name in gaussian_name_pairs
-                    ]
-                )
-                if _scalar_init:
-                    init_params["_linear"] = jnp.asarray(linear_arr[0])
-                else:
-                    init_params["_linear"] = jnp.stack(
-                        [jnp.asarray(linear_arr[i]) for i in indices]
-                    )
 
         return init_params
 

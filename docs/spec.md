@@ -60,6 +60,19 @@ ______________________________________________________________________
 1. **No global state.** Component models close over data; samplers combine models and
    priors; random state passes explicitly as JAX key values.
 
+1. **Double precision.** harv is run with `jax.config.update("jax_enable_x64", True)`.
+   The marginalized likelihood is a Cholesky plus Woodbury path, and the
+   truncation normalizers add an alternating sum on top of it (see
+   §Support-constrained and mixture linear priors); neither survives float32
+   gracefully. Every tutorial enables x64 in its first cell and `conftest.py`
+   enables it for the whole test suite, so tolerances are set against the
+   precision harv actually runs at. harv does **not** set the flag on import --
+   a library mutating global JAX config as a side effect of being imported is
+   worse than asking for one line. Code that has a precision-dependent
+   threshold derives it from `jnp.finfo(dtype).eps` rather than hard-coding a
+   float64 constant, so it degrades honestly rather than silently if a caller
+   omits the flag.
+
 ______________________________________________________________________
 
 ## Type annotations and runtime checking
@@ -241,6 +254,7 @@ src/harv/
 ├── stats/                   # Statistical utilities
 │   ├── grid_density.py      # LogGridDensity
 │   ├── numpyro_ext.py       # vendored numpyro-ext (MarginalizedLinear, ...)
+│   ├── marginalized.py      # truncated / mixture linear priors (harv-owned)
 │   └── linear_op.py         # vendored linear operators
 ├── plot.py                  # get_time_grid and plotting utilities
 └── simulate/                # Synthetic data generators
@@ -1069,16 +1083,56 @@ When `log_prob(values)` is called with only a flat dict of values (no explicit
 `marginalized_names`), the model auto-classifies which linear params to
 marginalize based on `linear_priors`:
 
-| Prior type                    | Classification | Treatment                         |
-| ----------------------------- | -------------- | --------------------------------- |
-| `dist.Normal` or `QD(Normal)` | Gaussian       | Analytically marginalized         |
-| `LinearPriorCallable`         | Callable       | Called, result marginalized       |
-| `dist.Delta` or `QD(Delta)`   | Fixed          | Treated as explicit (value fixed) |
-| `dist.HalfNormal`, etc.       | Non-Gaussian   | Sampled explicitly alongside NL   |
+| Prior type                                    | Classification | Treatment                            |
+| --------------------------------------------- | -------------- | ------------------------------------ |
+| `dist.Normal` or `QD(Normal)`                 | Gaussian       | Analytically marginalized            |
+| `dist.HalfNormal` / `dist.TruncatedNormal`    | Truncated      | Analytically marginalized            |
+| `dist.MixtureSameFamily` over the above       | Mixture        | Analytically marginalized            |
+| `LinearPriorCallable`                         | Callable       | Called, result marginalized          |
+| *read by another prior's `requires`*          | Pinned         | Sampled explicitly alongside NL      |
+| `dist.Delta` or `QD(Delta)`                   | Fixed          | Treated as explicit (value fixed)    |
+| anything else (`dist.Uniform`, `Gamma`, …)    | Non-Gaussian   | Sampled explicitly alongside NL      |
 
-Non-Gaussian linear priors (e.g. `HalfNormal` for parallax) must have their
-values present in the `values` dict alongside the nonlinear parameters. The
-model extracts them automatically in auto mode.
+Support-constrained and mixture Gaussians are marginalized by
+`harv.stats.marginalized` (see §Support-constrained and mixture linear priors).
+This is why the table has no "non-Gaussian → sampled" row for `HalfNormal`: the
+distinction that matters is no longer Gaussian vs not, but *inside the Gaussian
+family* (Normal, truncated Normal, or a mixture of those) vs outside it.
+
+**The `Pinned` row is the only exception to "marginalize whatever you can".** A
+`LinearPriorCallable` may declare `requires`, naming the parameter values it
+reads from the dict it is called with; any linear parameter named there must stay
+explicitly sampled, because a marginalized parameter has no sampled value for the
+callable to read. This is what keeps `parallax` explicit under
+`StandardGaiaAstrometry.default_prior` — `PeriodDependentSemiMajorAxisPrior` and
+`ParallaxDependentProperMotionPrior` both read it — while signed SB2
+semi-amplitudes, which nothing reads, are marginalized. Keys may be
+component-qualified (`"astro.parallax"`), so a dependency resolves inside the
+declaring prior's namespace first and then at the top level.
+
+A *Fixed* prior is never a sample site. On the marginalized path it enters the
+marginalized set and is reclassified, with its value extracted, by
+`AbstractComponentModel._handle_delta_priors`; under `marginalized=False` it is
+recorded with `numpyro.deterministic`. Sampling it would hand NUTS a site whose
+log-prob is `-inf` almost everywhere — stuck chains with no error.
+
+One classifier decides the row, and the **order of its tests is normative**:
+a prior outside the marginalizable family is *Non-Gaussian* first, before the
+pinned test, because the fix the *Pinned* row implies — drop the dependency —
+would leave a `Gamma` prior that still cannot be marginalized. Then *Pinned*,
+then *Fixed*, then *Marginalized*. `RejectionSampler.summary()` and the
+`verbose=True` advisory both render that one classification rather than
+re-deriving it, so the two introspection surfaces cannot disagree about a
+parameter or point at different fixes.
+
+Explicitly-sampled linear priors must have their values present in the `values`
+dict alongside the nonlinear parameters. The model extracts them automatically in
+auto mode.
+
+Marginalization is always *possible* for a wider set than auto mode chooses: a
+name listed in `marginalized_names` is honoured whenever the math supports it,
+including a pinned one — and then the dependent callable raises its documented
+`KeyError`.
 
 ### The `LinearPriorCallable` contract
 
@@ -1086,12 +1140,15 @@ A linear prior may be given as a callable, so that the prior on a linear paramet
 can depend on the values of the nonlinear parameters. The contract is:
 
 ```python
-LinearPriorCallable = Callable[[dict[str, Any]], QuantityDistribution | dist.Normal]
+LinearPriorCallable = Callable[[dict[str, Any]], QuantityDistribution | dist.Distribution]
 ```
 
 The callable receives a **plain dict** keyed by bare parameter name and must return a
-`Normal` (bare, or wrapped in a `QuantityDistribution` to declare its unit). The dict
-contains:
+distribution the marginalization accepts -- a `Normal`, a truncated Normal
+(`HalfNormal` / `TruncatedNormal`), or a `MixtureSameFamily` over those -- bare, or
+wrapped in a `QuantityDistribution` to declare its unit. Resolved finite bounds are
+corrected for automatically, so a callable returning a truncated prior is handled
+identically to one supplied directly. The dict contains:
 
 - every **nonlinear** parameter value sampled so far (`period`, `eccentricity`, …),
 - every **explicit** (non-marginalized) **linear** parameter value sampled so far, and
@@ -1107,11 +1164,34 @@ comes from `AbstractParameterization.derived_eccentricity(nonlinear_values)`, wh
 overridden by `EcoswEsinwRV`. Shared priors in a `JointModel` are the one exception:
 components need not agree on a parameterization, so no derivation is attempted there.
 
-The second bullet is why `parallax` is readable by callable priors: with the default
-`HalfNormal` prior it is classified non-Gaussian, so it is sampled explicitly rather
-than analytically marginalized. If a user overrides it with a `Normal` prior it becomes
-marginalized, disappears from the dict, and the parallax-dependent priors raise
-`KeyError` with an explanatory message.
+The second bullet is why `parallax` is readable by callable priors: it is sampled
+explicitly rather than marginalized. A callable declares what it reads via an
+optional `requires` attribute, and any linear parameter named there is pinned to
+explicit sampling (see §Linear prior classification):
+
+| callable                            | `requires`                              |
+| ----------------------------------- | --------------------------------------- |
+| `PeriodDependentKPrior`             | `("period", "eccentricity")`            |
+| `PeriodDependentSemiMajorAxisPrior` | `("period", "eccentricity", "parallax")`|
+| `ParallaxDependentProperMotionPrior`| `("parallax",)`                         |
+
+A callable may also declare `support`, one of `"real"` (the default),
+`"positive"` or `"negative"`, saying which support the distribution it returns
+will have. Like `requires` this is *static* metadata read at trace time, not
+inferred from the returned object, because the sampler needs the answer before
+it can call the callable. It is used to pick the bijector for warm-start init
+values: a `support="positive"` site starting from `K = 28` must start at
+`log 28`, not at `28` read as an unconstrained coordinate.
+
+Undeclared means unconstrained, so an existing callable needs no change, and a
+callable that returns a truncated prior without declaring `support` is still
+marginalized correctly. Declaring an unrecognized value raises `ValueError`.
+
+`requires` is optional and defaults to `()`, so a user-supplied callable needs no
+change. Omitting it on a callable that *does* read a linear parameter reproduces the
+pre-existing failure: the parameter is marginalized, disappears from the dict, and the
+callable raises `KeyError` with an explanatory message. Callables are not
+introspected -- harv reads the declaration, not the code.
 
 Values that carry units are `unxt.Q`-wrapped, so a callable can do
 `ustrip("", params["period"] / self.period_ref)` without assuming a unit; dimensionless values
@@ -1232,9 +1312,14 @@ method that returns a no-argument callable suitable for `numpyro.infer.MCMC`:
   `numpyro.sample`, samples non-Gaussian linear params explicitly, then
   calls `model.log_prob(values)` in auto mode so that Gaussian linear params
   are analytically marginalized.
-- **Full** (`marginalized=False`): samples all params (nonlinear + linear).
-  Gaussian linear params are sampled jointly from their MVN; non-Gaussian
-  ones are sampled individually.
+- **Full** (`marginalized=False`): samples all params (nonlinear + linear),
+  each linear parameter as its own named site. The priors are independent per
+  parameter, so one joint site would carry a diagonal covariance and be the same
+  distribution; a site each is that distribution without the extra machinery,
+  and it accepts every prior family — truncated, mixture-free callables,
+  `Delta` — rather than only the untruncated single Gaussians one
+  `MultivariateNormal` can express. Plain priors are drawn before callables, so
+  a callable sees the values named in its `requires`.
 
 `JointModel.numpyro_model` composes per-component log-probs with shared
 nonlinear sampling.
@@ -1277,6 +1362,15 @@ Fields:
 
 - `sigma_K0: Q["speed"]` — scale at reference period
 - `period_ref: Q["time"]` — reference period
+- `support: Literal["real", "positive", "negative"] = "real"` (static) — sign
+  constraint. `"real"` returns the `Normal` above unchanged; the other two return
+  `QD(TruncatedNormal(0, σ_K, low=0), unit)` / `(..., high=0)`, which are
+  marginalized analytically (see §Support-constrained and mixture linear priors).
+  `HalfNormal` is positive-only, so `K < 0` requires the general truncated form.
+
+  The constrained forms exist for SB2 (see `default_sb2_prior`).
+
+Declares `requires = ("period", "eccentricity")`.
 
 ### `PeriodDependentSemiMajorAxisPrior`
 
@@ -1397,10 +1491,14 @@ Per-parameter overrides flow through `**kwargs` (e.g.
 declared by the parameterization land in `extension_priors` for resolution at
 sampling time against the model's declared extension parameters.
 
-Parallax is classified as explicit automatically (because `HalfNormal` cannot be
-analytically marginalized).  For exoplanet searches where the catalog parallax
-is trustworthy, override with a `Normal` prior and set
-`marginalized_names=("parallax", ...)` on the sampler.
+Parallax is classified as explicit automatically -- not because `HalfNormal`
+cannot be marginalized (it can; see §Support-constrained and mixture linear
+priors) but because the default `semi_major_axis` and proper-motion priors
+*read* its sampled value, declaring it in their `requires` (see §Linear prior
+classification).  For exoplanet searches where the catalog parallax is
+trustworthy, override `semi_major_axis` / `pmra` / `pmdec` with priors that do
+not depend on parallax, or set `marginalized_names=("parallax", ...)` on the
+sampler and accept the callables' `KeyError`.
 
 #### `default_sb2_prior` (module-level)
 
@@ -1415,6 +1513,7 @@ default_sb2_prior(
     sigma_v0: Q["speed"],      # required — systemic velocity scale
     period_ref: Q["time"] = Q(1.0, "yr"),
     component_names: tuple[str, str] = ("primary", "secondary"),
+    signed_semiamp: bool = True,
     **kwargs,          # per-parameter or extension prior overrides (e.g. jitter=QD(...))
 ) -> HarvPrior
 ```
@@ -1427,8 +1526,48 @@ Same orbital defaults as `default_rv` but with linear parameters keyed by
 component name:
 
 - `{component_names[0]}.rv_semiamp`, `{component_names[1]}.rv_semiamp`: both use
-  `PeriodDependentKPrior(sigma_K0, period_ref)`
+  `PeriodDependentKPrior(sigma_K0, period_ref)`, with `support="positive"` and
+  `support="negative"` respectively when `signed_semiamp=True` (the default)
 - `v_sys`: `QD(Normal(0, sigma_v0), unit)` (shared across components)
+
+#### Signed semi-amplitudes (`signed_semiamp`)
+
+**The secondary's antiphase motion is carried by a negative `rv_semiamp`, not by
+`phase_peri`.** `rv_shape` is exactly odd in the argument of pericenter,
+
+```
+S(omega) = cos(omega + f) + e cos(omega),    S(omega + pi) = -S(omega)
+```
+
+so `K · S(omega + pi)` and `(-K) · S(omega)` are the same curve. `for_sb2`
+shares **both** `arg_peri` and `phase_peri` across the components — they pass
+pericenter of their barycentric orbits at the same instant and share `f(t)` —
+so flipping the sign of `K` is the only mechanism available.
+
+Sign-free priors on both semi-amplitudes therefore admit an exact two-fold
+degeneracy: `(K_1, K_2, omega)` and `(-K_1, -K_2, omega + pi)` predict identical
+RVs for *both* components, so a symmetric prior weights them equally and the
+`arg_peri` posterior comes out bimodal with modes 180° apart. They also leave
+prior mass on the unphysical *same-sign* region, where both stars sit on the same
+side of the barycenter.
+
+`signed_semiamp=True` pins `K_1 > 0` and `K_2 < 0`, selecting one branch and
+excluding the same-sign region, as a statement in the prior rather than a
+post-hoc repair. Both priors are still marginalized analytically — this is the
+motivating case for §Support-constrained and mixture linear priors, and the one
+that requires `Z_post` to be exact for *two* constrained parameters.
+
+`Samples.wrap_angles()` also repairs the sign pattern after the fact: the shared
+`arg_peri` shift flips both semi-amplitudes together, mapping
+`(K_1 < 0, K_2 > 0, omega)` onto `(K_1 > 0, K_2 < 0, omega + pi)`. The sign prior
+is therefore not the only route to a canonical answer — it is the route that does
+not spend prior volume and acceptance on the mirror branch first, and it
+additionally excludes the same-sign region, which the `arg_peri` symmetry cannot
+fix because it flips both semi-amplitudes at once. Under the signed prior
+`wrap_angles` is a no-op.
+
+**This changed the default.** `signed_semiamp=False` restores the older sign-free
+priors.
 
 ### Multi-survey RV offsets
 
@@ -1850,12 +1989,15 @@ The string contains:
 - a **Nonlinear parameters** table — base orbital params plus any nonlinear extension
   params (marked `(ext)`), which are always sampled explicitly;
 - a **Linear parameters** table classifying each linear param as:
-  - `marginalized` — analytically integrated out (Gaussian prior, in the effective
-    marginalized set);
-  - `sampled` — a non-Gaussian linear prior (e.g. a `HalfNormal` parallax) that cannot be
-    marginalized and is drawn explicitly;
-  - `sampled (could marg.)` — a Gaussian/linear prior that *could* be marginalized but is
-    excluded via `marginalized_names`.
+  - `marginalized` — analytically integrated out (in the effective marginalized
+    set);
+  - `sampled` — a prior the marginalization cannot handle at all (e.g.
+    `dist.Uniform`), drawn explicitly;
+  - `sampled (read by prior)` — marginalizable in itself, but another prior's
+    callable reads its value (`requires`), so it must stay explicit. This is
+    `parallax` under the Gaia defaults. Distinguished from the next case because
+    the fix is different: drop the dependency, not the `marginalized_names` entry;
+  - `sampled (could marg.)` — marginalizable but excluded via `marginalized_names`.
 
 Each row shows the prior-distribution type and unit. The classification reuses the same
 `effective_linear_prior` / marginalized-name resolution that `run` uses, so the summary
@@ -1959,9 +2101,11 @@ mcmc_samples = mcmc_sampler.run(
 
 Both sampler classes own marginalization policy. Set
 `marginalized_names=(...)` on `RejectionSampler` or `NumpyroSampler` to request
-an explicit subset of linear parameters to marginalize. Any non-Gaussian linear
-priors are still sampled explicitly even if they appear in that tuple. Pass
-`verbose=True` to be warned when that happens.
+an explicit subset of linear parameters to marginalize. Names whose priors the
+marginalization genuinely cannot handle (`dist.Uniform`, `dist.Gamma`, …) are
+still sampled explicitly even if they appear in that tuple; truncated and
+mixture Gaussians are *not* in that category and are honoured. Pass
+`verbose=True` to be warned when a name is dropped.
 
 `NumpyroSampler.run` also accepts `return_logprobs` (default `False`). When
 `True` the returned `Samples` carries `ln_likelihood` (the marginal
@@ -2154,6 +2298,15 @@ the first entry.
   positive when their signs disagree, so the `lon_asc_node` shift is required.
   The orbit predicted by the wrapped sample is identical to the original. No-op
   when `arg_peri` is missing or no entries are negative.
+
+  For SB2 samples the `rv_semiamp` keys are component-namespaced and *all* of
+  them flip together with the single shared `arg_peri` shift, which is the
+  correct SB2 canonicalization: `(K_1 < 0, K_2 > 0)` maps onto
+  `(K_1 > 0, K_2 < 0)`. It is triggered by the *first* `rv_semiamp` key, so under
+  `default_sb2_prior(signed_semiamp=True)` — where that key is constrained
+  positive — it is a no-op. It cannot repair a genuine same-sign sample, since it
+  flips both semi-amplitudes at once; only the sign prior excludes that region.
+  See §Signed semi-amplitudes.
 - `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
   parameter values between supported single-component RV or Gaia parameterizations.
   Extra non-base parameters are preserved unchanged; unsupported families or
@@ -2234,7 +2387,9 @@ model. `harv.stats.numpyro_ext` and `harv.stats.linear_op` are **vendored**
 from `numpyro-ext` (see "Why `MarginalizedLinear` from numpyro-ext?") and are
 exempt from linting and type checking as third-party code; harv's own
 statistical code lives in its own modules alongside them and is checked
-normally.
+normally. `harv.stats.marginalized` is harv-owned and checked normally: it
+widens the vendored `MarginalizedLinear` by *composition*, so the vendored files
+stay byte-for-byte upstream and remain re-syncable.
 
 ### `LogGridDensity`
 
@@ -2259,11 +2414,196 @@ but has nothing periodogram-specific in it:
   `biject_to` and hence `NumpyroSampler` MCMC continuation work. Caveat: the
   gradient of `log_prob` is discontinuous at the knots (acceptable for NUTS
   in practice).
+- The edge knots must survive a round trip through `exp`/`log`, which can land
+  an ulp outside the domain. `support` and `log_prob` apply the **same**
+  tolerance, derived from `jnp.finfo(dtype).eps` rather than hard-coded, so
+  they never disagree about an edge value — a period sitting exactly on the
+  domain edge would otherwise pass `log_prob` and still be rejected by
+  `biject_to(support)` under NUTS.
 
 Wrapped in a `QD` (e.g. `QD(LogGridDensity(...), "day")`) it is a **drop-in
 period prior**: pass it via the `period=` override of any `default_prior(...)`
 or set `nonlinear_priors["period"]` directly. **No sampler changes are
 involved anywhere in this feature.**
+
+
+### Support-constrained and mixture linear priors (`harv.stats.marginalized`)
+
+`MarginalizedLinear` integrates the linear parameters out under a *Gaussian*
+prior. `harv.stats.marginalized` widens that to two further families without
+touching the vendored code:
+
+- a **support-constrained** (truncated) Gaussian -- `parallax > 0`, or the signed
+  SB2 semi-amplitudes `K_1 > 0`, `K_2 < 0`;
+- a **mixture** of Gaussians sharing one support.
+
+`HalfNormal(s)` is not a special case: it *is* `TruncatedNormal(0, s, low=0)`,
+and the generic form costs no more to implement than the one-sided one.
+
+#### The correction
+
+For a prior restricted to a box `S`,
+
+```
+ln p(y) = ln p_untrunc(y) + ln Z_post - ln Z_prior
+Z_prior = integral over S of N(beta | mu, diag(s^2))     # the prior
+Z_post  = integral over S of N(beta | beta_hat, Sigma)   # the conditional posterior
+```
+
+with `beta_hat` the conditional mean and `Sigma = Lambda^-1`,
+`Lambda = diag(1/s^2) + X^T C^-1 X` (already computed by `MarginalizedLinear` as
+`conditional_precision_matrix`).
+
+`Z_prior` **factorizes exactly, for any number of constrained parameters**,
+because the prior covariance is diagonal. `Z_post` does not: `X^T C^-1 X`
+couples the linear parameters, so it is a Gaussian *rectangle probability* over
+the constrained sub-block. Hence the dimensional limit:
+
+| constrained params | `Z_post` |
+| ------------------ | -------- |
+| 0                  | `1`; the plain Gaussian fast path is taken unchanged |
+| 1                  | exact, one `log_ndtr` difference on that parameter's marginal |
+| 2                  | exact up to quadrature, via a bivariate rectangle probability |
+| 3 or more          | `NotImplementedError`, naming the offending parameters |
+
+**Conditional independence is not available as a shortcut.** The coupling is
+real and data-dependent. Measured under `StandardRV` at the true period,
+`corr(rv_semiamp, v_sys)` in the conditional posterior runs from 0.2 to 0.96
+across eccentricities and observation counts -- it does not vanish, because
+`(X^T C^-1 X)_{12}` is the inverse-variance-weighted mean of the RV-shape column
+and finite irregular sampling gives no reason for that to be zero. For the SB2
+pair `corr(K_1, K_2)` (coupled only through the shared `v_sys` column) the size
+depends on how well the data constrain the orbit: ~0.001 for 24 precise epochs
+over 4.4 periods, where the constraint is also inactive and costs nothing, rising
+to ~0.4 on four low-precision epochs inside part of one period -- the
+partial-arc regime where a sign prior earns its keep. Coupling and constraint
+bite together, which is exactly why `Z_post` must be the real two-dimensional
+integral.
+
+#### Numerics
+
+The bivariate rectangle probability uses Plackett's identity written in
+`theta = arcsin(rho)` rather than in the correlation, which cancels the
+`(1 - t^2)^(-1/2)` singularity and leaves a bounded, smooth integrand that a
+fixed 64-node Gauss-Legendre rule resolves for all `|rho| < 1`. The rule is a
+module constant, so the whole path is `jit` / `vmap` / `grad` safe.
+
+Four numerical properties are contractual, and each is pinned by tests:
+
+- **Signed sums collapse to `-inf` past the working precision rather than
+  returning a value they cannot justify.** Corner-wise inclusion-exclusion
+  cancels, and unguarded it returns finite values *far too high* (a true
+  `ln P` of -44 reported as -17, measured in float32), which would over-weight a draw the
+  truncation is meant to forbid. The guard holds back a margin below `-ln(eps)`,
+  because it can only test the computed total -- the quantity the cancellation
+  corrupts. In the float64 harv runs in, the error is 7e-14 for `ln P` above -8
+  and 4e-11 above -20, any finite result is within 7e-5, and the floor sits near
+  `ln P = -32`. The budget is derived from the dtype, so it tightens correctly if
+  a caller drops to single precision. Erring to `-inf` under-weights rather than
+  over-weights, and only discards weight already below the precision floor.
+- **Infinite bounds never enter the arithmetic.** `(-inf - loc) / scale` would
+  differentiate to `NaN` via `0 * inf`, and a `jnp.where` on the bound does not
+  help because `where` evaluates both branches under `grad`. An unbounded side is
+  therefore never *computed*: because the finiteness flags are static, those
+  slots are filled with a literal infinity, which is a constant carrying no
+  gradient path. `log_ndtr(±inf)` is exact, and the infinite corners of the
+  bivariate rectangle are reduced statically before the quadrature sees them.
+- **A vanishing correlation is an ordinary point, not a singularity.** `rho` is
+  *exactly* zero whenever the two constrained columns are supported on disjoint
+  rows with no shared column — two components each carrying their own `v_sys`,
+  say — because the `X^T C^-1 X` cross term is then an exact zero. Plackett's
+  integral term is therefore carried as a signed *weight* rather than folded
+  into the log as `ln|arcsin rho|`, whose derivative is infinite there. Both
+  forms give the same value, but the second gives `NaN` gradients at a point a
+  joint model reaches routinely.
+- **A degenerate normalizer scores `-inf`, never `+inf` or `NaN`.** `ln Z_prior`
+  underflows once a finite bound standardizes far enough from the prior mean,
+  and every component's `ln Z_post` can collapse at once by the guard above.
+  Both are reported as `-inf`, and the conditional's component weights and
+  truncated mean fall back to finite values whose draws are rejected on their
+  log-prob. A `NaN` escaping either would propagate through the rejection
+  sampler's `logsumexp` evidence and top-K comparison across the whole batch.
+
+The quadrature constants are held as NumPy arrays, not JAX arrays, so their
+dtype is decided where they are *used*. Materializing them at import would pin
+them to float32 whenever `import harv` precedes
+`jax.config.update("jax_enable_x64", True)`, costing eight orders of magnitude
+of accuracy while the cancellation guard still sized its budget from the
+float64 operands — see §Core design principles, Double precision.
+
+#### Conditional draws
+
+`conditional(y)` exposes the same `.mean` / `.sample(key)` surface the rest of
+harv already calls, and both are **exact** for up to two constrained parameters:
+
+- `.mean` is the truncated mean, obtained by differentiating `ln Z_post` rather
+  than from closed-form truncated moments: since
+  `grad_m ln Z = Sigma^-1 (E_S[beta] - m)`, the mean is
+  `beta_hat + Sigma @ grad_m(ln Z_post)(beta_hat)`. Exact for every
+  supported case, including the induced shift of the *unconstrained*
+  coordinates, and zero when nothing is truncated.
+- `.sample(key)` draws the constrained coordinates first, then the remainder from
+  one exact Gaussian conditional. One constrained coordinate is a 1-D truncated
+  normal (numpyro's, which reflects around the base location and so stays exact
+  tens of sigma into a tail, where a probability-scale inverse CDF piles every
+  draw onto the bound); two use the closed-form rectangle CDF inverted by
+  fixed-step bisection. The bisection bracket is anchored on the conditional
+  mean rather than on the bound: the coordinates are standardized on the mean,
+  so a bracket running `[bound, bound + 24]` excludes the entire posterior bulk
+  whenever the bound lies further than that below the mean. That is the ordinary
+  case for a constraint the data do not fight, and the resulting draws are wrong
+  by orders of magnitude. **No Gibbs and no rejection loop** -- both would be
+  biased or unbounded exactly where the constraint bites. Measured: in a quadrant holding
+  `Z_post ~ 4e-5`, rejection sampling kept 17 of 400,000 draws while the exact
+  sampler returned a full set matching the analytic truncated mean.
+
+The cost sits in the right place: `log_prob` runs once per prior draw (~1e7) and
+costs one rectangle probability, while `conditional(y).sample` runs only for
+*accepted* samples, so the ~40 evaluations bisection needs are immaterial.
+
+#### Mixtures
+
+Mixture components live on the **batch axis** of the inner distribution, which
+`MarginalizedLinear` already supports, so a mixture needs no new linear algebra:
+`inner.log_prob(y)` returns one value per component and the answer is a weighted
+`logsumexp`. When several parameters carry mixtures the joint prior is the
+Cartesian product of their components with product weights, so the component
+count is `prod(K_i)` -- static, and multiplicative by construction.
+
+Because every component shares the same support, the indicator factors out of the
+mixture sum and the prior normalizer is the **mixture** normalizer
+`Z_mix = sum_c w_c Z_prior_c`, subtracted **once**:
+
+```
+ln p(y) = logsumexp_c(ln w_c + ln p_untrunc_c(y) + ln Z_post_c)
+          - logsumexp_c(ln w_c + ln Z_prior_c)
+```
+
+Assembling this from per-component *truncated* log-probs -- each of which has
+already divided by its own `Z_prior_c` -- gives a different and wrong answer, and
+`Z_prior_c` varies across components even under a shared box, so it does not
+cancel. This is the one place a plausible-looking implementation is silently
+wrong, and it has a dedicated brute-force test.
+
+#### Scope
+
+- The untruncated single-Gaussian case returns a bare `MarginalizedLinear`, so
+  the common path is **bit-identical** to the pre-existing code and costs
+  nothing.
+- Truncated priors work in `JointModel`; bounds ride the same per-slot layout as
+  the means and scales. **Mixture linear priors inside a `JointModel` raise
+  `NotImplementedError`** -- their components would multiply across the joint
+  slot layout.
+- Non-marginalized numpyro models (`marginalized=False`) sample a truncated
+  prior as its own site, which is how signed SB2 semi-amplitudes work on that
+  path, whether the prior is supplied directly or returned by a
+  `LinearPriorCallable`. A **mixture** is the one family that is not sampleable
+  as a single site and raises `NotImplementedError`; marginalize it instead,
+  where mixtures are supported.
+- One linear parameter takes one *scalar* prior. A batched `loc`/`scale` raises
+  `ValueError` rather than being read as an equal-weight mixture, whose weights
+  would not sum to one; a mixture is declared with `dist.MixtureSameFamily`,
+  which carries explicit weights.
 
 ______________________________________________________________________
 
@@ -2900,6 +3240,13 @@ standard result, but implementing it carefully (handling the Woodbury identity,
 numerics, gradients) is non-trivial. numpyro-ext provides a tested implementation that
 also gives us `.conditional()` to draw from the posterior conditional — which is
 exactly what the rejection sampler needs for the linear parameter sampling step.
+
+Truncated and mixture priors are added *around* it, in the harv-owned
+`harv.stats.marginalized`, rather than by editing the vendored file (see
+§Support-constrained and mixture linear priors). The wrapper duck-types the only
+two methods harv calls — `log_prob(y)` and `conditional(y)` — so every call site
+is unchanged, the vendored code stays re-syncable with upstream, and the new code
+is linted and type-checked normally.
 
 ### Why `eqx.field(static=True)` for metadata fields?
 

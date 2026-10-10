@@ -21,6 +21,20 @@ from numpyro.distributions.util import validate_sample
 from numpyro.util import is_prng_key
 
 
+def _edge_tol(ln_grid: jax.Array) -> jax.Array:
+    """Round-trip slack on the domain edges, in ``ln x``.
+
+    Derived from the working dtype rather than hard-coded, so it degrades
+    honestly in single precision (``docs/spec.md`` -> Double precision). Used
+    by both ``support`` and ``log_prob``; they must agree about an edge value.
+    """
+    return (
+        8.0
+        * jnp.finfo(ln_grid.dtype).eps
+        * jnp.maximum(jnp.abs(ln_grid[0]), jnp.abs(ln_grid[-1]))
+    )
+
+
 @final
 class LogGridDensity(Distribution):
     r"""Distribution over ``x > 0`` with a pdf piecewise-linear in ``ln(x)``.
@@ -125,12 +139,24 @@ class LogGridDensity(Distribution):
         self._rho = rho_tilde / norm
         cdf_knots = jnp.concatenate([jnp.zeros(1), jnp.cumsum(segment_mass) / norm])
         self._cdf_knots = cdf_knots.at[-1].set(1.0)
-        self._support = constraints.interval(jnp.exp(ln_grid[0]), jnp.exp(ln_grid[-1]))
+        # Widened by the same ulp tolerance ``_ln_rho_ln`` applies, so that
+        # ``support(x)`` and ``log_prob(x)`` agree about the edge knots. Without
+        # it a period sitting exactly on the domain edge passes ``log_prob``
+        # and is still rejected by ``support`` and by ``biject_to(support)``
+        # under NUTS.
+        tol = _edge_tol(ln_grid)
+        self._support = constraints.interval(
+            jnp.exp(ln_grid[0] - tol), jnp.exp(ln_grid[-1] + tol)
+        )
         super().__init__(batch_shape=(), event_shape=(), validate_args=validate_args)
 
     @constraints.dependent_property(is_discrete=False, event_dim=0)
     def support(self):
-        """Interval constraint ``[exp(ln_grid[0]), exp(ln_grid[-1])]``."""
+        """Interval ``[exp(ln_grid[0]), exp(ln_grid[-1])]``, plus an ulp of slack.
+
+        The slack is the same round-trip tolerance ``log_prob`` applies; see
+        :func:`_edge_tol`.
+        """
         return self._support
 
     @property
@@ -156,10 +182,24 @@ class LogGridDensity(Distribution):
         value = jnp.asarray(value)
         positive = value > 0
         u = jnp.log(jnp.where(positive, value, 1.0))
-        j, u0, du = self._segment(u)
-        t = (u - u0) / du
+
+        # The endpoints must survive a round trip through ``exp``/``log``.
+        # ``log(exp(ln_grid[0]))`` can land an ulp *below* the knot -- measured at
+        # 1.1e-16 in float64 -- and a strict comparison then reports the left edge
+        # of the support as outside it, returning ``-inf`` where the density is
+        # finite. That matters downstream: a period sample sitting exactly on the
+        # domain edge would get an ``-inf`` interim prior and blow up hierarchical
+        # reweighting. ``support`` is widened by the same tolerance (see
+        # ``__init__``) so the two never disagree about an edge value.
+        lo, hi = self.ln_grid[0], self.ln_grid[-1]
+        tol = _edge_tol(self.ln_grid)
+
+        # Interpolate at the clamped coordinate so an edge value evaluates *at*
+        # the knot rather than extrapolating a hair past it.
+        j, u0, du = self._segment(jnp.clip(u, lo, hi))
+        t = jnp.clip((jnp.clip(u, lo, hi) - u0) / du, 0.0, 1.0)
         rho = self._rho[j] + (self._rho[j + 1] - self._rho[j]) * t
-        inside = positive & (u >= self.ln_grid[0]) & (u <= self.ln_grid[-1]) & (rho > 0)
+        inside = positive & (u >= lo - tol) & (u <= hi + tol) & (rho > 0)
         ln_rho = jnp.where(inside, jnp.log(jnp.where(rho > 0, rho, 1.0)), -jnp.inf)
         return ln_rho, u
 

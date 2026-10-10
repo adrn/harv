@@ -12,7 +12,12 @@ import warnings
 from collections.abc import Mapping
 from typing import Any
 
-from harv.models._helpers import _needs_explicit_sampling
+from harv.models._helpers import (
+    LinearRole,
+    _needs_explicit_sampling,
+    classify_linear_prior,
+    pinned_linear_names,
+)
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
@@ -35,20 +40,23 @@ def explicit_linear_names(
 ) -> tuple[str, ...]:
     """Linear params the sampler draws explicitly (not analytically marginalized).
 
-    When ``effective_marginalized_names`` is ``None`` only non-Gaussian priors are
-    explicit (decided by :func:`~harv.models._helpers._needs_explicit_sampling`).
-    When it is set, every linear param not in that set is explicit (even Gaussian
-    ones the user chose to sample rather than marginalize).
+    When ``effective_marginalized_names`` is ``None`` the auto-classification
+    decides (see :func:`~harv.models._helpers._needs_explicit_sampling`): a prior
+    is explicit if it is a ``Delta``, if the marginalization cannot handle it, or
+    if another prior's callable reads its value. When it is set, every linear
+    param not in that set is explicit (even ones that could have been
+    marginalized).
 
     Both :meth:`RejectionSampler._expected_prior_keys` and :meth:`HarvPrior.sample`
     call this so the explicit-linear key set stays consistent between the cache
     producer and consumer.
     """
     if effective_marginalized_names is None:
+        pinned = pinned_linear_names(dict(effective_linear_prior))
         return tuple(
             name
             for name, d in effective_linear_prior.items()
-            if _needs_explicit_sampling(d)
+            if _needs_explicit_sampling(d, name=name, pinned_names=pinned)
         )
     marg = set(effective_marginalized_names)
     return tuple(name for name in effective_linear_prior if name not in marg)
@@ -94,7 +102,14 @@ def resolve_effective_marginalized_names(
 ) -> tuple[str, ...] | None:
     """Resolve and validate the effective marginalized linear parameter subset.
 
-    Dropping non-Gaussian priors from the marginalized set is silent unless
+    A name the user asked to marginalize is honoured whenever the math allows it
+    (the role alone, ignoring pinning), which is a weaker test than
+    the auto-mode default: a truncated ``parallax`` pinned by a callable stays
+    explicit *by default*, but an explicit ``marginalized_names=("parallax",)``
+    is respected -- and then the dependent callable raises its own ``KeyError``,
+    which is the documented behaviour.
+
+    Dropping genuinely non-marginalizable priors from the set is silent unless
     ``verbose=True``: it is expected behaviour, not a defect, and
     :meth:`~harv.samplers.RejectionSampler.summary` already reports the resulting
     per-parameter classification.
@@ -118,10 +133,19 @@ def resolve_effective_marginalized_names(
         else set(marginalized_names)
     )
 
+    pinned = pinned_linear_names(dict(effective_linear_prior))
     explicit = {
         name
         for name in names_to_check
-        if _needs_explicit_sampling(effective_linear_prior[name])
+        if (
+            # An explicit request only needs the math to support it...
+            classify_linear_prior(effective_linear_prior[name]) is LinearRole.EXPLICIT
+            if marginalized_names is not None
+            # ...whereas auto mode also respects Delta and `requires` pinning.
+            else _needs_explicit_sampling(
+                effective_linear_prior[name], name=name, pinned_names=pinned
+            )
+        )
     }
     if not explicit:
         return marginalized_names
@@ -136,10 +160,34 @@ def resolve_effective_marginalized_names(
         )
 
     if verbose:
+        # The explicit set has two populations and they want different fixes.
+        # Saying "cannot be analytically marginalized" about a pinned name is
+        # simply false -- `parallax` under the Gaia defaults is a HalfNormal,
+        # which this package marginalizes fine; it stays explicit only because
+        # another prior's callable reads its sampled value. Both surfaces render
+        # the role rather than re-deriving the precedence, so this warning and
+        # `RejectionSampler.summary()` cannot disagree.
+        roles = {
+            n: classify_linear_prior(
+                effective_linear_prior[n], name=n, pinned_names=pinned
+            )
+            for n in explicit
+        }
+        read_by_prior = sorted(n for n, r in roles.items() if r is LinearRole.PINNED)
+        unmarginalizable = sorted(
+            n for n, r in roles.items() if r is LinearRole.EXPLICIT
+        )
+        clauses = []
+        if unmarginalizable:
+            clauses.append(f"{unmarginalizable} cannot be analytically marginalized")
+        if read_by_prior:
+            clauses.append(
+                f"{read_by_prior} is read by another prior's callable "
+                "(see its `requires`), so it has no marginalized value to read"
+            )
         warnings.warn(
-            f"Non-Gaussian linear prior(s) {sorted(explicit)} cannot be analytically "
-            f"marginalized and will be sampled explicitly. Marginalized parameters: "
-            f"{resolved_names}",
+            f"Linear prior(s) will be sampled explicitly: {' and '.join(clauses)}. "
+            f"Marginalized parameters: {resolved_names}",
             stacklevel=3,
         )
     return resolved_names

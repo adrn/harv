@@ -9,10 +9,13 @@ The method must also be side-effect-free: it runs no sampling and emits no warni
 import warnings
 from typing import Any
 
+import jax
+import numpy as np
 import numpyro.distributions as dist
 from unxt import Q
 
 import harv.models as hm
+from harv.data import GaiaAstrometryData
 from harv.distributions import QD
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.extensions import Jitter
@@ -113,8 +116,9 @@ class TestGaiaSummary:
         text = RejectionSampler(_gaia_prior(), GaiaAstrometryModel()).summary()
 
         parallax_line = _row(text, "parallax")
-        # HalfNormal parallax cannot be marginalized -> non-Gaussian "sampled".
-        assert "sampled" in parallax_line
+        # HalfNormal parallax *can* be marginalized; it stays explicit only
+        # because the semi-major-axis and proper-motion callables read it.
+        assert "sampled (read by prior)" in parallax_line
         assert "could marg." not in parallax_line
         # Other astrometric linear params remain marginalized.
         assert "ra0" in text
@@ -148,3 +152,52 @@ class TestJointSummary:
         assert "secondary.rv_semiamp" in text
         # Shared systemic velocity is bare (not namespaced).
         assert "v_sys" in text
+
+
+class TestPinnedVersusUnmarginalizable:
+    """The two reasons a linear param stays explicit want different fixes.
+
+    ``summary()`` and the ``verbose=True`` warning are two views of the same
+    classification, so they must agree; telling a user that a HalfNormal
+    "cannot be analytically marginalized" is simply false (see ``docs/spec.md``
+    -> Constructing a prior), and telling them to drop a dependency that is not
+    the binding constraint sends them the wrong way.
+    """
+
+    def test_pinned_but_unmarginalizable_reads_sampled(self):
+        prior = hm.StandardGaiaAstrometry().default_prior(
+            period_min=Q(100.0, "day"),
+            period_max=Q(3000.0, "day"),
+            sigma_a0=Q(5.0, "AU"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+            parallax=QD(dist.Gamma(2.0, 1.0), "mas"),
+        )
+        text = RejectionSampler(prior, GaiaAstrometryModel()).summary()
+        line = _row(text, "parallax")
+        # Still pinned by the callables, but dropping that dependency would not
+        # make a Gamma marginalizable, so the pinned label would misdirect.
+        assert "read by prior" not in line
+        assert "sampled" in line
+
+    def test_verbose_warning_distinguishes_the_two(self):
+        rng = np.random.default_rng(0)
+        n = 30
+        data = GaiaAstrometryData(
+            Q(np.sort(rng.uniform(0.0, 1000.0, n)), "day"),
+            Q(rng.normal(0.0, 0.1, n), "mas"),
+            Q(np.full(n, 0.1), "mas"),
+            Q(rng.uniform(0.0, 2 * np.pi, n), "rad"),
+            rng.uniform(-1.0, 1.0, n),
+        )
+        sampler = RejectionSampler(_gaia_prior(), GaiaAstrometryModel(), verbose=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sampler.run(data, key=jax.random.key(0), n_prior_samples=64)
+        messages = [
+            str(w.message) for w in caught if "sampled explicitly" in str(w.message)
+        ]
+        assert len(messages) == 1
+        assert "parallax" in messages[0]
+        assert "cannot be analytically marginalized" not in messages[0]
+        assert "read by another prior" in messages[0]
