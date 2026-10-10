@@ -7,7 +7,15 @@ renamed) so a file with its final name is always complete. No other module
 calls ``pyarrow.parquet.write_table`` directly.
 """
 
-__all__ = ("ParquetContents", "read_metadata", "read_parquet", "write_parquet")
+__all__ = (
+    "ParquetContents",
+    "groups_spanning",
+    "read_metadata",
+    "read_parquet",
+    "read_rows",
+    "row_group_starts",
+    "write_parquet",
+)
 
 import json
 import os
@@ -16,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, final
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -136,6 +145,51 @@ def read_metadata(path: str | os.PathLike) -> dict[str, Any]:
         The decoded metadata, keyed without the ``hq.`` prefix.
     """
     return _decode(pq.read_schema(path).metadata)
+
+
+def row_group_starts(parquet_file: pq.ParquetFile) -> np.ndarray:
+    """First row of each row group, plus the total row count at the end."""
+    sizes = [
+        parquet_file.metadata.row_group(i).num_rows
+        for i in range(parquet_file.num_row_groups)
+    ]
+    return np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+
+
+def groups_spanning(starts: np.ndarray, first: int, n_rows: int) -> range:
+    """The row groups holding rows ``first`` to ``first + n_rows``."""
+    lo = int(np.searchsorted(starts, first, side="right")) - 1
+    hi = int(np.searchsorted(starts, first + n_rows, side="left"))
+    return range(lo, max(hi, lo + 1))
+
+
+def read_rows(
+    parquet_file: pq.ParquetFile,
+    first: int,
+    n_rows: int,
+    *,
+    starts: np.ndarray | None = None,
+) -> pa.Table:
+    """Read rows ``first`` to ``first + n_rows``, decoding only their row groups.
+
+    Parameters
+    ----------
+    parquet_file
+        An open file.
+    first, n_rows
+        The row range.
+    starts
+        Cached :func:`row_group_starts` of the file, to skip recomputing it.
+
+    Returns
+    -------
+        The rows, with the file's schema.
+    """
+    if starts is None:
+        starts = row_group_starts(parquet_file)
+    groups = groups_spanning(starts, first, n_rows)
+    table = parquet_file.read_row_groups(list(groups))
+    return table.slice(first - int(starts[groups.start]), n_rows)
 
 
 def _decode(raw: Mapping[bytes, bytes] | None) -> dict[str, Any]:

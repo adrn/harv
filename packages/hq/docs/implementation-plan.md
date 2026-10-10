@@ -24,9 +24,9 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | ----- | ------------------------------------------------------ | ------------------------------------------------- |
 | 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
 | —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
-| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Implemented on branch `hq-phase1`, awaiting merge |
+| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59)                             |
 | 2     | prepare, `read_source`, `read_sources`                 | Implemented on branch `hq-phase2`, awaiting merge |
-| 3     | prior cache, serial rejection, result parts, resume    | Not started                                       |
+| 3     | prior cache, serial rejection, result parts, resume    | Implemented on branch `hq-phase3`, awaiting merge |
 | 4     | execution modes: shards, pool, MPI                     | Not started                                       |
 | 5     | compaction, summarize, status                          | Not started                                       |
 | 6     | MCMC follow-up                                         | Not started                                       |
@@ -130,7 +130,7 @@ Samples.from_columns(columns: SampleColumns) -> Samples
 
 ______________________________________________________________________
 
-## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance — awaiting merge
+## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance — done
 
 Done: branch `hq-phase1`. Deviations from the text below, all recorded in the
 spec: config is loaded with `Config.from_file(path)` (there is no `Run` yet),
@@ -256,7 +256,24 @@ linear time (loose bound).
 
 ______________________________________________________________________
 
-## Phase 3: prior cache, serial rejection, result parts, resume
+## Phase 3: prior cache, serial rejection, result parts, resume — awaiting merge
+
+Implemented on branch `hq-phase3` (stacked on `hq-phase2`). Deviations from the
+text below: `Run.run_rejection` takes `shard`, `overwrite` and `retry_failed`
+for now (`workers`, `mpi` and `compact` arrive with phases 4 and 5; the CLI
+rejects `--workers`/`--mpi` until then), and `Run.load_source` returns
+`summary=None` until phase 5. `slicing.py` exposes one function,
+`slice_ids(prepared, shard)`. `Payload` carries separate `row_units` and
+`samples_units`. A shared `read_rows` helper in `_parquet_io` serves both
+`PreparedData` and the results reader. The writer also flushes when the loop
+is interrupted by an exception, so only a hard kill loses the buffer (spec
+updated). Two planned tests changed: the "prior keys do not match the cache"
+failure is simulated by a sampler that raises, because a real mismatch is now
+refused earlier by provenance; and the injected-period recovery check is
+left to an end-to-end test with a realistic prior cache (the 20,000-sample
+test cache cannot resolve periods). Weighted percentiles drop zero-weight
+samples (spec updated). Found along the way: harv stores `n_prior_samples` in
+`Samples.metadata` as a float, where harv's spec says int.
 
 **`make_prior_cache`.** `ModelFile.setup`, then
 `harv.samplers.make_prior_cache(prior, model, n_samples, path, key=prior_cache_key(seed), batch_size=...)` into `prior_cache.h5.tmp`, write

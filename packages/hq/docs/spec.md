@@ -501,18 +501,28 @@ these names raise `ConfigError`.
 ### `make_prior_cache`
 
 Calls `make_setup()`, then
-`harv.samplers.make_prior_cache(prior, model, n_samples, path, key=..., batch_size=...)`.
-hq then writes the provenance JSON to the HDF5 file's root attribute
-`hq.provenance`.
+`harv.samplers.make_prior_cache(prior, model, n_samples, path, key=..., batch_size=...)`
+into `prior_cache.h5.tmp`, writes the provenance JSON (with a fresh
+`prior_cache_id`, and no `data_id`: the cache does not depend on the data) to
+the HDF5 root attribute `hq.provenance`, and renames the file into place. It
+refuses an existing cache with `FileExistsError` unless `overwrite=True`
+(`--overwrite`); rebuilding the cache changes `prior_cache_id`, so existing
+result parts then refuse to be resumed.
 
 ### `run_rejection`
 
-Each process calls `make_setup()` once and builds one
+Before any sampling, the stage checks the prepared data and the prior cache
+against the current `hq.toml` and model file (see "Provenance"), and raises
+`FileNotFoundError` if either is missing. Each process then calls
+`make_setup()` once and builds one
 `RejectionSampler(prior, model, batch_size=..., min_evidence_ess=...)`. It
 loads the data for its slice (see "Execution modes") with `read_sources`.
 Then, for each source in the slice that is not already done:
 
 1. `samples = sampler.run_with_samples(data, prior_cache, key=..., top_k=..., ignore_non_finite=..., randomize_prior_order=...)`.
+   The source's rejection key (see "Per-source randomness") is split with
+   `jax.random.split` into two keys: the first drives the sampler, the second
+   the equal-weight resample (see "Weighted samples").
    `top_k` forces `return_logprobs` and `return_evidence_stats`, so every
    result carries `ln_likelihood`, `ln_prior`, and the evidence metadata.
 1. Compute the source's summary statistics (see "Summary statistics") while
@@ -528,6 +538,11 @@ source is marked `failed`; the run continues.
 
 Within a slice, sources are processed in ascending `n_obs`, so consecutive
 sources share array shapes and reuse JIT compilations.
+
+When the loop ends, for any reason, including an exception or
+`KeyboardInterrupt`, the process writes whatever it has buffered before
+re-raising; only a hard kill loses the buffer. Each process also logs to
+`logs/<stage>-<i>-of-<N>.log` (appending) as well as to stderr.
 
 ### MCMC follow-up (`run_mcmc`)
 
@@ -648,7 +663,8 @@ concurrent or repeated processes with the same slice never collide.
 Each is written to `.tmp` and renamed. The sources file is the commit: a
 source counts as written only when its row exists in a `.sources.parquet`. A
 samples file without its sources file (from a crash between the two renames)
-is ignored by every reader.
+is ignored by every reader. A part whose sources all failed has no samples
+file.
 
 #### `*.sources.parquet`
 
@@ -742,8 +758,9 @@ so population analyses can read the samples dataset directly with no join.
 ### Loading results
 
 `harv_hq.Run.load_source(source_id) -> SourceResult` returns the source's
-data, its rejection and MCMC `Samples` (or `None`), their statuses, and its
-summary row. At first use, `Run` builds an in-memory index from the
+data, its rejection and MCMC `Samples` (or `None`), their statuses
+(`"pending"` before a stage has a result for it), and its summary row (`None`
+until `summarize` has run). At first use, `Run` builds an in-memory index from the
 `source_id`, `finished`, `samples_row_start`, and `n_samples` columns of every
 sources file (newest row per source wins), then reads only the row groups of
 the samples file that span the source's rows. If that file has since been
@@ -801,7 +818,10 @@ the unit of the samples.
 Top-K rejection samples are weighted (harv spec, "Top-K selection"); MCMC
 samples are equal-weight. hq treats the weights as follows.
 
-- Percentiles use `Samples.weight` renormalized to sum to one.
+- Percentiles use `Samples.weight` renormalized to sum to one, interpolated
+  on the midpoint weighted CDF. Zero-weight samples are dropped first: they
+  carry no posterior mass, and left in they would pull the interpolation
+  toward themselves.
 - Diagnostics that assume equal-weight draws (`period_unimodal`, MCMC
   initialization) use an *equal-weight resample*: `top_k` indices drawn with
   replacement in proportion to the renormalized weights, using the source's

@@ -24,7 +24,13 @@ from astropy.time import Time
 from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData
-from harv_hq._parquet_io import read_metadata, read_parquet, write_parquet
+from harv_hq._parquet_io import (
+    groups_spanning,
+    read_metadata,
+    read_parquet,
+    row_group_starts,
+    write_parquet,
+)
 from harv_hq.config import Config, ConfigError
 from harv_hq.provenance import ProvenanceError, make_provenance
 
@@ -342,6 +348,8 @@ class PreparedData:
 
         self.kind: str = data_meta["kind"]
         self.data_id: str = data_meta["data_id"]
+        self.provenance: dict[str, Any] = data_meta["provenance"]
+        self.path = data_path
         ids = index.table.column("source_id").to_pylist()
         self._is_int = pa.types.is_integer(index.table.schema.field("source_id").type)
         self._ranges = dict(
@@ -363,11 +371,7 @@ class PreparedData:
             for field in self._file.schema_arrow
             if field.metadata and b"unit" in field.metadata
         }
-        sizes = [
-            self._file.metadata.row_group(i).num_rows
-            for i in range(self._file.num_row_groups)
-        ]
-        self._group_starts = np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+        self._group_starts = row_group_starts(self._file)
 
     def n_obs(self, source_id: Any) -> int:
         """The number of prepared observations of one source."""
@@ -400,10 +404,7 @@ class PreparedData:
             {
                 g
                 for start, n in ranges
-                for g in range(
-                    int(np.searchsorted(self._group_starts, start, side="right")) - 1,
-                    int(np.searchsorted(self._group_starts, start + n, side="left")),
-                )
+                for g in groups_spanning(self._group_starts, start, n)
             }
         )
         table = self._file.read_row_groups(groups)
@@ -417,8 +418,7 @@ class PreparedData:
         columns = {name: table.column(name).to_numpy() for name in table.column_names}
         out: dict[Any, RVData | GaiaAstrometryData] = {}
         for key, (start, n) in zip(keys, ranges, strict=True):
-            group = int(np.searchsorted(self._group_starts, start, side="right")) - 1
-            lo = start + offsets[group]
+            lo = start + offsets[groups_spanning(self._group_starts, start, n).start]
             out[key] = self._build({k: v[lo : lo + n] for k, v in columns.items()})
         return out
 

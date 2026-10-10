@@ -8,6 +8,7 @@ __all__ = (
     "ConfigError",
     "ProvenanceError",
     "Run",
+    "SourceResult",
     "init_run",
     "read_source",
     "read_sources",
@@ -20,4 +21,4 @@ from harv_hq.ids import stable_hash
 from harv_hq.init import init_run
 from harv_hq.prepare import read_source, read_sources
 from harv_hq.provenance import ProvenanceError
-from harv_hq.run import Run
+from harv_hq.run import Run, SourceResult

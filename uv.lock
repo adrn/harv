@@ -1314,6 +1314,7 @@ name = "harv-hq"
 source = { editable = "packages/hq" }
 dependencies = [
     { name = "astropy" },
+    { name = "h5py" },
     { name = "harv" },
     { name = "jax" },
     { name = "numpy" },
@@ -1323,6 +1324,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", specifier = ">=6.1" },
+    { name = "h5py", specifier = ">=3.11" },
     { name = "harv", editable = "." },
     { name = "jax", specifier = ">=0.8.1" },
     { name = "numpy", specifier = ">=2.0" },
