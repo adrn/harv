@@ -25,8 +25,8 @@ hq handles everything around a single harv fit:
    every source, select sources for MCMC follow-up and run it, all resumable
    and parallelizable over shards, a local process pool, or MPI.
 1. **Results storage.** Write per-source posterior samples, per-source run
-   status, and run provenance in a standard format, and reduce them to one
-   summary table.
+   status and summary statistics, and run provenance as Parquet tables, and
+   reduce them to one summary table.
 1. **Exploration.** Serve a local web app with a catalog view (scatter plots
    of any catalog or summary column, lasso selection, a table of the
    selection) and a per-source page looked up by catalog source ID.
@@ -39,18 +39,22 @@ hq handles everything around a single harv fit:
 | `gaia_astrometry` | Gaia epoch astrometry (along-scan positions)                                  | `GaiaAstrometryModel` |
 
 A run is one kind, read from one input table, and each source's data is a
-single `RVData` or `GaiaAstrometryData`. Multi-instrument RV and joint RV +
-astrometry runs are planned (see "Planned features").
+single `RVData` or `GaiaAstrometryData`. Multi-instrument RV, SB2, and joint
+RV + astrometry runs are planned (see "Planned features").
 
 ### Non-goals
 
-- hq never re-implements orbit math, likelihoods, priors, or sampling. It
-  calls harv's public API only. If hq needs something harv cannot do, the
-  capability is added to harv (and its spec) first.
+- hq never re-implements orbit math, likelihoods, priors, sampling, or the
+  structure of `Samples`. It calls harv's public API only. If hq needs
+  something harv cannot do, the capability is added to harv (and its spec)
+  first.
 - hq does not do barycentric corrections. Input times must already be
   barycentric; hq only converts their time *scale* and format.
 - hq does not choose priors. The prior and model are defined by the user in
   Python (see "The model file").
+- hq does not manage numerical precision. Importing harv enables JAX's
+  float64 mode (harv spec, "Core design principles"), and that applies in
+  every hq process, including pool workers and MPI ranks.
 
 ### Lessons carried over
 
@@ -61,32 +65,68 @@ the `phobos` project. The design fixes the specific problems found in both:
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | Failed sources only appear in logs and are silently retried      | Every source gets a recorded status (`ok` or `failed`) and error           |
 | Stage completion means "a file exists"; stale results undetected | Every output records provenance hashes; mismatches refuse to resume        |
-| One shared results file, merged by callbacks and `atexit` hooks  | One results file per process, written and flushed per source               |
-| Per-source scans of the full input table                         | One group-by at prepare time; workers read prepared per-source data        |
+| One shared results file, merged by callbacks and `atexit` hooks  | Each process writes immutable result parts with an atomic rename           |
+| Per-source scans of the full input table                         | One sort at prepare time; each process loads only its own sources          |
 | Config keys silently ignored                                     | Unknown config keys are an error                                           |
 | Survey-specific columns hard-coded (`APOGEE_ID`)                 | All columns, units and IDs come from the config                            |
 | Prior constants and data paths in Python module constants        | Run settings in `hq.toml`, model and prior in `prior.py`, both snapshotted |
 
 ______________________________________________________________________
 
+## Storage formats
+
+hq stores everything it writes as Apache Parquet, read and written with
+`pyarrow`. The one exception is the prior cache, which is harv's own HDF5
+format (harv spec, "Building a prior cache") because harv streams it in
+contiguous row slices.
+
+Parquet suits hq's access patterns:
+
+- **Population-scale reads are columnar.** Resume reads two columns of every
+  per-source table; population inference reads a few parameter columns for
+  every source. Neither touches anything else.
+- **Results are written as immutable parts.** A process never appends to an
+  existing file, so a crash can lose the results it has not yet written, but
+  never damages results already on disk.
+- **No per-source file structure.** Per-source lookups go through an index
+  (source ID to file, row offset, row count), so there is no per-source group
+  or file whose count grows with the sample.
+- **Standard tools read the outputs directly.** `pyarrow.dataset`, polars,
+  duckdb, and pandas can query a run's tables without hq.
+
+Conventions shared by every Parquet file hq writes:
+
+- Physical units are stored in each column's field metadata under the key
+  `unit` (an astropy-parsable string, `""` for dimensionless).
+- Run provenance (see "Provenance") is stored as JSON in the file's
+  key-value metadata under the key `hq.provenance`.
+- Files are written to `<name>.tmp` and renamed into place, so a file with its
+  final name is always complete. Readers ignore `*.tmp`.
+
+______________________________________________________________________
+
 ## Run directory
 
-Everything about a run lives in one directory. Paths in the config are
-relative to it.
+Everything about a run lives in one directory. Relative paths in the config
+are resolved against it; absolute paths are used as given (survey data
+usually lives on a scratch filesystem outside any repository).
 
 ```
 run/
 ├── hq.toml                         # run configuration
 ├── prior.py                        # the model file: prior + model
-├── data.h5                         # prepared per-source data       (hq prepare)
+├── data.parquet                    # one row per observation         (hq prepare)
+├── data_index.parquet              # one row per source: row range   (hq prepare)
 ├── catalog.parquet                 # one row per prepared source     (hq prepare)
-├── prior_cache.h5                  # shared prior library            (hq prior-cache)
+├── prior_cache.h5                  # shared prior library, harv HDF5 (hq prior-cache)
 ├── results/
-│   ├── rejection-0003-of-0016.h5   # one file per process            (hq run)
-│   └── mcmc-0003-of-0016.h5        #                                 (hq mcmc)
+│   ├── rejection/                  #                                 (hq run)
+│   │   ├── 0003-of-0016-7f3a9c1e.sources.parquet
+│   │   └── 0003-of-0016-7f3a9c1e.samples.parquet
+│   └── mcmc/                       #                                 (hq mcmc)
 ├── summary.parquet                 # one row per source              (hq summarize)
 └── logs/
-    └── rejection-0003-of-0016.log  # one log per process
+    └── rejection-0003-of-0016.log  # one log per process slice
 ```
 
 `hq init RUN_DIR` creates the directory with a template `hq.toml` and a
@@ -212,6 +252,21 @@ Optional. Without it, `hq mcmc` raises `ConfigError`.
 
 `num_*` names follow harv's numpyro-passthrough exception to the `n_*` rule.
 
+### `[results]`
+
+How often a process writes a result part, and how large compacted parts are
+(see "Result parts" and "Compaction"). A part is written when either flush
+limit is reached, and when the process finishes.
+
+| Key                 | Type    | Default   | Description                            |
+| ------------------- | ------- | --------- | -------------------------------------- |
+| `flush_n_sources`   | `int`   | `1000`    | Write a part after this many sources   |
+| `flush_seconds`     | `float` | `600.0`   | Write a part after this much wall time |
+| `compact_n_sources` | `int`   | `100_000` | Sources per part written by compaction |
+
+The flush limits bound the work a crash can lose; smaller values mean more,
+smaller files until compaction merges them.
+
 ### `[serve]`
 
 | Key    | Type  | Default       | Description  |
@@ -324,11 +379,11 @@ integers, APOGEE `2MASS`-style strings, DESI `TARGETID`s.
 - The ID's type (`int64` or `str`) is taken from the `[data]` table. The
   `[catalog]` table's ID column is cast to that type before matching, and a
   failed cast raises `ConfigError`.
-- Tables (`catalog.parquet`, `summary.parquet`) keep the native type in a
-  `source_id` column.
-- HDF5 groups are named `str(source_id)`. An ID containing `/` or equal to
-  `"."` is rejected at prepare time with a `ValueError` naming it.
-- In the viewer, IDs appear URL-encoded in paths (`+` in APOGEE IDs).
+- Every hq table stores the ID in a `source_id` column of that native type.
+- IDs are never used as file or group names, so no characters are reserved.
+  In the viewer, IDs are URL-encoded in paths (`+` in APOGEE IDs), and the
+  source routes match the rest of the path (FastAPI's `{source_id:path}`),
+  because a `/` in an ID is decoded before routing.
 
 ### Per-source randomness
 
@@ -351,17 +406,19 @@ ______________________________________________________________________
 Each stage is a public method on `harv_hq.Run` (see "Public API"), and each
 CLI subcommand is a thin wrapper around one method. Stages run in this order:
 
-| CLI               | Method                 | Reads                                                  | Writes                       |
-| ----------------- | ---------------------- | ------------------------------------------------------ | ---------------------------- |
-| `hq init RUN_DIR` | `harv_hq.init_run`     | nothing                                                | `hq.toml`, `prior.py`        |
-| `hq prepare`      | `Run.prepare`          | `[data]`, `[catalog]` inputs                           | `data.h5`, `catalog.parquet` |
-| `hq prior-cache`  | `Run.make_prior_cache` | `prior.py`                                             | `prior_cache.h5`             |
-| `hq run`          | `Run.run_rejection`    | `data.h5`, `prior_cache.h5`                            | `results/rejection-*.h5`     |
-| `hq summarize`    | `Run.summarize`        | `catalog.parquet`, `results/*.h5`                      | `summary.parquet`            |
-| `hq mcmc`         | `Run.run_mcmc`         | `data.h5`, `summary.parquet`, `results/rejection-*.h5` | `results/mcmc-*.h5`          |
-| `hq summarize`    | `Run.summarize`        | (again, to add MCMC columns)                           | `summary.parquet`            |
-| `hq status`       | `Run.status`           | `results/*.h5`                                         | nothing (prints counts)      |
-| `hq serve`        | `harv_hq.create_app`   | everything above                                       | nothing                      |
+| CLI                       | Method                 | Reads                                                    | Writes                                                  |
+| ------------------------- | ---------------------- | -------------------------------------------------------- | ------------------------------------------------------- |
+| `hq init RUN_DIR`         | `harv_hq.init_run`     | nothing                                                  | `hq.toml`, `prior.py`                                   |
+| `hq prepare`              | `Run.prepare`          | `[data]`, `[catalog]` inputs                             | `data.parquet`, `data_index.parquet`, `catalog.parquet` |
+| `hq prior-cache`          | `Run.make_prior_cache` | `prior.py`                                               | `prior_cache.h5`                                        |
+| `hq run`                  | `Run.run_rejection`    | `data*.parquet`, `prior_cache.h5`                        | `results/rejection/*.parquet`                           |
+| `hq compact`              | `Run.compact`          | `results/rejection/`                                     | `results/rejection/` (merged parts)                     |
+| `hq summarize`            | `Run.summarize`        | `catalog.parquet`, `results/*/*.sources.parquet`         | `summary.parquet`                                       |
+| `hq mcmc`                 | `Run.run_mcmc`         | `data*.parquet`, `summary.parquet`, `results/rejection/` | `results/mcmc/*.parquet`                                |
+| `hq compact --stage mcmc` | `Run.compact`          | `results/mcmc/`                                          | `results/mcmc/` (merged parts)                          |
+| `hq summarize`            | `Run.summarize`        | (again, to add MCMC columns)                             | `summary.parquet`                                       |
+| `hq status`               | `Run.status`           | `results/*/*.sources.parquet`                            | nothing (prints counts)                                 |
+| `hq serve`                | `harv_hq.create_app`   | everything above                                         | nothing                                                 |
 
 Every CLI subcommand takes `--run-dir` (default: the current directory).
 
@@ -371,32 +428,42 @@ Every CLI subcommand takes `--run-dir` (default: the current directory).
 1. Apply the built-in cuts and then `select_rows`, if defined.
 1. Convert times to TCB with astropy `Time`, and store them as MJD (TCB) in
    days.
-1. Sort all rows by `(source_id, time)` once, and split at ID boundaries. No
-   step scans the table per source.
+1. Sort all rows by `(source_id, time)` once, and find source boundaries from
+   the sorted IDs. No step scans the table per source.
 1. Drop sources with fewer than `min_n_obs` observations, and record the
    number dropped in the log.
-1. Write `data.h5` and `catalog.parquet`.
+1. Write `data.parquet`, `data_index.parquet`, and `catalog.parquet`.
 
-`prepare` refuses to overwrite an existing `data.h5` unless `overwrite=True`
-(`--overwrite`), because doing so invalidates every downstream output.
+`prepare` refuses to overwrite existing prepared files unless
+`overwrite=True` (`--overwrite`), because doing so invalidates every
+downstream output.
 
-#### `data.h5` layout
+#### `data.parquet`
 
-```
-/                          attrs: hq_version, harv_version, data_id (uuid4), kind,
-                                  config_sha256, created
-/index/source_id           (n_sources,)  int64 or variable-length str
-/index/n_obs               (n_sources,)  int64
-/sources/<id>/
-    time                   float64, attrs: unit="day", format="mjd", scale="tcb"
-    rv, rv_err             float64, attrs: unit           (rv)
-    al_position, al_position_err, scan_angle, parallax_factor
-                           float64, attrs: unit           (gaia_astrometry)
-```
+One row per observation, sorted by `(source_id, time)`, written with row
+groups of 65,536 rows. Key-value metadata holds the provenance, the run
+`kind`, and a `data_id` (a uuid4 generated by this `prepare`, which every
+downstream output records).
 
-`harv_hq.read_source(data_file, source_id) -> RVData | GaiaAstrometryData`
-rebuilds the harv data object. `time_ref` is left to harv's default (the mean
-time).
+| Column                                                            | Type      | Field metadata                              |
+| ----------------------------------------------------------------- | --------- | ------------------------------------------- |
+| `source_id`                                                       | int64/str |                                             |
+| `time`                                                            | float64   | `unit="day"`, `format="mjd"`, `scale="tcb"` |
+| `rv`, `rv_err`                                                    | float64   | `unit` (`rv` runs)                          |
+| `al_position`, `al_position_err`, `scan_angle`, `parallax_factor` | float64   | `unit` (`gaia_astrometry` runs)             |
+
+#### `data_index.parquet`
+
+One row per prepared source: `source_id`, `row_start` (int64, the source's
+first row in `data.parquet`), and `n_obs` (int64). A source's observations are
+rows `row_start` to `row_start + n_obs` of `data.parquet`.
+
+`harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData`
+reads that row range and rebuilds the harv data object. `time_ref` is left to
+harv's default (the mean time). `harv_hq.read_sources(run_dir, source_ids)`
+does the same for many sources with one read of the row groups they span and
+returns a `dict`; the pipeline stages use it to load a process's slice (see
+"Execution modes").
 
 #### `catalog.parquet`
 
@@ -409,23 +476,28 @@ these names raise `ConfigError`.
 
 Calls `make_setup()`, then
 `harv.samplers.make_prior_cache(prior, model, n_samples, path, key=..., batch_size=...)`.
-hq adds provenance attrs to the file's root after harv writes it.
+hq then writes the provenance JSON to the HDF5 file's root attribute
+`hq.provenance`.
 
 ### `run_rejection`
 
 Each process calls `make_setup()` once and builds one
-`RejectionSampler(prior, model, batch_size=..., min_evidence_ess=...)`. Then,
-for each source in its slice (see "Execution modes") that is not already done:
+`RejectionSampler(prior, model, batch_size=..., min_evidence_ess=...)`. It
+loads the data for its slice (see "Execution modes") with `read_sources`.
+Then, for each source in the slice that is not already done:
 
-1. `data = read_source(...)`.
 1. `samples = sampler.run_with_samples(data, prior_cache, key=..., top_k=..., ignore_non_finite=..., randomize_prior_order=...)`.
    `top_k` forces `return_logprobs` and `return_evidence_stats`, so every
    result carries `ln_likelihood`, `ln_prior`, and the evidence metadata.
-1. Write the result and status (see "Results").
+1. Compute the source's summary statistics (see "Summary statistics") while
+   the data and samples are in memory.
+1. Add the source's samples and its sources-table row to the process's
+   buffer, and write a part when a `[results]` limit is reached (see
+   "Results").
 
 harv's under-resolution `UserWarning` is captured per source with
-`warnings.catch_warnings(record=True)` and stored as the source's `warnings`
-attr, not printed. Any exception is caught, its traceback is stored, and the
+`warnings.catch_warnings(record=True)` and stored in the source's `warnings`
+column, not printed. Any exception is caught, its traceback is stored, and the
 source is marked `failed`; the run continues.
 
 Within a slice, sources are processed in ascending `n_obs`, so consecutive
@@ -434,17 +506,18 @@ sources share array shapes and reuse JIT compilations.
 ### MCMC follow-up (`run_mcmc`)
 
 Reads `summary.parquet` (which must be current, see "Provenance") to select
-sources. Each process calls `make_setup()` once and builds one
-`NumpyroSampler(prior, model)`. Then, for each selected source in its slice:
+sources. Each process calls `make_setup()` once, builds one
+`NumpyroSampler(prior, model)`, and loads the data for its slice of the
+selected sources. Then, for each selected source in its slice:
 
-1. `data = read_source(...)`.
-1. Load the source's rejection `Samples` and pass its equal-weight resample
-   (see "Weighted samples") as `init_samples`, so chains start at draws in
-   proportion to their posterior weight.
+1. Load the source's rejection `Samples` (see `Run.load_source`) and pass its
+   equal-weight resample (see "Weighted samples") as `init_samples`, so chains
+   start at draws in proportion to their posterior weight.
 1. `sampler.run(data, init_samples=..., key=..., num_chains=..., num_warmup=..., num_samples=..., chain_method=..., return_logprobs=True)`.
 1. Compute `r_hat_max` and `ess_bulk_min` over all sampled parameters from
-   `samples.to_arviz()` (`arviz.rhat`, `arviz.ess`).
-1. Write the result with `mcmc_status`:
+   `samples.to_arviz()` (`arviz.rhat`, `arviz.ess`), and the summary
+   statistics.
+1. Buffer and write the result as in `run_rejection`, with `mcmc_status`:
 
 | `mcmc_status`     | Meaning                                                     |
 | ----------------- | ----------------------------------------------------------- |
@@ -474,141 +547,225 @@ ______________________________________________________________________
 `hq run` and `hq mcmc` partition the work the same way. Sources are ordered by
 `(n_obs, source_id)`, and slice `i` of `N` is `order[i::N]`. Round-robin
 assignment balances total `n_obs` across slices without a cost model, and
-each slice stays sorted by `n_obs`. The slice depends only on `data.h5`, `i`,
-and `N`.
+each slice stays sorted by `n_obs`. The slice depends only on
+`data_index.parquet`, `i`, and `N`.
 
-| Mode                     | Invocation                          | Slice               | Output file                     |
-| ------------------------ | ----------------------------------- | ------------------- | ------------------------------- |
-| Single process (default) | `hq run`                            | `0/1`               | `rejection-0000-of-0001.h5`     |
-| Explicit shard           | `hq run --shard 3/16`               | `3/16`              | `rejection-0003-of-0016.h5`     |
-| Local pool               | `hq run --workers 8 [--shard 3/16]` | the process's slice | one file, written by the parent |
-| MPI                      | `mpirun -n 64 hq run --mpi`         | `rank/size`         | one file per rank               |
+Each process loads the observations for its whole slice into memory once,
+with `read_sources`. A slice holds `1/N` of the data, so memory per process
+falls as `N` grows.
+
+| Mode                     | Invocation                          | Slice               | Writes parts named        |
+| ------------------------ | ----------------------------------- | ------------------- | ------------------------- |
+| Single process (default) | `hq run`                            | `0/1`               | `0000-of-0001-<uuid>`     |
+| Explicit shard           | `hq run --shard 3/16`               | `3/16`              | `0003-of-0016-<uuid>`     |
+| Local pool               | `hq run --workers 8 [--shard 3/16]` | the process's slice | as above, by the parent   |
+| MPI                      | `mpirun -n 64 hq run --mpi`         | `rank/size`         | `<rank>-of-<size>-<uuid>` |
 
 - **Explicit shards** are for job arrays and task launchers (SLURM
   `--array=0-15` with `--shard $SLURM_ARRAY_TASK_ID/16`, disBatch). Shards are
   fully independent processes.
 - **Local pool** runs a `ProcessPoolExecutor` with the `spawn` start method.
   Each worker is pinned to one CPU thread (BLAS and XLA environment variables
-  set before JAX is imported), so `W` workers use `W` cores. The worker initializer imports the model file and opens
-  `data.h5` and the prior cache once. Workers return results as plain NumPy
-  payloads, and only the parent process writes to HDF5.
+  set before JAX is imported), so `W` workers use `W` cores. The worker
+  initializer imports the model file and builds the sampler once. The parent
+  loads the slice's data and sends each task its source's arrays; workers
+  return results as plain NumPy payloads, and only the parent buffers and
+  writes parts.
 - **MPI** uses `mpi4py` (the `harv-hq[mpi]` extra), imported lazily so a
   missing install raises `ImportError` naming `hq run --mpi`. Rank `r` of `n`
-  processes slice `r/n` and writes its own file, so ranks do no I/O on each
-  other's files and need no communication beyond a final barrier. Rank 0
-  additionally logs aggregate progress. `--mpi` is mutually exclusive with
-  `--shard` and `--workers`.
+  processes slice `r/n` and writes its own parts, so ranks need no
+  communication beyond a final barrier. Rank 0 additionally logs aggregate
+  progress. `--mpi` is mutually exclusive with `--shard` and `--workers`.
 - GPU runs use the single-process or explicit-shard modes, one process per
   device.
+
+**Compaction at the end of a stage.** When one invocation has run the whole
+stage, it compacts the stage's parts before exiting (see "Compaction"): a
+single process or local pool on slice `0/1`, and MPI, where rank 0 compacts
+after the final barrier. Explicit shards cannot know which shard finishes
+last, so after a job array completes, `hq compact` (or `--stage mcmc`) is run
+once, e.g. as a SLURM job with `--dependency=afterok:<array job id>`.
+`--no-compact` skips the automatic step.
 
 ### Resume
 
 Resume does not depend on shard layout. Before processing its slice, a
-process reads the source IDs and statuses from **every** file matching
-`results/<stage>-*.h5`. A source is done if any file records it with status
-`ok`. A source recorded as `failed` is retried only with
-`--retry-failed`. `--overwrite` ignores existing results and writes fresh
-files (existing files for the same stage are moved to
-`results/superseded-<timestamp>/`, never deleted).
+process reads the `source_id`, `status`, and `finished` columns of every
+`results/<stage>/*.sources.parquet`. A source is done if its newest row (by
+`finished`) has status `ok`. A source whose newest row is `failed` is retried
+only with `--retry-failed`. Two rows with the same `finished` are copies of
+one result (a part and its compacted copy, briefly, while compaction runs);
+either may be used, and readers pick the one whose part stem sorts first.
 
 So a run started as `--shard i/16` can be finished with `--mpi` on 64 ranks,
-or with a single process, without recomputing finished sources. When a source
-appears in more than one file, the most recent `finished` timestamp wins.
+or with a single process, without recomputing finished sources. A crash loses
+only the sources still in the crashed process's buffer.
 
-A results file that cannot be opened (e.g. truncated by a crash mid-write) is
-renamed to `<name>.corrupt` with a logged warning, and its sources are treated
-as not done.
+`--overwrite` moves `results/<stage>/` to
+`results/superseded-<timestamp>-<stage>/` (never deleting it) and starts
+fresh.
 
 ______________________________________________________________________
 
 ## Results
 
-### Per-process results file
+### Result parts
 
-```
-results/rejection-0003-of-0016.h5
-/                          attrs: provenance (see below), stage, shard="3/16"
-/<id>/                     attrs: status, error, warnings, seed_hash, n_obs,
-                                  started, finished, wall_time_s
-/<id>/samples/             Samples.to_hdf5 layout (absent unless status == "ok")
-    nonlinear/<param>      attrs: unit
-    linear/<param>         attrs: unit
-    ln_likelihood, ln_prior
-    metadata/              attrs: model_type, linear_extension_names, ...
-```
+A process writes its buffered results as one *part*: a pair of files in
+`results/<stage>/` sharing a stem `<i>-of-<N>-<uuid8>`, where `uuid8` is the
+first 8 hex digits of a fresh uuid4. The uuid makes part names unique, so
+concurrent or repeated processes with the same slice never collide.
 
-| Attr                        | Type    | Description                                       |
-| --------------------------- | ------- | ------------------------------------------------- |
-| `status`                    | `str`   | `"ok"` or `"failed"`                              |
-| `error`                     | `str`   | Full traceback for `failed`, else `""`            |
-| `warnings`                  | `str`   | Newline-joined captured warning messages, or `""` |
-| `seed_hash`                 | `int`   | `stable_hash(source_id)`                          |
-| `n_obs`                     | `int`   | Observations used                                 |
-| `started`, `finished`       | `str`   | ISO 8601 UTC timestamps                           |
-| `wall_time_s`               | `float` | Wall time for this source                         |
-| `mcmc_status`               | `str`   | MCMC files only; see "MCMC follow-up"             |
-| `r_hat_max`, `ess_bulk_min` | `float` | MCMC files only                                   |
+1. `<stem>.samples.parquet` is written first, then
+1. `<stem>.sources.parquet`.
 
-The `samples/` group is written by harv's `Samples.to_hdf5`, so
-`Samples.from_hdf5` reads it back. **This requires a harv change:**
-`Samples.to_hdf5` and `Samples.from_hdf5` must accept an open `h5py.Group` in
-addition to a filename. The change and its spec entry land in harv before hq's
-results writer.
+Each is written to `.tmp` and renamed. The sources file is the commit: a
+source counts as written only when its row exists in a `.sources.parquet`. A
+samples file without its sources file (from a crash between the two renames)
+is ignored by every reader.
 
-The file is opened in append mode, each source's group is written completely,
-and the file is flushed before the next source starts. A crash therefore loses
-at most the source in progress (or, in the worst case, the file; see
-"Resume").
+#### `*.sources.parquet`
 
-`harv_hq.Run.load_source(source_id) -> SourceResult` returns the prepared
-data, the rejection and MCMC `Samples` (or `None`), their statuses,
-and the summary row, regardless of which files hold them.
+One row per source in the part.
+
+| Column                                     | Type            | Description                                                             |
+| ------------------------------------------ | --------------- | ----------------------------------------------------------------------- |
+| `source_id`                                | int64/str       |                                                                         |
+| `status`                                   | str             | `"ok"` or `"failed"`                                                    |
+| `error`                                    | str             | Full traceback for `failed`, else `""`                                  |
+| `warnings`                                 | str             | Newline-joined captured warning messages, or `""`                       |
+| `seed_hash`                                | int64           | `stable_hash(source_id)`                                                |
+| `n_obs`                                    | int64           | Observations used                                                       |
+| `started`, `finished`                      | timestamp (UTC) |                                                                         |
+| `wall_time_s`                              | float64         | Wall time for this source                                               |
+| `samples_row_start`, `n_samples`           | int64           | The source's row range in this part's samples file (0, 0 when `failed`) |
+| one column per `Samples.metadata` key      |                 | e.g. `time_ref`, `time_ref_unit`, `ln_Z_int`, `n_prior_samples`         |
+| summary statistics                         |                 | See "Summary statistics"                                                |
+| `mcmc_status`, `r_hat_max`, `ess_bulk_min` |                 | `mcmc` stage only                                                       |
+
+The `Samples.metadata` keys are listed in the key-value metadata entry
+`hq.samples_metadata_keys` (JSON), so the `Samples` can be rebuilt.
+
+#### `*.samples.parquet`
+
+One row per posterior sample, grouped by source in the order of the sources
+file, so each source's samples are one contiguous row range.
+
+| Column                      | Type      | Description                                                                   |
+| --------------------------- | --------- | ----------------------------------------------------------------------------- |
+| `source_id`                 | int64/str |                                                                               |
+| `sample_index`              | int32     | Index within the source's samples                                             |
+| `chain`                     | int16     | `mcmc` stage only                                                             |
+| one column per parameter    | float64   | Every nonlinear and linear parameter, unit in field metadata                  |
+| `ln_likelihood`, `ln_prior` | float64   |                                                                               |
+| `weight`                    | float64   | `Samples.weight` (`rejection` stage only), so readers need not reconstruct it |
+
+Key-value metadata records the run-wide `Samples` structure:
+`hq.model_type`, `hq.linear_extension_names`, `hq.nonlinear_names`, and
+`hq.linear_names` (JSON). Every source in a run shares one model, so these are
+identical across parts, and readers check that they are.
+
+The mapping between a `Samples` and these columns belongs to harv: hq writes
+`Samples.to_columns()` and rebuilds with `Samples.from_columns(...)` (harv
+spec, "`to_columns` / `from_columns`"). **This requires a harv addition**,
+which lands in harv, with its spec entry, before hq's results writer.
+
+### Compaction
+
+A large run leaves many small parts (one per process per flush), and some
+sources appear more than once (a `failed` row superseded by a later `ok` one,
+or duplicates from overlapping processes). `Run.compact(stage)` rewrites a
+stage's parts into a few large ones holding only the newest row per source.
+
+1. **Snapshot.** List the committed parts in `results/<stage>/` (sources files
+   with their samples files) at the start. Only these are inputs; parts
+   committed while compaction runs are left alone. If the snapshot is already
+   compacted (every part is a compacted part and no source appears twice),
+   return without writing anything.
+1. **Check.** Every input's provenance must match the current one
+   (`ProvenanceError` otherwise), and every input must carry the same
+   run-wide `Samples` structure.
+1. **Select.** Read the sources rows of all inputs, keep the newest row per
+   source (the "Resume" rule), and sort them by `source_id`.
+1. **Write.** For each block of `compact_n_sources` sources, gather their
+   samples from the input samples files (row-range reads), and write a new
+   part with stem `c-<uuid8>-<k:04d>` through the normal part protocol
+   (samples file, then sources file, each renamed into place), with samples
+   in the same `source_id` order and recomputed `samples_row_start`. Row
+   groups hold 131,072 rows.
+1. **Verify.** Re-read the new sources files and confirm they contain exactly
+   the selected `(source_id, finished)` pairs.
+1. **Delete inputs.** Remove the snapshot's input files, sources file first,
+   then samples file. A file already gone (removed by a concurrent
+   compaction) is skipped.
+
+Readers stay correct at every point. Before step 6, each source is present in
+an input part and possibly also in a compacted part with the same `finished`,
+which the tie rule in "Resume" resolves; after it, only the compacted copy
+remains. A crash at any step leaves a valid, possibly duplicated, results
+directory, and rerunning compaction finishes the job. Compaction therefore
+needs no lock, but it should not be run against a stage that is still being
+written if the goal is a fully merged result: later parts survive it and need
+another compaction.
+
+Compaction drops superseded rows, including the tracebacks of `failed`
+attempts that were later retried successfully; the `logs/` files keep them.
+After compaction, every `*.samples.parquet` row belongs to a current result,
+so population analyses can read the samples dataset directly with no join.
+
+### Loading results
+
+`harv_hq.Run.load_source(source_id) -> SourceResult` returns the source's
+data, its rejection and MCMC `Samples` (or `None`), their statuses, and its
+summary row. At first use, `Run` builds an in-memory index from the
+`source_id`, `finished`, `samples_row_start`, and `n_samples` columns of every
+sources file (newest row per source wins), then reads only the row groups of
+the samples file that span the source's rows. If that file has since been
+removed by compaction, the index is rebuilt and the read retried once.
+
+For population analyses, the samples are directly readable as one dataset:
+`pyarrow.dataset.dataset(run_dir / "results/rejection", format="parquet")`
+filtered to `*.samples.parquet`. After compaction every row is current; before
+it, superseded rows must be removed by joining on the newest sources rows.
 
 ### Provenance
 
-Every output file (`data.h5`, `prior_cache.h5`, each results file) carries
-these root attrs:
+Every output (`data.parquet`, `data_index.parquet`, `catalog.parquet`,
+`prior_cache.h5`, every result part, `summary.parquet`) records a provenance
+JSON object (Parquet key-value metadata, or the HDF5 root attribute for the
+prior cache) with these keys:
 
-| Attr                                        | Description                                           |
-| ------------------------------------------- | ----------------------------------------------------- |
-| `hq_version`, `harv_version`, `jax_version` | Package versions                                      |
-| `config_sha256`                             | sha256 of `hq.toml` bytes                             |
-| `model_file_sha256`                         | sha256 of the model file bytes (absent on `data.h5`)  |
-| `data_id`                                   | The `data_id` of the `data.h5` used                   |
-| `prior_cache_sha256`                        | sha256 of the prior cache's root attrs (results only) |
+| Key                                         | Description                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------- |
+| `hq_version`, `harv_version`, `jax_version` | Package versions                                                           |
+| `config_sha256`                             | sha256 of `hq.toml` bytes                                                  |
+| `model_file_sha256`                         | sha256 of the model file bytes (absent on the prepared data)               |
+| `data_id`                                   | The `data_id` of the prepared data                                         |
+| `prior_cache_id`                            | A uuid4 written into the prior cache when it was built (result parts only) |
+| `created`                                   | ISO 8601 UTC timestamp                                                     |
 
-A stage refuses to append to, or build on, outputs whose `config_sha256`,
-`model_file_sha256`, or `data_id` differ from the current ones, raising
-`harv_hq.ProvenanceError` that names the mismatched field and file. The fix is
-`--overwrite` on that stage. Version differences are logged but not refused.
-`summary.parquet` stores the same fields in its Parquet key-value metadata,
-and `run_mcmc` refuses a summary that is older than any rejection results
-file.
+A stage refuses to build on outputs whose `config_sha256`,
+`model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
+ones, raising `harv_hq.ProvenanceError` that names the mismatched field and
+file. The fix is `--overwrite` on that stage. Version differences are logged
+but not refused. `run_mcmc` also refuses a `summary.parquet` whose `created`
+is older than the newest rejection part.
 
-### Summary table (`summary.parquet`)
+### Summary statistics
 
-`Run.summarize()` reduces all results files to one row per prepared source
-(sources not yet run have `rejection_status = "pending"`). Columns:
+The worker computes these per source, while the data and samples are in
+memory, and stores them as columns of the sources table:
 
-| Column(s)                                                                                              | Source                                                       |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `source_id`, `n_obs`, `time_baseline`                                                                  | `catalog.parquet`                                            |
-| `rejection_status`, `rejection_error`                                                                  | results attrs                                                |
-| `n_prior_samples`, `ln_Z_int`, `ln_Z_int_mcse`, `ln_Z_int_ess`, `max_ln_likelihood`, `weight_captured` | `Samples.metadata`                                           |
-| `well_resolved`                                                                                        | `Samples.acceptance_diagnostics(min_evidence_ess=...)`       |
-| `period_unimodal`                                                                                      | `Samples.period_unimodal(data)` on the equal-weight resample |
-| `max_phase_gap`, `phase_coverage`, `periods_spanned`                                                   | the corresponding `Samples` methods, at the MAP sample       |
-| `map_<param>`                                                                                          | `Samples.map_sample()`, every parameter in `Samples.keys()`  |
-| `<param>_p16`, `<param>_p50`, `<param>_p84`                                                            | weighted percentiles (see below)                             |
-| `mcmc_status`, `r_hat_max`, `ess_bulk_min`                                                             | MCMC results attrs; `"not_selected"` / null when absent      |
-| `final`                                                                                                | `"mcmc"` if `mcmc_status == "converged"`, else `"rejection"` |
+| Column(s)                                            | Source                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| `well_resolved`                                      | `Samples.acceptance_diagnostics(min_evidence_ess=...)`       |
+| `period_unimodal`                                    | `Samples.period_unimodal(data)` on the equal-weight resample |
+| `max_phase_gap`, `phase_coverage`, `periods_spanned` | the corresponding `Samples` methods, at the MAP sample       |
+| `map_<param>`                                        | `Samples.map_sample()`, every parameter in `Samples.keys()`  |
+| `<param>_p16`, `<param>_p50`, `<param>_p84`          | percentiles; weighted for rejection (see below)              |
 
-Values with units are stored in the unit of the samples and the unit is
-recorded in the column's Parquet field metadata (`unit`). Every source shares
-one model, so every `ok` source has the same parameter columns; sources
-without results get nulls.
-
-The `<param>_p*` columns describe the `final` sample set.
+`well_resolved` is rejection-only. Units are recorded in field metadata, in
+the unit of the samples.
 
 ### Weighted samples
 
@@ -625,6 +782,24 @@ samples are equal-weight. hq treats the weights as follows.
   `weight_captured` is well below one. The column is reported so the user can
   cut on it.
 
+### Summary table (`summary.parquet`)
+
+`Run.summarize()` reads the sources tables of both stages, keeps the newest
+row per source, and joins them onto `catalog.parquet`. It reads no samples
+and no data. One row per prepared source:
+
+| Column(s)                                                                                                               | Source                                                        |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `source_id`, `n_obs`, `time_baseline`, `[catalog]` columns                                                              | `catalog.parquet`                                             |
+| `rejection_status`, `rejection_error`                                                                                   | rejection sources table (`"pending"` / null when not yet run) |
+| `n_prior_samples`, `ln_Z_int`, `ln_Z_int_mcse`, `ln_Z_int_ess`, `max_ln_likelihood`, `weight_captured`, `well_resolved` | rejection sources table                                       |
+| `mcmc_status`, `r_hat_max`, `ess_bulk_min`                                                                              | mcmc sources table; `"not_selected"` / null when absent       |
+| `final`                                                                                                                 | `"mcmc"` if `mcmc_status == "converged"`, else `"rejection"`  |
+| `period_unimodal`, phase-coverage columns, `map_<param>`, `<param>_p*`                                                  | the sources table of the `final` stage                        |
+
+Every source shares one model, so every `ok` source has the same parameter
+columns; sources without results get nulls.
+
 ______________________________________________________________________
 
 ## Web viewer
@@ -637,12 +812,12 @@ Plotly.js loaded from a CDN. There is no frontend build step.
 harv_hq.create_app(run_dir: str | os.PathLike) -> fastapi.FastAPI
 ```
 
-At startup the app loads `hq.toml`, the model file, `catalog.parquet` and
-`summary.parquet` (joined on `source_id`) into memory once. It opens `data.h5`
-and the results files read-only, and reads per-source groups on request. The
-summary is reloaded when its file modification time changes. The server binds
-`127.0.0.1` by default; for a run on a remote machine, use an SSH tunnel
-(`ssh -L 8000:localhost:8000 host`).
+At startup the app loads `hq.toml`, the model file, and `catalog.parquet`
+joined to `summary.parquet` (on `source_id`) into memory once, and builds the
+results index used by `Run.load_source`. Per-source data and samples are read
+on request. The summary and the results index are reloaded when the summary's
+modification time changes. The server binds `127.0.0.1` by default; for a
+run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 
 ### Pages
 
@@ -681,16 +856,20 @@ rejection samples and uniformly for MCMC.
 
 ### JSON API
 
-| Route                                       | Returns                                                          |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `GET /api/columns`                          | Column names, dtypes, and units of the joined table              |
-| `GET /api/catalog?columns=a,b,c&filter=...` | The requested columns as arrays, for all rows passing the filter |
-| `POST /api/rows`                            | Body `{source_ids, columns}`; the requested rows                 |
-| `GET /api/source/{source_id}`               | Data, samples, curves, summary row, statuses                     |
+| Route                                                  | Returns                                                          |
+| ------------------------------------------------------ | ---------------------------------------------------------------- |
+| `GET /api/columns`                                     | Column names, dtypes, and units of the joined table              |
+| `GET /api/catalog?columns=a,b,c&filter=...&status=...` | The requested columns as arrays, for all rows passing the filter |
+| `POST /api/rows`                                       | Body `{source_ids, columns}`; the requested rows                 |
+| `GET /api/source/{source_id}`                          | Data, samples, curves, summary row, statuses                     |
 
-Non-finite values are encoded as JSON `null`. `/api/catalog` returns whole
-columns, so the catalog view scales to roughly 10^6 sources before payload
-size dominates; larger runs should filter first.
+The `filter` parameter is a comma-separated list of `column:min:max` terms
+(an empty bound is open, e.g. `bp_rp:0.5:` or `n_obs::20`), combined with
+AND; a malformed term returns 400. `status` is a comma-separated list of
+`rejection_status` values to keep (default: all). Non-finite values are encoded as JSON
+`null`. `/api/catalog` returns whole columns, so the catalog view scales to
+roughly 10^6 sources before payload size dominates; larger runs should filter
+first.
 
 ______________________________________________________________________
 
@@ -705,14 +884,16 @@ run.config                                  # harv_hq.Config (frozen)
 run.prepare(*, overwrite=False)
 run.make_prior_cache(*, overwrite=False)
 run.run_rejection(*, shard=(0, 1), workers=1, mpi=False,
-                  overwrite=False, retry_failed=False)
+                  overwrite=False, retry_failed=False, compact=True)
+run.compact(stage="rejection")              # or "mcmc"
 run.summarize()
 run.run_mcmc(*, shard=(0, 1), workers=1, mpi=False,
-             overwrite=False, retry_failed=False)
+             overwrite=False, retry_failed=False, compact=True)
 run.status() -> dict[str, dict[str, int]]   # stage -> status -> count
 run.load_source(source_id) -> harv_hq.SourceResult
 
-harv_hq.read_source(data_file, source_id) -> RVData | GaiaAstrometryData
+harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData
+harv_hq.read_sources(run_dir, source_ids) -> dict[Any, RVData | GaiaAstrometryData]
 harv_hq.create_app(run_dir) -> fastapi.FastAPI
 
 # Exceptions
@@ -733,15 +914,15 @@ ______________________________________________________________________
 
 ## Dependencies
 
-| Dependency                      | Used for                                    |
-| ------------------------------- | ------------------------------------------- |
-| `harv` (same version)           | everything model-related                    |
-| `astropy`                       | reading input tables, time-scale conversion |
-| `h5py`                          | `data.h5` and results files                 |
-| `pyarrow`                       | `catalog.parquet`, `summary.parquet`        |
-| `arviz`                         | MCMC convergence diagnostics                |
-| `fastapi`, `uvicorn`, `jinja2`  | the web viewer                              |
-| `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                     |
+| Dependency                      | Used for                                     |
+| ------------------------------- | -------------------------------------------- |
+| `harv` (same version)           | everything model-related                     |
+| `astropy`                       | reading input tables, time-scale conversion  |
+| `pyarrow`                       | every Parquet file hq reads and writes       |
+| `h5py`                          | provenance attribute on the harv prior cache |
+| `arviz`                         | MCMC convergence diagnostics                 |
+| `fastapi`, `uvicorn`, `jinja2`  | the web viewer                               |
+| `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                      |
 
 `hq` pins `harv` to its own version (they are released in lockstep from one
 tag).
@@ -754,8 +935,12 @@ ______________________________________________________________________
 - An end-to-end test builds a small run from simulated data
   (`harv.simulate.simulate_rv_sb1_data` written out as a survey-style table,
   and `simulate_gaia_epoch_astrometry`), runs every stage with a small
-  prior cache, checks statuses, resume after a simulated crash, a change of
-  shard count between invocations, and provenance refusals.
+  prior cache, and checks statuses, resume after a simulated crash (only
+  buffered sources are lost), a change of shard count between invocations, an
+  orphaned samples part being ignored, provenance refusals, and compaction
+  (merged output equals the newest rows, superseded rows dropped, a crash
+  injected after each compaction step still leaves a readable directory, and
+  a second compaction of a compacted stage writes nothing).
 - The viewer is tested with FastAPI's `TestClient` against that run.
 - MPI is tested only when `mpi4py` is installed, with `mpirun -n 2`.
 
@@ -772,7 +957,8 @@ ______________________________________________________________________
   would provide a helper that builds the stacked data and the offset
   extension from one `SourceData.indicator_data_by_type` call, so their row
   order agrees, with the reference instrument chosen from a configured
-  preference order.
+  preference order. Per-source parameter sets differ (each source's offsets),
+  so the samples schema would need a defined union of columns.
 - **SB2 runs** (`kind = "sb2"`), needed for SDSS-V, where double-lined
   sources are identified in advance and routed to their own run. Each source
   becomes a `SystemData(primary=RVData, secondary=RVData)` fit with
@@ -781,8 +967,8 @@ ______________________________________________________________________
   `JointModel`). Open questions: how the input table encodes the two
   components (a component column with one row per component-epoch, or paired
   `rv`/`rv2` columns per epoch), how component-qualified parameter names
-  (`primary.rv_semiamp`) appear as summary columns, a derived mass-ratio
-  column, and a two-component RV panel in the viewer.
+  (`primary.rv_semiamp`) appear as columns, a derived mass-ratio column, and a
+  two-component RV panel in the viewer.
 - **Joint RV + Gaia astrometry runs**, with `kind = "joint"` and
   `JointModel.for_rv_and_gaia`.
 - **Iterative rejection reruns** for under-resolved, multimodal sources (a
