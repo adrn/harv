@@ -67,9 +67,7 @@ def _prior_cache(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     if args.workers != 1 or args.mpi:
         sys.exit("hq run: --workers and --mpi are not implemented yet; use --shard")
-    Run(args.run_dir).run_rejection(
-        shard=args.shard, overwrite=args.overwrite, retry_failed=args.retry_failed
-    )
+    Run(args.run_dir).run_rejection(shard=args.shard, overwrite=args.overwrite)
     return 0
 
 
@@ -131,11 +129,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "--overwrite",
             action="store_true",
             help="move existing results to results/superseded-* and start over",
-        )
-        p.add_argument(
-            "--retry-failed",
-            action="store_true",
-            help="also rerun sources whose newest result is failed",
         )
         p.add_argument(
             "--no-compact",

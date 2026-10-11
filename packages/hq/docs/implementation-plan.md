@@ -25,7 +25,7 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
 | —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
 | 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59)                             |
-| 2     | prepare, `read_source`, `read_sources`                 | Implemented on branch `hq-phase2`, awaiting merge |
+| 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)                                     |
 | 3     | prior cache, serial rejection, result parts, resume    | Implemented on branch `hq-phase3`, awaiting merge |
 | 4     | execution modes: shards, pool, MPI                     | Not started                                       |
 | 5     | compaction, summarize, status                          | Not started                                       |
@@ -222,7 +222,7 @@ config that loads.
 
 ______________________________________________________________________
 
-## Phase 2: prepare, read_source, read_sources — awaiting merge
+## Phase 2: prepare, read_source, read_sources — done
 
 Implemented on branch `hq-phase2` (stacked on `hq-phase1`). Deviations from
 the text below, all recorded in the spec where they are public: `Run` is
@@ -276,7 +276,7 @@ ______________________________________________________________________
 ## Phase 3: prior cache, serial rejection, result parts, resume — awaiting merge
 
 Implemented on branch `hq-phase3` (stacked on `hq-phase2`). Deviations from the
-text below: `Run.run_rejection` takes `shard`, `overwrite` and `retry_failed`
+text below: `Run.run_rejection` takes `shard` and `overwrite`
 for now (`workers`, `mpi` and `compact` arrive with phases 4 and 5; the CLI
 rejects `--workers`/`--mpi` until then), and `Run.load_source` returns
 `summary=None` until phase 5. Slicing is `PreparedData.slice_ids(shard)` (no
@@ -289,8 +289,10 @@ failure is simulated by a sampler that raises, because a real mismatch is now
 refused earlier by provenance; and the injected-period recovery check is
 left to an end-to-end test with a realistic prior cache (the 20,000-sample
 test cache cannot resolve periods). Weighted percentiles drop zero-weight
-samples (spec updated). Found along the way: harv stores `n_prior_samples` in
-`Samples.metadata` as a float, where harv's spec says int.
+samples (spec updated). A failed source is not done: every resume reruns it,
+and there is no `--retry-failed` flag (spec updated). Fixed in harv along the
+way: `RejectionSampler` stored `n_prior_samples` in `Samples.metadata` as a
+float, where harv's spec says int.
 
 **`make_prior_cache`.** `ModelFile.setup`, then
 `harv.samplers.make_prior_cache(prior, model, n_samples, path, key=prior_cache_key(seed), batch_size=...)` into `prior_cache.h5.tmp`, write
@@ -321,7 +323,7 @@ MAP sample. It calls only harv's `Samples` methods.
   `finished`, `samples_row_start` and `n_samples` columns of every
   `*.sources.parquet` with `pyarrow.dataset` (ignoring `.tmp` and orphaned
   samples files), keeps the newest row per source, and checks each part's
-  provenance against the current one. Exposes `done(retry_failed)`,
+  provenance against the current one. Exposes `done()` (newest row `ok`),
   `status_counts()`, and `locate(source_id) -> (samples_path, start, n)`.
 - `read_source_samples(index, source_id) -> Samples`.
 
@@ -348,7 +350,7 @@ text in `error`, and the run continues. Crash resume: raise in a test hook at
 source N; parts written before the crash are intact, buffered sources are
 missing, and a rerun processes exactly the missing ones. An orphaned
 `.samples.parquet` (delete its sources file) is ignored and its sources rerun.
-`--retry-failed`. `--overwrite` moves the stage directory to
+A failed source is rerun on the next resume. `--overwrite` moves the stage directory to
 `superseded-*`. Provenance: editing `prior.py` makes `run_rejection` raise
 `ProvenanceError`. Same seed gives identical samples on rerun. Population
 read: `pyarrow.dataset` over the samples files returns `n_sources * top_k`
@@ -529,7 +531,7 @@ ______________________________________________________________________
   below.
 - A workflow tutorial (`docs/hq/workflow.md`) that walks through every stage in
   order and covers re-running: which outputs each stage writes, what
-  `--overwrite`, `--retry-failed`, and `--no-compact` do, where superseded
+  `--overwrite` and `--no-compact` do, where superseded
   results go (`results/superseded-*`) and when they can be deleted, which
   downstream stages a change to `hq.toml`, `prior.py`, or the input data
   invalidates (the provenance refusals), and how to start a stage over from

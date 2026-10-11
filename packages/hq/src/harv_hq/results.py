@@ -324,13 +324,9 @@ class ResultsIndex:
                     )
         return cls(records)
 
-    def done(self, *, retry_failed: bool = False) -> set[Any]:
-        """Source IDs not to process again: ``ok``, and ``failed`` unless retrying."""
-        return {
-            sid
-            for sid, record in self.records.items()
-            if record.status == "ok" or (record.status == "failed" and not retry_failed)
-        }
+    def done(self) -> set[Any]:
+        """Source IDs whose newest result is ``ok``; anything else is rerun."""
+        return {sid for sid, record in self.records.items() if record.status == "ok"}
 
     def status_counts(self) -> dict[str, int]:
         """Number of sources per status."""
