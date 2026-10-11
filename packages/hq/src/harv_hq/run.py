@@ -202,8 +202,22 @@ class Run:
                 raise ValueError(msg)
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())
-        i, n = shard
+        if comm is None:
+            self._run_rejection(shard, workers, overwrite, comm)
+            return
+        try:
+            self._run_rejection(shard, workers, overwrite, comm)
+        except BaseException:
+            # A rank that stops early would leave the others waiting at a
+            # barrier forever; nothing above it can recover, so end them all.
+            logger.exception("rejection: rank %d failed; aborting every rank", shard[0])
+            comm.Abort(1)
+            raise
 
+    def _run_rejection(
+        self, shard: tuple[int, int], workers: int, overwrite: bool, comm: Any
+    ) -> None:
+        i, n = shard
         prepared = PreparedData(self.run_dir)
         expected = make_provenance(self.config, data_id=prepared.data_id)
         check_provenance(prepared.provenance, expected, path=prepared.path)

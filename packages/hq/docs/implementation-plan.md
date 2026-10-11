@@ -380,7 +380,9 @@ unless `mpi4py` and `mpirun` are both present, and could not be run locally
 path is also tested with a stand-in communicator. Found along the way, and
 fixed in harv: `run_with_samples` ordered parameters by set iteration, so two
 processes could write differently ordered columns, and the structure check
-then refused the second one (harv spec updated).
+then refused the second one (harv spec updated). From the Copilot review of
+PR #63: a rank that raises calls `comm.Abort(1)`, so its peers cannot hang at
+a barrier (spec updated).
 
 **`execution.py`** wraps a per-source function in three drivers sharing one
 contract: given `(ids, data, process_fn, writer)`, process every ID and pass
