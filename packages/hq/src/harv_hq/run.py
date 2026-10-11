@@ -147,7 +147,6 @@ class Run:
         *,
         shard: tuple[int, int] = (0, 1),
         overwrite: bool = False,
-        retry_failed: bool = False,
     ) -> None:
         """Run the rejection sampler on every source in a slice (``hq run``).
 
@@ -164,8 +163,6 @@ class Run:
         overwrite
             Move existing rejection results to
             ``results/superseded-<timestamp>-rejection/`` and start over.
-        retry_failed
-            Also rerun sources whose newest result is ``failed``.
 
         Raises
         ------
@@ -186,9 +183,7 @@ class Run:
             **expected,
             "prior_cache_id": cache_provenance["prior_cache_id"],
         }
-        done = ResultsIndex.build(stage_dir, expected_provenance=part_provenance).done(
-            retry_failed=retry_failed
-        )
+        done = ResultsIndex.build(stage_dir, expected_provenance=part_provenance).done()
         todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
         i, n = shard
         log_handler, log_level = self._log_to_file(f"rejection-{i:04d}-of-{n:04d}.log")

@@ -156,11 +156,17 @@ class TestFailuresAndResume:
         assert "boom: missing prior keys" in row["error"]
         assert row["n_samples"] == 0
 
-        # Without --retry-failed a failed source is not rerun; with it, it is.
+        # Failed sources are not done: the next resume reruns them, and only them.
         monkeypatch.setattr(RejectionSampler, "run_with_samples", original)
+        calls = []
+        process = run_module.process_rejection
+        monkeypatch.setattr(
+            run_module,
+            "process_rejection",
+            lambda sid, *a, **k: calls.append(sid) or process(sid, *a, **k),
+        )
         run.run_rejection()
-        assert index(run).records[bad].status == "failed"
-        run.run_rejection(retry_failed=True)
+        assert set(calls) == failed
         assert index(run).status_counts() == {"ok": len(set(rv_run.kept))}
 
     def test_resume_after_an_interruption(self, rv_run, monkeypatch):

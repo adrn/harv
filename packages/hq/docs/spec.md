@@ -633,8 +633,8 @@ once, e.g. as a SLURM job with `--dependency=afterok:<array job id>`.
 Resume does not depend on shard layout. Before processing its slice, a
 process reads the `source_id`, `status`, and `finished` columns of every
 `results/<stage>/*.sources.parquet`. A source is done if its newest row (by
-`finished`) has status `ok`. A source whose newest row is `failed` is retried
-only with `--retry-failed`. Two rows with the same `finished` are copies of
+`finished`) has status `ok`; every other source, including one whose newest
+row is `failed`, is run again. Two rows with the same `finished` are copies of
 one result (a part and its compacted copy, briefly, while compaction runs);
 either may be used, and readers pick the one whose part stem sorts first.
 
@@ -935,11 +935,11 @@ run.config                                  # harv_hq.Config (frozen)
 run.prepare(*, overwrite=False)
 run.make_prior_cache(*, overwrite=False)
 run.run_rejection(*, shard=(0, 1), workers=1, mpi=False,
-                  overwrite=False, retry_failed=False, compact=True)
+                  overwrite=False, compact=True)
 run.compact(stage="rejection")              # or "mcmc"
 run.summarize()
 run.run_mcmc(*, shard=(0, 1), workers=1, mpi=False,
-             overwrite=False, retry_failed=False, compact=True)
+             overwrite=False, compact=True)
 run.status() -> dict[str, dict[str, int]]   # stage -> status -> count
 run.load_source(source_id) -> harv_hq.SourceResult
 
