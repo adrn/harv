@@ -401,12 +401,10 @@ class TestExecutionModes:
         assert set(records) == set(rv_run.kept)
         assert {r.sources_path for r in records.values()} <= second_parts
 
-    def test_mpi_excludes_shard_and_workers(self, rv_run):
+    def test_mpi_excludes_shard(self, rv_run):
         run = Run(rv_run.run_dir)
-        with pytest.raises(ValueError, match="omit shard and workers"):
+        with pytest.raises(ValueError, match="omit shard"):
             run.run_rejection(mpi=True, shard=(0, 2))
-        with pytest.raises(ValueError, match="omit shard and workers"):
-            run.run_rejection(mpi=True, workers=2)
         with pytest.raises(ValueError, match="at least 1"):
             run.run_rejection(workers=0)
 
@@ -430,10 +428,10 @@ class TestExecutionModes:
                 barriers.append(self.rank)
 
         # --overwrite: only rank 0 moves results aside, so rank 1 does not move
-        # rank 0's new parts.
-        for rank in (0, 1):
+        # rank 0's new parts. Rank 1 also runs a pool (--mpi --workers 2).
+        for rank, workers in ((0, 1), (1, 2)):
             monkeypatch.setattr(run_module, "mpi_comm", lambda r=rank: FakeComm(r))
-            run.run_rejection(mpi=True, overwrite=True)
+            run.run_rejection(mpi=True, workers=workers, overwrite=True)
         assert barriers == [0, 0, 1, 1]  # after the overwrite, and at the end
         assert len(list((run.run_dir / "results").glob("superseded-*"))) == 1
         assert index(run).status_counts() == {"ok": len(rv_run.kept)}
@@ -539,8 +537,8 @@ def test_cli(rv_run):
         ResultsIndex.build(rv_run.run_dir / "results" / "rejection").records
     ) == set(rv_run.kept)
     with pytest.raises(SystemExit) as excinfo:
-        main(["run", "--run-dir", run_dir, "--mpi", "--workers", "2"])
-    assert "mutually exclusive" in str(excinfo.value.code)
+        main(["run", "--run-dir", run_dir, "--workers", "0"])
+    assert "at least 1" in str(excinfo.value.code)
 
 
 def test_copy_of_a_run_directory_still_resumes(rv_run, tmp_path):

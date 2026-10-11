@@ -372,7 +372,9 @@ and restores its own afterwards (spec updated). The drivers take
 `functools.partial(rejection_setup, config, cache_path)` that builds the
 per-source function (each pool worker calls it once), and `sink` adds to the
 `PartWriter` and counts progress. There is no `run_mpi` driver: `--mpi` takes
-the slice from the rank and then runs the serial driver. With `--overwrite`,
+the slice from the rank and then runs the serial driver, or the pool driver
+with `--workers` (`--mpi --workers` is allowed, for one rank per node; spec
+updated). With `--overwrite`,
 only rank 0 supersedes, between two barriers (spec updated). Every mode logs
 progress about every 5% of its slice. The real-`mpirun` test is skipped
 unless `mpi4py` and `mpirun` are both present, and could not be run locally
