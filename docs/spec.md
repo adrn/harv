@@ -2048,6 +2048,12 @@ sampler.run_with_samples(
   the file may be much larger than RAM. Same key handling as the in-memory
   branch: missing keys raise, extra keys are ignored.
 
+Both branches return parameters in declaration order: the prior's nonlinear
+parameters, then the extensions', then any explicitly sampled linear ones. The
+order never depends on set iteration, so it is the same in every process
+whatever `PYTHONHASHSEED` is (results written by separate processes, as in
+harv-hq's shards, must agree on it).
+
 `randomize_prior_order` (HDF5 path only): when `True` (default), batch *order*
 is permuted via `jax.random.permutation(key, n_batches)`. Each
 batch is still a single contiguous h5py slice — no random seeks, no read
