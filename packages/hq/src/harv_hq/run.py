@@ -202,16 +202,14 @@ class Run:
                 raise ValueError(msg)
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())
-        if comm is None:
-            self._run_rejection(shard, workers, overwrite, comm)
-            return
         try:
             self._run_rejection(shard, workers, overwrite, comm)
         except BaseException:
             # A rank that stops early would leave the others waiting at a
             # barrier forever; nothing above it can recover, so end them all.
-            logger.exception("rejection: rank %d failed; aborting every rank", shard[0])
-            comm.Abort(1)
+            if comm is not None:
+                logger.exception("rejection: rank %d failed; aborting", shard[0])
+                comm.Abort(1)
             raise
 
     def _run_rejection(
