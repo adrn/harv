@@ -183,7 +183,8 @@ class Run:
             **expected,
             "prior_cache_id": cache_provenance["prior_cache_id"],
         }
-        done = ResultsIndex.build(stage_dir, expected_provenance=part_provenance).done()
+        existing = ResultsIndex.build(stage_dir, expected_provenance=part_provenance)
+        done = existing.done()
         todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
         i, n = shard
         log_handler, log_level = self._log_to_file(f"rejection-{i:04d}-of-{n:04d}.log")
@@ -211,6 +212,7 @@ class Run:
                 provenance=part_provenance,
                 flush_n_sources=self.config.results.flush_n_sources,
                 flush_seconds=self.config.results.flush_seconds,
+                structure=existing.structure,
             )
             try:
                 for source_id in todo:
@@ -227,10 +229,11 @@ class Run:
             finally:
                 writer.close()
         finally:
+            # Parts may have been written even if the loop raised.
+            self._indexes.pop("rejection", None)
             logger.removeHandler(log_handler)
             logger.setLevel(log_level)
             log_handler.close()
-        self._indexes.pop("rejection", None)
 
     def load_source(self, source_id: Any) -> SourceResult:
         """Everything hq holds for one source.

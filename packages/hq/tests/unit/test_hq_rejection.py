@@ -8,14 +8,21 @@ import numpy as np
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
+from unxt import Q
 
-from harv.samplers import RejectionSampler
+from harv.samplers import RejectionSampler, Samples
 from harv_hq import ProvenanceError, Run
 from harv_hq import run as run_module
 from harv_hq.cli import main
 from harv_hq.ids import source_key
 from harv_hq.prepare import PreparedData
-from harv_hq.results import PartWriter, Payload, ResultsIndex
+from harv_hq.results import (
+    PartWriter,
+    Payload,
+    ResultsIndex,
+    samples_table,
+    supersede,
+)
 
 TOP_K = 64  # the fixtures' [rejection] top_k
 
@@ -181,10 +188,14 @@ class TestFailuresAndResume:
             return original(source_id, *args, **kwargs)
 
         monkeypatch.setattr(run_module, "process_rejection", interrupted)
+        # Caches the (empty) index on this Run.
+        assert run.load_source(next(iter(rv_run.kept))).rejection_status == "pending"
         with pytest.raises(KeyboardInterrupt):
             run.run_rejection()
         # Everything processed before the interruption was written on the way out.
         assert set(index(run).records) == set(calls)
+        # ...and the cached index was dropped, so this Run sees it too.
+        assert run.load_source(calls[0]).rejection_status == "ok"
 
         monkeypatch.setattr(run_module, "process_rejection", original)
         rerun = []
@@ -241,6 +252,72 @@ class TestFailuresAndResume:
         assert len(superseded) == 1
         assert any(superseded[0].glob("*.sources.parquet"))
         assert set(index(run).records) == set(rv_run.kept)
+
+    def test_each_overwrite_gets_its_own_archive(self, tmp_path):
+        stage = tmp_path / "results" / "rejection"
+        for _ in range(3):  # well within one second
+            stage.mkdir(parents=True)
+            (stage / "part").touch()
+            supersede(stage)
+        archives = list((tmp_path / "results").glob("superseded-*-rejection"))
+        assert len(archives) == 3
+        assert all((a / "part").exists() for a in archives)
+
+
+STRUCTURE_A = {
+    "model_type": "RVModel",
+    "linear_extension_names": [],
+    "nonlinear_names": ["period"],
+    "linear_names": [],
+}
+STRUCTURE_B = {**STRUCTURE_A, "nonlinear_names": ["period", "e"]}
+
+
+class TestSchema:
+    def _write(self, stage, structure, source_id):
+        writer = PartWriter(
+            stage,
+            stage="rejection",
+            shard=(0, 1),
+            provenance={},
+            flush_n_sources=1,
+            flush_seconds=1e9,
+        )
+        row = {"source_id": source_id, "status": "ok", "finished": datetime.now(UTC)}
+        writer.add(Payload(row=row, structure=structure))
+
+    def test_a_resumed_writer_refuses_a_new_structure(self, tmp_path):
+        self._write(tmp_path, STRUCTURE_A, "a")
+        existing = ResultsIndex.build(tmp_path)
+        assert existing.structure == STRUCTURE_A
+        writer = PartWriter(
+            tmp_path,
+            stage="rejection",
+            shard=(0, 1),
+            provenance={},
+            flush_n_sources=1,
+            flush_seconds=1e9,
+            structure=existing.structure,
+        )
+        row = {"source_id": "b", "status": "ok", "finished": datetime.now(UTC)}
+        with pytest.raises(ValueError, match="one Samples structure"):
+            writer.add(Payload(row=row, structure=STRUCTURE_B))
+
+    def test_parts_of_different_structure_are_refused(self, tmp_path):
+        self._write(tmp_path, STRUCTURE_A, "a")
+        self._write(tmp_path, STRUCTURE_B, "b")
+        with pytest.raises(ValueError, match="--overwrite"):
+            ResultsIndex.build(tmp_path)
+
+    @pytest.mark.parametrize("name", ["source_id", "sample_index", "chain", "weight"])
+    def test_a_parameter_named_like_a_bookkeeping_column_is_refused(self, name):
+        samples = Samples(
+            nonlinear={name: Q(np.ones(3), "")},
+            linear={},
+            model_type="RVModel",
+        )
+        with pytest.raises(ValueError, match="clash"):
+            samples_table(samples, "a", stage="rejection")
 
 
 class TestShards:
