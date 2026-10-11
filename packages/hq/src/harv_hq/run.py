@@ -172,10 +172,11 @@ class Run:
             This process's slice ``(i, N)``.
         workers
             Local worker processes; above 1, sources run on a spawned pool
-            and this process writes the parts.
+            and this process writes the parts. Combines with ``mpi`` (a pool
+            per rank, e.g. one rank per node).
         mpi
             Process slice ``rank/size`` of ``MPI.COMM_WORLD`` (needs
-            ``mpi4py``); excludes ``shard`` and ``workers``.
+            ``mpi4py``); excludes ``shard``.
         overwrite
             Move existing rejection results to
             ``results/superseded-<timestamp>-rejection/`` and start over.
@@ -183,8 +184,7 @@ class Run:
         Raises
         ------
         ValueError
-            If ``mpi`` is combined with ``shard`` or ``workers``, or
-            ``workers < 1``.
+            If ``mpi`` is combined with ``shard``, or ``workers < 1``.
         FileNotFoundError
             If the data are not prepared or the prior cache is not built.
         ProvenanceError
@@ -195,10 +195,8 @@ class Run:
             raise ValueError(msg)
         comm = None
         if mpi:
-            if shard != (0, 1) or workers != 1:
-                msg = (
-                    "mpi=True takes its slice from the MPI rank; omit shard and workers"
-                )
+            if shard != (0, 1):
+                msg = "mpi=True takes its slice from the MPI rank; omit shard"
                 raise ValueError(msg)
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())

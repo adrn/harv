@@ -601,6 +601,7 @@ falls as `N` grows.
 | Explicit shard           | `hq run --shard 3/16`               | `3/16`              | `0003-of-0016-<uuid>`     |
 | Local pool               | `hq run --workers 8 [--shard 3/16]` | the process's slice | as above, by the parent   |
 | MPI                      | `mpirun -n 64 hq run --mpi`         | `rank/size`         | `<rank>-of-<size>-<uuid>` |
+| MPI with a pool per rank | `hq run --mpi --workers 32`         | `rank/size`         | as above, by each rank    |
 
 - **Explicit shards** are for job arrays and task launchers (SLURM
   `--array=0-15` with `--shard $SLURM_ARRAY_TASK_ID/16`, disBatch). Shards are
@@ -623,7 +624,9 @@ falls as `N` grows.
   ranks. A rank that raises (anything outside a single source's
   processing, which only marks that source `failed`) logs the error and calls
   `MPI.COMM_WORLD.Abort(1)`, so no rank is left waiting at a barrier.
-  `--mpi` is mutually exclusive with `--shard` and `--workers`.
+  `--mpi` is mutually exclusive with `--shard`. It combines with
+  `--workers`: each rank runs a local pool over its slice, so a cluster job
+  can use one rank per node (`srun --ntasks-per-node=1 hq run --mpi --workers 32`), and only the pool workers are pinned to one thread.
 - Every mode logs a progress line about every 5% of its slice.
 - GPU runs use the single-process or explicit-shard modes, one process per
   device.

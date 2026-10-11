@@ -65,8 +65,6 @@ def _prior_cache(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    if args.mpi and args.workers != 1:
-        sys.exit("hq run: --mpi and --workers are mutually exclusive")
     if args.workers < 1:
         sys.exit("hq run: --workers must be at least 1")
     Run(args.run_dir).run_rejection(
