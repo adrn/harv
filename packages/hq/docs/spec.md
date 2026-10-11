@@ -768,6 +768,10 @@ needs no lock, but it should not be run against a stage that is still being
 written if the goal is a fully merged result: later parts survive it and need
 another compaction.
 
+`Run.compact` returns a `CompactReport` (`n_input_parts`, `n_sources`,
+`n_dropped_rows`, `n_output_parts`; all zero when there was nothing to do),
+and `hq compact` prints it.
+
 Compaction drops superseded rows, including the tracebacks of `failed`
 attempts that were later retried successfully; the `logs/` files keep them.
 After compaction, every `*.samples.parquet` row belongs to a current result,
@@ -865,7 +869,9 @@ and no data. One row per prepared source:
 | `period_unimodal`, phase-coverage columns, `map_<param>`, `<param>_p*`                                                  | the sources table of the `final` stage                        |
 
 Every source shares one model, so every `ok` source has the same parameter
-columns; sources without results get nulls.
+columns; sources without results get nulls. Units come from the inputs' field
+metadata, and the file records the rejection parts' provenance. Once it
+exists, `Run.load_source` returns the source's row as `summary`.
 
 ______________________________________________________________________
 
@@ -954,11 +960,12 @@ run.prepare(*, overwrite=False)
 run.make_prior_cache(*, overwrite=False)
 run.run_rejection(*, shard=(0, 1), workers=1, mpi=False,
                   overwrite=False, compact=True)
-run.compact(stage="rejection")              # or "mcmc"
-run.summarize()
+run.compact(stage="rejection") -> CompactReport  # or "mcmc"
+run.summarize() -> Path                     # summary.parquet
 run.run_mcmc(*, shard=(0, 1), workers=1, mpi=False,
              overwrite=False, compact=True)
-run.status() -> dict[str, dict[str, int]]   # stage -> status -> count
+run.status() -> dict[str, dict[str, int]]   # stage -> status -> count;
+                                            # rejection also counts "pending"
 run.load_source(source_id) -> harv_hq.SourceResult
 
 harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData

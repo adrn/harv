@@ -68,8 +68,33 @@ def _run(args: argparse.Namespace) -> int:
     if args.workers < 1:
         sys.exit("hq run: --workers must be at least 1")
     Run(args.run_dir).run_rejection(
-        shard=args.shard, workers=args.workers, mpi=args.mpi, overwrite=args.overwrite
+        shard=args.shard,
+        workers=args.workers,
+        mpi=args.mpi,
+        overwrite=args.overwrite,
+        compact=args.compact,
     )
+    return 0
+
+
+def _compact(args: argparse.Namespace) -> int:
+    report = Run(args.run_dir).compact(args.stage)
+    print(  # noqa: T201
+        f"{args.stage}: {report.n_input_parts} parts -> {report.n_output_parts}, "
+        f"{report.n_sources} sources, {report.n_dropped_rows} superseded rows dropped"
+    )
+    return 0
+
+
+def _summarize(args: argparse.Namespace) -> int:
+    print(Run(args.run_dir).summarize())  # noqa: T201
+    return 0
+
+
+def _status(args: argparse.Namespace) -> int:
+    for stage, counts in Run(args.run_dir).status().items():
+        summary = ", ".join(f"{status} {n}" for status, n in sorted(counts.items()))
+        print(f"{stage:10s} {summary or 'no results'}")  # noqa: T201
     return 0
 
 
@@ -139,11 +164,11 @@ def _build_parser() -> argparse.ArgumentParser:
             help="skip compaction at the end of a whole-stage run",
         )
 
-    p = add("compact", "merge a stage's result parts", _not_implemented)
+    p = add("compact", "merge a stage's result parts", _compact)
     p.add_argument("--stage", choices=("rejection", "mcmc"), default="rejection")
 
-    add("summarize", "write summary.parquet", _not_implemented)
-    add("status", "count sources by stage and status", _not_implemented)
+    add("summarize", "write summary.parquet", _summarize)
+    add("status", "count sources by stage and status", _status)
     add("serve", "serve the web viewer", _not_implemented)
     return parser
 

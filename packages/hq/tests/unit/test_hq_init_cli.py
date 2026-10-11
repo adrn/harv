@@ -45,9 +45,6 @@ def test_cli_init(tmp_path, capsys):
     "argv",
     [
         ["mcmc", "--mpi"],
-        ["compact", "--stage", "mcmc"],
-        ["summarize"],
-        ["status"],
         ["serve"],
     ],
 )
