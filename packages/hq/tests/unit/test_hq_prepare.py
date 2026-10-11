@@ -16,7 +16,13 @@ from harv_hq import prepare as prepare_module
 from harv_hq._parquet_io import read_metadata, read_parquet
 from harv_hq.cli import main
 from harv_hq.prepare import PreparedData
-from harv_hq.provenance import check_provenance, make_provenance, sha256_file
+from harv_hq.provenance import (
+    CATALOG_TABLES,
+    PREPARED_TABLES,
+    check_provenance,
+    make_provenance,
+    sha256_file,
+)
 
 
 def kept_rows(table, sid):
@@ -103,6 +109,20 @@ class TestRV:
         )
         for name in ("data_index.parquet", "catalog.parquet"):
             assert read_metadata(rv_run.run_dir / name)["data_id"] == meta["data_id"]
+        # Only the catalog depends on [catalog]: editing its columns leaves the
+        # data, and every result built on them, valid.
+        tables = {
+            name: set(
+                read_metadata(rv_run.run_dir / name)["provenance"]["config_sha256"]
+            )
+            for name in ("data.parquet", "data_index.parquet", "catalog.parquet")
+        }
+        assert (
+            tables["data.parquet"]
+            == tables["data_index.parquet"]
+            == set(PREPARED_TABLES)
+        )
+        assert tables["catalog.parquet"] == set(CATALOG_TABLES)
         time_field = pq.read_schema(rv_run.run_dir / "data.parquet").field("time")
         assert time_field.metadata[b"scale"] == b"tcb"
 
@@ -159,9 +179,11 @@ class TestCatalog:
         t = kept_rows(rv_run.table, "J1234/5678")["time"]
         assert source["time_baseline"] == pytest.approx(float(t.max() - t.min()))
 
-    def test_reserved_column_name(self, rv_run):
+    @pytest.mark.parametrize("name", ["n_obs", "final", "ln_Z_int", "map_x", "x_p50"])
+    def test_reserved_column_name(self, rv_run, name):
+        """hq's catalog columns, and summary.parquet's, are reserved."""
         catalog = rv_run.catalog.copy()
-        catalog.rename_column("bp_rp", "n_obs")
+        catalog.rename_column("bp_rp", name)
         catalog.write(rv_run.run_dir / "catalog.ecsv", overwrite=True)
         with pytest.raises(ConfigError, match="collide"):
             Run(rv_run.run_dir).prepare()

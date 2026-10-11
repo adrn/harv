@@ -16,7 +16,8 @@ import pyarrow.compute as pc
 
 from harv_hq._parquet_io import read_parquet, write_parquet
 from harv_hq.prepare import CATALOG_FILE
-from harv_hq.results import ResultsIndex, read_source_rows
+from harv_hq.results import ResultsIndex, read_source_rows, rescanning
+from harv_hq.summary_stats import is_statistic
 
 SUMMARY_FILE = "summary.parquet"
 _EVIDENCE = (
@@ -29,8 +30,9 @@ _EVIDENCE = (
     "well_resolved",
 )
 _MCMC = ("r_hat_max", "ess_bulk_min")
-_READ_ATTEMPTS = 5
-_NAMED_STATS = ("period_unimodal", "max_phase_gap", "phase_coverage", "periods_spanned")
+# Small row groups over rows sorted by source_id, so a one-source read
+# (Run.load_source) decodes one group, found from the column statistics.
+_ROW_GROUP_SIZE = 4096
 
 
 def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> Path:
@@ -59,17 +61,12 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> P
     units = dict(catalog.units)
     rows = {}
     for stage, provenance in expected.items():
-        for attempt in range(_READ_ATTEMPTS):
-            index = ResultsIndex.build(
-                run_dir / "results" / stage, expected_provenance=provenance
+        stage_dir = run_dir / "results" / stage
+        rows[stage], stage_units = rescanning(
+            lambda d=stage_dir, p=provenance: _aligned(
+                ResultsIndex.build(d, expected_provenance=p, rescan=False), ids
             )
-            try:
-                rows[stage], stage_units = _aligned(index, ids)
-                break
-            except FileNotFoundError:
-                # Compaction replaced a part after the index was built.
-                if attempt == _READ_ATTEMPTS - 1:
-                    raise
+        )
         units.update(stage_units)
     rejection, mcmc = rows["rejection"], rows["mcmc"]
     n = len(ids)
@@ -91,18 +88,19 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> P
     columns.update({name: column(mcmc, name) for name in _MCMC})
     use_mcmc = pc.equal(columns["mcmc_status"], "converged")  # ty: ignore[unresolved-attribute]
     columns["final"] = pc.if_else(use_mcmc, "mcmc", "rejection")  # ty: ignore[unresolved-attribute]
-    for name in filter(_is_statistic, rejection):
+    for name in filter(is_statistic, rejection):
         columns[name] = pc.if_else(  # ty: ignore[unresolved-attribute]
             use_mcmc, column(mcmc, name), rejection[name]
         )
 
     path = run_dir / SUMMARY_FILE
-    table = pa.table(columns)
+    table = pa.table(columns).sort_by("source_id")
     write_parquet(
         path,
         table,
         units={k: v for k, v in units.items() if k in table.column_names},
         metadata={"provenance": expected["rejection"]},
+        row_group_size=_ROW_GROUP_SIZE,
     )
     return path
 
@@ -119,12 +117,3 @@ def _aligned(
     take = pa.array([position.get(sid) for sid in ids], type=pa.int64())
     aligned = table.take(take)
     return dict(zip(aligned.column_names, aligned.columns, strict=True)), units
-
-
-def _is_statistic(name: str) -> bool:
-    """Whether a sources column is a per-source summary statistic."""
-    return (
-        name in _NAMED_STATS
-        or name.startswith("map_")
-        or name.endswith(("_p16", "_p50", "_p84"))
-    )

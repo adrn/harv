@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, final
@@ -34,10 +35,12 @@ from harv_hq.provenance import (
 )
 from harv_hq.rejection import rejection_setup
 from harv_hq.results import (
+    SOURCES_SUFFIX,
     PartWriter,
     Payload,
     ResultsIndex,
     read_source_samples,
+    rescanning,
     supersede,
 )
 from harv_hq.summarize import SUMMARY_FILE, summarize
@@ -218,10 +221,12 @@ class Run:
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())
         try:
-            self._run_rejection(shard, workers, overwrite, comm)
+            part_provenance = self._run_rejection(shard, workers, overwrite, comm)
             # The whole stage ran here (MPI: rank 0, after the final barrier).
+            # Checked against what this run wrote with, so an edit to hq.toml
+            # or the cache during the run cannot fail it at the very end.
             if compact and shard[0] == 0 and (comm is not None or shard[1] == 1):
-                self.compact("rejection")
+                self._compact("rejection", part_provenance)
         except BaseException:
             # A rank that stops early would leave the others waiting at a
             # barrier forever; nothing above it can recover, so end them all.
@@ -232,7 +237,7 @@ class Run:
 
     def _run_rejection(
         self, shard: tuple[int, int], workers: int, overwrite: bool, comm: Any
-    ) -> None:
+    ) -> dict[str, Any]:
         i, n = shard
         prepared, cache_path, part_provenance = self._rejection_inputs()
         stage_dir = self.run_dir / "results" / "rejection"
@@ -288,6 +293,7 @@ class Run:
             log_handler.close()
         if comm is not None:
             comm.Barrier()
+        return part_provenance
 
     def compact(self, stage: str = "rejection") -> CompactReport:
         """Merge a stage's result parts (``hq compact``); see the spec's "Compaction".
@@ -306,10 +312,13 @@ class Run:
         ProvenanceError
             If a part was built from different inputs.
         """
+        return self._compact(stage, self._stage_provenance(stage))
+
+    def _compact(self, stage: str, expected: dict[str, Any] | None) -> CompactReport:
         report = compact(
             self.run_dir / "results" / stage,
             stage=stage,
-            expected_provenance=self._stage_provenance(stage),
+            expected_provenance=expected,
             compact_n_sources=self.config.results.compact_n_sources,
         )
         self._indexes.pop(stage, None)
@@ -339,14 +348,31 @@ class Run:
 
         Returns
         -------
-            ``stage -> status -> count``. Rejection also counts ``pending``
-            sources, prepared but without a result.
+            ``stage -> status -> count`` over the prepared sources. Rejection
+            also counts ``pending`` sources, prepared but without a result.
+
+        Raises
+        ------
+        ProvenanceError
+            If a stage's parts were built from different inputs (e.g. before
+            ``hq prepare --overwrite``), rather than counting stale results.
         """
-        counts = {stage: self._index(stage).status_counts() for stage in STAGES}
-        n_prepared = len(PreparedData(self.run_dir).source_ids)
-        counts["rejection"]["pending"] = n_prepared - len(
-            self._index("rejection").records
-        )
+        prepared = set(PreparedData(self.run_dir).source_ids)
+        counts: dict[str, dict[str, int]] = {}
+        for stage in STAGES:
+            stage_dir = self.run_dir / "results" / stage
+            has_parts = any(stage_dir.glob(f"*{SOURCES_SUFFIX}"))
+            records = ResultsIndex.build(
+                stage_dir,
+                expected_provenance=self._stage_provenance(stage)
+                if has_parts
+                else None,
+            ).records
+            counts[stage] = dict(
+                Counter(r.status for sid, r in records.items() if sid in prepared)
+            )
+            if stage == "rejection":
+                counts[stage]["pending"] = len(prepared - records.keys())
         return counts
 
     def load_source(self, source_id: Any) -> SourceResult:
@@ -416,12 +442,15 @@ class Run:
         return self._indexes[stage]
 
     def _read_samples(self, stage: str, source_id: Any) -> Samples:
-        try:
-            return read_source_samples(self._index(stage).records[source_id])
-        except FileNotFoundError:
-            # The part was merged away (compaction) since the index was built.
-            self._indexes.pop(stage, None)
-            return read_source_samples(self._index(stage).records[source_id])
+        def read() -> Samples:
+            try:
+                return read_source_samples(self._index(stage).records[source_id])
+            except FileNotFoundError:
+                # Merged away by compaction since the index was built.
+                self._indexes.pop(stage, None)
+                raise
+
+        return rescanning(read)
 
     def _checked_prior_cache(
         self, expected: dict[str, Any]

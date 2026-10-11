@@ -1,6 +1,7 @@
 """Tests for compaction, ``summarize``, and ``status``."""
 
 import itertools
+import json
 import math
 import os
 import time
@@ -13,8 +14,9 @@ import pyarrow.parquet as pq
 import pytest
 
 from harv.samplers import RejectionSampler
-from harv_hq import Run
+from harv_hq import ProvenanceError, Run
 from harv_hq import compact as compact_module
+from harv_hq import rejection as rejection_module
 from harv_hq import results as results_module
 from harv_hq import summarize as summarize_module
 from harv_hq.cli import main
@@ -238,14 +240,91 @@ class TestCompact:
     def test_mismatched_output_deletes_nothing(self, rv_run, monkeypatch):
         run = rejected_run(rv_run)
         names = parts(run)
-        original = compact_module._payloads
-        # A writer bug: one source of each block goes missing.
-        monkeypatch.setattr(
-            compact_module, "_payloads", lambda block: original(block)[:-1]
-        )
+        original = compact_module._read_input
+        # A reader bug: one source of each input goes missing.
+        monkeypatch.setattr(compact_module, "_read_input", lambda *a: original(*a)[:-1])
         with pytest.raises(RuntimeError, match="inputs were left in place"):
             run.compact()
         assert set(names) <= set(parts(run))
+
+    def test_sample_ranges_across_row_groups(self, rv_run, monkeypatch):
+        """Sources whose samples straddle row groups come through intact."""
+        # 64 samples per source in 100-row groups: most sources span two.
+        monkeypatch.setattr(results_module, "SAMPLES_ROW_GROUP_SIZE", 100)
+        run = rejected_run(rv_run)
+        some = next(stage_dir(run).glob("*.samples.parquet"))
+        assert pq.ParquetFile(some).num_row_groups > 1
+        before = snapshot(run)
+        run.compact()
+        assert_same(snapshot(run), before)
+        assert_fully_compacted(run, len(rv_run.kept))
+
+    def test_parts_are_filled_in_input_order_and_sorted_within(self, rv_run):
+        run = rejected_run(rv_run)
+        run.compact()
+        for name in parts(run):
+            ids = pq.read_table(stage_dir(run) / name)["source_id"].to_pylist()
+            assert ids == sorted(ids)
+            samples = pq.read_table(
+                stage_dir(run) / name.replace("sources", "samples"),
+                columns=["source_id"],
+            )["source_id"].to_pylist()
+            assert list(dict.fromkeys(samples)) == ids
+
+    def test_outputs_keep_the_inputs_provenance(self, rv_run):
+        run = rejected_run(rv_run)
+        inputs = [
+            pq.read_schema(p).metadata for p in stage_dir(run).glob("*.sources.parquet")
+        ]
+        newest = max(
+            (json.loads(m[b"hq.provenance"]) for m in inputs),
+            key=lambda p: p["created"],
+        )
+        run.compact()
+        for name in parts(run):
+            meta = pq.read_schema(stage_dir(run) / name).metadata
+            assert json.loads(meta[b"hq.provenance"]) == newest
+
+    def test_parts_without_provenance_stay_without(self, rv_run):
+        """MCMC parts have no provenance yet; compaction must not invent one."""
+        run = rejected_run(rv_run)
+        mcmc = run.run_dir / "results" / "mcmc"
+        mcmc.mkdir()
+        for k in range(2):
+            row = {
+                "source_id": f"s{k}",
+                "status": "failed",
+                "error": "x",
+                "finished": datetime.now(UTC),
+            }
+            write_part(mcmc, f"0000-of-0001-mcmc{k:04d}", [Payload(row=row)], {})
+        assert run.compact("mcmc").n_sources == 2
+        (part,) = mcmc.glob("*.sources.parquet")
+        assert b"hq.provenance" not in pq.read_schema(part).metadata
+        # A later check refuses it cleanly instead of failing on a null.
+        with pytest.raises(ProvenanceError):
+            ResultsIndex.build(
+                mcmc, expected_provenance=run._stage_provenance("rejection")
+            )
+
+    def test_a_concurrent_compaction_restarts_this_one(self, rv_run, monkeypatch):
+        run = rejected_run(rv_run)
+        before = snapshot(run)
+        original = ResultsIndex._from_paths.__func__
+        calls = []
+
+        def vanishing_once(cls, paths, expected):
+            calls.append(1)
+            if len(calls) == 1:
+                raise FileNotFoundError("deleted by another compaction")
+            return original(cls, paths, expected)
+
+        monkeypatch.setattr(ResultsIndex, "_from_paths", classmethod(vanishing_once))
+        assert run.compact().n_sources == len(rv_run.kept)
+        assert_same(snapshot(run), before)
+
+    def test_orphans_already_gone_are_not_counted(self, tmp_path):
+        assert compact_module._delete_orphans([tmp_path / "x.samples.parquet"]) == 0
 
 
 def _crash(*args: object, **kwargs: object):
@@ -253,6 +332,28 @@ def _crash(*args: object, **kwargs: object):
 
 
 class TestAutomaticCompaction:
+    def test_an_edit_during_the_run_does_not_fail_its_compaction(
+        self, rv_run, monkeypatch
+    ):
+        config = rv_run.run_dir / "hq.toml"
+        config.write_text(
+            config.read_text()
+            + f"\n[results]\nflush_n_sources = {FLUSH}\ncompact_n_sources = {COMPACT}\n"
+        )
+        run = Run(rv_run.run_dir)
+        run.prepare()
+        run.make_prior_cache()
+        process = rejection_module.process_rejection
+
+        def edit_then_process(sid, *args: object, **kwargs: object):
+            # The user edits [rejection] for their next run while this one runs.
+            config.write_text(config.read_text().replace("top_k = 64", "top_k = 32"))
+            return process(sid, *args, **kwargs)
+
+        monkeypatch.setattr(rejection_module, "process_rejection", edit_then_process)
+        run.run_rejection()  # compacts at the end with what it wrote with
+        assert_fully_compacted(run, len(rv_run.kept))
+
     def test_a_whole_stage_run_compacts(self, rv_run):
         run = rejected_run(rv_run, compact=True)
         assert_fully_compacted(run, len(rv_run.kept))
@@ -447,6 +548,19 @@ class TestConcurrentCompaction:
         monkeypatch.setattr(summarize_module, "_aligned", vanishing_once)
         summary = pq.read_table(run.summarize())
         assert set(summary["rejection_status"].to_pylist()) == {"ok"}
+
+
+def test_status_refuses_stale_results(rv_run):
+    run = rejected_run(rv_run)
+    run.prepare(overwrite=True)  # a new data_id: the old results are stale
+    with pytest.raises(ProvenanceError, match="data_id"):
+        Run(run.run_dir).status()
+
+
+def test_summary_is_sorted_by_source_id(rv_run):
+    run = rejected_run(rv_run)
+    ids = pq.read_table(run.summarize())["source_id"].to_pylist()
+    assert ids == sorted(ids)
 
 
 def test_status_counts_pending_sources(rv_run):
