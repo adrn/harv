@@ -33,7 +33,7 @@ from harv_hq._parquet_io import (
     write_parquet,
 )
 from harv_hq.config import Config, ConfigError
-from harv_hq.provenance import ProvenanceError, make_provenance
+from harv_hq.provenance import PREPARED_TABLES, ProvenanceError, make_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def prepare(
 
     data_id = uuid.uuid4().hex
     metadata = {
-        "provenance": make_provenance(config, data_id=data_id),
+        "provenance": make_provenance(config, tables=PREPARED_TABLES, data_id=data_id),
         "kind": kind,
         "data_id": data_id,
     }

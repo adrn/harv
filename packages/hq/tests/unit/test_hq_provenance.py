@@ -7,7 +7,14 @@ from datetime import datetime
 import pytest
 
 from harv_hq import Config, ProvenanceError, init_run
-from harv_hq.provenance import check_provenance, make_provenance, sha256_file
+from harv_hq.provenance import (
+    ALL_TABLES,
+    REJECTION_TABLES,
+    check_provenance,
+    config_hashes,
+    make_provenance,
+    sha256_file,
+)
 
 
 @pytest.fixture
@@ -34,9 +41,34 @@ def test_make_provenance_keys(config):
         "prior_cache_id",
         "created",
     }
-    assert record["config_sha256"] == sha256_file(config.config_path)
+    assert record["config_sha256"] == config_hashes(config.config_path, ALL_TABLES)
     assert record["model_file_sha256"] == sha256_file(config.run.model_file)
     assert datetime.fromisoformat(record["created"]).utcoffset().total_seconds() == 0
+
+
+def test_table_hashes_ignore_formatting_and_other_tables(config):
+    before = config_hashes(config.config_path, ALL_TABLES)
+    text = config.config_path.read_text()
+    config.config_path.write_text(
+        "# a comment\n" + text + "\n[results]\nflush_n_sources = 7\n"
+        "\n[serve]\nport = 9999\n"
+    )
+    assert config_hashes(config.config_path, ALL_TABLES) == before
+    config.config_path.write_text(text.replace("top_k = 512", "top_k = 513"))
+    after = config_hashes(config.config_path, ALL_TABLES)
+    assert {k for k in before if before[k] != after[k]} == {"rejection"}
+
+
+def test_a_check_compares_only_the_recorded_tables(config):
+    part = make_provenance(config, tables=REJECTION_TABLES)
+    # Adding [mcmc] later leaves results that never depended on it valid.
+    config.config_path.write_text(config.config_path.read_text() + "\n[mcmc]\n")
+    check_provenance(part, make_provenance(config), path="x.parquet")
+    config.config_path.write_text(
+        config.config_path.read_text().replace("top_k = 512", "top_k = 513")
+    )
+    with pytest.raises(ProvenanceError, match=r"\['rejection'\]"):
+        check_provenance(part, make_provenance(config), path="x.parquet")
 
 
 def test_make_provenance_optional_keys(config):

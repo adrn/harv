@@ -26,7 +26,12 @@ from harv_hq.config import Config
 from harv_hq.execution import Progress, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
 from harv_hq.prepare import PreparedData, prepare
-from harv_hq.provenance import check_provenance, make_provenance
+from harv_hq.provenance import (
+    PRIOR_CACHE_TABLES,
+    REJECTION_TABLES,
+    check_provenance,
+    make_provenance,
+)
 from harv_hq.rejection import rejection_setup
 from harv_hq.results import (
     PartWriter,
@@ -141,7 +146,11 @@ class Run:
                 key=prior_cache_key(self.config.run.seed),
                 batch_size=self.config.prior_cache.batch_size,
             )
-            record = make_provenance(self.config, prior_cache_id=uuid.uuid4().hex)
+            record = make_provenance(
+                self.config,
+                tables=PRIOR_CACHE_TABLES,
+                prior_cache_id=uuid.uuid4().hex,
+            )
             with h5py.File(tmp, "a") as f:
                 f.attrs[_PROVENANCE_ATTR] = json.dumps(record)
             tmp.replace(path)
@@ -379,14 +388,16 @@ class Run:
     def _rejection_inputs(self) -> tuple[PreparedData, Path, dict[str, Any]]:
         """The checked prepared data and prior cache, and parts' provenance."""
         prepared = PreparedData(self.run_dir)
-        expected = make_provenance(self.config, data_id=prepared.data_id)
-        check_provenance(prepared.provenance, expected, path=prepared.path)
-        cache_path, cache_provenance = self._checked_prior_cache(expected)
-        return (
-            prepared,
-            cache_path,
-            {**expected, "prior_cache_id": cache_provenance["prior_cache_id"]},
+        current = make_provenance(self.config, data_id=prepared.data_id)
+        check_provenance(prepared.provenance, current, path=prepared.path)
+        cache_path, cache_provenance = self._checked_prior_cache(current)
+        part = make_provenance(
+            self.config,
+            tables=REJECTION_TABLES,
+            data_id=prepared.data_id,
+            prior_cache_id=cache_provenance["prior_cache_id"],
         )
+        return prepared, cache_path, part
 
     def _stage_provenance(self, stage: str) -> dict[str, Any] | None:
         """What a stage's parts must match (MCMC parts: not checked yet)."""
