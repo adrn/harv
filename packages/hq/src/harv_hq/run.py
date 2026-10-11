@@ -6,6 +6,7 @@ subcommand is a thin wrapper around one method here.
 
 __all__ = ("Run", "SourceResult")
 
+import functools
 import json
 import logging
 import os
@@ -17,14 +18,21 @@ from typing import Any, final
 import h5py
 
 from harv.data import GaiaAstrometryData, RVData
-from harv.samplers import RejectionSampler, Samples, make_prior_cache
+from harv.samplers import Samples, make_prior_cache
 from harv_hq._model_file import ModelFile
 from harv_hq.config import Config
+from harv_hq.execution import Progress, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
 from harv_hq.prepare import PreparedData, prepare
 from harv_hq.provenance import check_provenance, make_provenance
-from harv_hq.rejection import process_rejection
-from harv_hq.results import PartWriter, ResultsIndex, read_source_samples, supersede
+from harv_hq.rejection import rejection_setup
+from harv_hq.results import (
+    PartWriter,
+    Payload,
+    ResultsIndex,
+    read_source_samples,
+    supersede,
+)
 
 logger = logging.getLogger("harv_hq")
 
@@ -146,6 +154,8 @@ class Run:
         self,
         *,
         shard: tuple[int, int] = (0, 1),
+        workers: int = 1,
+        mpi: bool = False,
         overwrite: bool = False,
     ) -> None:
         """Run the rejection sampler on every source in a slice (``hq run``).
@@ -154,31 +164,58 @@ class Run:
         ``hq.toml`` and model file, skips sources already done (see the
         spec's "Resume"), and writes result parts as it goes. Anything still
         buffered is written when the loop ends, including when it is
-        interrupted by an exception.
+        interrupted by an exception. See the spec's "Execution modes".
 
         Parameters
         ----------
         shard
             This process's slice ``(i, N)``.
+        workers
+            Local worker processes; above 1, sources run on a spawned pool
+            and this process writes the parts.
+        mpi
+            Process slice ``rank/size`` of ``MPI.COMM_WORLD`` (needs
+            ``mpi4py``); excludes ``shard`` and ``workers``.
         overwrite
             Move existing rejection results to
             ``results/superseded-<timestamp>-rejection/`` and start over.
 
         Raises
         ------
+        ValueError
+            If ``mpi`` is combined with ``shard`` or ``workers``, or
+            ``workers < 1``.
         FileNotFoundError
             If the data are not prepared or the prior cache is not built.
         ProvenanceError
             If an input or an existing part was built from different inputs.
         """
+        if workers < 1:
+            msg = f"workers must be at least 1, got {workers}"
+            raise ValueError(msg)
+        comm = None
+        if mpi:
+            if shard != (0, 1) or workers != 1:
+                msg = (
+                    "mpi=True takes its slice from the MPI rank; omit shard and workers"
+                )
+                raise ValueError(msg)
+            comm = mpi_comm()
+            shard = (comm.Get_rank(), comm.Get_size())
+        i, n = shard
+
         prepared = PreparedData(self.run_dir)
         expected = make_provenance(self.config, data_id=prepared.data_id)
         check_provenance(prepared.provenance, expected, path=prepared.path)
         cache_path, cache_provenance = self._checked_prior_cache(expected)
 
         stage_dir = self.run_dir / "results" / "rejection"
-        if overwrite:
+        # Under MPI only rank 0 moves results aside, and every rank waits for
+        # it before reading what is done.
+        if overwrite and (comm is None or i == 0):
             supersede(stage_dir)
+        if comm is not None:
+            comm.Barrier()
         part_provenance = {
             **expected,
             "prior_cache_id": cache_provenance["prior_cache_id"],
@@ -186,7 +223,6 @@ class Run:
         existing = ResultsIndex.build(stage_dir, expected_provenance=part_provenance)
         done = existing.done()
         todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
-        i, n = shard
         log_handler, log_level = self._log_to_file(f"rejection-{i:04d}-of-{n:04d}.log")
         logger.info(
             "rejection: slice %d/%d, %d sources to run (%d already done)",
@@ -197,14 +233,7 @@ class Run:
         )
         try:
             data = prepared.read(todo)
-            prior, model = self.model_file.setup(self.config.run.kind)
-            rejection = self.config.rejection
-            sampler = RejectionSampler(
-                prior,
-                model,
-                batch_size=rejection.batch_size,
-                min_evidence_ess=rejection.min_evidence_ess,
-            )
+            setup = functools.partial(rejection_setup, self.config, cache_path)
             writer = PartWriter(
                 stage_dir,
                 stage="rejection",
@@ -214,18 +243,19 @@ class Run:
                 flush_seconds=self.config.results.flush_seconds,
                 structure=existing.structure,
             )
+            progress = Progress(
+                "rejection", len(todo), ranks=n if comm is not None and i == 0 else 1
+            )
+
+            def sink(payload: Payload) -> None:
+                writer.add(payload)
+                progress.tick()
+
             try:
-                for source_id in todo:
-                    writer.add(
-                        process_rejection(
-                            source_id,
-                            data[source_id],
-                            sampler=sampler,
-                            prior_cache=cache_path,
-                            config=rejection,
-                            seed=self.config.run.seed,
-                        )
-                    )
+                if workers > 1:
+                    run_pool(todo, data, setup, sink, workers=workers)
+                else:
+                    run_serial(todo, data, setup, sink)
             finally:
                 writer.close()
         finally:
@@ -234,6 +264,8 @@ class Run:
             logger.removeHandler(log_handler)
             logger.setLevel(log_level)
             log_handler.close()
+        if comm is not None:
+            comm.Barrier()
 
     def load_source(self, source_id: Any) -> SourceResult:
         """Everything hq holds for one source.

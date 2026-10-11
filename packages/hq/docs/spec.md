@@ -606,17 +606,22 @@ falls as `N` grows.
   `--array=0-15` with `--shard $SLURM_ARRAY_TASK_ID/16`, disBatch). Shards are
   fully independent processes.
 - **Local pool** runs a `ProcessPoolExecutor` with the `spawn` start method.
-  Each worker is pinned to one CPU thread (BLAS and XLA environment variables
-  set before JAX is imported), so `W` workers use `W` cores. The worker
+  Each worker is pinned to one CPU thread, so `W` workers use `W` cores: the
+  parent sets the BLAS thread variables (`OMP_NUM_THREADS` and friends) and
+  appends single-thread flags to `XLA_FLAGS` in the environment the workers
+  are spawned with, and restores its own environment afterwards. The worker
   initializer imports the model file and builds the sampler once. The parent
-  loads the slice's data and sends each task its source's arrays; workers
-  return results as plain NumPy payloads, and only the parent buffers and
-  writes parts.
+  loads the slice's data and sends each task its source's data; at most
+  `2 * W` sources are in flight. Workers return plain payloads, and only the
+  parent buffers and writes parts, in completion order.
 - **MPI** uses `mpi4py` (the `harv-hq[mpi]` extra), imported lazily so a
   missing install raises `ImportError` naming `hq run --mpi`. Rank `r` of `n`
   processes slice `r/n` and writes its own parts, so ranks need no
-  communication beyond a final barrier. Rank 0 additionally logs aggregate
-  progress. `--mpi` is mutually exclusive with `--shard` and `--workers`.
+  communication beyond barriers: one after the start (with `--overwrite`,
+  only rank 0 moves the old results aside, and the others wait for it) and
+  one at the end. Rank 0 additionally logs progress extrapolated to all
+  ranks. `--mpi` is mutually exclusive with `--shard` and `--workers`.
+- Every mode logs a progress line about every 5% of its slice.
 - GPU runs use the single-process or explicit-shard modes, one process per
   device.
 
