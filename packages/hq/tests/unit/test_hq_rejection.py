@@ -442,6 +442,32 @@ class TestExecutionModes:
         logs = {p.name for p in (run.run_dir / "logs").iterdir()}
         assert {"rejection-0000-of-0002.log", "rejection-0001-of-0002.log"} <= logs
 
+    def test_a_failing_rank_aborts_every_rank(self, rv_run, monkeypatch):
+        run = prepared_run(rv_run)
+        aborted = []
+
+        class FakeComm:
+            def Get_rank(self):
+                return 0
+
+            def Get_size(self):
+                return 2
+
+            def Barrier(self):
+                pass
+
+            def Abort(self, code):
+                aborted.append(code)
+
+        def broken(stage_dir):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(run_module, "mpi_comm", FakeComm)
+        monkeypatch.setattr(run_module, "supersede", broken)
+        with pytest.raises(OSError, match="disk full"):
+            run.run_rejection(mpi=True, overwrite=True)
+        assert aborted == [1]
+
     def test_mpi_without_mpi4py(self, rv_run, monkeypatch):
         monkeypatch.setitem(sys.modules, "mpi4py", None)
         with pytest.raises(ImportError, match="harv-hq\\[mpi\\]"):

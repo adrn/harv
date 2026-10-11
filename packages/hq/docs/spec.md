@@ -620,7 +620,10 @@ falls as `N` grows.
   communication beyond barriers: one after the start (with `--overwrite`,
   only rank 0 moves the old results aside, and the others wait for it) and
   one at the end. Rank 0 additionally logs progress extrapolated to all
-  ranks. `--mpi` is mutually exclusive with `--shard` and `--workers`.
+  ranks. A rank that raises (anything outside a single source's
+  processing, which only marks that source `failed`) logs the error and calls
+  `MPI.COMM_WORLD.Abort(1)`, so no rank is left waiting at a barrier.
+  `--mpi` is mutually exclusive with `--shard` and `--workers`.
 - Every mode logs a progress line about every 5% of its slice.
 - GPU runs use the single-process or explicit-shard modes, one process per
   device.
