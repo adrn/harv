@@ -435,7 +435,10 @@ file once (used by compaction and `summarize`). The tie rule and the
 rejection `pending` sources (spec updated). MCMC parts are not
 provenance-checked until phase 6 defines their provenance. The crash tests
 inject a crash after the write step, after the verify step, and after the
-third deletion.
+third deletion. Provenance now hashes `hq.toml` per table, and each output
+records only the tables it depends on, so editing `[results]`, `[serve]`, a
+comment, or adding `[mcmc]` no longer invalidates earlier outputs (spec
+updated; `provenance.config_hashes`, `*_TABLES`).
 
 **`compact.py`**, `compact(run, stage) -> CompactReport` (counts of input
 parts, sources kept, superseded rows dropped, output parts), following the

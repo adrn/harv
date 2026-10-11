@@ -509,6 +509,25 @@ class TestProvenance:
         with pytest.raises(ProvenanceError, match="model_file_sha256"):
             Run(run.run_dir).run_rejection()
 
+    def test_editing_storage_settings_keeps_results_valid(self, rv_run):
+        run = prepared_run(rv_run)
+        run.run_rejection(shard=(0, 2))
+        config = run.run_dir / "hq.toml"
+        text = config.read_text()
+        config.write_text(
+            "# tuning compaction\n"
+            + text.replace("flush_n_sources = 4", "flush_n_sources = 5")
+            + "\n[serve]\nport = 9000\n\n[mcmc]\nnum_chains = 2\n"
+        )
+        resumed = Run(run.run_dir)
+        resumed.run_rejection()  # resumes, then compacts
+        assert index(resumed).status_counts() == {"ok": len(rv_run.kept)}
+        resumed.summarize()
+        # A setting rejection depends on is still refused.
+        config.write_text(config.read_text().replace("top_k = 64", "top_k = 32"))
+        with pytest.raises(ProvenanceError, match=r"\['rejection'\]"):
+            Run(run.run_dir).run_rejection()
+
     def test_a_rebuilt_prior_cache_is_refused_by_existing_parts(self, rv_run):
         run = prepared_run(rv_run)
         run.run_rejection(shard=(0, 2))

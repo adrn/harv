@@ -803,13 +803,28 @@ prior cache) with these keys:
 | Key                                         | Description                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------- |
 | `hq_version`, `harv_version`, `jax_version` | Package versions                                                           |
-| `config_sha256`                             | sha256 of `hq.toml` bytes                                                  |
+| `config_sha256`                             | sha256 of each `hq.toml` table the output depends on (see below)           |
 | `model_file_sha256`                         | sha256 of the model file bytes                                             |
 | `data_id`                                   | The `data_id` of the prepared data                                         |
 | `prior_cache_id`                            | A uuid4 written into the prior cache when it was built (result parts only) |
 | `created`                                   | ISO 8601 UTC timestamp                                                     |
 
-A stage refuses to build on outputs whose `config_sha256`,
+`config_sha256` maps table names to the sha256 of that table's parsed values
+as sorted-key JSON (an absent table hashes as `null`), so comments,
+formatting, and key order do not count. Each output records only the tables
+it depends on:
+
+| Output                                  | Tables                                                         |
+| --------------------------------------- | -------------------------------------------------------------- |
+| prepared data and `catalog.parquet`     | `[run]`, `[data]`, `[prepare]`, `[catalog]`                    |
+| `prior_cache.h5`                        | `[run]`, `[prior_cache]`                                       |
+| rejection parts (and `summary.parquet`) | `[run]`, `[data]`, `[prepare]`, `[prior_cache]`, `[rejection]` |
+
+`[results]` and `[serve]` change only how results are stored or shown, so no
+output records them: they can be edited at any time. Adding or editing
+`[mcmc]` leaves rejection results valid.
+
+A stage refuses to build on outputs whose recorded table hashes,
 `model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
 ones, raising `harv_hq.ProvenanceError` that names the mismatched field and
 file. The prepared data records `model_file_sha256` too, because the model
