@@ -1,6 +1,11 @@
 """Tests for ``hq prior-cache`` and ``hq run``: result parts, resume, provenance."""
 
+import importlib.util
+import logging
+import os
 import shutil
+import subprocess
+import sys
 from datetime import UTC, datetime
 
 import jax
@@ -12,8 +17,10 @@ from unxt import Q
 
 from harv.samplers import RejectionSampler, Samples
 from harv_hq import ProvenanceError, Run
+from harv_hq import rejection as rejection_module
 from harv_hq import run as run_module
 from harv_hq.cli import main
+from harv_hq.execution import Progress
 from harv_hq.ids import source_key
 from harv_hq.prepare import PreparedData
 from harv_hq.results import (
@@ -166,9 +173,9 @@ class TestFailuresAndResume:
         # Failed sources are not done: the next resume reruns them, and only them.
         monkeypatch.setattr(RejectionSampler, "run_with_samples", original)
         calls = []
-        process = run_module.process_rejection
+        process = rejection_module.process_rejection
         monkeypatch.setattr(
-            run_module,
+            rejection_module,
             "process_rejection",
             lambda sid, *a, **k: calls.append(sid) or process(sid, *a, **k),
         )
@@ -179,7 +186,7 @@ class TestFailuresAndResume:
     def test_resume_after_an_interruption(self, rv_run, monkeypatch):
         run = prepared_run(rv_run)
         calls = []
-        original = run_module.process_rejection
+        original = rejection_module.process_rejection
 
         def interrupted(source_id, *args: object, **kwargs: object):
             if len(calls) == 6:
@@ -187,7 +194,7 @@ class TestFailuresAndResume:
             calls.append(source_id)
             return original(source_id, *args, **kwargs)
 
-        monkeypatch.setattr(run_module, "process_rejection", interrupted)
+        monkeypatch.setattr(rejection_module, "process_rejection", interrupted)
         # Caches the (empty) index on this Run.
         assert run.load_source(next(iter(rv_run.kept))).rejection_status == "pending"
         with pytest.raises(KeyboardInterrupt):
@@ -197,10 +204,10 @@ class TestFailuresAndResume:
         # ...and the cached index was dropped, so this Run sees it too.
         assert run.load_source(calls[0]).rejection_status == "ok"
 
-        monkeypatch.setattr(run_module, "process_rejection", original)
+        monkeypatch.setattr(rejection_module, "process_rejection", original)
         rerun = []
         monkeypatch.setattr(
-            run_module,
+            rejection_module,
             "process_rejection",
             lambda sid, *a, **k: rerun.append(sid) or original(sid, *a, **k),
         )
@@ -320,17 +327,178 @@ class TestSchema:
             samples_table(samples, "a", stage="rejection")
 
 
-class TestShards:
-    def test_two_shards_cover_every_source(self, rv_run):
+def all_samples(run):
+    """Every result's samples, in a fixed order, for comparing runs."""
+    paths = sorted(str(p) for p in stage_dir(run).glob("*.samples.parquet"))
+    return (
+        ds.dataset(paths)
+        .to_table()
+        .sort_by([("source_id", "ascending"), ("sample_index", "ascending")])
+    )
+
+
+def twin_runs(fixture, tmp_path):
+    """Two prepared copies of one run directory (same seed, data, and cache)."""
+    run = prepared_run(fixture)
+    shutil.copytree(run.run_dir, tmp_path / "twin")
+    return run, Run(tmp_path / "twin")
+
+
+class TestExecutionModes:
+    def test_shards_match_a_serial_run(self, rv_run, tmp_path):
+        serial, sharded = twin_runs(rv_run, tmp_path)
+        serial.run_rejection()
+        for i in range(3):
+            sharded.run_rejection(shard=(i, 3))
+        assert all_samples(sharded).equals(all_samples(serial))
+        names = {p.name[:12] for p in stage_dir(sharded).glob("*.sources.parquet")}
+        assert names == {f"000{i}-of-0003" for i in range(3)}
+
+    def test_a_pool_matches_a_serial_run(self, rv_run, tmp_path):
+        serial, pooled = twin_runs(rv_run, tmp_path)
+        serial.run_rejection()
+        environ = dict(os.environ)
+        pooled.run_rejection(workers=2)
+        # The workers' thread pinning does not leak into this process.
+        assert dict(os.environ) == environ
+        assert all_samples(pooled).equals(all_samples(serial))
+        assert index(pooled).status_counts() == {"ok": len(rv_run.kept)}
+        assert all(
+            p.name.startswith("0000-of-0001-")
+            for p in stage_dir(pooled).glob("*.parquet")
+        )
+
+    def test_changing_the_shard_count_recomputes_nothing(self, rv_run, monkeypatch):
         run = prepared_run(rv_run)
-        run.run_rejection(shard=(0, 2))
+        run.run_rejection(shard=(0, 4))
+        run.run_rejection(shard=(1, 4))
         first = set(index(run).records)
-        run.run_rejection(shard=(1, 2))
         assert first
         assert first != set(rv_run.kept)
+        calls = []
+        process = rejection_module.process_rejection
+        monkeypatch.setattr(
+            rejection_module,
+            "process_rejection",
+            lambda sid, *a, **k: calls.append(sid) or process(sid, *a, **k),
+        )
+        run.run_rejection()
+        assert set(calls) == set(rv_run.kept) - first
         assert set(index(run).records) == set(rv_run.kept)
+
+    def test_two_processes_on_one_slice_resolve_to_the_newest(
+        self, rv_run, monkeypatch
+    ):
+        run = prepared_run(rv_run)
+        run.run_rejection()
+        first_parts = set(stage_dir(run).glob("*.sources.parquet"))
+        # A second process that started before the first wrote anything.
+        monkeypatch.setattr(ResultsIndex, "done", lambda _self: set())
+        run.run_rejection()
+        second_parts = set(stage_dir(run).glob("*.sources.parquet")) - first_parts
+        assert len(second_parts) == len(first_parts)  # distinct names, none lost
+        records = index(run).records
+        assert set(records) == set(rv_run.kept)
+        assert {r.sources_path for r in records.values()} <= second_parts
+
+    def test_mpi_excludes_shard(self, rv_run):
+        run = Run(rv_run.run_dir)
+        with pytest.raises(ValueError, match="omit shard"):
+            run.run_rejection(mpi=True, shard=(0, 2))
+        with pytest.raises(ValueError, match="at least 1"):
+            run.run_rejection(workers=0)
+
+    def test_mpi_ranks_take_their_slices(self, rv_run, monkeypatch):
+        """The MPI path, with a stand-in communicator: ranks run one at a time."""
+        run = prepared_run(rv_run)
+        run.run_rejection()
+        barriers = []
+
+        class FakeComm:
+            def __init__(self, rank):
+                self.rank = rank
+
+            def Get_rank(self):
+                return self.rank
+
+            def Get_size(self):
+                return 2
+
+            def Barrier(self):
+                barriers.append(self.rank)
+
+        # --overwrite: only rank 0 moves results aside, so rank 1 does not move
+        # rank 0's new parts. Rank 1 also runs a pool (--mpi --workers 2).
+        for rank, workers in ((0, 1), (1, 2)):
+            monkeypatch.setattr(run_module, "mpi_comm", lambda r=rank: FakeComm(r))
+            run.run_rejection(mpi=True, workers=workers, overwrite=True)
+        assert barriers == [0, 0, 1, 1]  # after the overwrite, and at the end
+        assert len(list((run.run_dir / "results").glob("superseded-*"))) == 1
+        assert index(run).status_counts() == {"ok": len(rv_run.kept)}
         names = {p.name[:12] for p in stage_dir(run).glob("*.sources.parquet")}
         assert names == {"0000-of-0002", "0001-of-0002"}
+        logs = {p.name for p in (run.run_dir / "logs").iterdir()}
+        assert {"rejection-0000-of-0002.log", "rejection-0001-of-0002.log"} <= logs
+
+    def test_a_failing_rank_aborts_every_rank(self, rv_run, monkeypatch):
+        run = prepared_run(rv_run)
+        aborted = []
+
+        class FakeComm:
+            def Get_rank(self):
+                return 0
+
+            def Get_size(self):
+                return 2
+
+            def Barrier(self):
+                pass
+
+            def Abort(self, code):
+                aborted.append(code)
+
+        def broken(stage_dir):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(run_module, "mpi_comm", FakeComm)
+        monkeypatch.setattr(run_module, "supersede", broken)
+        with pytest.raises(OSError, match="disk full"):
+            run.run_rejection(mpi=True, overwrite=True)
+        assert aborted == [1]
+
+    def test_mpi_without_mpi4py(self, rv_run, monkeypatch):
+        monkeypatch.setitem(sys.modules, "mpi4py", None)
+        with pytest.raises(ImportError, match="harv-hq\\[mpi\\]"):
+            Run(rv_run.run_dir).run_rejection(mpi=True)
+
+    @pytest.mark.skipif(
+        importlib.util.find_spec("mpi4py") is None or shutil.which("mpirun") is None,
+        reason="needs mpi4py and mpirun",
+    )
+    def test_mpi(self, rv_run):
+        run = prepared_run(rv_run)
+        subprocess.run(  # noqa: S603 -- fixed argv
+            [
+                *("mpirun", "-n", "2", sys.executable),
+                *("-m", "harv_hq.cli", "run", "--mpi", "--run-dir", str(run.run_dir)),
+            ],
+            check=True,
+            timeout=600,
+        )
+        assert index(run).status_counts() == {"ok": len(rv_run.kept)}
+        names = {p.name[:12] for p in stage_dir(run).glob("*.sources.parquet")}
+        assert names == {"0000-of-0002", "0001-of-0002"}
+
+
+def test_progress_logs_about_every_five_percent(caplog):
+    progress = Progress("rejection", 40, ranks=4)
+    with caplog.at_level(logging.INFO, logger="harv_hq"):
+        for _ in range(40):
+            progress.tick()
+    assert len(caplog.records) == 20
+    assert caplog.messages[-1] == (
+        "rejection: 40/40 sources (about 160/160 over 4 ranks)"
+    )
 
 
 class TestProvenance:
@@ -369,8 +537,8 @@ def test_cli(rv_run):
         ResultsIndex.build(rv_run.run_dir / "results" / "rejection").records
     ) == set(rv_run.kept)
     with pytest.raises(SystemExit) as excinfo:
-        main(["run", "--run-dir", run_dir, "--workers", "2"])
-    assert "not implemented yet" in str(excinfo.value.code)
+        main(["run", "--run-dir", run_dir, "--workers", "0"])
+    assert "at least 1" in str(excinfo.value.code)
 
 
 def test_copy_of_a_run_directory_still_resumes(rv_run, tmp_path):
