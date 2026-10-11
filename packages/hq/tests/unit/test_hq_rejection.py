@@ -55,7 +55,7 @@ def index(run):
 class TestEndToEnd:
     def test_every_source_gets_a_result_in_several_parts(self, rv_run):
         run = prepared_run(rv_run)
-        run.run_rejection()
+        run.run_rejection(compact=False)
         records = index(run).records
         assert set(records) == set(rv_run.kept)
         assert {r.status for r in records.values()} == {"ok"}
@@ -358,7 +358,7 @@ class TestExecutionModes:
         serial, pooled = twin_runs(rv_run, tmp_path)
         serial.run_rejection()
         environ = dict(os.environ)
-        pooled.run_rejection(workers=2)
+        pooled.run_rejection(workers=2, compact=False)
         # The workers' thread pinning does not leak into this process.
         assert dict(os.environ) == environ
         assert all_samples(pooled).equals(all_samples(serial))
@@ -431,7 +431,7 @@ class TestExecutionModes:
         # rank 0's new parts. Rank 1 also runs a pool (--mpi --workers 2).
         for rank, workers in ((0, 1), (1, 2)):
             monkeypatch.setattr(run_module, "mpi_comm", lambda r=rank: FakeComm(r))
-            run.run_rejection(mpi=True, workers=workers, overwrite=True)
+            run.run_rejection(mpi=True, workers=workers, overwrite=True, compact=False)
         assert barriers == [0, 0, 1, 1]  # after the overwrite, and at the end
         assert len(list((run.run_dir / "results").glob("superseded-*"))) == 1
         assert index(run).status_counts() == {"ok": len(rv_run.kept)}
