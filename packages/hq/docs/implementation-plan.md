@@ -24,14 +24,32 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | ----- | ------------------------------------------------------ | ------------------------------------------------- |
 | 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
 | —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
-| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Implemented on branch `hq-phase1`, awaiting merge |
-| 2     | prepare, `read_source`, `read_sources`                 | Implemented on branch `hq-phase2`, awaiting merge |
-| 3     | prior cache, serial rejection, result parts, resume    | Not started                                       |
+| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59)                             |
+| 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)                                     |
+| 3     | prior cache, serial rejection, result parts, resume    | Implemented on branch `hq-phase3`, awaiting merge |
 | 4     | execution modes: shards, pool, MPI                     | Not started                                       |
 | 5     | compaction, summarize, status                          | Not started                                       |
 | 6     | MCMC follow-up                                         | Not started                                       |
 | 7     | web viewer                                             | Not started                                       |
 | 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
+
+______________________________________________________________________
+
+## Reviewing each phase
+
+After implementing a phase on its branch, and before you open the PR, I give
+you a review guide for that branch. It is part of finishing the phase, like
+updating the Status table. Each guide covers, in this order:
+
+1. **What to read first**: the files in the order that makes them easiest to
+   follow, with the one or two functions in each that carry the logic.
+1. **Spec and plan changes**: every behavior change or deviation, so you can
+   accept or reject it before reviewing code that depends on it.
+1. **Questions to check**: the specific things most likely to be wrong
+   (formats on disk, error behavior, edge cases), each with where to look.
+1. **How to run it yourself**: the commands that exercise the phase end to
+   end on the test fixtures, and the tests that cover each behavior.
+1. **What is deliberately not done yet**, so it is not mistaken for a gap.
 
 ______________________________________________________________________
 
@@ -47,8 +65,7 @@ packages/hq/src/harv_hq/
 ├── ids.py               # stable_hash, source_key, prior_cache_key
 ├── _parquet_io.py       # write_parquet / read_parquet: units, metadata, atomic rename
 ├── provenance.py        # provenance dict, check_provenance, ProvenanceError
-├── prepare.py           # prepare(), read_source(), read_sources()
-├── slicing.py           # source_order(), slice_ids(i, n)
+├── prepare.py           # prepare(), PreparedData (incl. slice_ids), read_source(s)
 ├── results.py           # PartWriter, ResultsIndex, samples <-> table conversion
 ├── summary_stats.py     # per-source summary statistics + weighted resample
 ├── rejection.py         # process one source: rejection
@@ -130,7 +147,7 @@ Samples.from_columns(columns: SampleColumns) -> Samples
 
 ______________________________________________________________________
 
-## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance — awaiting merge
+## Phase 1: packaging, config, model file, IDs, Parquet I/O, provenance — done
 
 Done: branch `hq-phase1`. Deviations from the text below, all recorded in the
 spec: config is loaded with `Config.from_file(path)` (there is no `Run` yet),
@@ -205,7 +222,7 @@ config that loads.
 
 ______________________________________________________________________
 
-## Phase 2: prepare, read_source, read_sources — awaiting merge
+## Phase 2: prepare, read_source, read_sources — done
 
 Implemented on branch `hq-phase2` (stacked on `hq-phase1`). Deviations from
 the text below, all recorded in the spec where they are public: `Run` is
@@ -256,7 +273,30 @@ linear time (loose bound).
 
 ______________________________________________________________________
 
-## Phase 3: prior cache, serial rejection, result parts, resume
+## Phase 3: prior cache, serial rejection, result parts, resume — awaiting merge
+
+Implemented on branch `hq-phase3` (stacked on `hq-phase2`). Deviations from the
+text below: `Run.run_rejection` takes `shard` and `overwrite`
+for now (`workers`, `mpi` and `compact` arrive with phases 4 and 5; the CLI
+rejects `--workers`/`--mpi` until then), and `Run.load_source` returns
+`summary=None` until phase 5. Slicing is `PreparedData.slice_ids(shard)` (no
+`slicing.py` module). `Payload` carries separate `row_units` and
+`samples_units`. A shared `read_rows` helper in `_parquet_io` serves both
+`PreparedData` and the results reader. The writer also flushes when the loop
+is interrupted by an exception, so only a hard kill loses the buffer (spec
+updated). Two planned tests changed: the "prior keys do not match the cache"
+failure is simulated by a sampler that raises, because a real mismatch is now
+refused earlier by provenance; and the injected-period recovery check is
+left to an end-to-end test with a realistic prior cache (the 20,000-sample
+test cache cannot resolve periods). Weighted percentiles drop zero-weight
+samples (spec updated). A failed source is not done: every resume reruns it,
+and there is no `--retry-failed` flag (spec updated). From the Copilot review of PR #61: parameter names that clash with the
+samples-table bookkeeping columns are refused, a resumed run checks its
+`Samples` structure against the parts already written, `--overwrite` archives
+have microsecond timestamps, and `run_rejection` drops `Run`'s cached index
+even when it raises. Fixed in harv along the
+way: `RejectionSampler` stored `n_prior_samples` in `Samples.metadata` as a
+float, where harv's spec says int.
 
 **`make_prior_cache`.** `ModelFile.setup`, then
 `harv.samplers.make_prior_cache(prior, model, n_samples, path, key=prior_cache_key(seed), batch_size=...)` into `prior_cache.h5.tmp`, write
@@ -287,7 +327,7 @@ MAP sample. It calls only harv's `Samples` methods.
   `finished`, `samples_row_start` and `n_samples` columns of every
   `*.sources.parquet` with `pyarrow.dataset` (ignoring `.tmp` and orphaned
   samples files), keeps the newest row per source, and checks each part's
-  provenance against the current one. Exposes `done(retry_failed)`,
+  provenance against the current one. Exposes `done()` (newest row `ok`),
   `status_counts()`, and `locate(source_id) -> (samples_path, start, n)`.
 - `read_source_samples(index, source_id) -> Samples`.
 
@@ -302,8 +342,8 @@ objects do not pickle cleanly across processes.
 `RejectionSampler`, compute `slice_ids(0, 1)` minus `ResultsIndex.done`,
 `read_sources` for the remaining IDs, loop, `PartWriter.add`, `close`.
 
-**`slicing.py`.** `source_order(run_dir)` sorts `data_index.parquet` by
-`(n_obs, source_id)`; `slice_ids(i, n)` is `order[i::n]`.
+**Slicing** (`PreparedData.slice_ids(shard)`): sorts the prepared sources by
+`(n_obs, source_id)` and returns `order[i::n]`.
 
 **Tests.** The tiny run end to end through rejection, producing several
 parts. Binaries recover their injected period within the posterior (loose
@@ -314,7 +354,7 @@ text in `error`, and the run continues. Crash resume: raise in a test hook at
 source N; parts written before the crash are intact, buffered sources are
 missing, and a rerun processes exactly the missing ones. An orphaned
 `.samples.parquet` (delete its sources file) is ignored and its sources rerun.
-`--retry-failed`. `--overwrite` moves the stage directory to
+A failed source is rerun on the next resume. `--overwrite` moves the stage directory to
 `superseded-*`. Provenance: editing `prior.py` makes `run_rejection` raise
 `ProvenanceError`. Same seed gives identical samples on rerun. Population
 read: `pyarrow.dataset` over the samples files returns `n_sources * top_k`
@@ -495,7 +535,7 @@ ______________________________________________________________________
   below.
 - A workflow tutorial (`docs/hq/workflow.md`) that walks through every stage in
   order and covers re-running: which outputs each stage writes, what
-  `--overwrite`, `--retry-failed`, and `--no-compact` do, where superseded
+  `--overwrite` and `--no-compact` do, where superseded
   results go (`results/superseded-*`) and when they can be deleted, which
   downstream stages a change to `hq.toml`, `prior.py`, or the input data
   invalidates (the provenance refusals), and how to start a stage over from

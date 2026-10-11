@@ -24,7 +24,14 @@ from astropy.time import Time
 from unxt import Q
 
 from harv.data import GaiaAstrometryData, RVData
-from harv_hq._parquet_io import read_metadata, read_parquet, write_parquet
+from harv_hq._parquet_io import (
+    field_units,
+    groups_spanning,
+    read_metadata,
+    read_parquet,
+    row_group_starts,
+    write_parquet,
+)
 from harv_hq.config import Config, ConfigError
 from harv_hq.provenance import ProvenanceError, make_provenance
 
@@ -35,12 +42,9 @@ INDEX_FILE = "data_index.parquet"
 CATALOG_FILE = "catalog.parquet"
 ROW_GROUP_SIZE = 65_536
 
-# Per kind: (observation column, uncertainty column) and every value column in
-# data.parquet order. parallax_factor is dimensionless and has no unit key.
-_OBS_ERR = {
-    "rv": ("rv", "rv_err"),
-    "gaia_astrometry": ("al_position", "al_position_err"),
-}
+# Per kind, every value column in data.parquet order; the first two are the
+# observation and its uncertainty. A column's unit key is "<name>_unit" with
+# any "_err" dropped (rv_err -> rv_unit); parallax_factor has none.
 _VALUE_COLUMNS = {
     "rv": ("rv", "rv_err"),
     "gaia_astrometry": (
@@ -49,13 +53,6 @@ _VALUE_COLUMNS = {
         "scan_angle",
         "parallax_factor",
     ),
-}
-_UNIT_KEYS = {
-    "rv": "rv_unit",
-    "rv_err": "rv_unit",
-    "al_position": "al_position_unit",
-    "al_position_err": "al_position_unit",
-    "scan_angle": "scan_angle_unit",
 }
 _RESERVED_CATALOG_COLUMNS = ("source_id", "n_obs", "time_baseline")
 
@@ -167,12 +164,8 @@ def prepare(
 
 
 def _read_table(path: Path, fmt: str | None, hdu: int | str | None) -> Table:
-    kwargs: dict[str, Any] = {}
-    if fmt is not None:
-        kwargs["format"] = fmt
-    if hdu is not None:
-        kwargs["hdu"] = hdu
-    return Table.read(path, **kwargs)
+    kwargs = {"format": fmt, "hdu": hdu}
+    return Table.read(path, **{k: v for k, v in kwargs.items() if v is not None})
 
 
 def _missing(column: Any) -> np.ndarray:
@@ -186,7 +179,7 @@ def _missing(column: Any) -> np.ndarray:
 def _builtin_cuts(table: Table, config: Config) -> np.ndarray:
     """Rows with an ID, finite time/observation/uncertainty, positive uncertainty."""
     data = config.data
-    obs_key, err_key = _OBS_ERR[config.run.kind]
+    obs_key, err_key = _VALUE_COLUMNS[config.run.kind][:2]
     obs_col, err_col = getattr(data, obs_key), getattr(data, err_key)
     keep = ~_missing(table[data.source_id])
     for name in (data.time, obs_col, err_col):
@@ -216,12 +209,9 @@ def _value_arrays(
     for name in _VALUE_COLUMNS[config.run.kind]:
         column = table[getattr(config.data, name)]
         values[name] = np.asarray(np.ma.getdata(column), dtype=np.float64)
-        if name in _UNIT_KEYS:
-            unit = (
-                column.unit
-                if column.unit is not None
-                else getattr(config.data, _UNIT_KEYS[name])
-            )
+        config_unit = getattr(config.data, name.removesuffix("_err") + "_unit", None)
+        if config_unit is not None:
+            unit = column.unit if column.unit is not None else config_unit
             units[name] = str(Q(1.0, str(unit)).unit)
     return values, units
 
@@ -342,6 +332,8 @@ class PreparedData:
 
         self.kind: str = data_meta["kind"]
         self.data_id: str = data_meta["data_id"]
+        self.provenance: dict[str, Any] = data_meta["provenance"]
+        self.path = data_path
         ids = index.table.column("source_id").to_pylist()
         self._is_int = pa.types.is_integer(index.table.schema.field("source_id").type)
         self._ranges = dict(
@@ -358,20 +350,37 @@ class PreparedData:
         self.source_ids: list[Any] = ids
 
         self._file = pq.ParquetFile(data_path)
-        self._units = {
-            field.name: field.metadata[b"unit"].decode()
-            for field in self._file.schema_arrow
-            if field.metadata and b"unit" in field.metadata
-        }
-        sizes = [
-            self._file.metadata.row_group(i).num_rows
-            for i in range(self._file.num_row_groups)
-        ]
-        self._group_starts = np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+        self._units = field_units(self._file.schema_arrow)
+        self._group_starts = row_group_starts(self._file)
 
-    def n_obs(self, source_id: Any) -> int:
-        """The number of prepared observations of one source."""
-        return self._ranges[self._key(source_id)][1]
+    def slice_ids(self, shard: tuple[int, int]) -> list[Any]:
+        """The source IDs in slice ``i`` of ``N``, in processing order.
+
+        Sources are ordered by ``(n_obs, source_id)`` and slice ``i`` is
+        ``order[i::N]`` (spec, "Execution modes"): round-robin balances total
+        ``n_obs`` across slices, and each slice stays sorted by ``n_obs`` so
+        consecutive sources reuse JIT compilations.
+
+        Parameters
+        ----------
+        shard
+            ``(i, N)`` with ``0 <= i < N``.
+
+        Returns
+        -------
+            The slice's source IDs.
+
+        Raises
+        ------
+        ValueError
+            If ``shard`` is not ``(i, N)`` with ``0 <= i < N``.
+        """
+        i, n = shard
+        if not 0 <= i < n:
+            msg = f"shard must be (i, N) with 0 <= i < N, got {shard}"
+            raise ValueError(msg)
+        order = sorted(self._ranges, key=lambda sid: (self._ranges[sid][1], sid))
+        return order[i::n]
 
     def read(self, source_ids: Iterable[Any]) -> dict[Any, RVData | GaiaAstrometryData]:
         """Read many sources, touching only the row groups that hold them.
@@ -400,10 +409,7 @@ class PreparedData:
             {
                 g
                 for start, n in ranges
-                for g in range(
-                    int(np.searchsorted(self._group_starts, start, side="right")) - 1,
-                    int(np.searchsorted(self._group_starts, start + n, side="left")),
-                )
+                for g in groups_spanning(self._group_starts, start, n)
             }
         )
         table = self._file.read_row_groups(groups)
@@ -417,8 +423,7 @@ class PreparedData:
         columns = {name: table.column(name).to_numpy() for name in table.column_names}
         out: dict[Any, RVData | GaiaAstrometryData] = {}
         for key, (start, n) in zip(keys, ranges, strict=True):
-            group = int(np.searchsorted(self._group_starts, start, side="right")) - 1
-            lo = start + offsets[group]
+            lo = start + offsets[groups_spanning(self._group_starts, start, n).start]
             out[key] = self._build({k: v[lo : lo + n] for k, v in columns.items()})
         return out
 
