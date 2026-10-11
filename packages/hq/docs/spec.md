@@ -739,7 +739,11 @@ stage's parts into a few large ones holding only the newest row per source.
 
 1. **Snapshot.** List the committed parts in `results/<stage>/` (sources files
    with their samples files) at the start. Only these are inputs; parts
-   committed while compaction runs are left alone. If the snapshot is already
+   committed while compaction runs are left alone. Also list *orphaned*
+   samples files (no sources file with the same stem) last modified over an
+   hour ago: left by a crash between a part's two renames or between this
+   step's two deletions. A younger orphan may be a writer between its renames,
+   so it is left for a later compaction. If the snapshot is already
    compacted (every part is a compacted part and no source appears twice),
    return without writing anything.
 1. **Check.** Every input's provenance must match the current one
@@ -757,7 +761,8 @@ stage's parts into a few large ones holding only the newest row per source.
    the selected `(source_id, finished)` pairs.
 1. **Delete inputs.** Remove the snapshot's input files, sources file first,
    then samples file. A file already gone (removed by a concurrent
-   compaction) is skipped.
+   compaction) is skipped. Then remove the listed orphans that still have no
+   sources file.
 
 Readers stay correct at every point. Before step 6, each source is present in
 an input part and possibly also in a compacted part with the same `finished`,
@@ -774,7 +779,8 @@ and `hq compact` prints it.
 
 Compaction drops superseded rows, including the tracebacks of `failed`
 attempts that were later retried successfully; the `logs/` files keep them.
-After compaction, every `*.samples.parquet` row belongs to a current result,
+After compaction, every `*.samples.parquet` row belongs to a current result
+(apart from orphans younger than an hour, which the next compaction removes),
 so population analyses can read the samples dataset directly with no join.
 
 ### Loading results
@@ -786,7 +792,10 @@ until `summarize` has run). At first use, `Run` builds an in-memory index from t
 `source_id`, `finished`, `samples_row_start`, and `n_samples` columns of every
 sources file (newest row per source wins), then reads only the row groups of
 the samples file that span the source's rows. If that file has since been
-removed by compaction, the index is rebuilt and the read retried once.
+removed by compaction, the index is rebuilt and the read retried once. Every
+directory scan (the index, `status`, `summarize`) likewise starts over when a
+part it listed disappears mid-scan, since compaction has already committed its
+replacement.
 
 For population analyses, the samples are directly readable as one dataset:
 `pyarrow.dataset.dataset(run_dir / "results/rejection", format="parquet")`

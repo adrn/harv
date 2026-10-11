@@ -438,7 +438,10 @@ inject a crash after the write step, after the verify step, and after the
 third deletion. Provenance now hashes `hq.toml` per table, and each output
 records only the tables it depends on, so editing `[results]`, `[serve]`, a
 comment, or adding `[mcmc]` no longer invalidates earlier outputs (spec
-updated; `provenance.config_hashes`, `*_TABLES`).
+updated; `provenance.config_hashes`, `*_TABLES`). From the Copilot review of
+PR #65: compaction also removes orphaned samples files over an hour old
+(`ORPHAN_AGE_S`), and directory scans (`ResultsIndex.build`, `summarize`)
+start over when compaction removes a part mid-scan (spec updated).
 
 **`compact.py`**, `compact(run, stage) -> CompactReport` (counts of input
 parts, sources kept, superseded rows dropped, output parts), following the

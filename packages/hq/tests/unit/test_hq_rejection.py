@@ -480,7 +480,8 @@ class TestExecutionModes:
         subprocess.run(  # noqa: S603 -- fixed argv
             [
                 *("mpirun", "-n", "2", sys.executable),
-                *("-m", "harv_hq.cli", "run", "--mpi", "--run-dir", str(run.run_dir)),
+                *("-m", "harv_hq.cli", "run", "--mpi", "--no-compact"),
+                *("--run-dir", str(run.run_dir)),
             ],
             check=True,
             timeout=600,

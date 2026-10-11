@@ -9,6 +9,7 @@ leaves a readable (possibly duplicated) stage, and rerunning finishes the job.
 __all__ = ("CompactReport", "compact")
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,11 @@ from harv_hq.results import (
 logger = logging.getLogger(__name__)
 
 COMPACTED_PREFIX = "c-"
+# A samples file without its sources file is an orphan: a crash between a
+# part's two renames, or between compaction's two deletions. It might also be a
+# writer between its renames right now, so only orphans this old are removed.
+# ponytail: an age heuristic; a writer's gap between renames is seconds.
+ORPHAN_AGE_S = 3600.0
 # Assigned again by write_part, so dropped from the rows carried over.
 _ASSIGNED = ("samples_row_start", "n_samples")
 
@@ -50,6 +56,7 @@ class CompactReport:
     n_sources: int
     n_dropped_rows: int
     n_output_parts: int
+    n_orphans_removed: int = 0
 
 
 def compact(
@@ -75,8 +82,8 @@ def compact(
 
     Returns
     -------
-        Counts of input parts, sources kept, superseded rows dropped, and
-        output parts. All zero when there is nothing to do.
+        Counts of input parts, sources kept, superseded rows dropped, output
+        parts, and orphaned samples files removed (see ``ORPHAN_AGE_S``).
 
     Raises
     ------
@@ -88,15 +95,17 @@ def compact(
         If the new parts do not hold exactly the selected rows (nothing is
         deleted then).
     """
-    # 1. Snapshot: only parts committed now are inputs.
+    # 1. Snapshot: only parts committed now are inputs, and only orphans that
+    # are already old are removed.
     snapshot = sorted(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}"))
+    orphans = _old_orphans(Path(stage_dir))
     # 2-3. Check provenance and structure, and select the newest row per source.
     index = ResultsIndex.build(
         stage_dir, expected_provenance=expected_provenance, paths=snapshot
     )
     already = all(p.name.startswith(COMPACTED_PREFIX) for p in snapshot)
     if not snapshot or (already and index.n_rows == len(index.records)):
-        return CompactReport(0, 0, 0, 0)
+        return CompactReport(0, 0, 0, 0, _delete_orphans(orphans))
     selected_ids = sorted(index.records)
     selected = [index.records[sid] for sid in selected_ids]
     metadata = {
@@ -122,6 +131,7 @@ def compact(
         n_sources=len(selected),
         n_dropped_rows=index.n_rows - len(selected),
         n_output_parts=len(outputs),
+        n_orphans_removed=_delete_orphans(orphans),
     )
     logger.info("%s: compacted %s", stage, report)
     return report
@@ -201,6 +211,31 @@ def _verify(outputs: list[Path], wanted: set[tuple[Any, Any]]) -> None:
             "inputs were left in place"
         )
         raise RuntimeError(msg)
+
+
+def _sources_twin(samples_path: Path) -> Path:
+    stem = samples_path.name.removesuffix(SAMPLES_SUFFIX)
+    return samples_path.with_name(stem + SOURCES_SUFFIX)
+
+
+def _old_orphans(stage_dir: Path) -> list[Path]:
+    """Samples files with no sources file, last written over ``ORPHAN_AGE_S`` ago."""
+    cutoff = time.time() - ORPHAN_AGE_S
+    return [
+        path
+        for path in stage_dir.glob(f"*{SAMPLES_SUFFIX}")
+        if not _sources_twin(path).exists() and path.stat().st_mtime < cutoff
+    ]
+
+
+def _delete_orphans(orphans: list[Path]) -> int:
+    """Remove orphans still without a sources file; returns how many."""
+    removed = 0
+    for path in orphans:
+        if not _sources_twin(path).exists():
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
 
 
 def _delete_inputs(snapshot: list[Path]) -> None:

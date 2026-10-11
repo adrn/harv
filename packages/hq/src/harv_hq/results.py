@@ -52,6 +52,8 @@ _STRUCTURE_KEYS = (
 )
 SAMPLES_ROW_GROUP_SIZE = 131_072
 _INDEX_COLUMNS = ["source_id", "status", "finished", "samples_row_start", "n_samples"]
+# Directory scans retried when compaction removes a part mid-scan.
+_SCAN_ATTEMPTS = 5
 
 
 @final
@@ -373,13 +375,33 @@ class ResultsIndex:
             If a part was built from different inputs.
         ValueError
             If two parts hold ``Samples`` of different structure.
+        FileNotFoundError
+            If a part in ``paths`` disappears, or the directory keeps changing
+            under repeated scans.
         """
+        if paths is not None:
+            return cls._from_paths(paths, expected_provenance)
+        for attempt in range(_SCAN_ATTEMPTS):
+            if not Path(stage_dir).is_dir():
+                return cls({})
+            try:
+                return cls._from_paths(
+                    list(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}")),
+                    expected_provenance,
+                )
+            except FileNotFoundError:
+                # A concurrent compaction removed a part mid-scan; its
+                # replacement is already committed, so scan again.
+                if attempt == _SCAN_ATTEMPTS - 1:
+                    raise
+        raise AssertionError  # unreachable
+
+    @classmethod
+    def _from_paths(
+        cls, paths: list[Path], expected_provenance: dict[str, Any] | None
+    ) -> "ResultsIndex":
         records: dict[Any, ResultRecord] = {}
         structure: dict[str, Any] | None = None
-        if paths is None:
-            if not Path(stage_dir).is_dir():
-                return cls(records)
-            paths = list(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}"))
         paths = sorted(paths)
         n_rows = 0
         for path in paths:

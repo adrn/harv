@@ -81,7 +81,8 @@ def _compact(args: argparse.Namespace) -> int:
     report = Run(args.run_dir).compact(args.stage)
     print(  # noqa: T201
         f"{args.stage}: {report.n_input_parts} parts -> {report.n_output_parts}, "
-        f"{report.n_sources} sources, {report.n_dropped_rows} superseded rows dropped"
+        f"{report.n_sources} sources, {report.n_dropped_rows} superseded rows "
+        f"dropped, {report.n_orphans_removed} orphaned samples files removed"
     )
     return 0
 
