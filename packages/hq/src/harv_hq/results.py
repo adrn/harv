@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 
 SOURCES_SUFFIX = ".sources.parquet"
 SAMPLES_SUFFIX = ".samples.parquet"
+# Samples-table columns hq adds; a model parameter may not use these names.
+_BOOKKEEPING_COLUMNS = ("source_id", "sample_index", "chain", "weight")
+_STRUCTURE_KEYS = (
+    "model_type",
+    "linear_extension_names",
+    "nonlinear_names",
+    "linear_names",
+)
 SAMPLES_ROW_GROUP_SIZE = 131_072
 _INDEX_COLUMNS = ["source_id", "status", "finished", "samples_row_start", "n_samples"]
 
@@ -89,12 +97,16 @@ def samples_table(
     Raises
     ------
     ValueError
-        If ``samples`` is batched.
+        If ``samples`` is batched, or a parameter is named like a column hq
+        adds (``source_id``, ``sample_index``, ``chain``, ``weight``).
     """
     if samples.batch_shape:
         msg = f"result samples must be flat, got batch shape {samples.batch_shape}"
         raise ValueError(msg)
     cols = samples.to_columns()
+    if clash := sorted(set(cols.columns) & set(_BOOKKEEPING_COLUMNS)):
+        msg = f"parameter names {clash} clash with columns hq adds to the results"
+        raise ValueError(msg)
     n = samples.n_samples
     columns: dict[str, Any] = {
         "source_id": [source_id] * n,
@@ -138,6 +150,10 @@ class PartWriter:
         The provenance record every part carries.
     flush_n_sources, flush_seconds
         The ``[results]`` flush limits.
+    structure
+        The ``Samples`` structure of parts already in ``stage_dir``
+        (:attr:`ResultsIndex.structure`), so a resumed run cannot append parts
+        with a different schema.
     """
 
     def __init__(
@@ -149,6 +165,7 @@ class PartWriter:
         provenance: dict[str, Any],
         flush_n_sources: int,
         flush_seconds: float,
+        structure: dict[str, Any] | None = None,
     ) -> None:
         self.stage_dir = Path(stage_dir)
         self.stage_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +176,7 @@ class PartWriter:
         self.flush_seconds = flush_seconds
         self._buffer: list[Payload] = []
         self._buffer_started = 0.0
-        self._structure: dict[str, Any] | None = None
+        self._structure = structure
         self._metadata_keys: list[str] = []
 
     def add(self, payload: Payload) -> None:
@@ -275,10 +292,18 @@ class ResultsIndex:
     ----------
     records
         Source ID to its newest :class:`ResultRecord`.
+    structure
+        The ``Samples`` structure the parts share (``None`` when no part has
+        samples).
     """
 
-    def __init__(self, records: dict[Any, ResultRecord]) -> None:
+    def __init__(
+        self,
+        records: dict[Any, ResultRecord],
+        structure: dict[str, Any] | None = None,
+    ) -> None:
         self.records = records
+        self.structure = structure
 
     @classmethod
     def build(
@@ -302,14 +327,28 @@ class ResultsIndex:
         ------
         ProvenanceError
             If a part was built from different inputs.
+        ValueError
+            If two parts hold ``Samples`` of different structure.
         """
         records: dict[Any, ResultRecord] = {}
+        structure: dict[str, Any] | None = None
         if not Path(stage_dir).is_dir():
             return cls(records)
         for path in sorted(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}")):
+            metadata = read_metadata(path)
             if expected_provenance is not None:
-                found = read_metadata(path).get("provenance", {})
+                found = metadata.get("provenance", {})
                 check_provenance(found, expected_provenance, path=path)
+            if "model_type" in metadata:  # failed-only parts carry no structure
+                part = {k: metadata[k] for k in _STRUCTURE_KEYS}
+                if structure is None:
+                    structure = part
+                elif part != structure:
+                    msg = (
+                        f"{path} holds Samples structured as {part}, but earlier "
+                        f"parts hold {structure}; rerun with --overwrite"
+                    )
+                    raise ValueError(msg)
             rows = pq.read_table(path, columns=_INDEX_COLUMNS).to_pylist()
             for row, r in enumerate(rows):
                 current = records.get(r["source_id"])
@@ -322,7 +361,7 @@ class ResultsIndex:
                         samples_row_start=r["samples_row_start"],
                         n_samples=r["n_samples"],
                     )
-        return cls(records)
+        return cls(records, structure)
 
     def done(self) -> set[Any]:
         """Source IDs whose newest result is ``ok``; anything else is rerun."""
@@ -399,7 +438,8 @@ def supersede(stage_dir: Path) -> None:
     """
     if not stage_dir.is_dir() or not any(stage_dir.iterdir()):
         return
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    # Microseconds, so two overwrites in one second get separate archives.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
     target = stage_dir.with_name(f"superseded-{stamp}-{stage_dir.name}")
     shutil.move(os.fspath(stage_dir), os.fspath(target))
     logger.info("moved %s to %s", stage_dir, target)

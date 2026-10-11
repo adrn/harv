@@ -644,7 +644,8 @@ only the sources still in the crashed process's buffer.
 
 `--overwrite` moves `results/<stage>/` to
 `results/superseded-<timestamp>-<stage>/` (never deleting it) and starts
-fresh.
+fresh. The timestamp has microsecond resolution, so each overwrite gets its
+own archive.
 
 ______________________________________________________________________
 
@@ -705,7 +706,13 @@ file, so each source's samples are one contiguous row range.
 Key-value metadata records the run-wide `Samples` structure:
 `hq.model_type`, `hq.linear_extension_names`, `hq.nonlinear_names`, and
 `hq.linear_names` (JSON). Every source in a run shares one model, so these are
-identical across parts, and readers check that they are.
+identical across parts, and readers check that they are. A resumed run checks
+its new results against the parts already written, so a change the
+provenance does not catch (a new harv version, say) cannot leave a stage with
+two schemas; the run stops with an error suggesting `--overwrite`. A model
+parameter named `source_id`, `sample_index`, `chain`, or `weight` would
+collide with the columns hq adds, so such a source fails with an error saying
+so.
 
 The mapping between a `Samples` and these columns belongs to harv: hq writes
 `Samples.to_columns()` and rebuilds with `Samples.from_columns(...)` (harv

@@ -290,7 +290,11 @@ refused earlier by provenance; and the injected-period recovery check is
 left to an end-to-end test with a realistic prior cache (the 20,000-sample
 test cache cannot resolve periods). Weighted percentiles drop zero-weight
 samples (spec updated). A failed source is not done: every resume reruns it,
-and there is no `--retry-failed` flag (spec updated). Fixed in harv along the
+and there is no `--retry-failed` flag (spec updated). From the Copilot review of PR #61: parameter names that clash with the
+samples-table bookkeeping columns are refused, a resumed run checks its
+`Samples` structure against the parts already written, `--overwrite` archives
+have microsecond timestamps, and `run_rejection` drops `Run`'s cached index
+even when it raises. Fixed in harv along the
 way: `RejectionSampler` stored `n_prior_samples` in `Samples.metadata` as a
 float, where harv's spec says int.
 
