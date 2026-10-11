@@ -29,6 +29,7 @@ _EVIDENCE = (
     "well_resolved",
 )
 _MCMC = ("r_hat_max", "ess_bulk_min")
+_READ_ATTEMPTS = 5
 _NAMED_STATS = ("period_unimodal", "max_phase_gap", "phase_coverage", "periods_spanned")
 
 
@@ -58,10 +59,17 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> P
     units = dict(catalog.units)
     rows = {}
     for stage, provenance in expected.items():
-        index = ResultsIndex.build(
-            run_dir / "results" / stage, expected_provenance=provenance
-        )
-        rows[stage], stage_units = _aligned(index, ids)
+        for attempt in range(_READ_ATTEMPTS):
+            index = ResultsIndex.build(
+                run_dir / "results" / stage, expected_provenance=provenance
+            )
+            try:
+                rows[stage], stage_units = _aligned(index, ids)
+                break
+            except FileNotFoundError:
+                # Compaction replaced a part after the index was built.
+                if attempt == _READ_ATTEMPTS - 1:
+                    raise
         units.update(stage_units)
     rejection, mcmc = rows["rejection"], rows["mcmc"]
     n = len(ids)

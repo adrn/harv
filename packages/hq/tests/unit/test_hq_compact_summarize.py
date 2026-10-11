@@ -2,6 +2,8 @@
 
 import itertools
 import math
+import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from harv.samplers import RejectionSampler
 from harv_hq import Run
 from harv_hq import compact as compact_module
 from harv_hq import results as results_module
+from harv_hq import summarize as summarize_module
 from harv_hq.cli import main
 from harv_hq.prepare import PreparedData
 from harv_hq.results import Payload, ResultsIndex, write_part
@@ -72,6 +75,18 @@ def assert_same(a, b):
             assert a[sid][1].keys() == b[sid][1].keys()
             for k in a[sid][1]:
                 np.testing.assert_array_equal(a[sid][1][k], b[sid][1][k])
+
+
+def stems(run, kind):
+    return {p.name.split(".")[0] for p in stage_dir(run).glob(f"*.{kind}.parquet")}
+
+
+def age_orphans(run):
+    """Backdate samples files without a sources file past the orphan age."""
+    old = time.time() - 2 * compact_module.ORPHAN_AGE_S
+    for path in stage_dir(run).glob("*.samples.parquet"):
+        if not path.with_name(path.name.replace("samples", "sources")).exists():
+            os.utime(path, (old, old))
 
 
 def assert_fully_compacted(run, n_sources):
@@ -199,9 +214,26 @@ class TestCompact:
             "pending": 0
         }
         Run(run.run_dir).summarize()
+        # Age any orphan the crash left (mid delete: a samples file whose
+        # sources file is gone), so the next compaction may remove it.
+        age_orphans(run)
         run.compact()  # finishes the job
         assert_fully_compacted(run, len(rv_run.kept))
         assert_same(snapshot(run), before)
+        # No orphaned samples left behind: every samples file has its sources.
+        assert stems(run, "samples") == stems(run, "sources")
+
+    def test_a_young_orphan_is_left_for_its_writer(self, rv_run):
+        run = rejected_run(rv_run)
+        # A writer between its two renames: samples committed, sources not yet.
+        some = next(stage_dir(run).glob("*.samples.parquet"))
+        pending = stage_dir(run) / "0000-of-0001-inflight.samples.parquet"
+        pending.write_bytes(some.read_bytes())
+        assert run.compact().n_orphans_removed == 0
+        assert pending.exists()
+        age_orphans(run)
+        assert run.compact().n_orphans_removed == 1
+        assert not pending.exists()
 
     def test_mismatched_output_deletes_nothing(self, rv_run, monkeypatch):
         run = rejected_run(rv_run)
@@ -374,6 +406,47 @@ class TestSummarize:
         summary = Run(run.run_dir).load_source(sid).summary
         assert summary["source_id"] == sid
         assert summary["rejection_status"] == "ok"
+
+
+class TestConcurrentCompaction:
+    """Readers rescan when a concurrent compaction removes a part under them."""
+
+    def test_an_index_scan_retries(self, rv_run, monkeypatch):
+        run = rejected_run(rv_run)
+        original = results_module.read_metadata
+        calls = []
+
+        def vanishing_once(path):
+            calls.append(path)
+            if len(calls) == 2:
+                raise FileNotFoundError(path)
+            return original(path)
+
+        monkeypatch.setattr(results_module, "read_metadata", vanishing_once)
+        index = ResultsIndex.build(stage_dir(run))
+        assert set(index.records) == set(rv_run.kept)
+        # An explicit snapshot (compaction's) is not rescanned: it fails.
+        calls.clear()
+        with pytest.raises(FileNotFoundError):
+            ResultsIndex.build(
+                stage_dir(run),
+                paths=sorted(stage_dir(run).glob("*.sources.parquet")),
+            )
+
+    def test_summarize_rereads(self, rv_run, monkeypatch):
+        run = rejected_run(rv_run)
+        original = summarize_module._aligned
+        calls = []
+
+        def vanishing_once(index, ids):
+            calls.append(1)
+            if len(calls) == 1:
+                raise FileNotFoundError("compacted away")
+            return original(index, ids)
+
+        monkeypatch.setattr(summarize_module, "_aligned", vanishing_once)
+        summary = pq.read_table(run.summarize())
+        assert set(summary["rejection_status"].to_pylist()) == {"ok"}
 
 
 def test_status_counts_pending_sources(rv_run):
