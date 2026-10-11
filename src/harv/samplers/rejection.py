@@ -672,8 +672,9 @@ class RejectionSampler(AbstractSampler):
         # Always assess resolution (cheap: a few reductions over log-likelihoods
         # already in memory) so the under-resolution warning fires even when the
         # caller did not ask to keep the full evidence statistics.
+        # n_prior_samples is already a Python int; the rest are JAX scalars.
         evidence_meta = {
-            k: float(v)
+            k: v if isinstance(v, int) else float(v)
             for k, v in _prior_monte_carlo_evidence_stats(ln_likelihoods).items()
         }
         n_accepted = int(next(iter(accepted_nonlinear.values())).shape[0])

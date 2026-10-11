@@ -337,6 +337,9 @@ class TestRunWithTopK:
         assert samples.ln_prior is not None
         for key in ("ln_Z_int", "ln_Z_int_ess", "n_prior_samples", "weight_captured"):
             assert key in samples.metadata
+        # The spec types the count as int; it was once stored as a float.
+        assert type(samples.metadata["n_prior_samples"]) is int
+        assert samples.metadata["n_prior_samples"] == 1000
 
     def test_weight_captured_equals_weight_sum(self):
         """The metadata scalar is exactly the sum of the returned weights."""
