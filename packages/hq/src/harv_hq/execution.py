@@ -13,10 +13,10 @@ __all__ = ("Progress", "mpi_comm", "run_pool", "run_serial")
 import logging
 import multiprocessing
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
-from contextlib import contextmanager
-from typing import Any, final
+from typing import Any, cast, final
+from unittest.mock import patch
 
 from harv_hq.results import Payload
 
@@ -65,18 +65,13 @@ class Progress:
         self.done += 1
         if self.done % self._every and self.done != self.total:
             return
-        if self.ranks > 1:
-            logger.info(
-                "%s: %d/%d sources (about %d/%d over %d ranks)",
-                self.label,
-                self.done,
-                self.total,
-                self.done * self.ranks,
-                self.total * self.ranks,
-                self.ranks,
-            )
-        else:
-            logger.info("%s: %d/%d sources", self.label, self.done, self.total)
+        overall = (
+            f" (about {self.done * self.ranks}/{self.total * self.ranks} "
+            f"over {self.ranks} ranks)"
+            if self.ranks > 1
+            else ""
+        )
+        logger.info("%s: %d/%d sources%s", self.label, self.done, self.total, overall)
 
 
 def run_serial(
@@ -127,7 +122,12 @@ def run_pool(
     workers
         Number of worker processes.
     """
-    with _single_threaded_children():
+    changes = {**_THREAD_ENV, "XLA_FLAGS": _XLA_SINGLE_THREAD}
+    if flags := os.environ.get("XLA_FLAGS"):
+        changes["XLA_FLAGS"] = f"{flags} {_XLA_SINGLE_THREAD}"
+    # Set only while the workers are spawned; this process's environment is
+    # restored afterwards.
+    with patch.dict(os.environ, changes):
         pool = ProcessPoolExecutor(
             workers,
             mp_context=multiprocessing.get_context("spawn"),
@@ -169,24 +169,6 @@ def mpi_comm() -> Any:
     return MPI.COMM_WORLD
 
 
-@contextmanager
-def _single_threaded_children() -> Iterator[None]:
-    """Set the thread-pinning variables while workers are spawned, then restore."""
-    changes = {**_THREAD_ENV, "XLA_FLAGS": _XLA_SINGLE_THREAD}
-    if flags := os.environ.get("XLA_FLAGS"):
-        changes["XLA_FLAGS"] = f"{flags} {_XLA_SINGLE_THREAD}"
-    saved = {name: os.environ.get(name) for name in changes}
-    os.environ.update(changes)
-    try:
-        yield
-    finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-
-
 # The per-source function, built once per worker by _init_worker.
 _worker_process: ProcessFn | None = None
 
@@ -197,7 +179,4 @@ def _init_worker(setup: Setup) -> None:
 
 
 def _process_in_worker(source_id: Any, data: Any) -> Payload:
-    if _worker_process is None:
-        msg = "worker was not initialized"
-        raise RuntimeError(msg)
-    return _worker_process(source_id, data)
+    return cast("ProcessFn", _worker_process)(source_id, data)
