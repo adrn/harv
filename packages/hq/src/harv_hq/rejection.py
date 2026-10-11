@@ -5,11 +5,13 @@ as a plain-data :class:`~harv_hq.results.Payload` so that later phases can
 hand it across processes.
 """
 
-__all__ = ("process_rejection",)
+__all__ = ("process_rejection", "rejection_setup")
 
+import functools
 import time
 import traceback
 import warnings
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,10 +20,48 @@ import jax
 
 from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import RejectionSampler
-from harv_hq.config import RejectionConfig
+from harv_hq._model_file import ModelFile
+from harv_hq.config import Config, RejectionConfig
 from harv_hq.ids import source_key, stable_hash
 from harv_hq.results import Payload, samples_table
 from harv_hq.summary_stats import summary_stats
+
+
+def rejection_setup(
+    config: Config, prior_cache: Path
+) -> Callable[[Any, RVData | GaiaAstrometryData], Payload]:
+    """Build a run's per-source rejection function, once per process.
+
+    Imports the model file, calls ``make_setup()``, and builds one
+    ``RejectionSampler``. Pass it with :func:`functools.partial` as an
+    execution driver's ``setup``, so that pool workers build their own.
+
+    Parameters
+    ----------
+    config
+        The run's configuration.
+    prior_cache
+        Path to the shared prior cache.
+
+    Returns
+    -------
+        ``process(source_id, data) -> Payload``.
+    """
+    prior, model = ModelFile.load(config.run.model_file).setup(config.run.kind)
+    rejection = config.rejection
+    sampler = RejectionSampler(
+        prior,
+        model,
+        batch_size=rejection.batch_size,
+        min_evidence_ess=rejection.min_evidence_ess,
+    )
+    return functools.partial(
+        process_rejection,
+        sampler=sampler,
+        prior_cache=prior_cache,
+        config=rejection,
+        seed=config.run.seed,
+    )
 
 
 def process_rejection(

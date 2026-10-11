@@ -39,6 +39,9 @@ dependencies = [
     "pyarrow>=17",
 ]
 
+[project.optional-dependencies]
+mpi = ["mpi4py>=4"]
+
 [project.scripts]
 hq = "harv_hq.cli:main"
 

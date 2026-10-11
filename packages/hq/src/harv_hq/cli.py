@@ -65,9 +65,13 @@ def _prior_cache(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    if args.workers != 1 or args.mpi:
-        sys.exit("hq run: --workers and --mpi are not implemented yet; use --shard")
-    Run(args.run_dir).run_rejection(shard=args.shard, overwrite=args.overwrite)
+    if args.mpi and args.workers != 1:
+        sys.exit("hq run: --mpi and --workers are mutually exclusive")
+    if args.workers < 1:
+        sys.exit("hq run: --workers must be at least 1")
+    Run(args.run_dir).run_rejection(
+        shard=args.shard, workers=args.workers, mpi=args.mpi, overwrite=args.overwrite
+    )
     return 0
 
 
