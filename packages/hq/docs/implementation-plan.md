@@ -441,7 +441,19 @@ comment, or adding `[mcmc]` no longer invalidates earlier outputs (spec
 updated; `provenance.config_hashes`, `*_TABLES`). From the Copilot review of
 PR #65: compaction also removes orphaned samples files over an hour old
 (`ORPHAN_AGE_S`), and directory scans (`ResultsIndex.build`, `summarize`)
-start over when compaction removes a part mid-scan (spec updated).
+start over when compaction removes a part mid-scan (spec updated). From our
+own review: compaction reads each input once in snapshot order (rows sorted
+by `source_id` within each output part, not across parts), so memory holds
+one output part plus one row group; outputs keep the newest input's
+provenance; it restarts when a concurrent compaction removes an input.
+Automatic compaction checks against the provenance the run wrote with.
+`status` counts prepared sources only and refuses stale results. Only
+`catalog.parquet` records `[catalog]`. Catalog columns may not use
+`summary.parquet` names, and the summary is sorted in 4,096-row groups. One
+`results.rescanning` helper replaces three retry loops; `ResultsIndex`
+collects `metadata_keys` and the newest `provenance`; `write_part_tables`
+writes parts from Arrow tables; `summary_stats` owns the statistic names.
+`CompactReport` is exported (spec updated).
 
 **`compact.py`**, `compact(run, stage) -> CompactReport` (counts of input
 parts, sources kept, superseded rows dropped, output parts), following the

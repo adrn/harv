@@ -5,6 +5,7 @@ See ``packages/hq/docs/spec.md``, "Provenance".
 
 __all__ = (
     "ALL_TABLES",
+    "CATALOG_TABLES",
     "PREPARED_TABLES",
     "PRIOR_CACHE_TABLES",
     "REJECTION_TABLES",
@@ -37,7 +38,10 @@ logger = logging.getLogger(__name__)
 _REFUSED_FIELDS = ("model_file_sha256", "data_id", "prior_cache_id")
 # The hq.toml tables each output depends on. [results] and [serve] change only
 # how results are stored or shown, so no output records them.
-PREPARED_TABLES = ("run", "data", "prepare", "catalog")
+PREPARED_TABLES = ("run", "data", "prepare")
+# catalog.parquet also depends on [catalog]; the data do not, so editing the
+# catalog columns leaves the data and every result built on them valid.
+CATALOG_TABLES = (*PREPARED_TABLES, "catalog")
 PRIOR_CACHE_TABLES = ("run", "prior_cache")
 REJECTION_TABLES = ("run", "data", "prepare", "prior_cache", "rejection")
 ALL_TABLES = ("run", "data", "prepare", "catalog", "prior_cache", "rejection", "mcmc")
@@ -115,9 +119,9 @@ def make_provenance(
         prepared.
     tables
         The ``hq.toml`` tables the output depends on (``PREPARED_TABLES``,
-        ``PRIOR_CACHE_TABLES``, ``REJECTION_TABLES``). The default, every
-        table, is for checking: a check compares only the tables the output
-        recorded.
+        ``CATALOG_TABLES``, ``PRIOR_CACHE_TABLES``, ``REJECTION_TABLES``).
+        The default, every table, is for checking: a check compares only the
+        tables the output recorded.
     data_id
         The prepared data's ``data_id``, when the output depends on it.
     prior_cache_id

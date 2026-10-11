@@ -6,7 +6,7 @@ parts, and only then deletes its inputs. It needs no lock: a crash at any step
 leaves a readable (possibly duplicated) stage, and rerunning finishes the job.
 """
 
-__all__ = ("CompactReport", "compact")
+__all__ = ("ORPHAN_AGE_S", "CompactReport", "compact")
 
 import logging
 import time
@@ -19,20 +19,14 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from harv_hq._parquet_io import (
-    field_units,
-    groups_spanning,
-    read_metadata,
-    row_group_starts,
-)
+from harv_hq._parquet_io import field_units, row_group_starts
 from harv_hq.results import (
     SAMPLES_SUFFIX,
     SOURCES_SUFFIX,
-    Payload,
     ResultRecord,
     ResultsIndex,
-    read_source_rows,
-    write_part,
+    rescanning,
+    write_part_tables,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,8 +37,8 @@ COMPACTED_PREFIX = "c-"
 # writer between its renames right now, so only orphans this old are removed.
 # ponytail: an age heuristic; a writer's gap between renames is seconds.
 ORPHAN_AGE_S = 3600.0
-# Assigned again by write_part, so dropped from the rows carried over.
-_ASSIGNED = ("samples_row_start", "n_samples")
+
+_Units = tuple[dict[str, str], dict[str, str]]
 
 
 @final
@@ -68,6 +62,8 @@ def compact(
 ) -> CompactReport:
     """Rewrite a stage's parts as parts holding only the newest row per source.
 
+    Starts over if a concurrent compaction removes one of its inputs.
+
     Parameters
     ----------
     stage_dir
@@ -75,8 +71,8 @@ def compact(
     stage
         ``"rejection"`` or ``"mcmc"``.
     expected_provenance
-        The current provenance; every input part must match it (``None``:
-        not checked).
+        What every input part must match (``None``: not checked). The outputs
+        record the inputs' own provenance, not this.
     compact_n_sources
         Sources per output part.
 
@@ -95,10 +91,27 @@ def compact(
         If the new parts do not hold exactly the selected rows (nothing is
         deleted then).
     """
+    return rescanning(
+        lambda: _compact(
+            Path(stage_dir),
+            stage=stage,
+            expected_provenance=expected_provenance,
+            compact_n_sources=compact_n_sources,
+        )
+    )
+
+
+def _compact(
+    stage_dir: Path,
+    *,
+    stage: str,
+    expected_provenance: dict[str, Any] | None,
+    compact_n_sources: int,
+) -> CompactReport:
     # 1. Snapshot: only parts committed now are inputs, and only orphans that
     # are already old are removed.
-    snapshot = sorted(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}"))
-    orphans = _old_orphans(Path(stage_dir))
+    snapshot = sorted(stage_dir.glob(f"*{SOURCES_SUFFIX}"))
+    orphans = _old_orphans(stage_dir)
     # 2-3. Check provenance and structure, and select the newest row per source.
     index = ResultsIndex.build(
         stage_dir, expected_provenance=expected_provenance, paths=snapshot
@@ -106,30 +119,39 @@ def compact(
     already = all(p.name.startswith(COMPACTED_PREFIX) for p in snapshot)
     if not snapshot or (already and index.n_rows == len(index.records)):
         return CompactReport(0, 0, 0, 0, _delete_orphans(orphans))
-    selected_ids = sorted(index.records)
-    selected = [index.records[sid] for sid in selected_ids]
-    metadata = {
-        "provenance": expected_provenance,
+    metadata: dict[str, Any] = {
         "stage": stage,
-        "samples_metadata_keys": _metadata_keys(snapshot),
+        "samples_metadata_keys": list(index.metadata_keys),
         **(index.structure or {}),
     }
+    if index.provenance is not None:
+        # The newest input's record: the samples were made then, not now.
+        metadata["provenance"] = index.provenance
 
-    # 4. Write blocks of compact_n_sources, in source_id order.
+    # 4. Read each input once, in snapshot order, filling output parts of
+    # compact_n_sources sources (rows sorted by source_id within each part).
+    by_file: dict[Path, list[tuple[Any, ResultRecord]]] = {}
+    for sid, record in index.records.items():
+        by_file.setdefault(record.sources_path, []).append((sid, record))
     run_id = uuid.uuid4().hex[:8]
-    outputs = []
-    for k, start in enumerate(range(0, len(selected), compact_n_sources)):
-        block = selected[start : start + compact_n_sources]
-        stem = f"{COMPACTED_PREFIX}{run_id}-{k:04d}"
-        outputs.append(write_part(stage_dir, stem, _payloads(block), metadata))
+    outputs: list[Path] = []
+    block = _Block()
+    for path in snapshot:
+        for source_id, row, samples, units in _read_input(path, by_file.get(path, [])):
+            block.add(source_id, row, samples, units)
+            if len(block) == compact_n_sources:
+                outputs.append(block.write(stage_dir, run_id, len(outputs), metadata))
+                block = _Block()
+    if len(block):
+        outputs.append(block.write(stage_dir, run_id, len(outputs), metadata))
 
     # 5. Verify, then 6. delete the inputs.
-    _verify(outputs, {(sid, index.records[sid].finished) for sid in selected_ids})
+    _verify(outputs, {(sid, r.finished) for sid, r in index.records.items()})
     _delete_inputs(snapshot)
     report = CompactReport(
         n_input_parts=len(snapshot),
-        n_sources=len(selected),
-        n_dropped_rows=index.n_rows - len(selected),
+        n_sources=len(index.records),
+        n_dropped_rows=index.n_rows - len(index.records),
         n_output_parts=len(outputs),
         n_orphans_removed=_delete_orphans(orphans),
     )
@@ -137,65 +159,108 @@ def compact(
     return report
 
 
-def _metadata_keys(paths: list[Path]) -> list[str]:
-    """The union of the inputs' ``samples_metadata_keys``, in first-seen order."""
-    keys: list[str] = []
-    for path in paths:
-        for key in read_metadata(path).get("samples_metadata_keys", []):
-            if key not in keys:
-                keys.append(key)
-    return keys
+@final
+class _Block:
+    """One output part being filled: sources rows and their samples."""
 
+    def __init__(self) -> None:
+        self.entries: list[tuple[Any, pa.Table, pa.Table | None]] = []
+        self.sources_units: dict[str, str] = {}
+        self.samples_units: dict[str, str] = {}
 
-def _payloads(block: list[ResultRecord]) -> list[Payload]:
-    """The block's sources rows and sample ranges, as payloads to rewrite."""
-    rows, row_units = read_source_rows(block)
-    rows = rows.drop_columns([c for c in _ASSIGNED if c in rows.column_names])
-    samples, samples_units = _read_sample_ranges(block)
-    return [
-        Payload(
-            row={k: v for k, v in row.items() if v is not None},
-            row_units=row_units,
-            samples=samples[i],
-            samples_units=samples_units,
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def add(
+        self, source_id: Any, row: pa.Table, samples: pa.Table | None, units: _Units
+    ) -> None:
+        self.entries.append((source_id, row, samples))
+        self.sources_units.update(units[0])
+        self.samples_units.update(units[1])
+
+    def write(
+        self, stage_dir: Path, run_id: str, k: int, metadata: dict[str, Any]
+    ) -> Path:
+        entries = sorted(self.entries, key=lambda e: e[0])
+        # ponytail: concatenates one-row tables (about a second per 100k
+        # sources); take() per input file if that ever shows in a profile.
+        sources = pa.concat_tables([e[1] for e in entries], promote_options="default")
+        n = np.array([0 if e[2] is None else e[2].num_rows for e in entries])
+        sources = _set_column(sources, "n_samples", pa.array(n, pa.int64()))
+        sources = _set_column(
+            sources, "samples_row_start", pa.array(np.cumsum(n) - n, pa.int64())
         )
-        for i, row in enumerate(rows.to_pylist())
+        tables = [e[2] for e in entries if e[2] is not None]
+        return write_part_tables(
+            stage_dir,
+            f"{COMPACTED_PREFIX}{run_id}-{k:04d}",
+            sources,
+            pa.concat_tables(tables) if tables else None,
+            sources_units=self.sources_units,
+            samples_units=self.samples_units,
+            metadata=metadata,
+        )
+
+
+def _set_column(table: pa.Table, name: str, values: pa.Array) -> pa.Table:
+    return table.set_column(table.schema.get_field_index(name), name, values)
+
+
+def _read_input(
+    sources_path: Path, selected: list[tuple[Any, ResultRecord]]
+) -> list[tuple[Any, pa.Table, pa.Table | None, _Units]]:
+    """The selected sources of one input part: rows, samples, and units."""
+    if not selected:
+        return []
+    selected = sorted(selected, key=lambda e: e[1].row)
+    records = [record for _, record in selected]
+    rows = pq.read_table(sources_path).take([r.row for r in records])
+    samples, samples_units = _read_samples(records)
+    units = (field_units(rows.schema), samples_units)
+    return [
+        (sid, rows.slice(i, 1), samples[i], units)
+        for i, (sid, _) in enumerate(selected)
     ]
 
 
-def _read_sample_ranges(
-    block: list[ResultRecord],
+def _read_samples(
+    records: list[ResultRecord],
 ) -> tuple[list[pa.Table | None], dict[str, str]]:
-    """Each record's samples rows, decoding each input's needed row groups once."""
-    by_file: dict[Path, list[int]] = {}
-    for position, record in enumerate(block):
-        if record.n_samples:
-            by_file.setdefault(record.samples_path, []).append(position)
-    samples: list[pa.Table | None] = [None] * len(block)
-    units: dict[str, str] = {}
-    for path, positions in by_file.items():
-        parquet_file = pq.ParquetFile(path)
-        starts = row_group_starts(parquet_file)
-        groups = sorted(
-            {
-                group
-                for p in positions
-                for group in groups_spanning(
-                    starts, block[p].samples_row_start, block[p].n_samples
-                )
-            }
-        )
-        table = parquet_file.read_row_groups(groups)
-        # Where each group read begins within ``table``.
-        sizes = np.diff(starts)[groups]
-        offset = dict(zip(groups, np.cumsum(sizes) - sizes, strict=True))
-        for p in positions:
-            record = block[p]
-            group = int(np.searchsorted(starts, record.samples_row_start, "right")) - 1
-            first = offset[group] + record.samples_row_start - int(starts[group])
-            samples[p] = table.slice(int(first), record.n_samples)
-        units.update(field_units(parquet_file.schema_arrow))
-    return samples, units
+    """Each record's samples, from one input, one row group at a time.
+
+    Only the needed rows of each row group are kept (copied out with
+    ``take``), so memory holds one decoded row group plus what is kept.
+    """
+    samples: list[pa.Table | None] = [None] * len(records)
+    with_samples = [i for i, r in enumerate(records) if r.n_samples]
+    if not with_samples:
+        return samples, {}
+    parquet_file = pq.ParquetFile(records[with_samples[0]].samples_path)
+    starts = row_group_starts(parquet_file)
+    first = np.array([records[i].samples_row_start for i in with_samples])
+    end = first + np.array([records[i].n_samples for i in with_samples])
+    order = np.argsort(first)
+    first, end = first[order], end[order]
+    owners = np.asarray(with_samples)[order]
+    pieces: dict[int, list[pa.Table]] = {int(i): [] for i in owners}
+    for group in range(parquet_file.num_row_groups):
+        lo_row, hi_row = int(starts[group]), int(starts[group + 1])
+        # Records overlapping this row group (ranges are disjoint and sorted).
+        lo = int(np.searchsorted(end, lo_row, side="right"))
+        hi = int(np.searchsorted(first, hi_row, side="left"))
+        if lo >= hi:
+            continue
+        a = np.maximum(first[lo:hi], lo_row) - lo_row
+        b = np.minimum(end[lo:hi], hi_row) - lo_row
+        wanted = np.concatenate([np.arange(x, y) for x, y in zip(a, b, strict=True)])
+        taken = parquet_file.read_row_group(group).take(wanted)
+        offset = 0
+        for owner, size in zip(owners[lo:hi], b - a, strict=True):
+            pieces[int(owner)].append(taken.slice(offset, int(size)))
+            offset += int(size)
+    for owner, parts in pieces.items():
+        samples[owner] = pa.concat_tables(parts)
+    return samples, field_units(parquet_file.schema_arrow)
 
 
 def _verify(outputs: list[Path], wanted: set[tuple[Any, Any]]) -> None:
@@ -221,20 +286,29 @@ def _sources_twin(samples_path: Path) -> Path:
 def _old_orphans(stage_dir: Path) -> list[Path]:
     """Samples files with no sources file, last written over ``ORPHAN_AGE_S`` ago."""
     cutoff = time.time() - ORPHAN_AGE_S
-    return [
-        path
-        for path in stage_dir.glob(f"*{SAMPLES_SUFFIX}")
-        if not _sources_twin(path).exists() and path.stat().st_mtime < cutoff
-    ]
+    orphans = []
+    for path in stage_dir.glob(f"*{SAMPLES_SUFFIX}"):
+        if _sources_twin(path).exists():
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                orphans.append(path)
+        except FileNotFoundError:
+            pass  # a concurrent compaction just deleted it
+    return orphans
 
 
 def _delete_orphans(orphans: list[Path]) -> int:
-    """Remove orphans still without a sources file; returns how many."""
+    """Remove orphans still without a sources file; returns how many this call did."""
     removed = 0
     for path in orphans:
-        if not _sources_twin(path).exists():
-            path.unlink(missing_ok=True)
+        if _sources_twin(path).exists():
+            continue
+        try:
+            path.unlink()
             removed += 1
+        except FileNotFoundError:
+            pass  # removed by a concurrent compaction
     return removed
 
 
