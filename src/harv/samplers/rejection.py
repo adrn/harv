@@ -940,8 +940,12 @@ class RejectionSampler(AbstractSampler):
 
     def _expected_prior_keys(
         self, prepared: _PreparedSamplerModel
-    ) -> tuple[set[str], set[str]]:
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Return ``(expected_nonlinear_keys, expected_explicit_linear_keys)``.
+
+        Both are in declaration order (prior, then extensions), never set
+        order: callers build the sample dicts by iterating them, and set order
+        varies between processes with ``PYTHONHASHSEED``.
 
         The flat sample dict the sampler consumes contains base nonlinear +
         extension nonlinear under the first set, plus the linear params sampled
@@ -951,14 +955,14 @@ class RejectionSampler(AbstractSampler):
         otherwise it is only the non-Gaussian linear params (those that cannot be
         analytically marginalized).
         """
-        nonlinear_keys = set(self.prior.nonlinear_priors) | set(
-            prepared.nonlinear_extension_priors
-        )
-        explicit_linear_keys = set(
-            _explicit_linear_names(
-                prepared.effective_linear_prior or {},
-                prepared.effective_marginalized_names,
+        nonlinear_keys = tuple(
+            dict.fromkeys(
+                [*self.prior.nonlinear_priors, *prepared.nonlinear_extension_priors]
             )
+        )
+        explicit_linear_keys = _explicit_linear_names(
+            prepared.effective_linear_prior or {},
+            prepared.effective_marginalized_names,
         )
         return nonlinear_keys, explicit_linear_keys
 
@@ -980,7 +984,7 @@ class RejectionSampler(AbstractSampler):
         got_nl = set(prior_samples.nonlinear)
         got_lin = set(prior_samples.linear)
 
-        missing = (expected_nl - got_nl) | (expected_lin - got_lin)
+        missing = (set(expected_nl) - got_nl) | (set(expected_lin) - got_lin)
         if missing:
             msg = (
                 "Prior samples key mismatch for this (prior, model) setup. "
@@ -1057,7 +1061,7 @@ class RejectionSampler(AbstractSampler):
         accumulated samples are not biased toward the start of the file.
         """
         expected_nl, expected_lin = self._expected_prior_keys(prepared)
-        expected_keys = expected_nl | expected_lin
+        expected_keys = tuple(dict.fromkeys([*expected_nl, *expected_lin]))
 
         with h5py.File(path, "r") as f:
             nonlinear_group = f["nonlinear"]
@@ -1068,7 +1072,7 @@ class RejectionSampler(AbstractSampler):
             available_nl = set(nonlinear_group)
             available_lin = set(linear_group)
             available = available_nl | available_lin
-            missing = expected_keys - available
+            missing = set(expected_keys) - available
             if missing:
                 msg = (
                     f"Prior cache at {path} is missing required keys: "

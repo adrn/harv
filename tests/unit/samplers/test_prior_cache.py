@@ -377,6 +377,25 @@ class TestRunWithSamplesFromHdf5:
             np.sort(np.asarray(mem["period"].value)),
         )
 
+    def test_parameter_order_is_the_declaration_order(self, tmp_path: Path):
+        """Both paths order parameters as declared, never in set order.
+
+        Set order changes between processes with ``PYTHONHASHSEED``, so results
+        written by different processes (harv-hq's shards and MPI ranks) would
+        disagree on column order.
+        """
+        prior = _rv_prior_with_jitter()
+        model = RVModel(extensions=(Jitter(obs_unit="km/s"),))
+        sampler = RejectionSampler(prior, model, batch_size=200)
+        path = tmp_path / "cache.h5"
+        make_prior_cache(prior, model, 400, path, key=jr.key(0), batch_size=200)
+        expected = [*prior.nonlinear_priors, "jitter"]
+        for cache in (path, Samples.from_hdf5(path)):
+            samples = sampler.run_with_samples(
+                _rv_data(), cache, key=jr.key(1), top_k=8
+            )
+            assert list(samples.nonlinear) == expected
+
     def test_randomize_does_not_change_n_samples_dramatically(self, tmp_path: Path):
         """randomize_prior_order=True still produces a valid posterior."""
         prior = _rv_prior()
