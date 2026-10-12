@@ -414,6 +414,19 @@ class TestConvergence:
         assert np.isnan(r_hat)
         assert np.isnan(ess)
 
+    def test_constant_infinite_draws_never_converge(self):
+        draws = np.random.default_rng(0).normal(size=4000)
+        samples = _chains(draws, 4)
+        samples = Samples(
+            nonlinear={**samples.nonlinear, "e": Q(np.full(4000, np.inf), "")},
+            linear={},
+            model_type="RVModel",
+            metadata={"num_chains": 4},
+        )
+        r_hat, ess = convergence(samples)
+        assert np.isnan(r_hat)
+        assert np.isnan(ess)
+
     def test_only_constant_parameters(self):
         r_hat, ess = convergence(_chains(np.ones(100), 2))
         assert np.isnan(r_hat)

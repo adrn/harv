@@ -122,9 +122,10 @@ def select_sources(
 def convergence(samples: Samples) -> tuple[float, float]:
     """``r_hat_max`` and ``ess_bulk_min`` over every parameter of MCMC samples.
 
-    A parameter whose draws are all equal has no defined R-hat and is
-    skipped; if every parameter is, both are NaN. Any other non-finite value
-    (e.g. NaN draws) makes the result NaN. NaN fails every threshold.
+    Any non-finite draw (NaN or infinite, in any parameter) makes both NaN.
+    Otherwise a parameter whose draws are all equal has no defined R-hat and
+    is skipped; if every parameter is, both are NaN. NaN fails every
+    threshold.
 
     Parameters
     ----------
@@ -155,7 +156,8 @@ def convergence(samples: Samples) -> tuple[float, float]:
     for name in (*samples.nonlinear, *samples.linear):
         value = samples[name]
         draws = np.asarray(getattr(value, "value", value), dtype=float)
-        # NaN != NaN, so NaN draws count as varying and reach the diagnostics.
+        if not np.isfinite(draws).all():
+            return float("nan"), float("nan")
         if not np.all(draws == draws[0]):
             names.append(name)
     if not names:
