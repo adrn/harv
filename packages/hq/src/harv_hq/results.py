@@ -12,9 +12,13 @@ __all__ = (
     "Payload",
     "ResultRecord",
     "ResultsIndex",
+    "read_source_rows",
     "read_source_samples",
+    "rescanning",
     "samples_table",
     "supersede",
+    "write_part",
+    "write_part_tables",
 )
 
 import logging
@@ -23,6 +27,7 @@ import shutil
 import time
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,6 +55,38 @@ _STRUCTURE_KEYS = (
 )
 SAMPLES_ROW_GROUP_SIZE = 131_072
 _INDEX_COLUMNS = ["source_id", "status", "finished", "samples_row_start", "n_samples"]
+# Attempts of a read that a concurrent compaction can invalidate.
+_SCAN_ATTEMPTS = 5
+
+
+def rescanning[T](read: Callable[[], T]) -> T:
+    """Run ``read``, starting over if a file it listed disappears.
+
+    Compaction deletes its input parts only after committing their
+    replacements, so a ``FileNotFoundError`` mid-read means the directory
+    changed under the reader, and a fresh listing finds the new parts.
+
+    Parameters
+    ----------
+    read
+        Lists the stage's parts and reads them, from scratch on each call.
+
+    Returns
+    -------
+        What ``read`` returns.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the directory keeps changing over every attempt.
+    """
+    for attempt in range(_SCAN_ATTEMPTS):
+        try:
+            return read()
+        except FileNotFoundError:
+            if attempt == _SCAN_ATTEMPTS - 1:
+                raise
+    raise AssertionError  # unreachable
 
 
 @final
@@ -212,20 +249,6 @@ class PartWriter:
             return
         i, n = self.shard
         stem = f"{i:04d}-of-{n:04d}-{uuid.uuid4().hex[:8]}"
-        rows: list[dict[str, Any]] = []
-        tables: list[pa.Table] = []
-        row_units: dict[str, str] = {}
-        samples_units: dict[str, str] = {}
-        row_start = 0
-        for payload in self._buffer:
-            n = 0 if payload.samples is None else payload.samples.num_rows
-            rows.append({**payload.row, "samples_row_start": row_start, "n_samples": n})
-            row_units.update(payload.row_units)
-            if payload.samples is not None:
-                tables.append(payload.samples)
-                samples_units.update(payload.samples_units)
-            row_start += n
-
         metadata = {
             "provenance": self.provenance,
             "stage": self.stage,
@@ -233,28 +256,113 @@ class PartWriter:
             "samples_metadata_keys": self._metadata_keys,
             **(self._structure or {}),
         }
-        if tables:
-            write_parquet(
-                self.stage_dir / (stem + SAMPLES_SUFFIX),
-                pa.concat_tables(tables),
-                units=samples_units,
-                metadata=metadata,
-                row_group_size=SAMPLES_ROW_GROUP_SIZE,
-            )
-        sources = _rows_to_columns(rows)
-        sources_path = self.stage_dir / (stem + SOURCES_SUFFIX)
-        write_parquet(
-            sources_path,
-            sources,
-            units={k: v for k, v in row_units.items() if k in sources.column_names},
-            metadata=metadata,
+        write_part(self.stage_dir, stem, self._buffer, metadata)
+        logger.info(
+            "%s: wrote part %s (%d sources)", self.stage, stem, len(self._buffer)
         )
-        logger.info("%s: wrote part %s (%d sources)", self.stage, stem, len(rows))
         self._buffer = []
 
     def close(self) -> None:
         """Write anything still buffered."""
         self.flush()
+
+
+def write_part(
+    stage_dir: Path, stem: str, payloads: list[Payload], metadata: dict[str, Any]
+) -> Path:
+    """Write payloads as one part: the samples file, then the sources file.
+
+    Each file is written to ``.tmp`` and renamed; the sources file's rename
+    is the commit. Assigns each row's ``samples_row_start`` and
+    ``n_samples``.
+
+    Parameters
+    ----------
+    stage_dir
+        ``results/<stage>``.
+    stem
+        The part's file stem.
+    payloads
+        The sources, in order.
+    metadata
+        The ``hq.*`` key-value metadata both files carry.
+
+    Returns
+    -------
+        The sources file.
+    """
+    rows: list[dict[str, Any]] = []
+    tables: list[pa.Table] = []
+    row_units: dict[str, str] = {}
+    samples_units: dict[str, str] = {}
+    row_start = 0
+    for payload in payloads:
+        n = 0 if payload.samples is None else payload.samples.num_rows
+        rows.append({**payload.row, "samples_row_start": row_start, "n_samples": n})
+        row_units.update(payload.row_units)
+        if payload.samples is not None:
+            tables.append(payload.samples)
+            samples_units.update(payload.samples_units)
+        row_start += n
+    return write_part_tables(
+        stage_dir,
+        stem,
+        _rows_to_columns(rows),
+        pa.concat_tables(tables) if tables else None,
+        sources_units=row_units,
+        samples_units=samples_units,
+        metadata=metadata,
+    )
+
+
+def write_part_tables(
+    stage_dir: Path,
+    stem: str,
+    sources: pa.Table,
+    samples: pa.Table | None,
+    *,
+    sources_units: dict[str, str],
+    samples_units: dict[str, str],
+    metadata: dict[str, Any],
+) -> Path:
+    """Write a part from finished tables: the samples file, then the sources file.
+
+    ``sources`` must already hold ``samples_row_start`` and ``n_samples``
+    pointing into ``samples`` (``None`` when no source has samples).
+
+    Parameters
+    ----------
+    stage_dir
+        ``results/<stage>``.
+    stem
+        The part's file stem.
+    sources, samples
+        The part's two tables.
+    sources_units, samples_units
+        Column units; entries for absent columns are ignored.
+    metadata
+        The ``hq.*`` key-value metadata both files carry.
+
+    Returns
+    -------
+        The sources file.
+    """
+    if samples is not None:
+        write_parquet(
+            stage_dir / (stem + SAMPLES_SUFFIX),
+            samples,
+            units={k: v for k, v in samples_units.items() if k in samples.column_names},
+            metadata=metadata,
+            row_group_size=SAMPLES_ROW_GROUP_SIZE,
+        )
+    sources_path = stage_dir / (stem + SOURCES_SUFFIX)
+    write_parquet(
+        sources_path,
+        sources,
+        units={k: v for k, v in sources_units.items() if k in sources.column_names},
+        metadata=metadata,
+    )
+    return sources_path
 
 
 def _rows_to_columns(rows: list[dict[str, Any]]) -> pa.Table:
@@ -295,19 +403,37 @@ class ResultsIndex:
     structure
         The ``Samples`` structure the parts share (``None`` when no part has
         samples).
+    n_rows
+        Rows over every sources file indexed, duplicates included.
+    metadata_keys
+        The union of the parts' ``samples_metadata_keys``, in first-seen order.
+    provenance
+        The provenance of the part created last (``None`` if no part has one).
     """
 
     def __init__(
         self,
         records: dict[Any, ResultRecord],
         structure: dict[str, Any] | None = None,
+        *,
+        n_rows: int = 0,
+        metadata_keys: tuple[str, ...] = (),
+        provenance: dict[str, Any] | None = None,
     ) -> None:
         self.records = records
         self.structure = structure
+        self.n_rows = n_rows
+        self.metadata_keys = metadata_keys
+        self.provenance = provenance
 
     @classmethod
     def build(
-        cls, stage_dir: Path, *, expected_provenance: dict[str, Any] | None = None
+        cls,
+        stage_dir: Path,
+        *,
+        expected_provenance: dict[str, Any] | None = None,
+        paths: list[Path] | None = None,
+        rescan: bool = True,
     ) -> "ResultsIndex":
         """Index every committed part in ``stage_dir``.
 
@@ -317,6 +443,12 @@ class ResultsIndex:
             ``results/<stage>``; a missing directory gives an empty index.
         expected_provenance
             When given, every part's provenance is checked against it.
+        paths
+            Index only these sources files (compaction's snapshot) instead of
+            every one in ``stage_dir``; never rescanned.
+        rescan
+            Start over if a part disappears mid-scan (see :func:`rescanning`);
+            ``False`` for a caller that rescans around more reads itself.
 
         Returns
         -------
@@ -329,16 +461,43 @@ class ResultsIndex:
             If a part was built from different inputs.
         ValueError
             If two parts hold ``Samples`` of different structure.
+        FileNotFoundError
+            If a part in ``paths`` disappears, or the directory keeps changing
+            under repeated scans.
         """
+        if paths is not None:
+            return cls._from_paths(paths, expected_provenance)
+
+        def scan() -> "ResultsIndex":
+            if not Path(stage_dir).is_dir():
+                return cls({})
+            return cls._from_paths(
+                list(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}")), expected_provenance
+            )
+
+        return rescanning(scan) if rescan else scan()
+
+    @classmethod
+    def _from_paths(
+        cls, paths: list[Path], expected_provenance: dict[str, Any] | None
+    ) -> "ResultsIndex":
         records: dict[Any, ResultRecord] = {}
         structure: dict[str, Any] | None = None
-        if not Path(stage_dir).is_dir():
-            return cls(records)
-        for path in sorted(Path(stage_dir).glob(f"*{SOURCES_SUFFIX}")):
+        n_rows = 0
+        metadata_keys: dict[str, None] = {}
+        provenance: dict[str, Any] | None = None
+        for path in sorted(paths):
             metadata = read_metadata(path)
+            found = metadata.get("provenance") or {}
             if expected_provenance is not None:
-                found = metadata.get("provenance", {})
                 check_provenance(found, expected_provenance, path=path)
+            if found and (
+                provenance is None or found["created"] > provenance["created"]
+            ):
+                provenance = found
+            metadata_keys.update(
+                dict.fromkeys(metadata.get("samples_metadata_keys", []))
+            )
             if "model_type" in metadata:  # failed-only parts carry no structure
                 part = {k: metadata[k] for k in _STRUCTURE_KEYS}
                 if structure is None:
@@ -350,6 +509,7 @@ class ResultsIndex:
                     )
                     raise ValueError(msg)
             rows = pq.read_table(path, columns=_INDEX_COLUMNS).to_pylist()
+            n_rows += len(rows)
             for row, r in enumerate(rows):
                 current = records.get(r["source_id"])
                 if current is None or r["finished"] > current.finished:
@@ -361,7 +521,13 @@ class ResultsIndex:
                         samples_row_start=r["samples_row_start"],
                         n_samples=r["n_samples"],
                     )
-        return cls(records, structure)
+        return cls(
+            records,
+            structure,
+            n_rows=n_rows,
+            metadata_keys=tuple(metadata_keys),
+            provenance=provenance,
+        )
 
     def done(self) -> set[Any]:
         """Source IDs whose newest result is ``ok``; anything else is rerun."""
@@ -370,6 +536,39 @@ class ResultsIndex:
     def status_counts(self) -> dict[str, int]:
         """Number of sources per status."""
         return dict(Counter(record.status for record in self.records.values()))
+
+
+def read_source_rows(records: list[ResultRecord]) -> tuple[pa.Table, dict[str, str]]:
+    """The sources-table rows of ``records``, in order, reading each file once.
+
+    Columns missing from a file (a part of only failed sources has no
+    statistics) come back null.
+
+    Parameters
+    ----------
+    records
+        Results to read (typically an index's newest rows).
+
+    Returns
+    -------
+        The rows, and the units of their columns.
+    """
+    by_file: dict[Path, list[int]] = {}
+    for position, record in enumerate(records):
+        by_file.setdefault(record.sources_path, []).append(position)
+    pieces: list[pa.Table] = []
+    order: list[int] = []
+    units: dict[str, str] = {}
+    for path, positions in by_file.items():
+        table = pq.read_table(path)
+        pieces.append(table.take([records[p].row for p in positions]))
+        order.extend(positions)
+        units.update(field_units(table.schema))
+    if not pieces:
+        return pa.table({}), units
+    table = pa.concat_tables(pieces, promote_options="default")
+    # Back to the order of ``records``.
+    return table.take(np.argsort(order, kind="stable")), units
 
 
 def read_source_samples(record: ResultRecord) -> Samples:

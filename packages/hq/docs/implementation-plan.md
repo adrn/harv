@@ -27,8 +27,8 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59)                             |
 | 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)                                     |
 | 3     | prior cache, serial rejection, result parts, resume    | Done (PR #61)                                     |
-| 4     | execution modes: shards, pool, MPI                     | Implemented on branch `hq-phase4`, awaiting merge |
-| 5     | compaction, summarize, status                          | Not started                                       |
+| 4     | execution modes: shards, pool, MPI                     | Done (PR #63)                                     |
+| 5     | compaction, summarize, status                          | Implemented on branch `hq-phase5`, awaiting merge |
 | 6     | MCMC follow-up                                         | Not started                                       |
 | 7     | web viewer                                             | Not started                                       |
 | 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
@@ -361,7 +361,7 @@ rows.
 
 ______________________________________________________________________
 
-## Phase 4: execution modes (shards, pool, MPI) — awaiting merge
+## Phase 4: execution modes (shards, pool, MPI) — done
 
 Implemented on branch `hq-phase4`. Deviations from the text below: there is
 no `_threads.py`. A worker cannot pin its own threads, because unpickling its
@@ -421,7 +421,39 @@ are present.
 
 ______________________________________________________________________
 
-## Phase 5: compaction, summarize, and status
+## Phase 5: compaction, summarize, and status — awaiting merge
+
+Implemented on branch `hq-phase5` (off `hq`). Deviations from the text below:
+`compact(stage_dir, *, stage, expected_provenance, compact_n_sources)` works
+on a stage directory, and `Run.compact(stage)` wraps it. Part writing moved
+out of `PartWriter.flush` into `results.write_part`, which compaction reuses,
+so compacted parts are written exactly like any other.
+`ResultsIndex.build` takes `paths=` (the snapshot) and reports `n_rows`, and
+`results.read_source_rows` reads a list of records' full rows, opening each
+file once (used by compaction and `summarize`). The tie rule and the
+`load_source` retry already existed from phase 3. `Run.status()` also counts
+rejection `pending` sources (spec updated). MCMC parts are not
+provenance-checked until phase 6 defines their provenance. The crash tests
+inject a crash after the write step, after the verify step, and after the
+third deletion. Provenance now hashes `hq.toml` per table, and each output
+records only the tables it depends on, so editing `[results]`, `[serve]`, a
+comment, or adding `[mcmc]` no longer invalidates earlier outputs (spec
+updated; `provenance.config_hashes`, `*_TABLES`). From the Copilot review of
+PR #65: compaction also removes orphaned samples files over an hour old
+(`ORPHAN_AGE_S`), and directory scans (`ResultsIndex.build`, `summarize`)
+start over when compaction removes a part mid-scan (spec updated). From our
+own review: compaction reads each input once in snapshot order (rows sorted
+by `source_id` within each output part, not across parts), so memory holds
+one output part plus one row group; outputs keep the newest input's
+provenance; it restarts when a concurrent compaction removes an input.
+Automatic compaction checks against the provenance the run wrote with.
+`status` counts prepared sources only and refuses stale results. Only
+`catalog.parquet` records `[catalog]`. Catalog columns may not use
+`summary.parquet` names, and the summary is sorted in 4,096-row groups. One
+`results.rescanning` helper replaces three retry loops; `ResultsIndex`
+collects `metadata_keys` and the newest `provenance`; `write_part_tables`
+writes parts from Arrow tables; `summary_stats` owns the statistic names.
+`CompactReport` is exported (spec updated).
 
 **`compact.py`**, `compact(run, stage) -> CompactReport` (counts of input
 parts, sources kept, superseded rows dropped, output parts), following the

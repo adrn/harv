@@ -11,32 +11,44 @@ import json
 import logging
 import os
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, final
 
 import h5py
+import pyarrow.parquet as pq
 
 from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import Samples, make_prior_cache
 from harv_hq._model_file import ModelFile
+from harv_hq.compact import CompactReport, compact
 from harv_hq.config import Config
 from harv_hq.execution import Progress, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
 from harv_hq.prepare import PreparedData, prepare
-from harv_hq.provenance import check_provenance, make_provenance
+from harv_hq.provenance import (
+    PRIOR_CACHE_TABLES,
+    REJECTION_TABLES,
+    check_provenance,
+    make_provenance,
+)
 from harv_hq.rejection import rejection_setup
 from harv_hq.results import (
+    SOURCES_SUFFIX,
     PartWriter,
     Payload,
     ResultsIndex,
     read_source_samples,
+    rescanning,
     supersede,
 )
+from harv_hq.summarize import SUMMARY_FILE, summarize
 
 logger = logging.getLogger("harv_hq")
 
 PRIOR_CACHE_FILE = "prior_cache.h5"
+STAGES = ("rejection", "mcmc")
 _PROVENANCE_ATTR = "hq.provenance"
 
 
@@ -137,7 +149,11 @@ class Run:
                 key=prior_cache_key(self.config.run.seed),
                 batch_size=self.config.prior_cache.batch_size,
             )
-            record = make_provenance(self.config, prior_cache_id=uuid.uuid4().hex)
+            record = make_provenance(
+                self.config,
+                tables=PRIOR_CACHE_TABLES,
+                prior_cache_id=uuid.uuid4().hex,
+            )
             with h5py.File(tmp, "a") as f:
                 f.attrs[_PROVENANCE_ATTR] = json.dumps(record)
             tmp.replace(path)
@@ -157,6 +173,7 @@ class Run:
         workers: int = 1,
         mpi: bool = False,
         overwrite: bool = False,
+        compact: bool = True,
     ) -> None:
         """Run the rejection sampler on every source in a slice (``hq run``).
 
@@ -180,6 +197,9 @@ class Run:
         overwrite
             Move existing rejection results to
             ``results/superseded-<timestamp>-rejection/`` and start over.
+        compact
+            Compact the stage at the end when this invocation covered all of
+            it (slice ``0/1``, or MPI on rank 0); explicit shards never do.
 
         Raises
         ------
@@ -201,7 +221,12 @@ class Run:
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())
         try:
-            self._run_rejection(shard, workers, overwrite, comm)
+            part_provenance = self._run_rejection(shard, workers, overwrite, comm)
+            # The whole stage ran here (MPI: rank 0, after the final barrier).
+            # Checked against what this run wrote with, so an edit to hq.toml
+            # or the cache during the run cannot fail it at the very end.
+            if compact and shard[0] == 0 and (comm is not None or shard[1] == 1):
+                self._compact("rejection", part_provenance)
         except BaseException:
             # A rank that stops early would leave the others waiting at a
             # barrier forever; nothing above it can recover, so end them all.
@@ -212,13 +237,9 @@ class Run:
 
     def _run_rejection(
         self, shard: tuple[int, int], workers: int, overwrite: bool, comm: Any
-    ) -> None:
+    ) -> dict[str, Any]:
         i, n = shard
-        prepared = PreparedData(self.run_dir)
-        expected = make_provenance(self.config, data_id=prepared.data_id)
-        check_provenance(prepared.provenance, expected, path=prepared.path)
-        cache_path, cache_provenance = self._checked_prior_cache(expected)
-
+        prepared, cache_path, part_provenance = self._rejection_inputs()
         stage_dir = self.run_dir / "results" / "rejection"
         # Under MPI only rank 0 moves results aside, and every rank waits for
         # it before reading what is done.
@@ -226,10 +247,6 @@ class Run:
             supersede(stage_dir)
         if comm is not None:
             comm.Barrier()
-        part_provenance = {
-            **expected,
-            "prior_cache_id": cache_provenance["prior_cache_id"],
-        }
         existing = ResultsIndex.build(stage_dir, expected_provenance=part_provenance)
         done = existing.done()
         todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
@@ -276,6 +293,87 @@ class Run:
             log_handler.close()
         if comm is not None:
             comm.Barrier()
+        return part_provenance
+
+    def compact(self, stage: str = "rejection") -> CompactReport:
+        """Merge a stage's result parts (``hq compact``); see the spec's "Compaction".
+
+        Parameters
+        ----------
+        stage
+            ``"rejection"`` (``"mcmc"`` arrives with MCMC follow-up).
+
+        Returns
+        -------
+            What was merged.
+
+        Raises
+        ------
+        ProvenanceError
+            If a part was built from different inputs.
+        """
+        return self._compact(stage, self._stage_provenance(stage))
+
+    def _compact(self, stage: str, expected: dict[str, Any] | None) -> CompactReport:
+        report = compact(
+            self.run_dir / "results" / stage,
+            stage=stage,
+            expected_provenance=expected,
+            compact_n_sources=self.config.results.compact_n_sources,
+        )
+        self._indexes.pop(stage, None)
+        return report
+
+    def summarize(self) -> Path:
+        """Write ``summary.parquet`` (``hq summarize``).
+
+        Returns
+        -------
+            Its path.
+
+        Raises
+        ------
+        ProvenanceError
+            If a result part was built from different inputs.
+        """
+        path = summarize(
+            self.run_dir,
+            expected={stage: self._stage_provenance(stage) for stage in STAGES},
+        )
+        logger.info("summarize: wrote %s", path)
+        return path
+
+    def status(self) -> dict[str, dict[str, int]]:
+        """Sources per status for each stage (``hq status``).
+
+        Returns
+        -------
+            ``stage -> status -> count`` over the prepared sources. Rejection
+            also counts ``pending`` sources, prepared but without a result.
+
+        Raises
+        ------
+        ProvenanceError
+            If a stage's parts were built from different inputs (e.g. before
+            ``hq prepare --overwrite``), rather than counting stale results.
+        """
+        prepared = set(PreparedData(self.run_dir).source_ids)
+        counts: dict[str, dict[str, int]] = {}
+        for stage in STAGES:
+            stage_dir = self.run_dir / "results" / stage
+            has_parts = any(stage_dir.glob(f"*{SOURCES_SUFFIX}"))
+            records = ResultsIndex.build(
+                stage_dir,
+                expected_provenance=self._stage_provenance(stage)
+                if has_parts
+                else None,
+            ).records
+            counts[stage] = dict(
+                Counter(r.status for sid, r in records.items() if sid in prepared)
+            )
+            if stage == "rejection":
+                counts[stage]["pending"] = len(prepared - records.keys())
+        return counts
 
     def load_source(self, source_id: Any) -> SourceResult:
         """Everything hq holds for one source.
@@ -297,7 +395,7 @@ class Run:
         key, source_data = next(iter(data.items()))
         samples: dict[str, Samples | None] = {}
         statuses: dict[str, str] = {}
-        for stage in ("rejection", "mcmc"):
+        for stage in STAGES:
             record = self._index(stage).records.get(key)
             statuses[stage] = "pending" if record is None else record.status
             samples[stage] = (
@@ -310,8 +408,33 @@ class Run:
             mcmc=samples["mcmc"],
             rejection_status=statuses["rejection"],
             mcmc_status=statuses["mcmc"],
-            summary=None,
+            summary=self._summary_row(key),
         )
+
+    def _rejection_inputs(self) -> tuple[PreparedData, Path, dict[str, Any]]:
+        """The checked prepared data and prior cache, and parts' provenance."""
+        prepared = PreparedData(self.run_dir)
+        current = make_provenance(self.config, data_id=prepared.data_id)
+        check_provenance(prepared.provenance, current, path=prepared.path)
+        cache_path, cache_provenance = self._checked_prior_cache(current)
+        part = make_provenance(
+            self.config,
+            tables=REJECTION_TABLES,
+            data_id=prepared.data_id,
+            prior_cache_id=cache_provenance["prior_cache_id"],
+        )
+        return prepared, cache_path, part
+
+    def _stage_provenance(self, stage: str) -> dict[str, Any] | None:
+        """What a stage's parts must match (MCMC parts: not checked yet)."""
+        return self._rejection_inputs()[2] if stage == "rejection" else None
+
+    def _summary_row(self, source_id: Any) -> dict[str, Any] | None:
+        path = self.run_dir / SUMMARY_FILE
+        if not path.exists():
+            return None
+        rows = pq.read_table(path, filters=[("source_id", "==", source_id)])
+        return rows.to_pylist()[0] if rows.num_rows else None
 
     def _index(self, stage: str) -> ResultsIndex:
         if stage not in self._indexes:
@@ -319,12 +442,15 @@ class Run:
         return self._indexes[stage]
 
     def _read_samples(self, stage: str, source_id: Any) -> Samples:
-        try:
-            return read_source_samples(self._index(stage).records[source_id])
-        except FileNotFoundError:
-            # The part was merged away (compaction) since the index was built.
-            self._indexes.pop(stage, None)
-            return read_source_samples(self._index(stage).records[source_id])
+        def read() -> Samples:
+            try:
+                return read_source_samples(self._index(stage).records[source_id])
+            except FileNotFoundError:
+                # Merged away by compaction since the index was built.
+                self._indexes.pop(stage, None)
+                raise
+
+        return rescanning(read)
 
     def _checked_prior_cache(
         self, expected: dict[str, Any]

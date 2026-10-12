@@ -5,7 +5,14 @@ Every statistic comes from harv's ``Samples`` methods; hq adds only the
 weighted percentile and the equal-weight resample that top-K samples need.
 """
 
-__all__ = ("summary_stats", "weighted_resample")
+__all__ = (
+    "NAMED_STATISTICS",
+    "PERCENTILES",
+    "SUMMARY_COLUMNS",
+    "is_statistic",
+    "summary_stats",
+    "weighted_resample",
+)
 
 from typing import Any, cast
 
@@ -16,7 +23,41 @@ from unxt import AbstractQuantity
 from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import Samples
 
-_PERCENTILES = (16, 50, 84)
+PERCENTILES = (16, 50, 84)
+# Per-source statistics with fixed names; every parameter also gets
+# map_<param> and <param>_p<q> for each of PERCENTILES.
+NAMED_STATISTICS = (
+    "period_unimodal",
+    "max_phase_gap",
+    "phase_coverage",
+    "periods_spanned",
+)
+# The summary table's own columns besides the catalog's and the statistics
+# (spec, "Summary table"); catalog columns may not use these names.
+SUMMARY_COLUMNS = (
+    "rejection_status",
+    "rejection_error",
+    "n_prior_samples",
+    "ln_Z_int",
+    "ln_Z_int_mcse",
+    "ln_Z_int_ess",
+    "max_ln_likelihood",
+    "weight_captured",
+    "well_resolved",
+    "mcmc_status",
+    "r_hat_max",
+    "ess_bulk_min",
+    "final",
+)
+
+
+def is_statistic(name: str) -> bool:
+    """Whether a column name is one of :func:`summary_stats`' statistics."""
+    return (
+        name in NAMED_STATISTICS
+        or name.startswith("map_")
+        or name.endswith(tuple(f"_p{q}" for q in PERCENTILES))
+    )
 
 
 def _normalized_weights(samples: Samples) -> np.ndarray:
@@ -61,7 +102,7 @@ def _weighted_percentiles(values: np.ndarray, weights: np.ndarray) -> np.ndarray
     order = np.argsort(values)
     values, weights = values[order], weights[order]
     cdf = np.cumsum(weights) - 0.5 * weights  # midpoint rule
-    return np.interp(np.asarray(_PERCENTILES) / 100, cdf, values)
+    return np.interp(np.asarray(PERCENTILES) / 100, cdf, values)
 
 
 def _value_and_unit(value: Any) -> tuple[np.ndarray, str]:
@@ -127,10 +168,10 @@ def summary_stats(
         percentiles = (
             _weighted_percentiles(values, weights)
             if weighted
-            else np.percentile(values, _PERCENTILES)
+            else np.percentile(values, PERCENTILES)
         )
         columns = {f"map_{name}": map_value[0]} | {
-            f"{name}_p{q}": p for q, p in zip(_PERCENTILES, percentiles, strict=True)
+            f"{name}_p{q}": p for q, p in zip(PERCENTILES, percentiles, strict=True)
         }
         for column, value in columns.items():
             stats[column] = float(value)

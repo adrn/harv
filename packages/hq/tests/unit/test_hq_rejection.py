@@ -55,7 +55,7 @@ def index(run):
 class TestEndToEnd:
     def test_every_source_gets_a_result_in_several_parts(self, rv_run):
         run = prepared_run(rv_run)
-        run.run_rejection()
+        run.run_rejection(compact=False)
         records = index(run).records
         assert set(records) == set(rv_run.kept)
         assert {r.status for r in records.values()} == {"ok"}
@@ -358,7 +358,7 @@ class TestExecutionModes:
         serial, pooled = twin_runs(rv_run, tmp_path)
         serial.run_rejection()
         environ = dict(os.environ)
-        pooled.run_rejection(workers=2)
+        pooled.run_rejection(workers=2, compact=False)
         # The workers' thread pinning does not leak into this process.
         assert dict(os.environ) == environ
         assert all_samples(pooled).equals(all_samples(serial))
@@ -431,7 +431,7 @@ class TestExecutionModes:
         # rank 0's new parts. Rank 1 also runs a pool (--mpi --workers 2).
         for rank, workers in ((0, 1), (1, 2)):
             monkeypatch.setattr(run_module, "mpi_comm", lambda r=rank: FakeComm(r))
-            run.run_rejection(mpi=True, workers=workers, overwrite=True)
+            run.run_rejection(mpi=True, workers=workers, overwrite=True, compact=False)
         assert barriers == [0, 0, 1, 1]  # after the overwrite, and at the end
         assert len(list((run.run_dir / "results").glob("superseded-*"))) == 1
         assert index(run).status_counts() == {"ok": len(rv_run.kept)}
@@ -480,7 +480,8 @@ class TestExecutionModes:
         subprocess.run(  # noqa: S603 -- fixed argv
             [
                 *("mpirun", "-n", "2", sys.executable),
-                *("-m", "harv_hq.cli", "run", "--mpi", "--run-dir", str(run.run_dir)),
+                *("-m", "harv_hq.cli", "run", "--mpi", "--no-compact"),
+                *("--run-dir", str(run.run_dir)),
             ],
             check=True,
             timeout=600,
@@ -507,6 +508,25 @@ class TestProvenance:
         prior = run.run_dir / "prior.py"
         prior.write_text(prior.read_text() + "\n# edited\n")
         with pytest.raises(ProvenanceError, match="model_file_sha256"):
+            Run(run.run_dir).run_rejection()
+
+    def test_editing_storage_settings_keeps_results_valid(self, rv_run):
+        run = prepared_run(rv_run)
+        run.run_rejection(shard=(0, 2))
+        config = run.run_dir / "hq.toml"
+        text = config.read_text()
+        config.write_text(
+            "# tuning compaction\n"
+            + text.replace("flush_n_sources = 4", "flush_n_sources = 5")
+            + "\n[serve]\nport = 9000\n\n[mcmc]\nnum_chains = 2\n"
+        )
+        resumed = Run(run.run_dir)
+        resumed.run_rejection()  # resumes, then compacts
+        assert index(resumed).status_counts() == {"ok": len(rv_run.kept)}
+        resumed.summarize()
+        # A setting rejection depends on is still refused.
+        config.write_text(config.read_text().replace("top_k = 64", "top_k = 32"))
+        with pytest.raises(ProvenanceError, match=r"\['rejection'\]"):
             Run(run.run_dir).run_rejection()
 
     def test_a_rebuilt_prior_cache_is_refused_by_existing_parts(self, rv_run):

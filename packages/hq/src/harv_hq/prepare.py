@@ -33,7 +33,13 @@ from harv_hq._parquet_io import (
     write_parquet,
 )
 from harv_hq.config import Config, ConfigError
-from harv_hq.provenance import ProvenanceError, make_provenance
+from harv_hq.provenance import (
+    CATALOG_TABLES,
+    PREPARED_TABLES,
+    ProvenanceError,
+    make_provenance,
+)
+from harv_hq.summary_stats import SUMMARY_COLUMNS, is_statistic
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +143,7 @@ def prepare(
 
     data_id = uuid.uuid4().hex
     metadata = {
-        "provenance": make_provenance(config, data_id=data_id),
+        "provenance": make_provenance(config, tables=PREPARED_TABLES, data_id=data_id),
         "kind": kind,
         "data_id": data_id,
     }
@@ -151,8 +157,16 @@ def prepare(
     )
 
     baseline = np.maximum.reduceat(time, starts) - np.minimum.reduceat(time, starts)
+    catalog_metadata = {
+        **metadata,
+        "provenance": make_provenance(config, tables=CATALOG_TABLES, data_id=data_id),
+    }
     _write_catalog(
-        config, ids=ids, n_obs=counts, time_baseline=baseline, metadata=metadata
+        config,
+        ids=ids,
+        n_obs=counts,
+        time_baseline=baseline,
+        metadata=catalog_metadata,
     )
 
     # Written last: until it exists, there is no usable prepared data.
@@ -247,9 +261,17 @@ def _write_catalog(
                 for n in table.colnames
                 if n != catalog.source_id and table[n].ndim == 1
             ]
-        clash = sorted(set(names) & set(_RESERVED_CATALOG_COLUMNS))
+        clash = sorted(
+            name
+            for name in names
+            if name in (*_RESERVED_CATALOG_COLUMNS, *SUMMARY_COLUMNS)
+            or is_statistic(name)
+        )
         if clash:
-            msg = f"[catalog] column(s) {clash} collide with hq's own catalog columns"
+            msg = (
+                f"[catalog] column(s) {clash} collide with hq's own catalog or "
+                "summary.parquet columns; rename them"
+            )
             raise ConfigError(msg)
         missing = sorted(set(names) - set(table.colnames))
         if missing:

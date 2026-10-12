@@ -496,7 +496,8 @@ returns a `dict`; the pipeline stages use it to load a process's slice (see
 One row per prepared source: `source_id`, `n_obs`, `time_baseline` (days),
 then the `[catalog]` columns joined on `source_id` (left join: prepared
 sources with no catalog row get nulls). Catalog columns that collide with
-these names raise `ConfigError`.
+these names, or with `summary.parquet`'s own columns (see "Summary table":
+its fixed columns, `map_*`, and `*_p16`/`_p50`/`_p84`), raise `ConfigError`.
 
 ### `make_prior_cache`
 
@@ -739,25 +740,34 @@ stage's parts into a few large ones holding only the newest row per source.
 
 1. **Snapshot.** List the committed parts in `results/<stage>/` (sources files
    with their samples files) at the start. Only these are inputs; parts
-   committed while compaction runs are left alone. If the snapshot is already
+   committed while compaction runs are left alone. Also list *orphaned*
+   samples files (no sources file with the same stem) last modified over an
+   hour ago: left by a crash between a part's two renames or between this
+   step's two deletions. A younger orphan may be a writer between its renames,
+   so it is left for a later compaction. If the snapshot is already
    compacted (every part is a compacted part and no source appears twice),
    return without writing anything.
 1. **Check.** Every input's provenance must match the current one
    (`ProvenanceError` otherwise), and every input must carry the same
    run-wide `Samples` structure.
-1. **Select.** Read the sources rows of all inputs, keep the newest row per
-   source (the "Resume" rule), and sort them by `source_id`.
-1. **Write.** For each block of `compact_n_sources` sources, gather their
-   samples from the input samples files (row-range reads), and write a new
-   part with stem `c-<uuid8>-<k:04d>` through the normal part protocol
-   (samples file, then sources file, each renamed into place), with samples
-   in the same `source_id` order and recomputed `samples_row_start`. Row
-   groups hold 131,072 rows.
+1. **Select.** Read the index columns of all inputs and keep the newest row
+   per source (the "Resume" rule).
+1. **Write.** Read each input once, in snapshot order: its selected sources
+   rows, and their samples one row group at a time, keeping only the selected
+   rows. Fill output parts of `compact_n_sources` sources each, and write each
+   with stem `c-<uuid8>-<k:04d>` through the normal part protocol (samples
+   file, then sources file, each renamed into place). Within a part, rows
+   are sorted by `source_id`, samples follow in the same order, and
+   `samples_row_start` is recomputed. Row groups hold 131,072 rows. Memory
+   holds one output part plus one input row group. The outputs record the
+   provenance of the newest input (by `created`), since that is when their
+   samples were made; inputs without provenance give outputs without it.
 1. **Verify.** Re-read the new sources files and confirm they contain exactly
    the selected `(source_id, finished)` pairs.
 1. **Delete inputs.** Remove the snapshot's input files, sources file first,
    then samples file. A file already gone (removed by a concurrent
-   compaction) is skipped.
+   compaction) is skipped. Then remove the listed orphans that still have no
+   sources file.
 
 Readers stay correct at every point. Before step 6, each source is present in
 an input part and possibly also in a compacted part with the same `finished`,
@@ -768,9 +778,18 @@ needs no lock, but it should not be run against a stage that is still being
 written if the goal is a fully merged result: later parts survive it and need
 another compaction.
 
+If an input disappears while compaction runs (a concurrent compaction removed
+it), compaction starts over from step 1.
+
+`Run.compact` returns a `harv_hq.CompactReport` (`n_input_parts`,
+`n_sources`, `n_dropped_rows`, `n_output_parts`, `n_orphans_removed`; all but
+`n_orphans_removed` are zero when the stage was already compacted), and
+`hq compact` prints it.
+
 Compaction drops superseded rows, including the tracebacks of `failed`
 attempts that were later retried successfully; the `logs/` files keep them.
-After compaction, every `*.samples.parquet` row belongs to a current result,
+After compaction, every `*.samples.parquet` row belongs to a current result
+(apart from orphans younger than an hour, which the next compaction removes),
 so population analyses can read the samples dataset directly with no join.
 
 ### Loading results
@@ -782,7 +801,10 @@ until `summarize` has run). At first use, `Run` builds an in-memory index from t
 `source_id`, `finished`, `samples_row_start`, and `n_samples` columns of every
 sources file (newest row per source wins), then reads only the row groups of
 the samples file that span the source's rows. If that file has since been
-removed by compaction, the index is rebuilt and the read retried once.
+removed by compaction, the index is rebuilt and the read retried once. Every
+directory scan (the index, `status`, `summarize`) likewise starts over when a
+part it listed disappears mid-scan, since compaction has already committed its
+replacement.
 
 For population analyses, the samples are directly readable as one dataset:
 `pyarrow.dataset.dataset(run_dir / "results/rejection", format="parquet")`
@@ -799,13 +821,29 @@ prior cache) with these keys:
 | Key                                         | Description                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------- |
 | `hq_version`, `harv_version`, `jax_version` | Package versions                                                           |
-| `config_sha256`                             | sha256 of `hq.toml` bytes                                                  |
+| `config_sha256`                             | sha256 of each `hq.toml` table the output depends on (see below)           |
 | `model_file_sha256`                         | sha256 of the model file bytes                                             |
 | `data_id`                                   | The `data_id` of the prepared data                                         |
 | `prior_cache_id`                            | A uuid4 written into the prior cache when it was built (result parts only) |
 | `created`                                   | ISO 8601 UTC timestamp                                                     |
 
-A stage refuses to build on outputs whose `config_sha256`,
+`config_sha256` maps table names to the sha256 of that table's parsed values
+as sorted-key JSON (an absent table hashes as `null`), so comments,
+formatting, and key order do not count. Each output records only the tables
+it depends on:
+
+| Output                                  | Tables                                                         |
+| --------------------------------------- | -------------------------------------------------------------- |
+| `data.parquet`, `data_index.parquet`    | `[run]`, `[data]`, `[prepare]`                                 |
+| `catalog.parquet`                       | `[run]`, `[data]`, `[prepare]`, `[catalog]`                    |
+| `prior_cache.h5`                        | `[run]`, `[prior_cache]`                                       |
+| rejection parts (and `summary.parquet`) | `[run]`, `[data]`, `[prepare]`, `[prior_cache]`, `[rejection]` |
+
+`[results]` and `[serve]` change only how results are stored or shown, so no
+output records them: they can be edited at any time. Adding or editing
+`[mcmc]` leaves rejection results valid.
+
+A stage refuses to build on outputs whose recorded table hashes,
 `model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
 ones, raising `harv_hq.ProvenanceError` that names the mismatched field and
 file. The prepared data records `model_file_sha256` too, because the model
@@ -853,7 +891,8 @@ samples are equal-weight. hq treats the weights as follows.
 
 `Run.summarize()` reads the sources tables of both stages, keeps the newest
 row per source, and joins them onto `catalog.parquet`. It reads no samples
-and no data. One row per prepared source:
+and no data. One row per prepared source, sorted by `source_id` in row groups
+of 4,096, so a one-source read decodes one row group:
 
 | Column(s)                                                                                                               | Source                                                        |
 | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -865,7 +904,9 @@ and no data. One row per prepared source:
 | `period_unimodal`, phase-coverage columns, `map_<param>`, `<param>_p*`                                                  | the sources table of the `final` stage                        |
 
 Every source shares one model, so every `ok` source has the same parameter
-columns; sources without results get nulls.
+columns; sources without results get nulls. Units come from the inputs' field
+metadata, and the file records the rejection parts' provenance. Once it
+exists, `Run.load_source` returns the source's row as `summary`.
 
 ______________________________________________________________________
 
@@ -954,16 +995,20 @@ run.prepare(*, overwrite=False)
 run.make_prior_cache(*, overwrite=False)
 run.run_rejection(*, shard=(0, 1), workers=1, mpi=False,
                   overwrite=False, compact=True)
-run.compact(stage="rejection")              # or "mcmc"
-run.summarize()
+run.compact(stage="rejection") -> CompactReport  # or "mcmc"
+run.summarize() -> Path                     # summary.parquet
 run.run_mcmc(*, shard=(0, 1), workers=1, mpi=False,
              overwrite=False, compact=True)
-run.status() -> dict[str, dict[str, int]]   # stage -> status -> count
+run.status() -> dict[str, dict[str, int]]   # stage -> status -> count;
+                                            # prepared sources only; rejection
+                                            # also counts "pending"; refuses
+                                            # stale results (ProvenanceError)
 run.load_source(source_id) -> harv_hq.SourceResult
 
 harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData
 harv_hq.read_sources(run_dir, source_ids) -> dict[Any, RVData | GaiaAstrometryData]
 harv_hq.create_app(run_dir) -> fastapi.FastAPI
+harv_hq.CompactReport                       # returned by run.compact
 
 # Exceptions
 harv_hq.ConfigError, harv_hq.ProvenanceError
