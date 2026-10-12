@@ -4,6 +4,7 @@ import shutil
 import time
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from astropy.table import Table
@@ -178,6 +179,22 @@ class TestCatalog:
         assert source["bp_rp"] is not None
         t = kept_rows(rv_run.table, "J1234/5678")["time"]
         assert source["time_baseline"] == pytest.approx(float(t.max() - t.min()))
+
+    def test_fits_catalog(self, rv_run):
+        """FITS strings are bytes and FITS numbers big-endian; both are stored."""
+        catalog = rv_run.catalog.copy()
+        catalog["telescope"] = [f"t{i}" for i in range(len(catalog))]
+        catalog.write(rv_run.run_dir / "catalog.fits")
+        config = rv_run.run_dir / "hq.toml"
+        config.write_text(config.read_text().replace("catalog.ecsv", "catalog.fits"))
+        Run(rv_run.run_dir).prepare()
+        table = read_parquet(rv_run.run_dir / "catalog.parquet").table
+        assert table.schema.field("telescope").type == pa.string()
+        rows = {r["source_id"]: r for r in table.to_pylist()}
+        expected = {r["source_id"]: r for r in rv_run.catalog}
+        sid = "J1234/5678"
+        assert rows[sid]["abs_g"] == pytest.approx(float(expected[sid]["abs_g"]))
+        assert rows[sid]["telescope"].startswith("t")
 
     @pytest.mark.parametrize("name", ["n_obs", "final", "ln_Z_int", "map_x", "x_p50"])
     def test_reserved_column_name(self, rv_run, name):

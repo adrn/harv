@@ -12,6 +12,7 @@ __all__ = (
     "Payload",
     "ResultRecord",
     "ResultsIndex",
+    "read_source_row",
     "read_source_rows",
     "read_source_samples",
     "process_source",
@@ -59,6 +60,8 @@ _STRUCTURE_KEYS = (
     "linear_names",
 )
 SAMPLES_ROW_GROUP_SIZE = 131_072
+# Small enough that one source's row (read_source_row) decodes little.
+SOURCES_ROW_GROUP_SIZE = 4096
 _INDEX_COLUMNS = ["source_id", "status", "finished", "samples_row_start", "n_samples"]
 # Attempts of a read that a concurrent compaction can invalidate.
 _SCAN_ATTEMPTS = 5
@@ -448,6 +451,7 @@ def write_part_tables(
         sources,
         units={k: v for k, v in sources_units.items() if k in sources.column_names},
         metadata=metadata,
+        row_group_size=SOURCES_ROW_GROUP_SIZE,
     )
     return sources_path
 
@@ -623,6 +627,21 @@ class ResultsIndex:
     def status_counts(self) -> dict[str, int]:
         """Number of sources per status."""
         return dict(Counter(record.status for record in self.records.values()))
+
+
+def read_source_row(record: ResultRecord) -> dict[str, Any]:
+    """One record's full sources-table row, decoding only its row group.
+
+    Parameters
+    ----------
+    record
+        The result to read.
+
+    Returns
+    -------
+        The row as a dict.
+    """
+    return read_rows(pq.ParquetFile(record.sources_path), record.row, 1).to_pylist()[0]
 
 
 def read_source_rows(records: list[ResultRecord]) -> tuple[pa.Table, dict[str, str]]:

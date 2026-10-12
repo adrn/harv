@@ -1,21 +1,35 @@
 """Tests for the web viewer: routes, filters, IDs, and source payloads."""
 
 import shutil
+import types
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from unxt import Q
 
 from harv.samplers import Samples
 from harv_hq import Run, create_app
-from harv_hq import cli as cli_module
+from harv_hq._model_file import ModelFile
 from harv_hq.cli import main
+from harv_hq.results import ResultsIndex, read_source_row, read_source_rows
 from harv_hq.summarize import SUMMARY_FILE
-from harv_hq.web.payload import MAX_CURVE_SAMPLES, _shown, jsonable
+from harv_hq.web import payload as payload_module
+from harv_hq.web.app import _Viewer
+from harv_hq.web.payload import (
+    MAX_CURVE_SAMPLES,
+    _curve_json,
+    _gaia_curves,
+    _rv_curves,
+    _samples_payload,
+    _shown,
+    jsonable,
+)
 
 PLUS, SLASH = "2M00000001+0000007", "J1234/5678"  # IDs that need URL encoding
 MCMC_ID = "2M00000003+0000021"
@@ -209,6 +223,7 @@ class TestSourcePayload:
         assert str(sid) in ids
         body = client.get(f"/api/source/{sid}").json()
         assert body["source_id"] == str(sid)
+        assert body["summary"]["source_id"] == str(sid)
         assert body["kind"] == "gaia_astrometry"
         n_obs = fixture.kept[sid]
         assert len(body["data"]["al_position"]) == n_obs
@@ -218,6 +233,123 @@ class TestSourcePayload:
         assert np.shape(curves["residual"]) == (n, n_obs)
         assert client.get("/api/source/12345").status_code == 404
         assert client.get("/api/source/not-an-int").status_code == 404
+
+
+class TestReload:
+    def test_a_rewritten_summary_is_picked_up_without_reimporting(
+        self, rv_dir, tmp_path, monkeypatch
+    ):
+        run_dir = shutil.copytree(rv_dir, tmp_path / "run")
+        viewer = _Viewer(run_dir)
+        first = viewer.current()
+        assert viewer.current() is first  # unchanged: the same snapshot
+        loads = []
+        load = ModelFile.load
+        monkeypatch.setattr(
+            ModelFile, "load", lambda path: loads.append(path) or load(path)
+        )
+        # Rewritten at once, likely within one mtime tick: a new inode.
+        Run(run_dir).summarize()
+        second = viewer.current()
+        assert second is not first
+        assert second.run is not first.run  # a fresh results index
+        assert loads == []  # the model file is not imported again
+        assert second.run.config is viewer.run.config
+
+    def test_a_summary_deleted_while_loading_falls_back_to_the_catalog(
+        self, rv_dir, tmp_path, monkeypatch
+    ):
+        run_dir = shutil.copytree(rv_dir, tmp_path / "run")
+        viewer = _Viewer(run_dir)
+        (run_dir / SUMMARY_FILE).unlink()
+        snapshot = viewer.current()
+        assert snapshot.stamp is None
+        assert "rejection_status" not in snapshot.table.column_names
+
+
+class TestRobustPayloads:
+    @pytest.fixture
+    def rv_source(self, rv_dir):
+        run = Run(rv_dir)
+        result = run.load_source(SLASH)
+        model = run.model_file.setup("rv")[1]
+        return result, model
+
+    @staticmethod
+    def with_periods(samples, periods) -> Samples:
+        return Samples(
+            nonlinear={**samples.nonlinear, "period": Q(periods, "day")},
+            linear=samples.linear,
+            model_type=samples.model_type,
+            metadata=samples.metadata,
+            ln_likelihood=samples.ln_likelihood,
+            ln_prior=samples.ln_prior,
+        )
+
+    def test_nan_periods_are_skipped(self, rv_source):
+        result, model = rv_source
+        samples = result.rejection
+        periods = np.asarray(samples["period"].value).copy()
+        periods[0] = np.nan
+        curves = _rv_curves(self.with_periods(samples, periods), result.data, model)
+        assert curves["rv"][0] == [None] * len(curves["time"])
+        assert curves["rv"][1][0] is not None
+
+    def test_curves_that_fail_leave_the_rest_of_the_page(self, rv_source):
+        result, model = rv_source
+        samples = result.rejection
+        nan = self.with_periods(samples, np.full(samples.n_samples, np.nan))
+        payload = _samples_payload(nan, result.data, model)
+        assert "no sample has a finite period" in payload["curves_error"]
+        assert "curves" not in payload
+        assert len(payload["params"]["period"]) == samples.n_samples
+
+    def test_a_page_survives_failing_curves(self, client, monkeypatch):
+        def broken(*args: object, **kwargs: object):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(payload_module, "_rv_curves", broken)
+        response = client.get(f"/api/source/{quote(SLASH, safe='')}")
+        assert response.status_code == 200
+        assert "boom" in response.json()["stages"]["rejection"]["curves_error"]
+
+    def test_no_samples_shown(self, rv_source):
+        result, model = rv_source
+        empty = result.rejection[np.array([], dtype=int)]
+        payload = _samples_payload(empty, result.data, model)
+        assert payload["params"]["period"] == []
+        assert "curves" not in payload
+        assert "curves_error" not in payload
+
+    def test_gaia_without_a_sky_orbit(self, gaia_client):
+        _, fixture = gaia_client
+        run = Run(fixture.run_dir)
+        result = run.load_source(next(iter(fixture.kept)))
+        model = run.model_file.setup("gaia_astrometry")[1]
+        # A parameterization with no sky orbit (as a Fourier fit has none).
+        stub = types.SimpleNamespace(
+            parameterization=types.SimpleNamespace(
+                params=model.parameterization.params
+            ),
+            predict=model.predict,
+            _all_nonlinear_names=model._all_nonlinear_names,
+            _linear_param_units=model._linear_param_units,
+        )
+        curves = _gaia_curves(result.rejection, result.data, stub)
+        assert set(curves) == {"residual"}
+
+
+def test_curve_values_keep_six_significant_digits():
+    assert _curve_json(np.array([123.456789, np.nan, -1.0])) == [123.457, None, -1.0]
+    assert _curve_json(np.array([0.00123456789])) == [0.00123457]
+    assert _curve_json(np.array([[0.0, np.inf]])) == [[0.0, None]]
+
+
+def test_read_source_row(rv_dir):
+    records = ResultsIndex.build(rv_dir / "results" / "rejection").records
+    record = records[SLASH]
+    assert read_source_row(record) == read_source_rows([record])[0].to_pylist()[0]
+    assert pq.ParquetFile(record.sources_path).metadata.row_group(0).num_rows <= 4096
 
 
 def test_load_source_returns_the_stage_rows(rv_dir):
@@ -261,12 +393,20 @@ def test_jsonable_turns_non_finite_into_null():
     assert jsonable(column) == [1.0, None, None, None]
     assert jsonable(pa.array([1, 2])) == [1, 2]
     assert jsonable(np.array([np.nan, 2.0])) == [None, 2.0]
+    # FITS strings and timestamps, which JSON cannot hold as they are.
+    assert jsonable(pa.array([b"HARPS"])) == ["HARPS"]
+    when = datetime(2026, 1, 2, tzinfo=UTC)
+    assert jsonable(pa.array([when]))[0].startswith("2026-01-02")
+    assert jsonable({"telescope": b"HARPS", "at": when}) == {
+        "telescope": "HARPS",
+        "at": when.isoformat(),
+    }
 
 
 def test_cli_serve(rv_dir, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        cli_module.uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
+        uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
     )
     config = rv_dir / "hq.toml"
     text = config.read_text()

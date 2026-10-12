@@ -6,6 +6,7 @@ subcommand is a thin wrapper around one method here.
 
 __all__ = ("Run", "SourceResult")
 
+import copy
 import functools
 import json
 import logging
@@ -50,7 +51,7 @@ from harv_hq.results import (
     Payload,
     ResultRecord,
     ResultsIndex,
-    read_source_rows,
+    read_source_row,
     read_source_samples,
     rescanning,
     supersede,
@@ -116,6 +117,18 @@ class Run:
     def run_dir(self) -> Path:
         """The run directory."""
         return self.config.run_dir
+
+    def _fresh(self) -> "Run":
+        """A copy sharing the config and model file, with no cached index.
+
+        For the viewer: it sees new results without re-reading ``hq.toml``
+        or re-importing the model file, and readers of the old copy are
+        unaffected.
+        """
+        run = copy.copy(self)
+        run._indexes = {}
+        run._prepared = None
+        return run
 
     @property
     def model_file(self) -> ModelFile:
@@ -586,7 +599,7 @@ class Run:
                 else None
             )
             rows[stage] = (
-                None if record is None else self._read(stage, key, _source_row)
+                None if record is None else self._read(stage, key, read_source_row)
             )
         return SourceResult(
             source_id=key,
@@ -687,8 +700,3 @@ class Run:
         if previous == logging.NOTSET or previous > logging.INFO:
             logger.setLevel(logging.INFO)
         return handler, previous
-
-
-def _source_row(record: ResultRecord) -> dict[str, Any]:
-    """A record's full sources-table row."""
-    return read_source_rows([record])[0].to_pylist()[0]

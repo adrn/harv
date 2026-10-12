@@ -590,7 +590,19 @@ residual panel shows the selected sample nearest the median period. `hq serve` u
 built with `JSONResponse` (which refuses NaN) rather than FastAPI's encoder.
 The CLI's `_not_implemented` stub is gone, since every subcommand now exists.
 The browser check (lasso, splom selection, phase fold) is still to do by
-hand.
+hand. From our own review: FITS catalogs work (byte strings are decoded
+and big-endian numbers made native in `prepare`, which failed before this
+phase too); a stage whose curves fail (NaN periods, no shown samples) gets
+`curves_error` instead of failing the page; the summary row's `source_id`
+is a string; Fourier fits get no sky orbit or phase fold; the app loads
+`hq.toml` and the model once and swaps whole lock-built snapshots
+(`Run._fresh` gives each a new results index), detecting changes by inode
+and nanosecond mtime; sources files use 4,096-row groups and
+`results.read_source_row` reads one; curve values are rounded to six
+significant digits; `harv_hq.create_app` and `hq serve` import the web
+stack lazily; `catalog.js` attaches its selection handler before the first
+request and drops a sort on a removed column; `source.js` reports a failed
+request.
 
 `web/app.py`, `create_app(run_dir)`: load config, model file setup,
 `catalog.parquet` joined to `summary.parquet` as a pyarrow `Table`, the
