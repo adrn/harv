@@ -566,11 +566,10 @@ source in its slice:
 1. `sampler.run(data, init_samples=..., key=..., num_chains=..., num_warmup=..., num_samples=..., chain_method=..., return_logprobs=True)`.
 1. Compute `r_hat_max` and `ess_bulk_min` over every nonlinear and linear
    parameter from `samples.to_arviz()` (`arviz.rhat`, `arviz.ess` with
-   `method="bulk"`), and the summary statistics (unweighted). A parameter
-   whose draws are all equal has no R-hat and is skipped; if every parameter
-   is, both are NaN. Any other non-finite value (NaN draws, say) makes them
-   NaN too, and NaN fails both thresholds, so the source is
-   `"not_converged"`.
+   `method="bulk"`), and the summary statistics (unweighted). Any non-finite
+   draw (NaN or infinite) makes both NaN. Otherwise a parameter whose draws
+   are all equal has no R-hat and is skipped; if every parameter is, both
+   are NaN. NaN fails both thresholds, so the source is `"not_converged"`.
 1. Buffer and write the result as in `run_rejection`, with `mcmc_status`:
 
 | `mcmc_status`     | Meaning                                                     |
