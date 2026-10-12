@@ -17,7 +17,13 @@ from harv.samplers import Samples
 from harv_hq import Run, create_app
 from harv_hq._model_file import ModelFile
 from harv_hq.cli import main
-from harv_hq.results import ResultsIndex, read_source_row, read_source_rows
+from harv_hq.results import (
+    PartWriter,
+    ResultsIndex,
+    process_source,
+    read_source_row,
+    read_source_rows,
+)
 from harv_hq.summarize import SUMMARY_FILE
 from harv_hq.web import payload as payload_module
 from harv_hq.web.app import _Viewer
@@ -33,35 +39,53 @@ from harv_hq.web.payload import (
 
 PLUS, SLASH = "2M00000001+0000007", "J1234/5678"  # IDs that need URL encoding
 MCMC_ID = "2M00000003+0000021"
-HOOK = f"""
+MCMC_CHAINS = 2
 
-def select_for_mcmc(row):
-    return row["source_id"] == {MCMC_ID!r}
-"""
-MCMC = """
-[mcmc]
-num_chains = 2
-num_warmup = 20
-num_samples = 20
-max_r_hat = 1e6
-min_ess_bulk = 1
-"""
+
+def write_mcmc_result(run, source_id):
+    """An MCMC result made from the rejection samples, without running NUTS.
+
+    The viewer only needs a result to show; a real run would compile NUTS
+    here too, and this module's memory is what CI runners run short of.
+    """
+    rejection = run.load_source(source_id)
+    samples = rejection.rejection
+    chained = Samples(
+        nonlinear=samples.nonlinear,
+        linear=samples.linear,
+        model_type=samples.model_type,
+        metadata={**samples.metadata, "num_chains": MCMC_CHAINS},
+        ln_likelihood=samples.ln_likelihood,
+        ln_prior=samples.ln_prior,
+    )
+    columns = {"mcmc_status": "converged", "r_hat_max": 1.0, "ess_bulk_min": 100.0}
+    payload = process_source(
+        source_id,
+        rejection.data,
+        stage="mcmc",
+        compute=lambda: (chained, columns, {}),
+    )
+    writer = PartWriter(
+        run.run_dir / "results" / "mcmc",
+        stage="mcmc",
+        shard=(0, 1),
+        provenance=run._stage_provenance("mcmc"),
+        flush_n_sources=1,
+        flush_seconds=60.0,
+    )
+    writer.add(payload)
+    return samples.n_samples
 
 
 @pytest.fixture(scope="module")
 def rv_dir(tmp_path_factory, rv_run_factory):
     """An RV run with rejection results, one MCMC result, and a summary."""
     fixture = rv_run_factory(tmp_path_factory.mktemp("web"))
-    model_file = fixture.run_dir / "prior.py"
-    model_file.write_text(model_file.read_text() + HOOK)
-    config = fixture.run_dir / "hq.toml"
-    config.write_text(config.read_text() + MCMC)
     run = Run(fixture.run_dir)
     run.prepare()
     run.make_prior_cache()
     run.run_rejection()
-    run.summarize()
-    run.run_mcmc()
+    write_mcmc_result(run, MCMC_ID)
     run.summarize()
     return fixture.run_dir
 
@@ -206,13 +230,14 @@ class TestSourcePayload:
         assert body["stages"]["mcmc"]["status"] == "pending"
         assert "params" not in body["stages"]["mcmc"]
 
-    def test_both_stages(self, client):
+    def test_both_stages(self, client, rv_dir):
         body = client.get(f"/api/source/{quote(MCMC_ID, safe='')}").json()
         mcmc = body["stages"]["mcmc"]
         assert mcmc["status"] == "ok"
         assert mcmc["mcmc_status"] == "converged"
-        assert len(mcmc["params"]["period"]) == 2 * 20  # every draw, under the cap
-        assert len(mcmc["curves"]["rv"]) == 2 * 20
+        n = Run(rv_dir).load_source(MCMC_ID).mcmc.n_samples
+        assert len(mcmc["params"]["period"]) == n  # every draw, under the cap
+        assert len(mcmc["curves"]["rv"]) == n
         assert "params" in body["stages"]["rejection"]
 
     def test_gaia(self, gaia_client):
