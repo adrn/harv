@@ -10,6 +10,7 @@ __all__ = (
     "ProvenanceError",
     "Run",
     "SourceResult",
+    "create_app",
     "init_run",
     "read_source",
     "read_sources",
@@ -24,3 +25,4 @@ from harv_hq.init import init_run
 from harv_hq.prepare import read_source, read_sources
 from harv_hq.provenance import ProvenanceError
 from harv_hq.run import Run, SourceResult
+from harv_hq.web import create_app

@@ -127,7 +127,18 @@ def make_rv_run(base):
 @pytest.fixture
 def gaia_run(tmp_path):
     """A Gaia astrometry run: 6 sources with 19-digit integer IDs."""
-    run_dir = init_run(tmp_path / "run", kind="gaia_astrometry")
+    return make_gaia_run(tmp_path)
+
+
+@pytest.fixture(scope="session")
+def gaia_run_factory():
+    """``make_gaia_run``, for fixtures with a wider scope than ``gaia_run``."""
+    return make_gaia_run
+
+
+def make_gaia_run(base):
+    """Write the ``gaia_run`` fixture's run under ``base`` (for wider scopes)."""
+    run_dir = init_run(base / "run", kind="gaia_astrometry")
     rows = {k: [] for k in ("source_id", "time", "al", "al_err", "psi", "plx_factor")}
     n_obs = {}
     for i in range(6):

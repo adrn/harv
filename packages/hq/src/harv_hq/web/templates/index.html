@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ run_name }} &mdash; hq</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script
+      src="https://cdn.plot.ly/plotly-2.35.2.min.js"
+      charset="utf-8"
+    ></script>
+  </head>
+  <body>
+    <header>
+      <h1>{{ run_name }}</h1>
+      <form id="search">
+        <input id="search-id" placeholder="source ID" />
+        <button type="submit">Open</button>
+      </form>
+    </header>
+
+    <form id="controls" class="controls">
+      <label>x <select id="x"></select></label>
+      <label><input type="checkbox" id="logx" /> log</label>
+      <label><input type="checkbox" id="revx" /> reverse</label>
+      <label>y <select id="y"></select></label>
+      <label><input type="checkbox" id="logy" /> log</label>
+      <label><input type="checkbox" id="revy" /> reverse</label>
+      <label>color <select id="color"></select></label>
+      <label
+        >status
+        <input id="status" placeholder="ok,failed" size="12" />
+      </label>
+      <label
+        >filter
+        <input id="filter" placeholder="bp_rp:0.5:,n_obs::20" size="24" />
+      </label>
+      <label
+        >table columns
+        <input id="cols" placeholder="n_obs,period_p50" size="24" />
+      </label>
+      <button type="submit">Apply</button>
+    </form>
+    <p id="message" class="hint"></p>
+
+    <div id="scatter" class="plot wide"></div>
+    <p class="hint">
+      Box- or lasso-select points to list them below. Click a row to open the
+      source.
+    </p>
+    <div class="table-wrap">
+      <table id="rows">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <script src="/static/catalog.js"></script>
+  </body>
+</html>

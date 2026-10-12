@@ -41,13 +41,6 @@ def test_cli_init(tmp_path, capsys):
     assert config.run.kind == "gaia_astrometry"
 
 
-@pytest.mark.parametrize("argv", [["serve"]])
-def test_cli_unimplemented_subcommands_exit_with_a_message(argv, capsys):
-    with pytest.raises(SystemExit) as excinfo:
-        main(argv)
-    assert "not implemented yet" in str(excinfo.value.code)
-
-
 def test_cli_shard_and_mpi_are_exclusive(capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(["run", "--shard", "0/2", "--mpi"])
