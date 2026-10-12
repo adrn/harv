@@ -273,11 +273,12 @@ class Run:
         ValueError
             If ``mpi`` is combined with ``shard``, or ``workers < 1``.
         FileNotFoundError
-            If the data are not prepared, the prior cache is not built, or
-            ``summary.parquet`` does not exist.
+            If the data are not prepared or ``summary.parquet`` does not
+            exist.
         ProvenanceError
             If an input or an existing part was built from different inputs,
-            or ``summary.parquet`` is older than the newest rejection result.
+            or ``summary.parquet`` does not hold the current rejection
+            results.
         """
         self._run_stage(
             "mcmc",
