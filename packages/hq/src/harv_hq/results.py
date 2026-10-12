@@ -14,6 +14,7 @@ __all__ = (
     "ResultsIndex",
     "read_source_rows",
     "read_source_samples",
+    "process_source",
     "rescanning",
     "samples_table",
     "supersede",
@@ -25,9 +26,11 @@ import logging
 import os
 import shutil
 import time
+import traceback
 import uuid
+import warnings
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,8 +40,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import SampleColumns, Samples
 from harv_hq._parquet_io import field_units, read_metadata, read_rows, write_parquet
+from harv_hq.ids import stable_hash
 from harv_hq.provenance import check_provenance
 
 logger = logging.getLogger(__name__)
@@ -105,6 +110,88 @@ class Payload:
     samples_units: dict[str, str] = field(default_factory=dict)
     structure: dict[str, Any] | None = None
     metadata_keys: tuple[str, ...] = ()
+
+
+def process_source(
+    source_id: Any,
+    data: RVData | GaiaAstrometryData,
+    *,
+    stage: str,
+    compute: Callable[[], tuple[Samples, dict[str, Any], dict[str, str]]],
+    failed_columns: Mapping[str, Any] | None = None,
+) -> Payload:
+    """Run one source's work and package the result as a :class:`Payload`.
+
+    Any exception is caught and returned as a ``failed`` payload with its
+    traceback; warnings (e.g. harv's under-resolution warning) are recorded in
+    the ``warnings`` column instead of printed.
+
+    Parameters
+    ----------
+    source_id
+        The source's ID.
+    data
+        Its prepared data.
+    stage
+        ``"rejection"`` or ``"mcmc"``.
+    compute
+        Does the work: returns the source's ``Samples``, its extra
+        sources-table columns (summary statistics and stage columns), and
+        their units.
+    failed_columns
+        Extra sources-table columns for a ``failed`` source.
+
+    Returns
+    -------
+        The source's payload.
+
+    Examples
+    --------
+    >>> from harv.simulate import simulate_rv_sb1_data
+    >>> data, _ = simulate_rv_sb1_data(seed=0, n_obs=5)
+    >>> def compute():
+    ...     raise ValueError("no samples")
+    >>> payload = process_source("s1", data, stage="rejection", compute=compute)
+    >>> payload.row["status"], payload.samples is None
+    ('failed', True)
+    >>> "ValueError: no samples" in payload.row["error"]
+    True
+    """
+    started = datetime.now(UTC)
+    clock = time.perf_counter()
+    row: dict[str, Any] = {
+        "source_id": source_id,
+        "seed_hash": stable_hash(source_id),
+        "n_obs": int(data.n_obs),
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            samples, columns, units = compute()
+            table, sample_units, structure, metadata = samples_table(
+                samples, source_id, stage=stage
+            )
+        except Exception:  # noqa: BLE001 -- recorded as this source's failure
+            failure = traceback.format_exc()
+        else:
+            failure = None
+
+    row["warnings"] = "\n".join(str(w.message) for w in caught)
+    row["started"] = started
+    row["finished"] = datetime.now(UTC)
+    row["wall_time_s"] = time.perf_counter() - clock
+    if failure is not None:
+        return Payload(
+            row={**row, "status": "failed", "error": failure, **(failed_columns or {})}
+        )
+    return Payload(
+        row={**row, "status": "ok", "error": "", **metadata, **columns},
+        row_units=units,
+        samples=table,
+        samples_units=sample_units,
+        structure=structure,
+        metadata_keys=tuple(metadata),
+    )
 
 
 def samples_table(

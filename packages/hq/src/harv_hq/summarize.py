@@ -35,7 +35,7 @@ _MCMC = ("r_hat_max", "ess_bulk_min")
 _ROW_GROUP_SIZE = 4096
 
 
-def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> Path:
+def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any]]) -> Path:
     """Write ``summary.parquet`` and return its path.
 
     Parameters
@@ -43,9 +43,8 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> P
     run_dir
         The run directory.
     expected
-        Each stage's current provenance; its parts are checked against it
-        (``None``: not checked). The rejection entry is also recorded as the
-        summary's provenance.
+        Each stage's current provenance; its parts are checked against it.
+        The rejection entry is also recorded as the summary's provenance.
 
     Returns
     -------
@@ -82,6 +81,8 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any] | None]) -> P
     )
     columns["rejection_error"] = column(rejection, "error")
     columns.update({name: column(rejection, name) for name in _EVIDENCE})
+    # The rejection value even when MCMC is final: MCMC selection needs it.
+    columns["rejection_period_unimodal"] = column(rejection, "period_unimodal")
     columns["mcmc_status"] = pc.fill_null(
         column(mcmc, "mcmc_status").cast(pa.string()), "not_selected"
     )

@@ -443,6 +443,10 @@ CLI subcommand is a thin wrapper around one method. Stages run in this order:
 
 Every CLI subcommand takes `--run-dir` (default: the current directory).
 
+Only `hq run` reads `prior_cache.h5`. The later stages check it when it
+exists; once it is deleted (it can be large), they take its `prior_cache_id`
+from the rejection parts, which must all agree on it.
+
 ### `prepare`
 
 1. Read the `[data]` table.
@@ -547,18 +551,25 @@ re-raising; only a hard kill loses the buffer. Each process also logs to
 
 ### MCMC follow-up (`run_mcmc`)
 
-Reads `summary.parquet` (which must be current, see "Provenance") to select
-sources. Each process calls `make_setup()` once, builds one
-`NumpyroSampler(prior, model)`, and loads the data for its slice of the
-selected sources. Then, for each selected source in its slice:
+Reads `summary.parquet` (which must exist and be current, see "Provenance")
+to select sources; without it the stage raises `FileNotFoundError`. Each
+process calls `make_setup()` once, builds one `NumpyroSampler(prior, model)`,
+and loads the data for its slice of the selected sources (sliced as in
+"Execution modes", over the selected sources only). Then, for each selected
+source in its slice:
 
-1. Load the source's rejection `Samples` (see `Run.load_source`) and pass its
-   equal-weight resample (see "Weighted samples") as `init_samples`, so chains
-   start at draws in proportion to their posterior weight.
+1. Read the source's rejection `Samples` and pass `num_chains` equal-weight
+   draws from them (see "Weighted samples") as `init_samples`, so chains
+   start at draws in proportion to their posterior weight. The source's MCMC
+   key (see "Per-source randomness") is split with `jax.random.split` into
+   two keys: the first drives the sampler, the second these draws.
 1. `sampler.run(data, init_samples=..., key=..., num_chains=..., num_warmup=..., num_samples=..., chain_method=..., return_logprobs=True)`.
-1. Compute `r_hat_max` and `ess_bulk_min` over all sampled parameters from
-   `samples.to_arviz()` (`arviz.rhat`, `arviz.ess`), and the summary
-   statistics.
+1. Compute `r_hat_max` and `ess_bulk_min` over every nonlinear and linear
+   parameter from `samples.to_arviz()` (`arviz.rhat`, `arviz.ess` with
+   `method="bulk"`), and the summary statistics (unweighted). Any non-finite
+   draw (NaN or infinite) makes both NaN. Otherwise a parameter whose draws
+   are all equal has no R-hat and is skipped; if every parameter is, both
+   are NaN. NaN fails both thresholds, so the source is `"not_converged"`.
 1. Buffer and write the result as in `run_rejection`, with `mcmc_status`:
 
 | `mcmc_status`     | Meaning                                                     |
@@ -566,6 +577,13 @@ selected sources. Then, for each selected source in its slice:
 | `"converged"`     | `r_hat_max <= max_r_hat` and `ess_bulk_min >= min_ess_bulk` |
 | `"not_converged"` | Ran, but failed either threshold                            |
 | `"failed"`        | Raised; traceback stored                                    |
+
+The `status` column is `"ok"` for both `"converged"` and `"not_converged"`,
+so resume reruns only `"failed"` sources. In pool mode each worker reads its
+sources' rejection samples itself, so the parent holds only their locations.
+Those locations are indexed when the stage starts; if compaction of the
+rejection stage removes a part meanwhile, the reader indexes the stage again
+and retries (as in "Loading results").
 
 Selection rules (`[mcmc] select`):
 
@@ -575,12 +593,20 @@ Selection rules (`[mcmc] select`):
 | `"all"`            | finished with status `ok`                                   |
 
 With `require_unimodal = true`, a source must also have
-`period_unimodal == True`. A multimodal, under-resolved source needs a larger
-prior library, not MCMC; rerunning those is planned (see "Planned
-features"). `select_for_mcmc` in the model file overrides both keys.
+`rejection_period_unimodal == True`. A multimodal, under-resolved source
+needs a larger prior library, not MCMC; rerunning those is planned (see
+"Planned features"). `select_for_mcmc` in the model file overrides both
+keys. Either way, only sources with `rejection_status == "ok"` can be
+selected, since their rejection samples start the chains; the hook is called
+with each such source's summary row. The rule reads only rejection-stage
+columns, so MCMC results never change the selection, and the shards of a
+job array slice the same selected set however often the summary is
+rewritten in between. The rule reads only its four columns of the summary;
+a hook gets whole rows, a batch at a time.
 
 `arviz` is a required dependency of hq because convergence diagnostics are
-part of the MCMC result.
+part of the MCMC result. It is imported only when the diagnostics are
+computed, since it pulls in matplotlib, pandas, and xarray.
 
 ______________________________________________________________________
 
@@ -617,7 +643,7 @@ falls as `N` grows.
   `2 * W` sources are in flight. Workers return plain payloads, and only the
   parent buffers and writes parts, in completion order.
 - **MPI** uses `mpi4py` (the `harv-hq[mpi]` extra), imported lazily so a
-  missing install raises `ImportError` naming `hq run --mpi`. Rank `r` of `n`
+  missing install raises `ImportError` naming `--mpi`. Rank `r` of `n`
   processes slice `r/n` and writes its own parts, so ranks need no
   communication beyond barriers: one after the start (with `--overwrite`,
   only rank 0 moves the old results aside, and the others wait for it) and
@@ -838,10 +864,14 @@ it depends on:
 | `catalog.parquet`                       | `[run]`, `[data]`, `[prepare]`, `[catalog]`                    |
 | `prior_cache.h5`                        | `[run]`, `[prior_cache]`                                       |
 | rejection parts (and `summary.parquet`) | `[run]`, `[data]`, `[prepare]`, `[prior_cache]`, `[rejection]` |
+| MCMC parts                              | the rejection parts' tables, and `[mcmc]`                      |
 
 `[results]` and `[serve]` change only how results are stored or shown, so no
 output records them: they can be edited at any time. Adding or editing
-`[mcmc]` leaves rejection results valid.
+`[mcmc]` leaves rejection results valid, and invalidates existing MCMC
+results (`hq mcmc --overwrite`), except for its `select` and
+`require_unimodal` keys: they decide which sources run, not what any result
+holds, so they are left out of the table's hash.
 
 A stage refuses to build on outputs whose recorded table hashes,
 `model_file_sha256`, `data_id`, or `prior_cache_id` differ from the current
@@ -850,8 +880,12 @@ file. The prepared data records `model_file_sha256` too, because the model
 file's `select_rows` decides which rows were prepared: any edit to `prior.py`,
 including a prior-only change, requires `hq prepare --overwrite` before later
 stages will run. The fix is `--overwrite` on that stage. Version differences are logged
-but not refused. `run_mcmc` also refuses a `summary.parquet` whose `created`
-is older than the newest rejection part.
+but not refused. `run_mcmc` also checks `summary.parquet` against the
+current rejection provenance, and refuses a summary that does not hold the
+current rejection results (`hq summarize` again): one started before the
+newest rejection result's `finished`, or whose `ok` sources differ from the
+rejection stage's. A part's `created` is when its run started, so it cannot
+tell whether a summary written mid-run is current.
 
 ### Summary statistics
 
@@ -879,10 +913,11 @@ samples are equal-weight. hq treats the weights as follows.
   carry no posterior mass, and left in they would pull the interpolation
   toward themselves.
 - Diagnostics that assume equal-weight draws (`period_unimodal`, MCMC
-  initialization) use an *equal-weight resample*: `top_k` indices drawn with
-  replacement in proportion to the renormalized weights, using the source's
-  rejection key. Without it, the low-weight tail of a top-K set would make
-  nearly every source look multimodal.
+  initialization) use an *equal-weight resample*: indices drawn with
+  replacement in proportion to the renormalized weights. `period_unimodal`
+  draws `top_k` of them with the source's rejection key; MCMC initialization
+  draws `num_chains` with its MCMC key. Without it, the low-weight tail of a
+  top-K set would make nearly every source look multimodal.
 - Weighted percentiles on a truncated top-K set are biased when
   `weight_captured` is well below one. The column is reported so the user can
   cut on it.
@@ -899,6 +934,7 @@ of 4,096, so a one-source read decodes one row group:
 | `source_id`, `n_obs`, `time_baseline`, `[catalog]` columns                                                              | `catalog.parquet`                                             |
 | `rejection_status`, `rejection_error`                                                                                   | rejection sources table (`"pending"` / null when not yet run) |
 | `n_prior_samples`, `ln_Z_int`, `ln_Z_int_mcse`, `ln_Z_int_ess`, `max_ln_likelihood`, `weight_captured`, `well_resolved` | rejection sources table                                       |
+| `rejection_period_unimodal`                                                                                             | rejection sources table, whichever stage is `final`           |
 | `mcmc_status`, `r_hat_max`, `ess_bulk_min`                                                                              | mcmc sources table; `"not_selected"` / null when absent       |
 | `final`                                                                                                                 | `"mcmc"` if `mcmc_status == "converged"`, else `"rejection"`  |
 | `period_unimodal`, phase-coverage columns, `map_<param>`, `<param>_p*`                                                  | the sources table of the `final` stage                        |
@@ -1044,7 +1080,7 @@ ______________________________________________________________________
 | `astropy`                       | reading input tables, time-scale conversion  |
 | `pyarrow`                       | every Parquet file hq reads and writes       |
 | `h5py`                          | provenance attribute on the harv prior cache |
-| `arviz`                         | MCMC convergence diagnostics                 |
+| `arviz`                         | MCMC convergence diagnostics (lazy import)   |
 | `fastapi`, `uvicorn`, `jinja2`  | the web viewer                               |
 | `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                      |
 

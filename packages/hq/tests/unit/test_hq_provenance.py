@@ -59,6 +59,18 @@ def test_table_hashes_ignore_formatting_and_other_tables(config):
     assert {k for k in before if before[k] != after[k]} == {"rejection"}
 
 
+def test_mcmc_selection_keys_are_not_hashed(config):
+    text = config.config_path.read_text()
+    config.config_path.write_text(text + "\n[mcmc]\nnum_warmup = 10\n")
+    before = config_hashes(config.config_path, ("mcmc",))
+    config.config_path.write_text(
+        text + '\n[mcmc]\nnum_warmup = 10\nselect = "all"\nrequire_unimodal = false\n'
+    )
+    assert config_hashes(config.config_path, ("mcmc",)) == before
+    config.config_path.write_text(text + "\n[mcmc]\nnum_warmup = 11\n")
+    assert config_hashes(config.config_path, ("mcmc",)) != before
+
+
 def test_a_check_compares_only_the_recorded_tables(config):
     part = make_provenance(config, tables=REJECTION_TABLES)
     # Adding [mcmc] later leaves results that never depended on it valid.
