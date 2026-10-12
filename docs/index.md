@@ -13,6 +13,7 @@ tutorials/index
 api/index
 math-notes/index
 at-scale
+hq/index
 benchmarks
 running-benchmarks
 :::
@@ -56,6 +57,7 @@ individual systems are not well-constrained.
 - New to JAX, NumPyro, or unxt? Check **{doc}`sharp-bits`**.
 - Looking up a specific class or function? Use the **{doc}`api/index`**.
 - Want math? See the **{doc}`math notes <math-notes/index>`**.
+- Running harv on a whole survey? See **{doc}`hq <hq/index>`**.
 
 
 ## Installation

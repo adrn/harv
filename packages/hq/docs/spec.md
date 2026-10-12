@@ -1103,7 +1103,9 @@ The CLI entry point is the `hq` console script, built with `argparse`. It
 logs at `INFO` to stderr, and reports `ConfigError`, `ProvenanceError`,
 `FileExistsError`, and `FileNotFoundError` as a one-line message
 (`hq <command>: <message>`) with a non-zero exit status instead of a
-traceback.
+traceback. Every `--help` (the top level and each subcommand) ends with a link
+to the workflow tutorial in the harv docs (`docs/hq/workflow.md`), and
+`harv_hq.cli.WORKFLOW_URL` holds it.
 
 ______________________________________________________________________
 
@@ -1119,8 +1121,19 @@ ______________________________________________________________________
 | `fastapi`, `uvicorn`, `jinja2`  | the web viewer (imported only by it)         |
 | `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                      |
 
-`hq` pins `harv` to its own version (they are released in lockstep from one
-tag).
+`harv-hq` is released in lockstep with `harv`, from one git tag, so both get
+the same version from hatch-vcs. A released `harv-hq` requires exactly that
+`harv` (`harv == <version>`, written at build time by the metadata hook in
+`packages/hq/hatch_build.py`); development versions (a `.dev` or local part)
+leave `harv` unpinned, so the workspace lock does not change with every
+commit. The release workflow builds both distributions and publishes
+`harv-hq` (its own PyPI trusted publisher, environment `pypi-hq`) only after
+`harv`.
+
+Importing `harv_hq` enables JAX's float64 mode before anything imports harv,
+since harv's likelihoods need it; harv would enable it anyway, with a warning
+meant for interactive use, and hq commands stay quiet. hq therefore ignores
+`JAX_ENABLE_X64=0`.
 
 ______________________________________________________________________
 

@@ -4,7 +4,7 @@ requires = ["hatchling>=1.27", "hatch-vcs"]
 
 [project]
 name = "harv-hq"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "Pipelines, catalog preparation, and visualization for running harv on large samples."
 authors = [
     { name = "adrn", email = "583379+adrn@users.noreply.github.com" },
@@ -14,7 +14,7 @@ license-files = ["LICENSE"]
 requires-python = ">= 3.12"
 readme = {"file" = "README.md", "content-type" = "text/markdown"}
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
@@ -25,22 +25,6 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
-]
-# hq is released in lockstep with harv from the same git tag (see the root
-# pyproject's [tool.uv.workspace]). TODO: pin harv to this package's own version
-# at build time before the first release.
-# Each phase adds the dependencies it imports (see docs/implementation-plan.md).
-dependencies = [
-    "arviz>=1.0.0",
-    "astropy>=6.1",
-    "fastapi>=0.115",
-    "h5py>=3.11",
-    "harv",
-    "jax>=0.8.1",
-    "jinja2>=3.1",
-    "numpy>=2.0",
-    "pyarrow>=17",
-    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +46,23 @@ packages = ["src/harv_hq"]
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/harv_hq/_version.py"
+
+[tool.hatch.metadata.hooks.custom]
+# hq is released in lockstep with harv from the same git tag (see the root
+# pyproject's [tool.uv.workspace]). hatch_build.py adds harv to this list,
+# pinned to this package's own version in released builds.
+# Each phase adds the dependencies it imports (see docs/implementation-plan.md).
+dependencies = [
+    "arviz>=1.0.0",
+    "astropy>=6.1",
+    "fastapi>=0.115",
+    "h5py>=3.11",
+    "jax>=0.8.1",
+    "jinja2>=3.1",
+    "numpy>=2.0",
+    "pyarrow>=17",
+    "uvicorn>=0.30",
+]
 
 [tool.hatch.version]
 source = "vcs"
