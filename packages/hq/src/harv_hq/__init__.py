@@ -19,6 +19,13 @@ __all__ = (
 
 from typing import Any
 
+import jax
+
+# harv runs in float64 and enables it on import, with a warning meant for
+# interactive users. hq always wants float64, so it says so first, before any
+# module imports harv, and every hq command stays quiet.
+jax.config.update("jax_enable_x64", True)  # noqa: FBT003
+
 from harv_hq._version import __version__
 from harv_hq.compact import CompactReport
 from harv_hq.config import Config, ConfigError
