@@ -47,9 +47,6 @@ REJECTION_TABLES = ("run", "data", "prepare", "prior_cache", "rejection")
 MCMC_TABLES = (*REJECTION_TABLES, "mcmc")
 ALL_TABLES = ("run", "data", "prepare", "catalog", "prior_cache", "rejection", "mcmc")
 _VERSION_FIELDS = ("hq_version", "harv_version", "jax_version")
-# Keys left out of their table's hash: they decide which sources are selected,
-# not what any result holds, so editing them leaves results valid.
-_UNHASHED_KEYS = {"mcmc": ("select", "require_unimodal")}
 
 
 class ProvenanceError(RuntimeError):
@@ -102,8 +99,10 @@ def config_hashes(
     hashed = {}
     for name in tables:
         table = raw.get(name)
-        if isinstance(table, dict):
-            skip = _UNHASHED_KEYS.get(name, ())
+        if name == "mcmc" and isinstance(table, dict):
+            # These decide which sources are selected, not what any result
+            # holds, so editing them leaves results valid.
+            skip = ("select", "require_unimodal")
             table = {k: v for k, v in table.items() if k not in skip}
         hashed[name] = hashlib.sha256(
             json.dumps(table, sort_keys=True, default=str).encode()
