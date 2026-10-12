@@ -14,22 +14,26 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, final
 
 import h5py
 import pyarrow as pa
+
+# pyarrow.compute generates its functions at import, so ty cannot see them.
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import Samples, make_prior_cache
 from harv_hq._model_file import ModelFile
-from harv_hq._parquet_io import read_parquet
+from harv_hq._parquet_io import read_metadata
 from harv_hq.compact import CompactReport, compact
 from harv_hq.config import Config, ConfigError
 from harv_hq.execution import Progress, Setup, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
-from harv_hq.mcmc import mcmc_setup, select_sources
+from harv_hq.mcmc import SELECTION_COLUMNS, mcmc_setup, select_sources
 from harv_hq.prepare import PreparedData, prepare
 from harv_hq.provenance import (
     MCMC_TABLES,
@@ -328,7 +332,7 @@ class Run:
         comm: Any,
     ) -> dict[str, Any]:
         i, n = shard
-        work = self._stage_work(stage, shard)
+        work = self._stage_work(stage, shard, workers)
         stage_dir = self.run_dir / "results" / stage
         # Under MPI only rank 0 moves results aside, and every rank waits for
         # it before reading what is done.
@@ -384,27 +388,35 @@ class Run:
             comm.Barrier()
         return work.provenance
 
-    def _stage_work(self, stage: str, shard: tuple[int, int]) -> _StageWork:
+    def _stage_work(
+        self, stage: str, shard: tuple[int, int], workers: int
+    ) -> _StageWork:
         """Check a stage's inputs, and say what slice ``shard`` of it runs."""
-        prepared, cache_path, provenance = self._inputs()
         if stage == "rejection":
+            prepared, provenance = self._inputs(need_cache=True)
             return _StageWork(
                 ids=prepared.slice_ids(shard),
                 read=prepared.read,
-                setup=functools.partial(rejection_setup, self.config, cache_path),
+                setup=functools.partial(
+                    rejection_setup, self.config, self.run_dir / PRIOR_CACHE_FILE
+                ),
                 provenance=provenance["rejection"],
             )
         if self.config.mcmc is None:
             msg = f"{self.config.run_dir / 'hq.toml'} has no [mcmc] table"
             raise ConfigError(msg)
+        prepared, provenance = self._inputs()
         rejection = ResultsIndex.build(
             self.run_dir / "results" / "rejection",
             expected_provenance=provenance["rejection"],
         )
-        summary = self._current_summary(provenance["rejection"], rejection.provenance)
-        selected = select_sources(
-            summary, self.config.mcmc, self.model_file.select_for_mcmc
+        hook = self.model_file.select_for_mcmc
+        summary = self._current_summary(
+            provenance["rejection"],
+            rejection,
+            columns=None if hook else list(SELECTION_COLUMNS),
         )
+        selected = select_sources(summary, self.config.mcmc, hook)
         records = rejection.records
 
         def read(ids: list[Any]) -> dict[Any, Any]:
@@ -414,28 +426,47 @@ class Run:
         return _StageWork(
             ids=prepared.slice_ids(shard, among=selected & rejection.done()),
             read=read,
-            setup=functools.partial(mcmc_setup, self.config),
+            # Pool workers import the model file themselves; this process
+            # reuses the one it already imported.
+            setup=functools.partial(
+                mcmc_setup, self.config, None if workers > 1 else self.model_file
+            ),
             provenance=provenance["mcmc"],
         )
 
     def _current_summary(
-        self, expected: dict[str, Any], newest_part: dict[str, Any] | None
+        self,
+        expected: dict[str, Any],
+        rejection: ResultsIndex,
+        *,
+        columns: list[str] | None,
     ) -> pa.Table:
-        """``summary.parquet``, refused if older than the rejection results."""
+        """``summary.parquet``'s ``columns``, refused unless it is current.
+
+        Current means built from the current inputs and holding every
+        rejection result: none finished after the summary was started, and
+        its ``ok`` sources are exactly the rejection stage's.
+        """
         path = self.run_dir / SUMMARY_FILE
         if not path.exists():
             msg = f"{self.run_dir} has no {SUMMARY_FILE}; run hq summarize first"
             raise FileNotFoundError(msg)
-        summary = read_parquet(path)
-        found = summary.metadata.get("provenance") or {}
+        found = read_metadata(path).get("provenance") or {}
         check_provenance(found, expected, path=path)
-        created = found.get("created", "")
-        if newest_part is not None and newest_part["created"] > created:
+        summary = pq.read_table(path, columns=columns)
+        ok = summary.filter(pc.equal(summary["rejection_status"], "ok"))  # ty: ignore[unresolved-attribute]
+        newest = max((r.finished for r in rejection.records.values()), default=None)
+        created = found.get("created")
+        if (
+            newest is not None
+            and (created is None or newest > datetime.fromisoformat(created))
+        ) or set(ok["source_id"].to_pylist()) != rejection.done():
             msg = (
-                f"{path} is older than the newest rejection result; rerun hq summarize"
+                f"{path} does not hold the current rejection results; "
+                "rerun hq summarize"
             )
             raise ProvenanceError(msg)
-        return summary.table
+        return summary
 
     def compact(self, stage: str = "rejection") -> CompactReport:
         """Merge a stage's result parts (``hq compact``); see the spec's "Compaction".
@@ -480,7 +511,7 @@ class Run:
         """
         path = summarize(
             self.run_dir,
-            expected=self._inputs()[2],
+            expected=self._inputs()[1],
         )
         logger.info("summarize: wrote %s", path)
         return path
@@ -499,22 +530,23 @@ class Run:
             If a stage's parts were built from different inputs (e.g. before
             ``hq prepare --overwrite``), rather than counting stale results.
         """
-        prepared = set(PreparedData(self.run_dir).source_ids)
+        stage_dirs = {stage: self.run_dir / "results" / stage for stage in STAGES}
+        if any(any(d.glob(f"*{SOURCES_SUFFIX}")) for d in stage_dirs.values()):
+            prepared, provenance = self._inputs()
+        else:
+            # Nothing to check, and the prior cache may not exist yet.
+            prepared, provenance = PreparedData(self.run_dir), {}
+        ids = set(prepared.source_ids)
         counts: dict[str, dict[str, int]] = {}
-        for stage in STAGES:
-            stage_dir = self.run_dir / "results" / stage
-            has_parts = any(stage_dir.glob(f"*{SOURCES_SUFFIX}"))
+        for stage, stage_dir in stage_dirs.items():
             records = ResultsIndex.build(
-                stage_dir,
-                expected_provenance=self._stage_provenance(stage)
-                if has_parts
-                else None,
+                stage_dir, expected_provenance=provenance.get(stage)
             ).records
             counts[stage] = dict(
-                Counter(r.status for sid, r in records.items() if sid in prepared)
+                Counter(r.status for sid, r in records.items() if sid in ids)
             )
             if stage == "rejection":
-                counts[stage]["pending"] = len(prepared - records.keys())
+                counts[stage]["pending"] = len(ids - records.keys())
         return counts
 
     def load_source(self, source_id: Any) -> SourceResult:
@@ -553,27 +585,38 @@ class Run:
             summary=self._summary_row(key),
         )
 
-    def _inputs(self) -> tuple[PreparedData, Path, dict[str, dict[str, Any]]]:
-        """The checked prepared data and prior cache, and each stage's provenance."""
+    def _inputs(
+        self, *, need_cache: bool = False
+    ) -> tuple[PreparedData, dict[str, dict[str, Any]]]:
+        """The checked prepared data, and what each stage's parts must match.
+
+        Only ``hq run`` reads the prior cache (``need_cache``). Later stages
+        check it when it exists; after it is deleted they take its ID from
+        the rejection results, whose parts must all agree on it.
+        """
         prepared = PreparedData(self.run_dir)
         current = make_provenance(self.config, data_id=prepared.data_id)
         check_provenance(prepared.provenance, current, path=prepared.path)
-        cache_path, cache_provenance = self._checked_prior_cache(current)
+        if need_cache or (self.run_dir / PRIOR_CACHE_FILE).exists():
+            cache_id = self._checked_prior_cache(current)["prior_cache_id"]
+        else:
+            recorded = ResultsIndex.build(self.run_dir / "results" / "rejection")
+            cache_id = (recorded.provenance or {}).get("prior_cache_id")
         stage_tables = {"rejection": REJECTION_TABLES, "mcmc": MCMC_TABLES}
         provenance = {
             stage: make_provenance(
                 self.config,
                 tables=tables,
                 data_id=prepared.data_id,
-                prior_cache_id=cache_provenance["prior_cache_id"],
+                prior_cache_id=cache_id,
             )
             for stage, tables in stage_tables.items()
         }
-        return prepared, cache_path, provenance
+        return prepared, provenance
 
     def _stage_provenance(self, stage: str) -> dict[str, Any]:
         """What a stage's parts must match."""
-        return self._inputs()[2][stage]
+        return self._inputs()[1][stage]
 
     def _summary_row(self, source_id: Any) -> dict[str, Any] | None:
         path = self.run_dir / SUMMARY_FILE
@@ -598,9 +641,8 @@ class Run:
 
         return rescanning(read)
 
-    def _checked_prior_cache(
-        self, expected: dict[str, Any]
-    ) -> tuple[Path, dict[str, Any]]:
+    def _checked_prior_cache(self, expected: dict[str, Any]) -> dict[str, Any]:
+        """The prior cache's provenance, checked against ``expected``."""
         path = self.run_dir / PRIOR_CACHE_FILE
         if not path.exists():
             msg = f"{self.run_dir} has no prior cache; run hq prior-cache first"
@@ -611,7 +653,7 @@ class Run:
         check_provenance(
             found, {k: v for k, v in expected.items() if k != "data_id"}, path=path
         )
-        return path, found
+        return found
 
     def _log_to_file(self, name: str) -> tuple[logging.Handler, int]:
         """Also log this stage to ``logs/<name>``; returns the handler and old level."""

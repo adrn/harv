@@ -44,6 +44,7 @@ SUMMARY_COLUMNS = (
     "max_ln_likelihood",
     "weight_captured",
     "well_resolved",
+    "rejection_period_unimodal",
     "mcmc_status",
     "r_hat_max",
     "ess_bulk_min",

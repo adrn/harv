@@ -81,6 +81,8 @@ def summarize(run_dir: Path, *, expected: dict[str, dict[str, Any]]) -> Path:
     )
     columns["rejection_error"] = column(rejection, "error")
     columns.update({name: column(rejection, name) for name in _EVIDENCE})
+    # The rejection value even when MCMC is final: MCMC selection needs it.
+    columns["rejection_period_unimodal"] = column(rejection, "period_unimodal")
     columns["mcmc_status"] = pc.fill_null(
         column(mcmc, "mcmc_status").cast(pa.string()), "not_selected"
     )

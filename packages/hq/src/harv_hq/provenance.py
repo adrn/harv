@@ -47,6 +47,9 @@ REJECTION_TABLES = ("run", "data", "prepare", "prior_cache", "rejection")
 MCMC_TABLES = (*REJECTION_TABLES, "mcmc")
 ALL_TABLES = ("run", "data", "prepare", "catalog", "prior_cache", "rejection", "mcmc")
 _VERSION_FIELDS = ("hq_version", "harv_version", "jax_version")
+# Keys left out of their table's hash: they decide which sources are selected,
+# not what any result holds, so editing them leaves results valid.
+_UNHASHED_KEYS = {"mcmc": ("select", "require_unimodal")}
 
 
 class ProvenanceError(RuntimeError):
@@ -79,7 +82,9 @@ def config_hashes(
 
     Each table is hashed as sorted-key JSON, so comments, formatting, key
     order, and every other table leave its hash unchanged. A table absent from
-    the file hashes as ``null``.
+    the file hashes as ``null``. ``[mcmc]``'s ``select`` and
+    ``require_unimodal`` are left out: they change which sources are
+    selected, not any result.
 
     Parameters
     ----------
@@ -94,12 +99,16 @@ def config_hashes(
     """
     with Path(config_path).open("rb") as f:
         raw = tomllib.load(f)
-    return {
-        name: hashlib.sha256(
-            json.dumps(raw.get(name), sort_keys=True, default=str).encode()
+    hashed = {}
+    for name in tables:
+        table = raw.get(name)
+        if isinstance(table, dict):
+            skip = _UNHASHED_KEYS.get(name, ())
+            table = {k: v for k, v in table.items() if k not in skip}
+        hashed[name] = hashlib.sha256(
+            json.dumps(table, sort_keys=True, default=str).encode()
         ).hexdigest()
-        for name in tables
-    }
+    return hashed
 
 
 def make_provenance(

@@ -55,6 +55,12 @@ def rv_run(tmp_path):
     return make_rv_run(tmp_path)
 
 
+@pytest.fixture(scope="session")
+def rv_run_factory():
+    """``make_rv_run``, for fixtures with a wider scope than ``rv_run``."""
+    return make_rv_run
+
+
 def make_rv_run(base):
     """Write the ``rv_run`` fixture's run under ``base`` (for wider scopes)."""
     run_dir = init_run(base / "run", kind="rv")
