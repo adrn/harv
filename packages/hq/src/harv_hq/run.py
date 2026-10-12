@@ -48,7 +48,9 @@ from harv_hq.results import (
     SOURCES_SUFFIX,
     PartWriter,
     Payload,
+    ResultRecord,
     ResultsIndex,
+    read_source_rows,
     read_source_samples,
     rescanning,
     supersede,
@@ -74,6 +76,8 @@ class SourceResult:
     rejection_status: str
     mcmc_status: str
     summary: dict[str, Any] | None
+    rejection_row: dict[str, Any] | None
+    mcmc_row: dict[str, Any] | None
 
 
 @final
@@ -561,8 +565,10 @@ class Run:
         Returns
         -------
             Its data, its rejection and MCMC samples (``None`` when absent),
-            their statuses (``"pending"`` before a stage has a result), and
-            its summary row (``None`` until ``summarize`` has run).
+            their statuses (``"pending"`` before a stage has a result), its
+            summary row (``None`` until ``summarize`` has run), and each
+            stage's sources-table row (``None`` while pending), which holds
+            the error traceback, captured warnings, and diagnostics.
         """
         if self._prepared is None:
             self._prepared = PreparedData(self.run_dir)
@@ -570,11 +576,17 @@ class Run:
         key, source_data = next(iter(data.items()))
         samples: dict[str, Samples | None] = {}
         statuses: dict[str, str] = {}
+        rows: dict[str, dict[str, Any] | None] = {}
         for stage in STAGES:
             record = self._index(stage).records.get(key)
             statuses[stage] = "pending" if record is None else record.status
             samples[stage] = (
-                self._read_samples(stage, key) if statuses[stage] == "ok" else None
+                self._read(stage, key, read_source_samples)
+                if statuses[stage] == "ok"
+                else None
+            )
+            rows[stage] = (
+                None if record is None else self._read(stage, key, _source_row)
             )
         return SourceResult(
             source_id=key,
@@ -584,6 +596,8 @@ class Run:
             rejection_status=statuses["rejection"],
             mcmc_status=statuses["mcmc"],
             summary=self._summary_row(key),
+            rejection_row=rows["rejection"],
+            mcmc_row=rows["mcmc"],
         )
 
     def _inputs(
@@ -631,10 +645,14 @@ class Run:
             self._indexes[stage] = ResultsIndex.build(self.run_dir / "results" / stage)
         return self._indexes[stage]
 
-    def _read_samples(self, stage: str, source_id: Any) -> Samples:
-        def read() -> Samples:
+    def _read[T](
+        self, stage: str, source_id: Any, reader: Callable[[ResultRecord], T]
+    ) -> T:
+        """``reader`` on the source's newest record, following compaction."""
+
+        def read() -> T:
             try:
-                return read_source_samples(self._index(stage).records[source_id])
+                return reader(self._index(stage).records[source_id])
             except FileNotFoundError:
                 # Merged away by compaction since the index was built.
                 self._indexes.pop(stage, None)
@@ -669,3 +687,8 @@ class Run:
         if previous == logging.NOTSET or previous > logging.INFO:
             logger.setLevel(logging.INFO)
         return handler, previous
+
+
+def _source_row(record: ResultRecord) -> dict[str, Any]:
+    """A record's full sources-table row."""
+    return read_source_rows([record])[0].to_pylist()[0]
