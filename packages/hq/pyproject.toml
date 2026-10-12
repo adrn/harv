@@ -31,6 +31,7 @@ classifiers = [
 # at build time before the first release.
 # Each phase adds the dependencies it imports (see docs/implementation-plan.md).
 dependencies = [
+    "arviz>=1.0.0",
     "astropy>=6.1",
     "h5py>=3.11",
     "harv",

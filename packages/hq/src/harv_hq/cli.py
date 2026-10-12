@@ -66,8 +66,10 @@ def _prior_cache(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     if args.workers < 1:
-        sys.exit("hq run: --workers must be at least 1")
-    Run(args.run_dir).run_rejection(
+        sys.exit(f"hq {args.command}: --workers must be at least 1")
+    run = Run(args.run_dir)
+    method = run.run_rejection if args.command == "run" else run.run_mcmc
+    method(
         shard=args.shard,
         workers=args.workers,
         mpi=args.mpi,
@@ -144,7 +146,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for name, help_, handler in (
         ("run", "run the rejection sampler on every source", _run),
-        ("mcmc", "run MCMC follow-up on selected sources", _not_implemented),
+        ("mcmc", "run MCMC follow-up on selected sources", _run),
     ):
         p = add(name, help_, handler)
         mode = p.add_mutually_exclusive_group()
