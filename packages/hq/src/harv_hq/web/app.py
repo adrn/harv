@@ -8,7 +8,7 @@ __all__ = ("create_app",)
 
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, final
 
@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from harv_hq._parquet_io import read_parquet
 from harv_hq.prepare import CATALOG_FILE
-from harv_hq.run import Run
+from harv_hq.run import STAGES, Run
 from harv_hq.summarize import SUMMARY_FILE
 from harv_hq.web.payload import column_info, filter_mask, jsonable, source_payload
 
@@ -70,7 +70,11 @@ class _Snapshot:
 
     @classmethod
     def load(cls, run: Run) -> "_Snapshot":
-        """Read the current table; the results index is built on first use."""
+        """Read the current table, and index each stage's results now.
+
+        Indexing here, not on first use, keeps the table and the results of
+        one snapshot from the same moment.
+        """
         summary = run.run_dir / SUMMARY_FILE
         stamp = _stamp(summary)
         try:
@@ -83,13 +87,16 @@ class _Snapshot:
             # Deleted since the stamp: the catalog alone, as before summarize.
             stamp, contents = None, read_parquet(run.run_dir / CATALOG_FILE)
         table = contents.table
+        fresh = run._fresh()
+        for stage in STAGES:
+            fresh._index(stage)
         return cls(
             stamp=stamp,
             table=table,
             units=contents.units,
             positions={sid: i for i, sid in enumerate(table["source_id"].to_pylist())},
             int_ids=pa.types.is_integer(table.schema.field("source_id").type),
-            run=run._fresh(),
+            run=fresh,
         )
 
     def source_id(self, text: str) -> Any:
@@ -107,6 +114,12 @@ class _Snapshot:
         if unknown := [n for n in names if n not in self.table.column_names]:
             raise HTTPException(400, f"unknown columns {unknown}")
         return names
+
+    def summary_row(self, source_id: Any) -> dict[str, Any] | None:
+        """The source's row of this snapshot's summary (``None`` before one)."""
+        if self.stamp is None:
+            return None
+        return self.table.slice(self.positions[source_id], 1).to_pylist()[0]
 
 
 @final
@@ -221,7 +234,10 @@ def create_app(run_dir: str | os.PathLike) -> FastAPI:
     @app.get("/api/source/{source_id:path}")
     def api_source(source_id: str) -> JSONResponse:
         current = state()
-        result = current.run.load_source(current.source_id(source_id))
+        key = current.source_id(source_id)
+        # The summary row of this snapshot, not one reread from the file,
+        # which may have been replaced since.
+        result = replace(current.run.load_source(key), summary=current.summary_row(key))
         return JSONResponse(source_payload(result, viewer.model))
 
     return app

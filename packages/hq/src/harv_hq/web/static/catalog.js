@@ -12,6 +12,10 @@ let COLUMNS = []; // [{name, dtype, unit, numeric}]
 let rows = null; // the table's current rows, as {column: values}
 let sortKey = null;
 let sortDir = 1;
+// Each request gets a token; a response whose token is no longer the latest
+// (a slower, older request) is dropped instead of overwriting newer results.
+let plotToken = 0;
+let rowsToken = 0;
 
 const sourceUrl = (id) => `/source/${encodeURIComponent(id)}`;
 
@@ -65,14 +69,17 @@ async function plot() {
     filter: $("filter").value,
     status: $("status").value,
   });
+  const token = ++plotToken;
   let data;
   try {
     data = await getJson(`/api/catalog?${query}`);
   } catch (err) {
+    if (token !== plotToken) return;
     $("message").textContent = err.message;
     $("message").className = "hint error";
     return;
   }
+  if (token !== plotToken) return;
   $("message").className = "hint";
   $("message").textContent = `${data.source_id.length} sources`;
   const marker = { size: 4, opacity: 0.7 };
@@ -110,17 +117,22 @@ async function plot() {
 }
 
 async function showRows(ids) {
+  const token = ++rowsToken;
+  let fetched;
   try {
-    rows = await getJson("/api/rows", {
+    fetched = await getJson("/api/rows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_ids: ids, columns: tableColumns() }),
     });
   } catch (err) {
+    if (token !== rowsToken) return;
     $("message").textContent = err.message;
     $("message").className = "hint error";
     return;
   }
+  if (token !== rowsToken) return;
+  rows = fetched;
   renderTable();
 }
 
@@ -155,24 +167,34 @@ function renderTable() {
   body.innerHTML = "";
   for (const i of order) {
     const row = body.insertRow();
-    row.onclick = () => (location.href = sourceUrl(rows.source_id[i]));
     for (const name of names) {
       const v = rows[name][i];
-      row.insertCell().textContent =
-        typeof v === "number" ? v.toPrecision(6) : v === null ? "" : v;
+      const cell = row.insertCell();
+      if (name === "source_id") {
+        // A real link, so the table works from the keyboard too.
+        const link = Object.assign(document.createElement("a"), {
+          href: sourceUrl(v),
+          textContent: v,
+        });
+        cell.appendChild(link);
+      } else {
+        cell.textContent = typeof v === "number" ? v.toPrecision(6) : v === null ? "" : v;
+      }
     }
   }
 }
 
 async function main() {
   COLUMNS = await getJson("/api/columns");
-  const numeric = COLUMNS.filter((c) => c.numeric).map((c) => c.name);
+  // Not source_id: IDs travel as strings, so they cannot be plotted as numbers.
+  const numeric = COLUMNS.filter((c) => c.numeric && c.name !== "source_id").map(
+    (c) => c.name,
+  );
   fillSelect($("x"), numeric, false);
   fillSelect($("y"), numeric, false);
   fillSelect($("color"), numeric, true);
-  const axes = numeric.filter((n) => n !== "source_id");
-  $("x").value = axes[0] || numeric[0];
-  $("y").value = axes[1] || axes[0] || numeric[0];
+  $("x").value = numeric[0];
+  $("y").value = numeric[1] || numeric[0];
   readUrl();
 
   $("controls").addEventListener("submit", (ev) => {

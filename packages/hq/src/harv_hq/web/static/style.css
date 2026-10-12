@@ -79,9 +79,6 @@ th:first-child,
 td:first-child {
   text-align: left;
 }
-#rows tbody tr {
-  cursor: pointer;
-}
 #rows tbody tr:hover {
   background: #eef6fb;
 }

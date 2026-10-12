@@ -256,6 +256,16 @@ class TestReload:
         assert loads == []  # the model file is not imported again
         assert second.run.config is viewer.run.config
 
+    def test_a_snapshot_is_one_version(self, rv_dir, tmp_path):
+        """Its results index and summary row do not follow later changes."""
+        run_dir = shutil.copytree(rv_dir, tmp_path / "run")
+        snapshot = _Viewer(run_dir).current()
+        assert set(snapshot.run._indexes) == {"rejection", "mcmc"}  # built now
+        before = snapshot.summary_row(SLASH)
+        assert before["source_id"] == SLASH
+        (run_dir / SUMMARY_FILE).unlink()
+        assert snapshot.summary_row(SLASH) == before
+
     def test_a_summary_deleted_while_loading_falls_back_to_the_catalog(
         self, rv_dir, tmp_path, monkeypatch
     ):

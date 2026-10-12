@@ -89,7 +89,12 @@ function renderGaia(indices) {
   const d = DATA.data,
     u = d.units,
     c = S().curves;
-  if (!c) return;
+  // Clear the panels first, so a stage without curves never shows another's.
+  if (!c) {
+    Plotly.purge($("data-plot"));
+    Plotly.purge($("second-plot"));
+    return;
+  }
   const sky = c.ra ? [curvesTrace(c.ra, c.dec, indices, "scatter")] : [];
   Plotly.react($("data-plot"), sky, {
     showlegend: false,
@@ -99,7 +104,10 @@ function renderGaia(indices) {
     yaxis: { title: `ΔDec [${u.al_position}]`, scaleanchor: "x" },
   });
   const ref = referenceIndex(indices);
-  if (ref === null) return;
+  if (ref === null) {
+    Plotly.purge($("second-plot"));
+    return;
+  }
   Plotly.react($("second-plot"), [errorTrace(d.time, c.residual[ref], d.al_position_err)], {
     showlegend: false,
     margin: { t: 30 },
