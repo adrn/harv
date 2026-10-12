@@ -286,7 +286,7 @@ class TestCompact:
             assert json.loads(meta[b"hq.provenance"]) == newest
 
     def test_parts_without_provenance_stay_without(self, rv_run):
-        """MCMC parts have no provenance yet; compaction must not invent one."""
+        """Compaction must not invent a provenance its inputs lack."""
         run = rejected_run(rv_run)
         mcmc = run.run_dir / "results" / "mcmc"
         mcmc.mkdir()
@@ -298,7 +298,10 @@ class TestCompact:
                 "finished": datetime.now(UTC),
             }
             write_part(mcmc, f"0000-of-0001-mcmc{k:04d}", [Payload(row=row)], {})
-        assert run.compact("mcmc").n_sources == 2
+        report = compact_module.compact(
+            mcmc, stage="mcmc", expected_provenance=None, compact_n_sources=COMPACT
+        )
+        assert report.n_sources == 2
         (part,) = mcmc.glob("*.sources.parquet")
         assert b"hq.provenance" not in pq.read_schema(part).metadata
         # A later check refuses it cleanly instead of failing on a null.
@@ -487,7 +490,7 @@ class TestSummarize:
             run.run_dir / "results" / "mcmc",
             "0000-of-0001-mcmc0000",
             [Payload(row=row)],
-            {"stage": "mcmc"},
+            {"stage": "mcmc", "provenance": run._stage_provenance("mcmc")},
         )
         summary = {
             r["source_id"]: r for r in pq.read_table(run.summarize()).to_pylist()

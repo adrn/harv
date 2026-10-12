@@ -164,7 +164,7 @@ def mpi_comm() -> Any:
     try:
         from mpi4py import MPI  # noqa: PLC0415  # ty: ignore[unresolved-import]
     except ImportError as err:
-        msg = "hq run --mpi needs mpi4py: pip install 'harv-hq[mpi]'"
+        msg = "--mpi needs mpi4py: pip install 'harv-hq[mpi]'"
         raise ImportError(msg) from err
     return MPI.COMM_WORLD
 

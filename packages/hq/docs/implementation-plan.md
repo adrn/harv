@@ -28,8 +28,8 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)                                     |
 | 3     | prior cache, serial rejection, result parts, resume    | Done (PR #61)                                     |
 | 4     | execution modes: shards, pool, MPI                     | Done (PR #63)                                     |
-| 5     | compaction, summarize, status                          | Implemented on branch `hq-phase5`, awaiting merge |
-| 6     | MCMC follow-up                                         | Not started                                       |
+| 5     | compaction, summarize, status                          | Done (PR #65)                                     |
+| 6     | MCMC follow-up                                         | Implemented on branch `hq-phase6`, awaiting merge |
 | 7     | web viewer                                             | Not started                                       |
 | 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
 
@@ -421,9 +421,9 @@ are present.
 
 ______________________________________________________________________
 
-## Phase 5: compaction, summarize, and status — awaiting merge
+## Phase 5: compaction, summarize, and status — done
 
-Implemented on branch `hq-phase5` (off `hq`). Deviations from the text below:
+Implemented on branch `hq-phase5` (off `hq`), merged as PR #65. Deviations from the text below:
 `compact(stage_dir, *, stage, expected_provenance, compact_n_sources)` works
 on a stage directory, and `Run.compact(stage)` wraps it. Part writing moved
 out of `PartWriter.flush` into `results.write_part`, which compaction reuses,
@@ -518,7 +518,24 @@ samples reader to raise).
 
 ______________________________________________________________________
 
-## Phase 6: MCMC follow-up
+## Phase 6: MCMC follow-up — awaiting merge
+
+Implemented on branch `hq-phase6` (off `hq`). Deviations from the text below:
+pool workers read their sources' rejection samples themselves (each task
+carries the source's data and its `ResultRecord`), so the parent holds no
+samples. Chains start from `num_chains` equal-weight draws (not `top_k`),
+with the second half of the source's MCMC key. `r_hat_max` /
+`ess_bulk_min` skip parameters constant over every draw; all constant gives
+NaN, which is `not_converged`. Only `ok` rejection results can be selected,
+by the rule or the hook. MCMC parts record `MCMC_TABLES` (the rejection
+tables plus `[mcmc]`), so `compact`, `summarize`, and `status` now check them
+too; `run_mcmc` also checks the summary's provenance and raises
+`FileNotFoundError` without one (spec updated). `Run.run_rejection` and
+`run_mcmc` share one driver (`_run_stage` / `_run_slice`), and
+`results.process_source` holds the per-source timing, warning capture and
+failure handling both stages use. `PreparedData.slice_ids` takes `among=`.
+`arviz` is now an hq dependency. numpyro prints a progress bar per source;
+harv's `NumpyroSampler.run` has no switch for it yet.
 
 `mcmc.py`, `process_mcmc(source_id, data, *, sampler, init_samples, config, seed)`: `weighted_resample` of the rejection samples for `init_samples`, then
 `sampler.run(...)` with the `[mcmc]` arguments and `return_logprobs=True`.

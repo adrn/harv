@@ -1313,6 +1313,7 @@ test = [
 name = "harv-hq"
 source = { editable = "packages/hq" }
 dependencies = [
+    { name = "arviz" },
     { name = "astropy" },
     { name = "h5py" },
     { name = "harv" },
@@ -1328,6 +1329,7 @@ mpi = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arviz", specifier = ">=1.0.0" },
     { name = "astropy", specifier = ">=6.1" },
     { name = "h5py", specifier = ">=3.11" },
     { name = "harv", editable = "." },

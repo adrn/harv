@@ -41,13 +41,7 @@ def test_cli_init(tmp_path, capsys):
     assert config.run.kind == "gaia_astrometry"
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["mcmc", "--mpi"],
-        ["serve"],
-    ],
-)
+@pytest.mark.parametrize("argv", [["serve"]])
 def test_cli_unimplemented_subcommands_exit_with_a_message(argv, capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(argv)

@@ -52,7 +52,12 @@ def _write_config(run_dir, kind, data_file, extra=""):
 @pytest.fixture
 def rv_run(tmp_path):
     """An RV run: 20 sources with string IDs, 2-10 epochs, a few bad rows."""
-    run_dir = init_run(tmp_path / "run", kind="rv")
+    return make_rv_run(tmp_path)
+
+
+def make_rv_run(base):
+    """Write the ``rv_run`` fixture's run under ``base`` (for wider scopes)."""
+    run_dir = init_run(base / "run", kind="rv")
     ids = _rv_ids(20)
     rows = {"source_id": [], "time": [], "rv": [], "rv_err": [], "snr": []}
     n_obs = {}

@@ -11,7 +11,7 @@ __all__ = ("PreparedData", "prepare", "read_source", "read_sources")
 import logging
 import os
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from pathlib import Path
 from typing import Any, final
 
@@ -375,7 +375,9 @@ class PreparedData:
         self._units = field_units(self._file.schema_arrow)
         self._group_starts = row_group_starts(self._file)
 
-    def slice_ids(self, shard: tuple[int, int]) -> list[Any]:
+    def slice_ids(
+        self, shard: tuple[int, int], *, among: Collection[Any] | None = None
+    ) -> list[Any]:
         """The source IDs in slice ``i`` of ``N``, in processing order.
 
         Sources are ordered by ``(n_obs, source_id)`` and slice ``i`` is
@@ -387,6 +389,9 @@ class PreparedData:
         ----------
         shard
             ``(i, N)`` with ``0 <= i < N``.
+        among
+            Order and slice only these sources (MCMC's selection); every
+            prepared source when ``None``.
 
         Returns
         -------
@@ -401,7 +406,8 @@ class PreparedData:
         if not 0 <= i < n:
             msg = f"shard must be (i, N) with 0 <= i < N, got {shard}"
             raise ValueError(msg)
-        order = sorted(self._ranges, key=lambda sid: (self._ranges[sid][1], sid))
+        ids = self._ranges if among is None else set(among) & self._ranges.keys()
+        order = sorted(ids, key=lambda sid: (self._ranges[sid][1], sid))
         return order[i::n]
 
     def read(self, source_ids: Iterable[Any]) -> dict[Any, RVData | GaiaAstrometryData]:

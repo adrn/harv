@@ -44,6 +44,7 @@ PREPARED_TABLES = ("run", "data", "prepare")
 CATALOG_TABLES = (*PREPARED_TABLES, "catalog")
 PRIOR_CACHE_TABLES = ("run", "prior_cache")
 REJECTION_TABLES = ("run", "data", "prepare", "prior_cache", "rejection")
+MCMC_TABLES = (*REJECTION_TABLES, "mcmc")
 ALL_TABLES = ("run", "data", "prepare", "catalog", "prior_cache", "rejection", "mcmc")
 _VERSION_FIELDS = ("hq_version", "harv_version", "jax_version")
 

@@ -12,24 +12,30 @@ import logging
 import os
 import uuid
 from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, final
 
 import h5py
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import Samples, make_prior_cache
 from harv_hq._model_file import ModelFile
+from harv_hq._parquet_io import read_parquet
 from harv_hq.compact import CompactReport, compact
-from harv_hq.config import Config
-from harv_hq.execution import Progress, mpi_comm, run_pool, run_serial
+from harv_hq.config import Config, ConfigError
+from harv_hq.execution import Progress, Setup, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
+from harv_hq.mcmc import mcmc_setup, select_sources
 from harv_hq.prepare import PreparedData, prepare
 from harv_hq.provenance import (
+    MCMC_TABLES,
     PRIOR_CACHE_TABLES,
     REJECTION_TABLES,
+    ProvenanceError,
     check_provenance,
     make_provenance,
 )
@@ -64,6 +70,17 @@ class SourceResult:
     rejection_status: str
     mcmc_status: str
     summary: dict[str, Any] | None
+
+
+@final
+@dataclass(frozen=True)
+class _StageWork:
+    """What one process of a stage runs: its slice, inputs, and setup."""
+
+    ids: list[Any]  # the slice, in processing order
+    read: Callable[[list[Any]], Mapping[Any, Any]]  # each source's task input
+    setup: Setup
+    provenance: dict[str, Any]  # what the stage's parts record
 
 
 @final
@@ -210,6 +227,73 @@ class Run:
         ProvenanceError
             If an input or an existing part was built from different inputs.
         """
+        self._run_stage(
+            "rejection",
+            shard=shard,
+            workers=workers,
+            mpi=mpi,
+            overwrite=overwrite,
+            compact=compact,
+        )
+
+    def run_mcmc(
+        self,
+        *,
+        shard: tuple[int, int] = (0, 1),
+        workers: int = 1,
+        mpi: bool = False,
+        overwrite: bool = False,
+        compact: bool = True,
+    ) -> None:
+        """Run MCMC follow-up on the selected sources in a slice (``hq mcmc``).
+
+        Selects sources from ``summary.parquet`` by the ``[mcmc]`` rule or the
+        model file's ``select_for_mcmc``, and starts each source's chains
+        from its rejection samples. Otherwise it runs like
+        :meth:`run_rejection`: the same slicing, resume, execution modes,
+        part writing, and compaction, into ``results/mcmc/``. See the spec's
+        "MCMC follow-up".
+
+        Parameters
+        ----------
+        shard, workers, mpi, compact
+            As for :meth:`run_rejection`.
+        overwrite
+            Move existing MCMC results to
+            ``results/superseded-<timestamp>-mcmc/`` and start over.
+
+        Raises
+        ------
+        ConfigError
+            If ``hq.toml`` has no ``[mcmc]`` table.
+        ValueError
+            If ``mpi`` is combined with ``shard``, or ``workers < 1``.
+        FileNotFoundError
+            If the data are not prepared, the prior cache is not built, or
+            ``summary.parquet`` does not exist.
+        ProvenanceError
+            If an input or an existing part was built from different inputs,
+            or ``summary.parquet`` is older than the newest rejection result.
+        """
+        self._run_stage(
+            "mcmc",
+            shard=shard,
+            workers=workers,
+            mpi=mpi,
+            overwrite=overwrite,
+            compact=compact,
+        )
+
+    def _run_stage(
+        self,
+        stage: str,
+        *,
+        shard: tuple[int, int],
+        workers: int,
+        mpi: bool,
+        overwrite: bool,
+        compact: bool,
+    ) -> None:
         if workers < 1:
             msg = f"workers must be at least 1, got {workers}"
             raise ValueError(msg)
@@ -221,57 +305,62 @@ class Run:
             comm = mpi_comm()
             shard = (comm.Get_rank(), comm.Get_size())
         try:
-            part_provenance = self._run_rejection(shard, workers, overwrite, comm)
+            part_provenance = self._run_slice(stage, shard, workers, overwrite, comm)
             # The whole stage ran here (MPI: rank 0, after the final barrier).
             # Checked against what this run wrote with, so an edit to hq.toml
             # or the cache during the run cannot fail it at the very end.
             if compact and shard[0] == 0 and (comm is not None or shard[1] == 1):
-                self._compact("rejection", part_provenance)
+                self._compact(stage, part_provenance)
         except BaseException:
             # A rank that stops early would leave the others waiting at a
             # barrier forever; nothing above it can recover, so end them all.
             if comm is not None:
-                logger.exception("rejection: rank %d failed; aborting", shard[0])
+                logger.exception("%s: rank %d failed; aborting", stage, shard[0])
                 comm.Abort(1)
             raise
 
-    def _run_rejection(
-        self, shard: tuple[int, int], workers: int, overwrite: bool, comm: Any
+    def _run_slice(
+        self,
+        stage: str,
+        shard: tuple[int, int],
+        workers: int,
+        overwrite: bool,
+        comm: Any,
     ) -> dict[str, Any]:
         i, n = shard
-        prepared, cache_path, part_provenance = self._rejection_inputs()
-        stage_dir = self.run_dir / "results" / "rejection"
+        work = self._stage_work(stage, shard)
+        stage_dir = self.run_dir / "results" / stage
         # Under MPI only rank 0 moves results aside, and every rank waits for
         # it before reading what is done.
         if overwrite and (comm is None or i == 0):
             supersede(stage_dir)
         if comm is not None:
             comm.Barrier()
-        existing = ResultsIndex.build(stage_dir, expected_provenance=part_provenance)
+        existing = ResultsIndex.build(stage_dir, expected_provenance=work.provenance)
         done = existing.done()
-        todo = [sid for sid in prepared.slice_ids(shard) if sid not in done]
-        log_handler, log_level = self._log_to_file(f"rejection-{i:04d}-of-{n:04d}.log")
+        todo = [sid for sid in work.ids if sid not in done]
+        log_handler, log_level = self._log_to_file(f"{stage}-{i:04d}-of-{n:04d}.log")
         logger.info(
-            "rejection: slice %d/%d, %d sources to run (%d already done)",
+            "%s: slice %d/%d, %d sources to run (%d already done)",
+            stage,
             i,
             n,
             len(todo),
             len(done),
         )
         try:
-            data = prepared.read(todo)
-            setup = functools.partial(rejection_setup, self.config, cache_path)
+            inputs = work.read(todo)
             writer = PartWriter(
                 stage_dir,
-                stage="rejection",
+                stage=stage,
                 shard=shard,
-                provenance=part_provenance,
+                provenance=work.provenance,
                 flush_n_sources=self.config.results.flush_n_sources,
                 flush_seconds=self.config.results.flush_seconds,
                 structure=existing.structure,
             )
             progress = Progress(
-                "rejection", len(todo), ranks=n if comm is not None and i == 0 else 1
+                stage, len(todo), ranks=n if comm is not None and i == 0 else 1
             )
 
             def sink(payload: Payload) -> None:
@@ -280,20 +369,73 @@ class Run:
 
             try:
                 if workers > 1:
-                    run_pool(todo, data, setup, sink, workers=workers)
+                    run_pool(todo, inputs, work.setup, sink, workers=workers)
                 else:
-                    run_serial(todo, data, setup, sink)
+                    run_serial(todo, inputs, work.setup, sink)
             finally:
                 writer.close()
         finally:
             # Parts may have been written even if the loop raised.
-            self._indexes.pop("rejection", None)
+            self._indexes.pop(stage, None)
             logger.removeHandler(log_handler)
             logger.setLevel(log_level)
             log_handler.close()
         if comm is not None:
             comm.Barrier()
-        return part_provenance
+        return work.provenance
+
+    def _stage_work(self, stage: str, shard: tuple[int, int]) -> _StageWork:
+        """Check a stage's inputs, and say what slice ``shard`` of it runs."""
+        prepared, cache_path, provenance = self._inputs()
+        if stage == "rejection":
+            return _StageWork(
+                ids=prepared.slice_ids(shard),
+                read=prepared.read,
+                setup=functools.partial(rejection_setup, self.config, cache_path),
+                provenance=provenance["rejection"],
+            )
+        if self.config.mcmc is None:
+            msg = f"{self.config.run_dir / 'hq.toml'} has no [mcmc] table"
+            raise ConfigError(msg)
+        rejection = ResultsIndex.build(
+            self.run_dir / "results" / "rejection",
+            expected_provenance=provenance["rejection"],
+        )
+        summary = self._current_summary(provenance["rejection"], rejection.provenance)
+        selected = select_sources(
+            summary, self.config.mcmc, self.model_file.select_for_mcmc
+        )
+        records = rejection.records
+
+        def read(ids: list[Any]) -> dict[Any, Any]:
+            data = prepared.read(ids)
+            return {sid: (data[sid], records[sid]) for sid in data}
+
+        return _StageWork(
+            ids=prepared.slice_ids(shard, among=selected & rejection.done()),
+            read=read,
+            setup=functools.partial(mcmc_setup, self.config),
+            provenance=provenance["mcmc"],
+        )
+
+    def _current_summary(
+        self, expected: dict[str, Any], newest_part: dict[str, Any] | None
+    ) -> pa.Table:
+        """``summary.parquet``, refused if older than the rejection results."""
+        path = self.run_dir / SUMMARY_FILE
+        if not path.exists():
+            msg = f"{self.run_dir} has no {SUMMARY_FILE}; run hq summarize first"
+            raise FileNotFoundError(msg)
+        summary = read_parquet(path)
+        found = summary.metadata.get("provenance") or {}
+        check_provenance(found, expected, path=path)
+        created = found.get("created", "")
+        if newest_part is not None and newest_part["created"] > created:
+            msg = (
+                f"{path} is older than the newest rejection result; rerun hq summarize"
+            )
+            raise ProvenanceError(msg)
+        return summary.table
 
     def compact(self, stage: str = "rejection") -> CompactReport:
         """Merge a stage's result parts (``hq compact``); see the spec's "Compaction".
@@ -301,7 +443,7 @@ class Run:
         Parameters
         ----------
         stage
-            ``"rejection"`` (``"mcmc"`` arrives with MCMC follow-up).
+            ``"rejection"`` or ``"mcmc"``.
 
         Returns
         -------
@@ -314,7 +456,7 @@ class Run:
         """
         return self._compact(stage, self._stage_provenance(stage))
 
-    def _compact(self, stage: str, expected: dict[str, Any] | None) -> CompactReport:
+    def _compact(self, stage: str, expected: dict[str, Any]) -> CompactReport:
         report = compact(
             self.run_dir / "results" / stage,
             stage=stage,
@@ -338,7 +480,7 @@ class Run:
         """
         path = summarize(
             self.run_dir,
-            expected={stage: self._stage_provenance(stage) for stage in STAGES},
+            expected=self._inputs()[2],
         )
         logger.info("summarize: wrote %s", path)
         return path
@@ -411,23 +553,27 @@ class Run:
             summary=self._summary_row(key),
         )
 
-    def _rejection_inputs(self) -> tuple[PreparedData, Path, dict[str, Any]]:
-        """The checked prepared data and prior cache, and parts' provenance."""
+    def _inputs(self) -> tuple[PreparedData, Path, dict[str, dict[str, Any]]]:
+        """The checked prepared data and prior cache, and each stage's provenance."""
         prepared = PreparedData(self.run_dir)
         current = make_provenance(self.config, data_id=prepared.data_id)
         check_provenance(prepared.provenance, current, path=prepared.path)
         cache_path, cache_provenance = self._checked_prior_cache(current)
-        part = make_provenance(
-            self.config,
-            tables=REJECTION_TABLES,
-            data_id=prepared.data_id,
-            prior_cache_id=cache_provenance["prior_cache_id"],
-        )
-        return prepared, cache_path, part
+        stage_tables = {"rejection": REJECTION_TABLES, "mcmc": MCMC_TABLES}
+        provenance = {
+            stage: make_provenance(
+                self.config,
+                tables=tables,
+                data_id=prepared.data_id,
+                prior_cache_id=cache_provenance["prior_cache_id"],
+            )
+            for stage, tables in stage_tables.items()
+        }
+        return prepared, cache_path, provenance
 
-    def _stage_provenance(self, stage: str) -> dict[str, Any] | None:
-        """What a stage's parts must match (MCMC parts: not checked yet)."""
-        return self._rejection_inputs()[2] if stage == "rejection" else None
+    def _stage_provenance(self, stage: str) -> dict[str, Any]:
+        """What a stage's parts must match."""
+        return self._inputs()[2][stage]
 
     def _summary_row(self, source_id: Any) -> dict[str, Any] | None:
         path = self.run_dir / SUMMARY_FILE
