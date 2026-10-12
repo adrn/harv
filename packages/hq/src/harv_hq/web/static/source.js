@@ -59,7 +59,12 @@ function renderRv(indices) {
     u = d.units,
     c = S().curves;
   const layout = { showlegend: false, margin: { t: 30 }, yaxis: { title: `RV [${u.rv}]` } };
-  const ref = $("fold").checked ? referenceIndex(indices) : null;
+  const ref = c && $("fold").checked ? referenceIndex(indices) : null;
+  if (!c) {
+    layout.xaxis = { title: `time [${u.time}]` };
+    Plotly.react($("data-plot"), [errorTrace(d.time, d.rv, d.rv_err)], layout);
+    return;
+  }
   if (ref === null) {
     layout.xaxis = { title: `time [${u.time}]` };
     Plotly.react($("data-plot"), [curvesTrace(c.time, c.rv, indices), errorTrace(d.time, d.rv, d.rv_err)], layout);
@@ -84,10 +89,12 @@ function renderGaia(indices) {
   const d = DATA.data,
     u = d.units,
     c = S().curves;
-  Plotly.react($("data-plot"), [curvesTrace(c.ra, c.dec, indices, "scatter")], {
+  if (!c) return;
+  const sky = c.ra ? [curvesTrace(c.ra, c.dec, indices, "scatter")] : [];
+  Plotly.react($("data-plot"), sky, {
     showlegend: false,
     margin: { t: 30 },
-    title: "Sky-plane orbits",
+    title: c.ra ? "Sky-plane orbits" : "No sky-plane orbit for this parameterization",
     xaxis: { title: `ΔRA* [${u.al_position}]`, autorange: "reversed" },
     yaxis: { title: `ΔDec [${u.al_position}]`, scaleanchor: "x" },
   });
@@ -132,6 +139,10 @@ function renderSplom() {
 
 function buildStage() {
   const s = S();
+  // Folding needs the time of periastron, which a Fourier fit lacks.
+  $("fold-label").hidden = DATA.kind !== "rv" || !s.params.time_peri;
+  if ($("fold-label").hidden) $("fold").checked = false;
+  $("curves-error").textContent = s.curves_error ? `No curves: ${s.curves_error}` : "";
   const dims = $("dims");
   dims.innerHTML = "";
   for (const name of Object.keys(s.params)) {
@@ -167,12 +178,23 @@ function renderSummary() {
 
 async function main() {
   const resp = await fetch(`/api/source/${encodeURIComponent(SOURCE_ID)}`);
+  if (!resp.ok) {
+    const text = await resp.text();
+    let detail = text;
+    try {
+      detail = JSON.parse(text).detail || text;
+    } catch {}
+    $("title").textContent = SOURCE_ID;
+    $("statuses").textContent = `Could not load this source: ${resp.status} ${detail}`;
+    $("statuses").className = "hint error";
+    return;
+  }
   DATA = await resp.json();
   $("title").textContent = DATA.source_id;
   const st = DATA.stages;
   $("statuses").textContent =
     `rejection: ${st.rejection.status} · mcmc: ${st.mcmc.mcmc_status || st.mcmc.status}`;
-  $("fold-label").hidden = DATA.kind !== "rv";
+  $("fold-label").hidden = true; // shown by buildStage when it can fold
   $("second-plot").hidden = DATA.kind === "rv";
   renderSummary();
 

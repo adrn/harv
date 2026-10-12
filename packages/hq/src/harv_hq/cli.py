@@ -12,13 +12,10 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import uvicorn
-
 from harv_hq.config import KINDS, Config, ConfigError
 from harv_hq.init import init_run
 from harv_hq.provenance import ProvenanceError
 from harv_hq.run import Run
-from harv_hq.web import create_app
 
 # Errors that mean "the run directory or config is not in a state for this";
 # the CLI reports them in one line instead of a traceback.
@@ -101,6 +98,12 @@ def _status(args: argparse.Namespace) -> int:
 
 
 def _serve(args: argparse.Namespace) -> int:
+    # Imported here so that the other subcommands (and pool workers, which
+    # import this package) do not load the web stack.
+    import uvicorn  # noqa: PLC0415
+
+    from harv_hq.web import create_app  # noqa: PLC0415
+
     serve = Config.from_file(Path(args.run_dir) / "hq.toml").serve
     uvicorn.run(create_app(args.run_dir), host=serve.host, port=serve.port)
     return 0

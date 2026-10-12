@@ -291,7 +291,7 @@ def _write_catalog(
             if column.ndim != 1:
                 msg = f"[catalog] column {name!r} is not one value per source"
                 raise ConfigError(msg)
-            source = pa.array(np.asarray(np.ma.getdata(column)), mask=_missing(column))
+            source = pa.array(_catalog_values(column), mask=_missing(column))
             columns[name] = source.take(take)
             if getattr(column, "unit", None) is not None:
                 units[name] = str(column.unit)
@@ -299,6 +299,20 @@ def _write_catalog(
     write_parquet(
         config.run_dir / CATALOG_FILE, pa.table(columns), units=units, metadata=metadata
     )
+
+
+def _catalog_values(column: Any) -> np.ndarray:
+    """A catalog column's values as pyarrow takes them.
+
+    FITS strings are bytes (``S``), decoded here so they are stored as
+    strings, and FITS numbers are big-endian, which pyarrow refuses.
+    """
+    values = np.asarray(np.ma.getdata(column))
+    if values.dtype.kind == "S":
+        return np.char.decode(values).astype(str)
+    if not values.dtype.isnative:
+        return values.astype(values.dtype.newbyteorder("="))
+    return values
 
 
 def _cast_catalog_ids(column: Any, dtype: np.dtype) -> np.ndarray:

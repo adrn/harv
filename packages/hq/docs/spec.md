@@ -499,7 +499,8 @@ returns a `dict`; the pipeline stages use it to load a process's slice (see
 
 One row per prepared source: `source_id`, `n_obs`, `time_baseline` (days),
 then the `[catalog]` columns joined on `source_id` (left join: prepared
-sources with no catalog row get nulls). Catalog columns that collide with
+sources with no catalog row get nulls). Byte-string columns (as FITS stores
+text) are stored as strings. Catalog columns that collide with
 these names, or with `summary.parquet`'s own columns (see "Summary table":
 its fixed columns, `map_*`, and `*_p16`/`_p50`/`_p84`), raise `ConfigError`.
 
@@ -703,7 +704,8 @@ Each is written to `.tmp` and renamed. The sources file is the commit: a
 source counts as written only when its row exists in a `.sources.parquet`. A
 samples file without its sources file (from a crash between the two renames)
 is ignored by every reader. A part whose sources all failed has no samples
-file.
+file. Sources files are written in row groups of 4,096, so reading one
+source's row decodes only its group.
 
 #### `*.sources.parquet`
 
@@ -962,8 +964,12 @@ memory once, and builds the results index used by `Run.load_source`.
 `summary.parquet` already holds the catalog columns, so it is the joined
 table; before `hq summarize` has run, the table is `catalog.parquet` alone.
 Per-source data and samples are read on request. The table and the results
-index are reloaded when the summary's modification time changes (or it
-appears or disappears). The server binds `127.0.0.1` by default; for a
+index are reloaded when `summary.parquet` changes (its inode and
+modification time, since every write renames a new file into place) or
+appears or disappears; `hq.toml` and the model file are not reloaded, so
+the curves always use the model the server started with (restart it after
+editing them). A reload builds the new table and index together and swaps
+them in at once, so concurrent requests see one version or the other. The server binds `127.0.0.1` by default; for a
 run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 
 ### Pages
@@ -1007,7 +1013,13 @@ rows, so RV curves are drawn without it, and the data points are shown
 without offsets. At most 256 samples are sent to the browser: top-K
 rejection samples are drawn without replacement in proportion to weight
 (all nonzero-weight samples when there are at most 256), and MCMC samples
-are evenly spaced over the draws.
+are evenly spaced over the draws. Curve values are rounded to six
+significant digits of each array's largest value. If a stage's curves
+cannot be computed (no sample with a finite period, say), that stage
+reports `curves_error` and the rest of the page is still shown. A
+parameterization without Campbell elements (a Fourier fit) has no sky orbit
+or time of periastron, so the sky-plane orbit and the phase fold are left
+out.
 
 ### JSON API
 
@@ -1024,11 +1036,13 @@ AND; a malformed term returns 400. `status` is a comma-separated list of
 `rejection_status` values to keep (default: all); before `hq summarize` it
 returns 400. Rows with a null in a filtered column are dropped. An unknown
 column returns 400, and an unknown source ID 404. Non-finite values are
-encoded as JSON `null`, and source IDs as strings, since 19-digit Gaia IDs
+encoded as JSON `null`, byte strings and timestamps as strings, and source
+IDs as strings (in the summary row too), since 19-digit Gaia IDs
 exceed the integers a browser represents exactly. `/api/source` returns
 `source_id`, `kind`, `data` (arrays and units), `summary`, and per stage its
 `status`, `mcmc_status`, `error`, `warnings` and, when it has samples,
-`params`, `units`, `curves` (and `weight` for rejection). `/api/catalog` returns whole columns, so the catalog view scales to
+`params`, `units`, `curves` or `curves_error` (and `weight` for
+rejection). `/api/catalog` returns whole columns, so the catalog view scales to
 roughly 10^6 sources before payload size dominates; larger runs should filter
 first.
 
@@ -1100,7 +1114,7 @@ ______________________________________________________________________
 | `pyarrow`                       | every Parquet file hq reads and writes       |
 | `h5py`                          | provenance attribute on the harv prior cache |
 | `arviz`                         | MCMC convergence diagnostics (lazy import)   |
-| `fastapi`, `uvicorn`, `jinja2`  | the web viewer                               |
+| `fastapi`, `uvicorn`, `jinja2`  | the web viewer (imported only by it)         |
 | `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                      |
 
 `hq` pins `harv` to its own version (they are released in lockstep from one

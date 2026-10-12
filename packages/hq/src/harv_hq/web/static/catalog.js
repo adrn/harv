@@ -126,6 +126,7 @@ async function showRows(ids) {
 
 function renderTable() {
   const names = Object.keys(rows);
+  if (!names.includes(sortKey)) sortKey = null; // its column was removed
   const n = rows.source_id.length;
   const order = [...Array(n).keys()];
   if (sortKey) {
@@ -184,12 +185,15 @@ async function main() {
     const id = $("search-id").value.trim();
     if (id) location.href = sourceUrl(id);
   });
-  await plot();
+  // An empty plot first, so the selection handler is attached even when the
+  // first request fails (e.g. a bookmarked filter with a typo).
+  await Plotly.newPlot($("scatter"), [], { margin: { t: 20 } });
   $("scatter").on("plotly_selected", (ev) => {
     if (ev && ev.points && ev.points.length) {
       showRows(ev.points.map((p) => p.customdata));
     }
   });
+  await plot();
 }
 
 main();

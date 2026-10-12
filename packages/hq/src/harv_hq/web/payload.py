@@ -13,10 +13,10 @@ __all__ = (
     "source_payload",
 )
 
+import logging
 import math
 from typing import Any
 
-import equinox as eqx
 import jax
 import numpy as np
 import pyarrow as pa
@@ -26,17 +26,20 @@ import pyarrow.compute as pc
 from unxt import Q, ustrip
 
 from harv.data import GaiaAstrometryData, RVData
-from harv.models import MultiSurveyOffset
-from harv.plot import get_time_grid
+from harv.plot import _strip_multi_survey_offsets, get_time_grid
 from harv.samplers import Samples
 from harv.samplers.samples import _assemble_sample_params
 from harv_hq.run import STAGES, SourceResult
 from harv_hq.summary_stats import _value_and_unit
 
+logger = logging.getLogger(__name__)
+
 MAX_CURVE_SAMPLES = 256
 MAX_TIME_GRID = 4096
 # Points along one period of the Gaia sky-plane orbit.
 _SKY_GRID = 256
+# Significant digits kept in curve values, the bulk of a source payload.
+_CURVE_DIGITS = 6
 
 
 def jsonable(values: Any) -> Any:
@@ -60,6 +63,8 @@ def jsonable(values: Any) -> Any:
     {'a': None, 'b': 'x'}
     """
     if isinstance(values, (pa.Array, pa.ChunkedArray)):
+        if pa.types.is_binary(values.type) or pa.types.is_temporal(values.type):
+            values = values.cast(pa.string())
         if pa.types.is_floating(values.type):
             values = pc.if_else(  # ty: ignore[unresolved-attribute]
                 pc.is_finite(values),  # ty: ignore[unresolved-attribute]
@@ -71,6 +76,8 @@ def jsonable(values: Any) -> Any:
         return {k: jsonable(v) for k, v in values.items()}
     if isinstance(values, float):
         return values if math.isfinite(values) else None
+    if isinstance(values, bytes):
+        return values.decode()
     if hasattr(values, "isoformat"):
         return values.isoformat()
     if isinstance(values, (np.ndarray, jax.Array)):
@@ -189,11 +196,15 @@ def source_payload(result: SourceResult, model: Any) -> dict[str, Any]:
             stages[stage] |= _samples_payload(shown, data, model)
             if weighted:
                 stages[stage]["weight"] = jsonable(np.asarray(shown.weight))
+    summary = jsonable(result.summary)
+    if summary is not None:
+        summary["source_id"] = str(result.source_id)
     return {
-        "source_id": str(result.source_id),  # 19-digit IDs overflow JS numbers
+        # 19-digit IDs overflow JS numbers, so IDs travel as strings.
+        "source_id": str(result.source_id),
         "kind": "rv" if isinstance(data, RVData) else "gaia_astrometry",
         "data": _data_payload(data),
-        "summary": jsonable(result.summary),
+        "summary": summary,
         "stages": stages,
     }
 
@@ -241,23 +252,46 @@ def _samples_payload(
         "params": {name: jsonable(value) for name, (value, _) in params.items()},
         "units": {name: unit for name, (_, unit) in params.items()},
     }
-    if isinstance(data, RVData):
-        payload["curves"] = _rv_curves(samples, data, model)
-    else:
-        payload["curves"] = _gaia_curves(samples, data, model)
+    if not samples.n_samples:
+        return payload
+    # A bad sample set (NaN draws, an unusual parameterization) loses its
+    # curves, not the whole page.
+    try:
+        if isinstance(data, RVData):
+            payload["curves"] = _rv_curves(samples, data, model)
+        else:
+            payload["curves"] = _gaia_curves(samples, data, model)
+    except Exception as err:
+        logger.exception("curves failed")
+        payload["curves_error"] = f"{type(err).__name__}: {err}"
     return payload
+
+
+def _curve_json(values: Any) -> Any:
+    """Curve values rounded to ``_CURVE_DIGITS`` significant digits of their scale.
+
+    Full float64 precision would make a source payload several times larger
+    for no visible difference.
+    """
+    array = np.asarray(values, dtype=float)
+    finite = np.abs(array[np.isfinite(array)])
+    if finite.size and finite.max() > 0:
+        scale = math.floor(math.log10(finite.max()))
+        array = np.round(array, max(0, _CURVE_DIGITS - 1 - scale))
+    return jsonable(array)
 
 
 def _rv_curves(samples: Samples, data: RVData, model: Any) -> dict[str, Any]:
     """RV on a grid over the baseline, one row per sample."""
     # A MultiSurveyOffset is bound to the data's rows, so it cannot be
     # evaluated on a grid; the curves are drawn without the offsets.
-    model = eqx.tree_at(
-        lambda m: m.extensions,
-        model,
-        tuple(e for e in model.extensions if not isinstance(e, MultiSurveyOffset)),
-    )
-    period = Q(np.median(np.asarray(samples["period"].value)), samples["period"].unit)
+    model = _strip_multi_survey_offsets(model)
+    periods = np.asarray(samples["period"].value)
+    periods = periods[np.isfinite(periods)]
+    if not periods.size:
+        msg = "no sample has a finite period"
+        raise ValueError(msg)
+    period = Q(np.median(periods), samples["period"].unit)
     grid = get_time_grid(data.time, period, max_time_grid=MAX_TIME_GRID)
     unit = str(data.rv.unit)
     nonlinear, linear = _assemble_sample_params(samples, model, data)
@@ -269,14 +303,18 @@ def _rv_curves(samples: Samples, data: RVData, model: Any) -> dict[str, Any]:
 
     return {
         "time": jsonable(np.asarray(grid.value)),
-        "rv": jsonable(jax.vmap(curve)(nonlinear, linear)),
+        "rv": _curve_json(jax.vmap(curve)(nonlinear, linear)),
     }
 
 
 def _gaia_curves(
     samples: Samples, data: GaiaAstrometryData, model: Any
 ) -> dict[str, Any]:
-    """Sky-plane orbits over one period, and along-scan residuals at the data."""
+    """Sky-plane orbits over one period, and along-scan residuals at the data.
+
+    A parameterization without Campbell elements (Fourier) has no sky orbit,
+    so only the residuals are returned.
+    """
     nonlinear, linear = _assemble_sample_params(samples, model, data)
     phase = np.linspace(0.0, 1.0, _SKY_GRID)
     al = ustrip(str(data.al_position.unit), data.al_position)
@@ -288,9 +326,8 @@ def _gaia_curves(
     def residual(nl: dict[str, Any], lin: dict[str, Any]) -> jax.Array:
         return al - model.predict(nl, lin, data)
 
-    ra, dec = jax.vmap(sky)(nonlinear, linear)
-    return {
-        "ra": jsonable(ra),
-        "dec": jsonable(dec),
-        "residual": jsonable(jax.vmap(residual)(nonlinear, linear)),
-    }
+    curves = {"residual": _curve_json(jax.vmap(residual)(nonlinear, linear))}
+    if "phase_peri" in nonlinear and hasattr(model.parameterization, "sky_orbit"):
+        ra, dec = jax.vmap(sky)(nonlinear, linear)
+        curves |= {"ra": _curve_json(ra), "dec": _curve_json(dec)}
+    return curves
