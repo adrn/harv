@@ -535,7 +535,21 @@ too; `run_mcmc` also checks the summary's provenance and raises
 `results.process_source` holds the per-source timing, warning capture and
 failure handling both stages use. `PreparedData.slice_ids` takes `among=`.
 `arviz` is now an hq dependency. numpyro prints a progress bar per source;
-harv's `NumpyroSampler.run` has no switch for it yet.
+harv's `NumpyroSampler.run` has no switch for it yet. From our own review:
+the summary gains `rejection_period_unimodal`, and the rule selects on it,
+so MCMC results and re-summarizing between shards never change the
+selection; a summary is current only if no rejection result finished after
+it started and its `ok` sources match the stage's (part `created` is the run
+start, so it cannot tell); `convergence` skips only parameters whose draws
+are all equal, so NaN draws fail; `RejectionSamples` re-indexes the
+rejection stage when compaction removes a part mid-stage; only `hq run`
+needs `prior_cache.h5` (later stages take its ID from the rejection parts);
+`[mcmc]`'s `select` and `require_unimodal` are not hashed; the rule reads
+four summary columns and the hook iterates batches; `status` checks the
+inputs once; serial and MPI runs reuse the parent's imported model file;
+`arviz` is imported lazily; the fixture builder is a session fixture
+(`rv_run_factory`), since `from conftest import` broke collection from the
+repo root.
 
 `mcmc.py`, `process_mcmc(source_id, data, *, sampler, init_samples, config, seed)`: `weighted_resample` of the rejection samples for `init_samples`, then
 `sampler.run(...)` with the `[mcmc]` arguments and `return_logprobs=True`.

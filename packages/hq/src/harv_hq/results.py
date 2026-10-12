@@ -144,6 +144,18 @@ def process_source(
     Returns
     -------
         The source's payload.
+
+    Examples
+    --------
+    >>> from harv.simulate import simulate_rv_sb1_data
+    >>> data, _ = simulate_rv_sb1_data(seed=0, n_obs=5)
+    >>> def compute():
+    ...     raise ValueError("no samples")
+    >>> payload = process_source("s1", data, stage="rejection", compute=compute)
+    >>> payload.row["status"], payload.samples is None
+    ('failed', True)
+    >>> "ValueError: no samples" in payload.row["error"]
+    True
     """
     started = datetime.now(UTC)
     clock = time.perf_counter()
