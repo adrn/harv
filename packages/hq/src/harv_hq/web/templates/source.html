@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ source_id }} &mdash; {{ run_name }} &mdash; hq</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script
+      src="https://cdn.plot.ly/plotly-2.35.2.min.js"
+      charset="utf-8"
+    ></script>
+  </head>
+  <body>
+    <p><a href="/">&larr; {{ run_name }}</a></p>
+    <h1 id="title"></h1>
+    <p id="statuses" class="hint"></p>
+    <p id="curves-error" class="hint error"></p>
+
+    <div class="controls">
+      <span id="stage-toggle"></span>
+      <label id="fold-label"
+        ><input type="checkbox" id="fold" /> phase-fold on the selected sample
+        nearest the median period</label
+      >
+    </div>
+
+    <div class="plots">
+      <div>
+        <div id="data-plot" class="plot"></div>
+        <div id="second-plot" class="plot"></div>
+      </div>
+      <div>
+        <div id="dims" class="checkboxes"></div>
+        <div id="splom" class="plot"></div>
+        <p class="hint">
+          Select samples to limit the curves to them; double-click to reset.
+        </p>
+      </div>
+    </div>
+
+    <h2>Summary</h2>
+    <div class="table-wrap"><table id="summary"></table></div>
+    <div id="problems"></div>
+
+    <script>
+      const SOURCE_ID = {{ source_id|tojson }};
+    </script>
+    <script src="/static/source.js"></script>
+  </body>
+</html>

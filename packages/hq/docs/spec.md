@@ -499,7 +499,8 @@ returns a `dict`; the pipeline stages use it to load a process's slice (see
 
 One row per prepared source: `source_id`, `n_obs`, `time_baseline` (days),
 then the `[catalog]` columns joined on `source_id` (left join: prepared
-sources with no catalog row get nulls). Catalog columns that collide with
+sources with no catalog row get nulls). Byte-string columns (as FITS stores
+text) are stored as strings. Catalog columns that collide with
 these names, or with `summary.parquet`'s own columns (see "Summary table":
 its fixed columns, `map_*`, and `*_p16`/`_p50`/`_p84`), raise `ConfigError`.
 
@@ -703,7 +704,8 @@ Each is written to `.tmp` and renamed. The sources file is the commit: a
 source counts as written only when its row exists in a `.sources.parquet`. A
 samples file without its sources file (from a crash between the two renames)
 is ignored by every reader. A part whose sources all failed has no samples
-file.
+file. Sources files are written in row groups of 4,096, so reading one
+source's row decodes only its group.
 
 #### `*.sources.parquet`
 
@@ -822,8 +824,9 @@ so population analyses can read the samples dataset directly with no join.
 
 `harv_hq.Run.load_source(source_id) -> SourceResult` returns the source's
 data, its rejection and MCMC `Samples` (or `None`), their statuses
-(`"pending"` before a stage has a result for it), and its summary row (`None`
-until `summarize` has run). At first use, `Run` builds an in-memory index from the
+(`"pending"` before a stage has a result for it), its summary row (`None`
+until `summarize` has run), and each stage's sources-table row (`None` while
+pending), which holds the error traceback and captured warnings. At first use, `Run` builds an in-memory index from the
 `source_id`, `finished`, `samples_row_start`, and `n_samples` columns of every
 sources file (newest row per source wins), then reads only the row groups of
 the samples file that span the source's rows. If that file has since been
@@ -956,11 +959,19 @@ Plotly.js loaded from a CDN. There is no frontend build step.
 harv_hq.create_app(run_dir: str | os.PathLike) -> fastapi.FastAPI
 ```
 
-At startup the app loads `hq.toml`, the model file, and `catalog.parquet`
-joined to `summary.parquet` (on `source_id`) into memory once, and builds the
-results index used by `Run.load_source`. Per-source data and samples are read
-on request. The summary and the results index are reloaded when the summary's
-modification time changes. The server binds `127.0.0.1` by default; for a
+At startup the app loads `hq.toml`, the model file, and the joined table into
+memory once, and builds the results index used by `Run.load_source`.
+`summary.parquet` already holds the catalog columns, so it is the joined
+table; before `hq summarize` has run, the table is `catalog.parquet` alone.
+Per-source data and samples are read on request. The table and the results
+index are reloaded when `summary.parquet` changes (its inode and
+modification time, since every write renames a new file into place) or
+appears or disappears; `hq.toml` and the model file are not reloaded, so
+the curves always use the model the server started with (restart it after
+editing them). A reload builds the new table and every stage's results
+index together and swaps them in at once, so concurrent requests see one
+version or the other, and a source page's summary row comes from the same
+version as its results. The server binds `127.0.0.1` by default; for a
 run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 
 ### Pages
@@ -986,32 +997,54 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
   median period). Gaia astrometry: the sky-plane orbit and along-scan
   residuals versus time.
 - A posterior scatter matrix (Plotly `splom`) with a parameter picker.
-  Selecting points in it limits the orbit curves to those samples.
+  Selecting points in it limits the orbit curves to those samples. For Gaia
+  astrometry, the residual panel shows the selected sample nearest the median
+  period.
 - A toggle between the rejection and MCMC sample sets when both exist.
 - The source's summary row, status, error traceback, captured warnings, and
   catalog columns.
 
 Orbit curves are computed on request, not stored. The server uses the model
-from `make_setup` and evaluates
-`RVModel.predict_at_times` or `GaiaAstrometryModel.predict_orbit_sky` under
-`jax.vmap` on a grid from `harv.plot.get_time_grid`, capped at 4096 points.
-At most 256 samples are sent to the browser, chosen by weight for top-K
-rejection samples and uniformly for MCMC.
+from `make_setup` and evaluates, under `jax.vmap` over the samples,
+`RVModel.predict_at_times` on a grid from `harv.plot.get_time_grid` (capped
+at 4096 points, around the median period), or
+`GaiaAstrometryModel.predict_orbit_sky` over one period (256 points) plus
+the along-scan residuals at the data (`al_position` minus
+`GaiaAstrometryModel.predict`). A `MultiSurveyOffset` is bound to the data's
+rows, so RV curves are drawn without it, and the data points are shown
+without offsets. At most 256 samples are sent to the browser: top-K
+rejection samples are drawn without replacement in proportion to weight
+(all nonzero-weight samples when there are at most 256), and MCMC samples
+are evenly spaced over the draws. Curve values are rounded to six
+significant digits of each array's largest value. If a stage's curves
+cannot be computed (no sample with a finite period, say), that stage
+reports `curves_error` and the rest of the page is still shown. A
+parameterization without Campbell elements (a Fourier fit) has no sky orbit
+or time of periastron, so the sky-plane orbit and the phase fold are left
+out.
 
 ### JSON API
 
 | Route                                                  | Returns                                                          |
 | ------------------------------------------------------ | ---------------------------------------------------------------- |
-| `GET /api/columns`                                     | Column names, dtypes, and units of the joined table              |
+| `GET /api/columns`                                     | Column names, dtypes, units, and whether each is numeric         |
 | `GET /api/catalog?columns=a,b,c&filter=...&status=...` | The requested columns as arrays, for all rows passing the filter |
 | `POST /api/rows`                                       | Body `{source_ids, columns}`; the requested rows                 |
-| `GET /api/source/{source_id}`                          | Data, samples, curves, summary row, statuses                     |
+| `GET /api/source/{source_id}`                          | Data, samples, curves, summary row, statuses, errors, warnings   |
 
 The `filter` parameter is a comma-separated list of `column:min:max` terms
 (an empty bound is open, e.g. `bp_rp:0.5:` or `n_obs::20`), combined with
 AND; a malformed term returns 400. `status` is a comma-separated list of
-`rejection_status` values to keep (default: all). Non-finite values are encoded as JSON
-`null`. `/api/catalog` returns whole columns, so the catalog view scales to
+`rejection_status` values to keep (default: all); before `hq summarize` it
+returns 400. Rows with a null in a filtered column are dropped. An unknown
+column returns 400, and an unknown source ID 404. Non-finite values are
+encoded as JSON `null`, byte strings and timestamps as strings, and source
+IDs as strings (in the summary row too), since 19-digit Gaia IDs
+exceed the integers a browser represents exactly. `/api/source` returns
+`source_id`, `kind`, `data` (arrays and units), `summary`, and per stage its
+`status`, `mcmc_status`, `error`, `warnings` and, when it has samples,
+`params`, `units`, `curves` or `curves_error` (and `weight` for
+rejection). `/api/catalog` returns whole columns, so the catalog view scales to
 roughly 10^6 sources before payload size dominates; larger runs should filter
 first.
 
@@ -1058,8 +1091,10 @@ takes `--kind rv|gaia_astrometry` (default `rv`).
 
 `SourceResult` is a frozen dataclass with fields `source_id`, `data`
 (`RVData | GaiaAstrometryData`), `rejection` and `mcmc` (`Samples | None`),
-`rejection_status` and `mcmc_status` (`str`), and `summary`
-(`dict[str, Any] | None`).
+`rejection_status` and `mcmc_status` (`str`), `summary`
+(`dict[str, Any] | None`), and `rejection_row` and `mcmc_row` (the stage's
+sources-table row as a dict, with its `error` and `warnings`, or `None`
+while pending).
 
 `Run`, `Config`, and `SourceResult` are `@final`, following the
 abstract-final pattern; hq has no abstract bases in this version.
@@ -1081,7 +1116,7 @@ ______________________________________________________________________
 | `pyarrow`                       | every Parquet file hq reads and writes       |
 | `h5py`                          | provenance attribute on the harv prior cache |
 | `arviz`                         | MCMC convergence diagnostics (lazy import)   |
-| `fastapi`, `uvicorn`, `jinja2`  | the web viewer                               |
+| `fastapi`, `uvicorn`, `jinja2`  | the web viewer (imported only by it)         |
 | `mpi4py` (extra `harv-hq[mpi]`) | `--mpi`                                      |
 
 `hq` pins `harv` to its own version (they are released in lockstep from one

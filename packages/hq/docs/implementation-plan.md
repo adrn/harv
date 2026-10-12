@@ -30,7 +30,7 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 4     | execution modes: shards, pool, MPI                     | Done (PR #63)                                     |
 | 5     | compaction, summarize, status                          | Done (PR #65)                                     |
 | 6     | MCMC follow-up                                         | Implemented on branch `hq-phase6`, awaiting merge |
-| 7     | web viewer                                             | Not started                                       |
+| 7     | web viewer                                             | Implemented on branch `hq-phase7`, awaiting merge |
 | 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
 
 ______________________________________________________________________
@@ -572,7 +572,42 @@ summary raises. `select_for_mcmc` overrides the rule. Resume as in phase 3.
 
 ______________________________________________________________________
 
-## Phase 7: web viewer
+## Phase 7: web viewer — awaiting merge
+
+Implemented on branch `hq-phase7`, off `hq-phase6` (it needs MCMC results to
+show). Deviations from the text below: the joined table is
+`summary.parquet` itself, which already holds the catalog columns
+(`catalog.parquet` before `hq summarize`). The app reuses `Run.load_source`
+instead of its own `ResultsIndex`es, and `SourceResult` gains `rejection_row`
+/ `mcmc_row` (each stage's sources-table row, for the error and warnings;
+spec updated). No `jax.jit` or startup warm-up: under `jax.vmap` alone, 64
+samples on a 4,096-point grid take a few milliseconds after the first
+request. Source IDs travel to the browser as strings (19-digit Gaia IDs
+overflow JS numbers). Rejection samples are drawn without replacement in
+proportion to weight; MCMC samples are evenly spaced. RV curves drop any
+`MultiSurveyOffset` (data points are shown without offsets). For Gaia, the
+residual panel shows the selected sample nearest the median period. `hq serve` uses `[serve]` host and port only (no CLI overrides). Responses are
+built with `JSONResponse` (which refuses NaN) rather than FastAPI's encoder.
+The CLI's `_not_implemented` stub is gone, since every subcommand now exists.
+The browser check (lasso, splom selection, phase fold) is still to do by
+hand. From our own review: FITS catalogs work (byte strings are decoded
+and big-endian numbers made native in `prepare`, which failed before this
+phase too); a stage whose curves fail (NaN periods, no shown samples) gets
+`curves_error` instead of failing the page; the summary row's `source_id`
+is a string; Fourier fits get no sky orbit or phase fold; the app loads
+`hq.toml` and the model once and swaps whole lock-built snapshots
+(`Run._fresh` gives each a new results index), detecting changes by inode
+and nanosecond mtime; sources files use 4,096-row groups and
+`results.read_source_row` reads one; curve values are rounded to six
+significant digits; `harv_hq.create_app` and `hq serve` import the web
+stack lazily; `catalog.js` attaches its selection handler before the first
+request and drops a sort on a removed column; `source.js` reports a failed
+request. From the Copilot review of PR #67: snapshots index every stage
+when built and serve the source's summary row from their own table;
+`catalog.js` drops responses older than the latest request, renders source
+IDs as links (keyboard access), and leaves `source_id` out of the plot
+controls; `source.js` clears the Gaia panels for a stage without curves;
+the search box has an accessible name.
 
 `web/app.py`, `create_app(run_dir)`: load config, model file setup,
 `catalog.parquet` joined to `summary.parquet` as a pyarrow `Table`, the

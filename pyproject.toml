@@ -152,6 +152,7 @@ test = [
     # The workspace companion package, so CI runs packages/hq/tests against
     # every harv change.
     "harv-hq",
+    "httpx>=0.27",  # fastapi.testclient, for the hq viewer tests
 ]
 nox = [
     "nox>=2026.4.10",

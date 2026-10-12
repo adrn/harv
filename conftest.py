@@ -1,8 +1,11 @@
 """Root conftest.py: configure float64 and runtime type checking."""
 
+import gc
 import os
+from collections.abc import Iterator
 
 import jax
+import pytest
 from jaxtyping import install_import_hook
 from sybil import Sybil
 from sybil.parsers.markdown import PythonCodeBlockParser
@@ -13,6 +16,20 @@ from sybil.parsers.markdown import PythonCodeBlockParser
 # harv's own warning. The suite must test the precision harv actually runs at, or its
 # tolerances measure the wrong thing.
 jax.config.update(name="jax_enable_x64", val=True)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _free_jax_caches() -> Iterator[None]:
+    """Drop JAX's compiled functions after each test module.
+
+    An xdist worker runs many modules, and each compiles its own models and
+    samplers for its own shapes. Kept for the whole session, they grew every
+    worker to 4-6 GB, and four of them exhausted a 16 GB CI runner.
+    """
+    yield
+    jax.clear_caches()
+    gc.collect()
+
 
 pytest_collect_file = Sybil(
     parsers=[PythonCodeBlockParser()],

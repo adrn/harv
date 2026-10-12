@@ -1,0 +1,90 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #1a1a1a;
+}
+body {
+  margin: 1.5rem;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+h1 {
+  font-size: 1.4rem;
+}
+h2 {
+  font-size: 1.1rem;
+  margin-top: 1.5rem;
+}
+a {
+  color: #1f77b4;
+}
+.hint {
+  color: #666;
+  font-size: 0.85rem;
+}
+.error {
+  color: #b00020;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+.plots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.plot {
+  width: 640px;
+  height: 460px;
+}
+.plot.wide {
+  width: 100%;
+  height: 560px;
+}
+.checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+}
+.table-wrap {
+  max-height: 32rem;
+  overflow: auto;
+}
+table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+th,
+td {
+  padding: 0.25rem 0.6rem;
+  text-align: right;
+  border-bottom: 1px solid #eee;
+}
+th {
+  cursor: pointer;
+  background: #f5f5f5;
+  position: sticky;
+  top: 0;
+}
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+#rows tbody tr:hover {
+  background: #eef6fb;
+}
+pre {
+  background: #f7f7f7;
+  padding: 0.6rem;
+  overflow: auto;
+  font-size: 0.8rem;
+}

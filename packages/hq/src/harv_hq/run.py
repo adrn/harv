@@ -6,6 +6,7 @@ subcommand is a thin wrapper around one method here.
 
 __all__ = ("Run", "SourceResult")
 
+import copy
 import functools
 import json
 import logging
@@ -48,7 +49,9 @@ from harv_hq.results import (
     SOURCES_SUFFIX,
     PartWriter,
     Payload,
+    ResultRecord,
     ResultsIndex,
+    read_source_row,
     read_source_samples,
     rescanning,
     supersede,
@@ -74,6 +77,8 @@ class SourceResult:
     rejection_status: str
     mcmc_status: str
     summary: dict[str, Any] | None
+    rejection_row: dict[str, Any] | None
+    mcmc_row: dict[str, Any] | None
 
 
 @final
@@ -112,6 +117,18 @@ class Run:
     def run_dir(self) -> Path:
         """The run directory."""
         return self.config.run_dir
+
+    def _fresh(self) -> "Run":
+        """A copy sharing the config and model file, with no cached index.
+
+        For the viewer: it sees new results without re-reading ``hq.toml``
+        or re-importing the model file, and readers of the old copy are
+        unaffected.
+        """
+        run = copy.copy(self)
+        run._indexes = {}
+        run._prepared = None
+        return run
 
     @property
     def model_file(self) -> ModelFile:
@@ -561,8 +578,10 @@ class Run:
         Returns
         -------
             Its data, its rejection and MCMC samples (``None`` when absent),
-            their statuses (``"pending"`` before a stage has a result), and
-            its summary row (``None`` until ``summarize`` has run).
+            their statuses (``"pending"`` before a stage has a result), its
+            summary row (``None`` until ``summarize`` has run), and each
+            stage's sources-table row (``None`` while pending), which holds
+            the error traceback, captured warnings, and diagnostics.
         """
         if self._prepared is None:
             self._prepared = PreparedData(self.run_dir)
@@ -570,11 +589,17 @@ class Run:
         key, source_data = next(iter(data.items()))
         samples: dict[str, Samples | None] = {}
         statuses: dict[str, str] = {}
+        rows: dict[str, dict[str, Any] | None] = {}
         for stage in STAGES:
             record = self._index(stage).records.get(key)
             statuses[stage] = "pending" if record is None else record.status
             samples[stage] = (
-                self._read_samples(stage, key) if statuses[stage] == "ok" else None
+                self._read(stage, key, read_source_samples)
+                if statuses[stage] == "ok"
+                else None
+            )
+            rows[stage] = (
+                None if record is None else self._read(stage, key, read_source_row)
             )
         return SourceResult(
             source_id=key,
@@ -584,6 +609,8 @@ class Run:
             rejection_status=statuses["rejection"],
             mcmc_status=statuses["mcmc"],
             summary=self._summary_row(key),
+            rejection_row=rows["rejection"],
+            mcmc_row=rows["mcmc"],
         )
 
     def _inputs(
@@ -631,10 +658,14 @@ class Run:
             self._indexes[stage] = ResultsIndex.build(self.run_dir / "results" / stage)
         return self._indexes[stage]
 
-    def _read_samples(self, stage: str, source_id: Any) -> Samples:
-        def read() -> Samples:
+    def _read[T](
+        self, stage: str, source_id: Any, reader: Callable[[ResultRecord], T]
+    ) -> T:
+        """``reader`` on the source's newest record, following compaction."""
+
+        def read() -> T:
             try:
-                return read_source_samples(self._index(stage).records[source_id])
+                return reader(self._index(stage).records[source_id])
             except FileNotFoundError:
                 # Merged away by compaction since the index was built.
                 self._indexes.pop(stage, None)

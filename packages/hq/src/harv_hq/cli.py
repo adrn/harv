@@ -1,8 +1,7 @@
 """The ``hq`` command-line interface: a thin wrapper around :mod:`harv_hq`.
 
 Every subcommand maps to one public function or ``Run`` method (spec,
-"Stages"). Subcommands whose stage is not implemented yet exit with a message
-saying so.
+"Stages").
 """
 
 __all__ = ("main",)
@@ -11,8 +10,9 @@ import argparse
 import logging
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
-from harv_hq.config import KINDS, ConfigError
+from harv_hq.config import KINDS, Config, ConfigError
 from harv_hq.init import init_run
 from harv_hq.provenance import ProvenanceError
 from harv_hq.run import Run
@@ -48,10 +48,6 @@ def parse_shard(text: str) -> tuple[int, int]:
         msg = f"need 0 <= i < N, got {text!r}"
         raise argparse.ArgumentTypeError(msg)
     return i, n
-
-
-def _not_implemented(args: argparse.Namespace) -> int:
-    sys.exit(f"hq {args.command}: not implemented yet")
 
 
 def _prepare(args: argparse.Namespace) -> int:
@@ -98,6 +94,18 @@ def _status(args: argparse.Namespace) -> int:
     for stage, counts in Run(args.run_dir).status().items():
         summary = ", ".join(f"{status} {n}" for status, n in sorted(counts.items()))
         print(f"{stage:10s} {summary or 'no results'}")  # noqa: T201
+    return 0
+
+
+def _serve(args: argparse.Namespace) -> int:
+    # Imported here so that the other subcommands (and pool workers, which
+    # import this package) do not load the web stack.
+    import uvicorn  # noqa: PLC0415
+
+    from harv_hq.web import create_app  # noqa: PLC0415
+
+    serve = Config.from_file(Path(args.run_dir) / "hq.toml").serve
+    uvicorn.run(create_app(args.run_dir), host=serve.host, port=serve.port)
     return 0
 
 
@@ -172,7 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add("summarize", "write summary.parquet", _summarize)
     add("status", "count sources by stage and status", _status)
-    add("serve", "serve the web viewer", _not_implemented)
+    add("serve", "serve the web viewer", _serve)
     return parser
 
 
