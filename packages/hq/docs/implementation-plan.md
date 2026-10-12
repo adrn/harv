@@ -602,7 +602,12 @@ and nanosecond mtime; sources files use 4,096-row groups and
 significant digits; `harv_hq.create_app` and `hq serve` import the web
 stack lazily; `catalog.js` attaches its selection handler before the first
 request and drops a sort on a removed column; `source.js` reports a failed
-request.
+request. From the Copilot review of PR #67: snapshots index every stage
+when built and serve the source's summary row from their own table;
+`catalog.js` drops responses older than the latest request, renders source
+IDs as links (keyboard access), and leaves `source_id` out of the plot
+controls; `source.js` clears the Gaia panels for a stage without curves;
+the search box has an accessible name.
 
 `web/app.py`, `create_app(run_dir)`: load config, model file setup,
 `catalog.parquet` joined to `summary.parquet` as a pyarrow `Table`, the

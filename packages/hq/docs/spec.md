@@ -968,8 +968,10 @@ index are reloaded when `summary.parquet` changes (its inode and
 modification time, since every write renames a new file into place) or
 appears or disappears; `hq.toml` and the model file are not reloaded, so
 the curves always use the model the server started with (restart it after
-editing them). A reload builds the new table and index together and swaps
-them in at once, so concurrent requests see one version or the other. The server binds `127.0.0.1` by default; for a
+editing them). A reload builds the new table and every stage's results
+index together and swaps them in at once, so concurrent requests see one
+version or the other, and a source page's summary row comes from the same
+version as its results. The server binds `127.0.0.1` by default; for a
 run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 
 ### Pages
