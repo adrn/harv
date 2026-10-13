@@ -1059,7 +1059,8 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 
 - Data panel. RV: RV versus time with posterior orbit curves for a subset of
   samples, and a phase-fold toggle (folded on the selected sample nearest the
-  median period). Gaia astrometry: the sky-plane orbit and along-scan
+  median period). SB2: the same, with both stars' data and curves in two
+  colors on one panel, folded together. Gaia astrometry: the sky-plane orbit and along-scan
   residuals versus time.
 - A posterior scatter matrix (Plotly `splom`) with a parameter picker.
   Selecting points in it limits the orbit curves to those samples. For Gaia
@@ -1072,7 +1073,9 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
 Orbit curves are computed on request, not stored. The server uses the model
 from `make_setup` and evaluates, under `jax.vmap` over the samples,
 `RVModel.predict_at_times` on a grid from `harv.plot.get_time_grid` (capped
-at 4096 points, around the median period), or
+at 4096 points, around the median period), for `sb2` once per star on one
+grid over both stars' times (each star's `Samples.component(name)` with its
+component of the `JointModel`), or
 `GaiaAstrometryModel.predict_orbit_sky` over one period (256 points) plus
 the along-scan residuals at the data (`al_position` minus
 `GaiaAstrometryModel.predict`). A `MultiSurveyOffset` is bound to the data's
@@ -1106,10 +1109,13 @@ column returns 400, and an unknown source ID 404. Non-finite values are
 encoded as JSON `null`, byte strings and timestamps as strings, and source
 IDs as strings (in the summary row too), since 19-digit Gaia IDs
 exceed the integers a browser represents exactly. `/api/source` returns
-`source_id`, `kind`, `data` (arrays and units), `summary`, and per stage its
+`source_id`, `kind`, `data` (arrays and units; for `sb2` one such object per
+star, keyed `primary` and `secondary`), `summary`, and per stage its
 `status`, `mcmc_status`, `error`, `warnings` and, when it has samples,
 `params`, `units`, `curves` or `curves_error` (and `weight` for
-rejection). `/api/catalog` returns whole columns, so the catalog view scales to
+rejection). RV `curves` hold `time` (the grid) and `rv` (one row per shown
+sample); `sb2` curves hold `time`, `primary`, and `secondary`; Gaia curves
+hold `residual` and, with Campbell elements, `ra` and `dec`. `/api/catalog` returns whole columns, so the catalog view scales to
 roughly 10^6 sources before payload size dominates; larger runs should filter
 first.
 

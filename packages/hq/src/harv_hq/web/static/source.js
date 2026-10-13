@@ -6,8 +6,17 @@
 
 const $ = (id) => document.getElementById(id);
 const wrap01 = (x) => ((x % 1) + 1) % 1;
-const CURVE = "rgba(31,119,180,0.15)";
-const DEFAULT_DIMS = ["period", "eccentricity", "rv_semiamp", "semi_major_axis"];
+// Data and curve colors, per SB2 star; an RV run uses the first.
+const COLORS = { primary: [31, 119, 180], secondary: [214, 39, 40] };
+const rgba = (c, a) => `rgba(${c.join(",")},${a})`;
+const DEFAULT_DIMS = [
+  "period",
+  "eccentricity",
+  "rv_semiamp",
+  "semi_major_axis",
+  "primary.rv_semiamp",
+  "secondary.rv_semiamp",
+];
 
 let DATA = null;
 let stage = null; // the sample set shown: "rejection" or "mcmc"
@@ -32,7 +41,7 @@ function referenceIndex(indices) {
 }
 
 // Many curves as one trace, separated by nulls.
-function curvesTrace(xs, ys, indices, type = "scattergl") {
+function curvesTrace(xs, ys, indices, type = "scattergl", color = COLORS.primary) {
   const x = [],
     y = [];
   for (const i of indices) {
@@ -40,49 +49,63 @@ function curvesTrace(xs, ys, indices, type = "scattergl") {
     x.push(...xi, null);
     y.push(...ys[i], null);
   }
-  return { x, y, type, mode: "lines", line: { color: CURVE, width: 1 }, hoverinfo: "skip" };
+  return { x, y, type, mode: "lines", line: { color: rgba(color, 0.15), width: 1 }, hoverinfo: "skip" };
 }
 
-function errorTrace(x, y, err) {
+function errorTrace(x, y, err, color = "black", name = "") {
   return {
     x,
     y,
+    name,
     type: "scatter",
     mode: "markers",
-    marker: { color: "black", size: 6 },
-    error_y: { type: "data", array: err, color: "black" },
+    marker: { color, size: 6 },
+    error_y: { type: "data", array: err, color },
   };
 }
 
+// The RV panel's series: the one dataset of an RV run, or both SB2 stars,
+// each with its data, its curves, and its color.
+function rvSeries() {
+  const c = S().curves;
+  if (DATA.kind === "rv") return [{ name: "", d: DATA.data, curves: c && c.rv, color: COLORS.primary, dots: "black" }];
+  return Object.entries(COLORS).map(([name, color]) => ({
+    name,
+    d: DATA.data[name],
+    curves: c && c[name],
+    color,
+    dots: rgba(color, 1),
+  }));
+}
+
 function renderRv(indices) {
-  const d = DATA.data,
-    u = d.units,
+  const series = rvSeries(),
+    u = series[0].d.units,
     c = S().curves;
-  const layout = { showlegend: false, margin: { t: 30 }, yaxis: { title: `RV [${u.rv}]` } };
+  const layout = {
+    showlegend: DATA.kind === "sb2",
+    margin: { t: 30 },
+    yaxis: { title: `RV [${u.rv}]` },
+    xaxis: { title: `time [${u.time}]` },
+  };
   const ref = c && $("fold").checked ? referenceIndex(indices) : null;
-  if (!c) {
-    layout.xaxis = { title: `time [${u.time}]` };
-    Plotly.react($("data-plot"), [errorTrace(d.time, d.rv, d.rv_err)], layout);
-    return;
-  }
+  const dots = (s, x) => errorTrace(x, s.d.rv, s.d.rv_err, s.dots, s.name);
   if (ref === null) {
-    layout.xaxis = { title: `time [${u.time}]` };
-    Plotly.react($("data-plot"), [curvesTrace(c.time, c.rv, indices), errorTrace(d.time, d.rv, d.rv_err)], layout);
+    const curves = c ? series.map((s) => curvesTrace(c.time, s.curves, indices, "scattergl", s.color)) : [];
+    for (const t of curves) t.showlegend = false;
+    Plotly.react($("data-plot"), [...curves, ...series.map((s) => dots(s, s.d.time))], layout);
     return;
   }
   const P = S().params.period[ref],
     t0 = S().params.time_peri[ref];
   const phase = (t) => wrap01((t - t0) / P);
-  const pts = c.time.map((t, k) => [phase(t), c.rv[ref][k]]).sort((a, b) => a[0] - b[0]);
   layout.xaxis = { title: `phase (P = ${P.toPrecision(5)} ${S().units.period})`, range: [0, 1] };
-  Plotly.react(
-    $("data-plot"),
-    [
-      { x: pts.map((p) => p[0]), y: pts.map((p) => p[1]), mode: "lines", line: { color: "rgb(31,119,180)" } },
-      errorTrace(d.time.map(phase), d.rv, d.rv_err),
-    ],
-    layout,
-  );
+  const folded = series.map((s) => {
+    const pts = c.time.map((t, k) => [phase(t), s.curves[ref][k]]).sort((a, b) => a[0] - b[0]);
+    const line = { color: rgba(s.color, 1) };
+    return { x: pts.map((p) => p[0]), y: pts.map((p) => p[1]), mode: "lines", line, showlegend: false };
+  });
+  Plotly.react($("data-plot"), [...folded, ...series.map((s) => dots(s, s.d.time.map(phase)))], layout);
 }
 
 function renderGaia(indices) {
@@ -119,7 +142,7 @@ function renderGaia(indices) {
 
 function renderData() {
   const indices = selected.length ? selected : S().params.period.map((_, i) => i);
-  (DATA.kind === "rv" ? renderRv : renderGaia)(indices);
+  (DATA.kind === "gaia_astrometry" ? renderGaia : renderRv)(indices);
 }
 
 function renderSplom() {
@@ -148,7 +171,7 @@ function renderSplom() {
 function buildStage() {
   const s = S();
   // Folding needs the time of periastron, which a Fourier fit lacks.
-  $("fold-label").hidden = DATA.kind !== "rv" || !s.params.time_peri;
+  $("fold-label").hidden = DATA.kind === "gaia_astrometry" || !s.params.time_peri;
   if ($("fold-label").hidden) $("fold").checked = false;
   $("curves-error").textContent = s.curves_error ? `No curves: ${s.curves_error}` : "";
   const dims = $("dims");
@@ -203,7 +226,7 @@ async function main() {
   $("statuses").textContent =
     `rejection: ${st.rejection.status} · mcmc: ${st.mcmc.mcmc_status || st.mcmc.status}`;
   $("fold-label").hidden = true; // shown by buildStage when it can fold
-  $("second-plot").hidden = DATA.kind === "rv";
+  $("second-plot").hidden = DATA.kind !== "gaia_astrometry";
   renderSummary();
 
   const withSamples = Object.keys(st).filter((k) => st[k].params);

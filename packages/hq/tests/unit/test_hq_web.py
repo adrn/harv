@@ -106,6 +106,17 @@ def gaia_client(tmp_path_factory, gaia_run_factory):
     return TestClient(create_app(fixture.run_dir)), fixture
 
 
+@pytest.fixture(scope="module")
+def sb2_client(tmp_path_factory, sb2_run_factory):
+    fixture = sb2_run_factory(tmp_path_factory.mktemp("web-sb2"))
+    run = Run(fixture.run_dir)
+    run.prepare()
+    run.make_prior_cache()
+    run.run_rejection()
+    run.summarize()
+    return TestClient(create_app(fixture.run_dir)), fixture
+
+
 def summary(rv_dir):
     return pq.read_table(rv_dir / SUMMARY_FILE)
 
@@ -258,6 +269,30 @@ class TestSourcePayload:
         assert np.shape(curves["residual"]) == (n, n_obs)
         assert client.get("/api/source/12345").status_code == 404
         assert client.get("/api/source/not-an-int").status_code == 404
+
+    def test_sb2(self, sb2_client):
+        client, fixture = sb2_client
+        body = client.get("/api/source/103").json()
+        assert body["kind"] == "sb2"
+        table = fixture.table[fixture.table["source_id"] == 103]
+        for name, label in (("primary", 1), ("secondary", 2)):
+            data = body["data"][name]
+            assert len(data["rv"]) == np.sum(table["component"] == label)
+            assert data["units"]["rv"] == "km / s"
+
+        rejection = body["stages"]["rejection"]
+        assert "primary.rv_semiamp" in rejection["params"]
+        assert "mass_ratio_p50" in body["summary"]
+        curves = rejection["curves"]
+        n = len(rejection["params"]["period"])
+        for name in ("primary", "secondary"):
+            assert np.shape(curves[name]) == (n, len(curves["time"]))
+        # The stars move in antiphase about the shared systemic velocity.
+        primary, secondary = (
+            np.asarray(curves[k][0]) for k in ("primary", "secondary")
+        )
+        assert np.corrcoef(primary, secondary)[0, 1] < -0.99
+        assert client.get("/source/103").status_code == 200
 
 
 class TestReload:

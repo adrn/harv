@@ -15,7 +15,7 @@ __all__ = (
 
 import logging
 import math
-from typing import Any
+from typing import Any, cast
 
 import jax
 import numpy as np
@@ -25,10 +25,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from unxt import Q, ustrip
 
-from harv.data import GaiaAstrometryData, RVData
+from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.plot import _strip_multi_survey_offsets, get_time_grid
 from harv.samplers import Samples
 from harv.samplers.samples import _assemble_sample_params
+from harv_hq.config import SB2_COMPONENTS
+from harv_hq.prepare import PreparedSource
 from harv_hq.run import STAGES, SourceResult
 from harv_hq.summary_stats import _value_and_unit
 
@@ -175,9 +177,10 @@ def source_payload(result: SourceResult, model: Any) -> dict[str, Any]:
 
     Returns
     -------
-        ``source_id``, ``kind``, ``data`` (arrays and units), ``summary``, and
-        per stage its ``status``, ``error``, ``warnings``, and, when it has
-        samples, up to :data:`MAX_CURVE_SAMPLES` of them with their curves.
+        ``source_id``, ``kind``, ``data`` (arrays and units, per star for
+        ``sb2``), ``summary``, and per stage its ``status``, ``error``,
+        ``warnings``, and, when it has samples, up to
+        :data:`MAX_CURVE_SAMPLES` of them with their curves.
     """
     data = result.data
     stages = {}
@@ -202,7 +205,7 @@ def source_payload(result: SourceResult, model: Any) -> dict[str, Any]:
     return {
         # 19-digit IDs overflow JS numbers, so IDs travel as strings.
         "source_id": str(result.source_id),
-        "kind": "rv" if isinstance(data, RVData) else "gaia_astrometry",
+        "kind": _kind(data),
         "data": _data_payload(data),
         "summary": summary,
         "stages": stages,
@@ -228,7 +231,18 @@ def _shown(samples: Samples, *, weighted: bool) -> np.ndarray:
     return np.sort(rng.choice(nonzero, MAX_CURVE_SAMPLES, replace=False, p=p))
 
 
-def _data_payload(data: RVData | GaiaAstrometryData) -> dict[str, Any]:
+def _kind(data: PreparedSource) -> str:
+    if isinstance(data, SystemData):
+        return "sb2"
+    return "rv" if isinstance(data, RVData) else "gaia_astrometry"
+
+
+def _data_payload(data: PreparedSource) -> dict[str, Any]:
+    """The data's arrays and units; per component (``primary``, ...) for SB2."""
+    if isinstance(data, SystemData):
+        return {
+            name: _data_payload(cast("RVData", data[name])) for name in SB2_COMPONENTS
+        }
     if isinstance(data, RVData):
         columns = {"time": data.time, "rv": data.rv, "rv_err": data.rv_err}
     else:
@@ -244,7 +258,7 @@ def _data_payload(data: RVData | GaiaAstrometryData) -> dict[str, Any]:
 
 
 def _samples_payload(
-    samples: Samples, data: RVData | GaiaAstrometryData, model: Any
+    samples: Samples, data: PreparedSource, model: Any
 ) -> dict[str, Any]:
     # Some derived keys are plain arrays, not Quantities.
     params = {name: _value_and_unit(samples[name]) for name in samples.keys()}  # noqa: SIM118
@@ -257,7 +271,9 @@ def _samples_payload(
     # A bad sample set (NaN draws, an unusual parameterization) loses its
     # curves, not the whole page.
     try:
-        if isinstance(data, RVData):
+        if isinstance(data, SystemData):
+            payload["curves"] = _sb2_curves(samples, data, model)
+        elif isinstance(data, RVData):
             payload["curves"] = _rv_curves(samples, data, model)
         else:
             payload["curves"] = _gaia_curves(samples, data, model)
@@ -281,18 +297,22 @@ def _curve_json(values: Any) -> Any:
     return jsonable(array)
 
 
-def _rv_curves(samples: Samples, data: RVData, model: Any) -> dict[str, Any]:
-    """RV on a grid over the baseline, one row per sample."""
-    # A MultiSurveyOffset is bound to the data's rows, so it cannot be
-    # evaluated on a grid; the curves are drawn without the offsets.
-    model = _strip_multi_survey_offsets(model)
+def _rv_grid(samples: Samples, time: Any) -> Any:
+    """A time grid over ``time`` resolving the median sampled period."""
     periods = np.asarray(samples["period"].value)
     periods = periods[np.isfinite(periods)]
     if not periods.size:
         msg = "no sample has a finite period"
         raise ValueError(msg)
     period = Q(np.median(periods), samples["period"].unit)
-    grid = get_time_grid(data.time, period, max_time_grid=MAX_TIME_GRID)
+    return get_time_grid(time, period, max_time_grid=MAX_TIME_GRID)
+
+
+def _rv_on_grid(samples: Samples, data: RVData, model: Any, grid: Any) -> Any:
+    """RV on ``grid``, one row per sample, rounded for JSON."""
+    # A MultiSurveyOffset is bound to the data's rows, so it cannot be
+    # evaluated on a grid; the curves are drawn without the offsets.
+    model = _strip_multi_survey_offsets(model)
     unit = str(data.rv.unit)
     nonlinear, linear = _assemble_sample_params(samples, model, data)
 
@@ -301,9 +321,39 @@ def _rv_curves(samples: Samples, data: RVData, model: Any) -> dict[str, Any]:
             nl, lin, grid, time_ref=data.time_ref, obs_unit=unit
         )
 
+    return _curve_json(jax.vmap(curve)(nonlinear, linear))
+
+
+def _rv_curves(samples: Samples, data: RVData, model: Any) -> dict[str, Any]:
+    """RV on a grid over the baseline, one row per sample."""
+    grid = _rv_grid(samples, data.time)
     return {
         "time": jsonable(np.asarray(grid.value)),
-        "rv": _curve_json(jax.vmap(curve)(nonlinear, linear)),
+        "rv": _rv_on_grid(samples, data, model, grid),
+    }
+
+
+def _sb2_curves(samples: Samples, data: SystemData, model: Any) -> dict[str, Any]:
+    """Each star's RV on one grid over both stars' baseline, one row per sample.
+
+    Each star is the RV case on its own component of the samples and model.
+    """
+    time = Q(
+        np.concatenate([ustrip("day", data[name].time) for name in SB2_COMPONENTS]),
+        "day",
+    )
+    grid = _rv_grid(samples, time)
+    return {
+        "time": jsonable(np.asarray(grid.value)),
+        **{
+            name: _rv_on_grid(
+                samples.component(name),
+                cast("RVData", data[name]),
+                model.components[name],
+                grid,
+            )
+            for name in SB2_COMPONENTS
+        },
     }
 
 
