@@ -13,10 +13,15 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, final
 
-from harv.models import GaiaAstrometryModel, HarvPrior, RVModel
-from harv_hq.config import ConfigError
+from harv.models import GaiaAstrometryModel, HarvPrior, JointModel, RVModel
+from harv_hq.config import SB2_COMPONENTS, ConfigError
 
-_MODEL_TYPES = {"rv": RVModel, "gaia_astrometry": GaiaAstrometryModel}
+_MODEL_TYPES = {
+    "rv": RVModel,
+    "gaia_astrometry": GaiaAstrometryModel,
+    "sb2": JointModel,
+}
+Model = RVModel | GaiaAstrometryModel | JointModel
 
 
 @final
@@ -30,7 +35,7 @@ class ModelFile:
     def __init__(self, path: Path, module: ModuleType) -> None:
         self.path = path
         self._module = module
-        self._setup: tuple[HarvPrior, RVModel | GaiaAstrometryModel] | None = None
+        self._setup: tuple[HarvPrior, Model] | None = None
         if not callable(getattr(module, "make_setup", None)):
             msg = f"model file {path} does not define make_setup()"
             raise ConfigError(msg)
@@ -79,14 +84,14 @@ class ModelFile:
         """The optional ``select_for_mcmc(row)`` hook, or ``None``."""
         return getattr(self._module, "select_for_mcmc", None)
 
-    def setup(self, kind: str) -> tuple[HarvPrior, RVModel | GaiaAstrometryModel]:
+    def setup(self, kind: str) -> tuple[HarvPrior, Model]:
         """Call ``make_setup()`` once, check its result, and cache it.
 
         Parameters
         ----------
         kind
-            The run kind (``"rv"`` or ``"gaia_astrometry"``) the model must
-            match.
+            The run kind (``"rv"``, ``"gaia_astrometry"`` or ``"sb2"``) the
+            model must match.
 
         Returns
         -------
@@ -96,7 +101,9 @@ class ModelFile:
         ------
         ConfigError
             If ``make_setup`` does not return a ``(HarvPrior, model)`` pair
-            whose model matches ``kind``.
+            whose model matches ``kind``. For ``"sb2"``, the model must be a
+            ``JointModel`` of two ``RVModel`` components named ``primary``
+            and ``secondary``.
         """
         if self._setup is None:
             result = self._module.make_setup()
@@ -119,6 +126,17 @@ class ModelFile:
             msg = (
                 f"make_setup() in {self.path} returned a {type(model).__name__}, "
                 f"but kind = {kind!r} requires a {expected.__name__}"
+            )
+            raise ConfigError(msg)
+        if isinstance(model, JointModel) and not (
+            sorted(model.components) == sorted(SB2_COMPONENTS)
+            and all(isinstance(c, RVModel) for c in model.components.values())
+        ):
+            found = {k: type(c).__name__ for k, c in model.components.items()}
+            msg = (
+                f"make_setup() in {self.path} returned a JointModel with "
+                f"components {found}; kind = 'sb2' requires RVModel components "
+                f"named {list(SB2_COMPONENTS)} (JointModel.for_sb2)"
             )
             raise ConfigError(msg)
         return prior, model

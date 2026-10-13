@@ -1,0 +1,43 @@
+# hq run configuration. Every key is documented in harv-hq's spec,
+# "Configuration (hq.toml)". Relative paths resolve against this directory.
+
+[run]
+name = "my-sb2-run"
+kind = "sb2"
+seed = 42
+model_file = "prior.py"
+
+[data]
+# One row per RV measurement of one component, readable by
+# astropy.table.Table.read: an epoch where both stars were measured is two rows.
+file = "observations.fits"
+source_id = "source_id"
+time = "time"         # barycentric times
+time_format = "jd"    # astropy Time format
+time_scale = "tdb"    # astropy Time scale; converted to TCB
+rv = "rv"
+rv_err = "rv_err"
+rv_unit = "km/s"      # used only if the column carries no unit
+component = "component"                          # which star each RV belongs to
+components = { primary = "1", secondary = "2" }  # the column's label for each star
+
+[prepare]
+min_n_obs = 3         # applies to the better-sampled component
+# include_ids = "ids.txt"   # keep only these sources (one ID per line)
+# exclude_ids = "ids.txt"   # drop these sources
+
+# Optional: one row per source, joined onto the results for the viewer.
+# [catalog]
+# file = "catalog.fits"
+# source_id = "source_id"
+# columns = ["bp_rp", "abs_g"]
+
+[prior_cache]
+n_samples = 10_000_000
+
+[rejection]
+top_k = 512
+
+# Optional: MCMC follow-up of sources the rejection sampler under-resolves.
+# [mcmc]
+# select = "under_resolved"

@@ -37,9 +37,11 @@ hq handles everything around a single harv fit:
 | ----------------- | ----------------------------------------------------------------------------- | --------------------- |
 | `rv`              | RV epochs from one instrument of any survey (APOGEE, SDSS-V, DESI, Gaia, ...) | `RVModel`             |
 | `gaia_astrometry` | Gaia epoch astrometry (along-scan positions)                                  | `GaiaAstrometryModel` |
+| `sb2`             | RVs of both stars of a double-lined binary, from one instrument               | `JointModel.for_sb2`  |
 
 A run is one kind, read from one input table, and each source's data is a
-single `RVData` or `GaiaAstrometryData`. Multi-instrument RV, SB2, and joint
+single `RVData` or `GaiaAstrometryData`, or for `sb2` a
+`SystemData(primary=RVData, secondary=RVData)`. Multi-instrument RV and joint
 RV + astrometry runs are planned (see "Planned features").
 
 ### Non-goals
@@ -148,9 +150,11 @@ Beyond types, these values are checked: `run.kind`, `mcmc.select`, and
 their allowed values; `data.time_format` and `data.time_scale` against
 astropy's `Time.FORMATS` and `Time.SCALES`; every count and size
 (`min_n_obs`, `n_samples`, `top_k`, `batch_size`, `num_*`, `flush_*`,
-`compact_n_sources`) must be positive; and `[data]` must hold the keys of
-`run.kind` and none of the other kind's. An integer is accepted where a float
-is expected, but a boolean is never accepted as a number.
+`compact_n_sources`) must be positive; `[data]` must hold the keys of
+`run.kind` and none that belong only to another kind; and `data.components`
+must name exactly `primary` and `secondary`, with distinct labels. An
+integer is accepted where a float is expected, but a boolean is never
+accepted as a number.
 
 Each table is an attribute of `Config` holding a frozen dataclass of its keys
 (`config.run.seed`, `config.data.rv`, ...). The optional `[catalog]` and
@@ -165,7 +169,7 @@ holding `hq.toml`.
 | Key          | Type  | Default      | Description                                              |
 | ------------ | ----- | ------------ | -------------------------------------------------------- |
 | `name`       | `str` | required     | Run name, recorded in provenance and shown in the viewer |
-| `kind`       | `str` | required     | `"rv"` or `"gaia_astrometry"`                            |
+| `kind`       | `str` | required     | `"rv"`, `"gaia_astrometry"`, or `"sb2"`                  |
 | `seed`       | `int` | required     | Root seed; every PRNG key in the run derives from it     |
 | `model_file` | `str` | `"prior.py"` | Path to the model file                                   |
 
@@ -190,13 +194,29 @@ Every row is treated as coming from one instrument. A table that mixes
 instruments (e.g. APOGEE's two telescopes) must be cut to one with
 `select_rows` until multi-instrument support exists.
 
-Keys for `kind = "rv"`:
+Keys for `kind = "rv"` (and `"sb2"`):
 
 | Key       | Type  | Default  | Description                                  |
 | --------- | ----- | -------- | -------------------------------------------- |
 | `rv`      | `str` | required | RV column                                    |
 | `rv_err`  | `str` | required | RV uncertainty column                        |
 | `rv_unit` | `str` | `"km/s"` | Unit applied when the column carries no unit |
+
+Keys for `kind = "sb2"`, besides the `rv` ones:
+
+| Key          | Type             | Default                            | Description                                  |
+| ------------ | ---------------- | ---------------------------------- | -------------------------------------------- |
+| `component`  | `str`            | required                           | Column saying which star each row's RV is of |
+| `components` | `dict[str, str]` | `{primary = "1", secondary = "2"}` | The `component` column's label for each star |
+
+An SB2 input table has one row per measurement of one star: an epoch where
+both stars were measured is two rows, one where only one was is one row. A
+table with both stars' RVs on one row is reshaped to this form before hq
+reads it. A label is compared as text with the column's values (integer
+columns as their decimal digits), and TOML integers are accepted as labels
+(`{primary = 1, secondary = 2}`). A row whose label is not one of the two
+raises `ConfigError` at prepare time, and a row with a missing label is
+dropped by the built-in cuts.
 
 Keys for `kind = "gaia_astrometry"`:
 
@@ -362,7 +382,9 @@ One prior and one model serve the whole run: `hq prior-cache` passes them to
 `harv.samplers.make_prior_cache`, and `hq run`, `hq mcmc` and the viewer use
 them for every source. Each process calls `make_setup` once. The model must
 match `run.kind` (`RVModel` for `rv`, `GaiaAstrometryModel` for
-`gaia_astrometry`), checked once with a `ConfigError` on mismatch.
+`gaia_astrometry`, and for `sb2` a `JointModel` whose components are
+`RVModel`s named `primary` and `secondary`, as `JointModel.for_sb2` with
+`default_sb2_prior` builds), checked once with a `ConfigError` on mismatch.
 
 ### Optional functions
 
@@ -372,8 +394,8 @@ def select_rows(table: astropy.table.Table) -> numpy.ndarray:
 ```
 
 Built-in cuts that always apply first: a non-missing source ID, finite (and
-non-masked) time, observation, and uncertainty, and uncertainty strictly
-positive.
+non-masked) time, observation, and uncertainty, uncertainty strictly
+positive, and for `sb2` a non-missing component label.
 
 ```python
 def select_for_mcmc(row: dict[str, Any]) -> bool:
@@ -472,10 +494,17 @@ from the rejection parts, which must all agree on it.
    columns are kept after the cuts.
 1. Convert times to TCB with astropy `Time`, and store them as MJD (TCB) in
    days.
-1. Sort all rows by `(source_id, time)` once, and find source boundaries from
-   the sorted IDs. No step scans the table per source.
+1. Sort all rows by `(source_id, time)` once (`(source_id, component, time)`
+   for `sb2`, so each star's rows are contiguous within the source's), and
+   find source boundaries from the sorted IDs. No step scans the table per
+   source.
 1. Drop sources with fewer than `min_n_obs` observations, and record the
-   number dropped in the log.
+   number dropped in the log. For `sb2`, `min_n_obs` applies to the
+   better-sampled star: a source is kept if either star has `min_n_obs`
+   measurements and the other has at least one, so a source with a sparsely
+   measured secondary is kept on its primary. A source with no measurement of
+   one star is dropped (it does not belong in an SB2 run), and the number of
+   such sources is logged.
 1. Write `data.parquet`, `data_index.parquet`, and `catalog.parquet`.
 
 `prepare` refuses to overwrite existing prepared files unless
@@ -486,7 +515,8 @@ sources, and sources dropped are logged.
 
 #### `data.parquet`
 
-One row per observation, sorted by `(source_id, time)`, written with row
+One row per observation, sorted by `(source_id, time)` (or
+`(source_id, component, time)`), written with row
 groups of 65,536 rows. Key-value metadata holds the provenance, the run
 `kind`, and a `data_id`, which every downstream output records: the first 32
 hex digits of a sha256 over the run kind, the units, and every prepared
@@ -494,12 +524,13 @@ column's dtype, shape, and bytes. Preparing the same rows again gives the
 same `data_id`, so `hq prepare --overwrite` after a `[catalog]` edit leaves
 every result valid; any change to the prepared rows gives a new one.
 
-| Column                                                            | Type      | Field metadata                              |
-| ----------------------------------------------------------------- | --------- | ------------------------------------------- |
-| `source_id`                                                       | int64/str |                                             |
-| `time`                                                            | float64   | `unit="day"`, `format="mjd"`, `scale="tcb"` |
-| `rv`, `rv_err`                                                    | float64   | `unit` (`rv` runs)                          |
-| `al_position`, `al_position_err`, `scan_angle`, `parallax_factor` | float64   | `unit` (`gaia_astrometry` runs)             |
+| Column                                                            | Type      | Field metadata                                 |
+| ----------------------------------------------------------------- | --------- | ---------------------------------------------- |
+| `source_id`                                                       | int64/str |                                                |
+| `time`                                                            | float64   | `unit="day"`, `format="mjd"`, `scale="tcb"`    |
+| `rv`, `rv_err`                                                    | float64   | `unit` (`rv` runs)                             |
+| `al_position`, `al_position_err`, `scan_angle`, `parallax_factor` | float64   | `unit` (`gaia_astrometry` runs)                |
+| `component`                                                       | int8      | `sb2` runs: 0 for `primary`, 1 for `secondary` |
 
 #### `data_index.parquet`
 
@@ -507,17 +538,20 @@ One row per prepared source: `source_id`, `row_start` (int64, the source's
 first row in `data.parquet`), and `n_obs` (int64). A source's observations are
 rows `row_start` to `row_start + n_obs` of `data.parquet`.
 
-`harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData`
+`harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData | SystemData`
 reads that row range and rebuilds the harv data object. `time_ref` is left to
-harv's default (the mean time). `harv_hq.read_sources(run_dir, source_ids)`
+harv's default (the mean time; for an `sb2` source's
+`SystemData(primary=..., secondary=...)`, the mean over both stars, which
+`SystemData` sets on both). `harv_hq.read_sources(run_dir, source_ids)`
 does the same for many sources with one read of the row groups they span and
 returns a `dict`; the pipeline stages use it to load a process's slice (see
 "Execution modes").
 
 #### `catalog.parquet`
 
-One row per prepared source: `source_id`, `n_obs`, `time_baseline` (days),
-then the `[catalog]` columns joined on `source_id` (left join: prepared
+One row per prepared source: `source_id`, `n_obs`, for `sb2` runs
+`n_obs_primary` and `n_obs_secondary` (`n_obs` is their sum),
+`time_baseline` (days, over every row), then the `[catalog]` columns joined on `source_id` (left join: prepared
 sources with no catalog row get nulls). Byte-string columns (as FITS stores
 text) are stored as strings. Catalog columns that collide with
 these names, or with `summary.parquet`'s own columns (see "Summary table":
@@ -927,6 +961,15 @@ memory, and stores them as columns of the sources table:
 `well_resolved` is rejection-only. Units are recorded in field metadata, in
 the unit of the samples.
 
+For `sb2` runs, the parameter columns carry harv's component-qualified names
+(`map_primary.rv_semiamp`, `secondary.rv_semiamp_p50`); the shared orbit and
+`v_sys` keep their bare names. The time-based statistics use both stars'
+observation times (harv's `Samples` methods accept the joint samples with the
+`SystemData`). One derived quantity is added: `mass_ratio`,
+`|K_primary| / |K_secondary|` per sample (the mass ratio
+`M_secondary / M_primary`), as `map_mass_ratio` and `mass_ratio_p16`,
+`_p50`, `_p84`, weighted like every other percentile.
+
 ### Weighted samples
 
 Top-K rejection samples are weighted (harv spec, "Top-K selection"); MCMC
@@ -1096,8 +1139,8 @@ run.status() -> dict[str, dict[str, int]]   # stage -> status -> count;
                                             # stale results (ProvenanceError)
 run.load_source(source_id) -> harv_hq.SourceResult
 
-harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData
-harv_hq.read_sources(run_dir, source_ids) -> dict[Any, RVData | GaiaAstrometryData]
+harv_hq.read_source(run_dir, source_id) -> RVData | GaiaAstrometryData | SystemData
+harv_hq.read_sources(run_dir, source_ids) -> dict[Any, RVData | GaiaAstrometryData | SystemData]
 harv_hq.create_app(run_dir) -> fastapi.FastAPI
 harv_hq.CompactReport                       # returned by run.compact
 
@@ -1109,10 +1152,11 @@ harv_hq.ConfigError, harv_hq.ProvenanceError
 `ProvenanceError` subclasses `RuntimeError` (an output built from different
 inputs). `init_run(run_dir, *, kind)` creates `run_dir` if needed, refuses a
 non-empty one with `FileExistsError`, and returns it as a `Path`; `hq init`
-takes `--kind rv|gaia_astrometry` (default `rv`).
+takes `--kind rv|gaia_astrometry|sb2` (default `rv`). The `sb2` template's
+model file uses `default_sb2_prior` and `JointModel.for_sb2`.
 
 `SourceResult` is a frozen dataclass with fields `source_id`, `data`
-(`RVData | GaiaAstrometryData`), `rejection` and `mcmc` (`Samples | None`),
+(`RVData | GaiaAstrometryData | SystemData`), `rejection` and `mcmc` (`Samples | None`),
 `rejection_status` and `mcmc_status` (`str`), `summary`
 (`dict[str, Any] | None`), and `rejection_row` and `mcmc_row` (the stage's
 sources-table row as a dict, with its `error` and `warnings`, or `None`
@@ -1166,7 +1210,8 @@ ______________________________________________________________________
 - Unit tests mirror `src/harv_hq/` under `packages/hq/tests/unit/`.
 - An end-to-end test builds a small run from simulated data
   (`harv.simulate.simulate_rv_sb1_data` written out as a survey-style table,
-  and `simulate_gaia_epoch_astrometry`), runs every stage with a small
+  `simulate_gaia_epoch_astrometry`, and an SB2 table with both stars on one
+  orbit), runs every stage with a small
   prior cache, and checks statuses, resume after a simulated crash (only
   buffered sources are lost), a change of shard count between invocations, an
   orphaned samples part being ignored, provenance refusals, and compaction
@@ -1191,16 +1236,6 @@ ______________________________________________________________________
   order agrees, with the reference instrument chosen from a configured
   preference order. Per-source parameter sets differ (each source's offsets),
   so the samples schema would need a defined union of columns.
-- **SB2 runs** (`kind = "sb2"`), needed for SDSS-V, where double-lined
-  sources are identified in advance and routed to their own run. Each source
-  becomes a `SystemData(primary=RVData, secondary=RVData)` fit with
-  `JointModel.for_sb2` and `default_sb2_prior` (both already in harv; the
-  shared prior cache works because `make_prior_cache` accepts a
-  `JointModel`). Open questions: how the input table encodes the two
-  components (a component column with one row per component-epoch, or paired
-  `rv`/`rv2` columns per epoch), how component-qualified parameter names
-  (`primary.rv_semiamp`) appear as columns, a derived mass-ratio column, and a
-  two-component RV panel in the viewer.
 - **Joint RV + Gaia astrometry runs**, with `kind = "joint"` and
   `JointModel.for_rv_and_gaia`.
 - **Iterative rejection reruns** for under-resolved, multimodal sources (a

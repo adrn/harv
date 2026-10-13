@@ -1,12 +1,20 @@
 """``hq prepare``: turn a survey table into per-source data, and read it back.
 
 See ``packages/hq/docs/spec.md``, "``prepare``". The input table is sorted
-once by ``(source_id, time)``; source boundaries come from the sorted IDs, so
+once by ``(source_id, time)`` (``(source_id, component, time)`` for SB2
+runs); source boundaries come from the sorted IDs, so
 no step scans the table per source. Readers find a source's rows through
 ``data_index.parquet`` and read only the row groups that hold them.
 """
 
-__all__ = ("PreparedData", "prepare", "read_source", "read_sources")
+__all__ = (
+    "PreparedData",
+    "PreparedSource",
+    "n_obs",
+    "prepare",
+    "read_source",
+    "read_sources",
+)
 
 import hashlib
 import json
@@ -24,7 +32,7 @@ from astropy.table import Table
 from astropy.time import Time
 from unxt import Q
 
-from harv.data import GaiaAstrometryData, RVData
+from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv_hq._parquet_io import (
     field_units,
     groups_spanning,
@@ -33,7 +41,7 @@ from harv_hq._parquet_io import (
     row_group_starts,
     write_parquet,
 )
-from harv_hq.config import Config, ConfigError
+from harv_hq.config import SB2_COMPONENTS, Config, ConfigError
 from harv_hq.provenance import (
     CATALOG_TABLES,
     PREPARED_TABLES,
@@ -60,8 +68,24 @@ _VALUE_COLUMNS = {
         "scan_angle",
         "parallax_factor",
     ),
+    "sb2": ("rv", "rv_err"),
 }
-_RESERVED_CATALOG_COLUMNS = ("source_id", "n_obs", "time_baseline")
+_RESERVED_CATALOG_COLUMNS = (
+    "source_id",
+    "n_obs",
+    "time_baseline",
+    *(f"n_obs_{name}" for name in SB2_COMPONENTS),
+)
+
+# One source's prepared data, as harv takes it.
+PreparedSource = RVData | GaiaAstrometryData | SystemData
+
+
+def n_obs(data: PreparedSource) -> int:
+    """Observations in one source's data, over every component of a ``SystemData``."""
+    if isinstance(data, SystemData):
+        return sum(int(d.n_obs) for d in data.values())
+    return int(data.n_obs)
 
 
 def prepare(
@@ -115,13 +139,31 @@ def prepare(
         np.asarray(table[data.time]), format=data.time_format, scale=data.time_scale
     ).tcb.mjd
     values, units = _value_arrays(table, config)
+    if kind == "sb2":
+        values["component"] = _component_index(table, config)
+    component = values.get("component", np.zeros(len(time), dtype=np.int8))
 
-    order = np.lexsort((time, source_id))
-    source_id, time = source_id[order], time[order]
+    order = np.lexsort((time, component, source_id))
+    source_id, time, component = source_id[order], time[order], component[order]
     values = {name: arr[order] for name, arr in values.items()}
 
-    ids, starts, counts = np.unique(source_id, return_index=True, return_counts=True)
-    enough = counts >= config.prepare.min_n_obs
+    ids, inverse, counts = np.unique(source_id, return_inverse=True, return_counts=True)
+    # Observations per component (one component unless SB2). A source is kept
+    # if its best-sampled component has min_n_obs, and every component has one.
+    by_component = np.stack(
+        [
+            np.bincount(inverse[component == c], minlength=len(ids))
+            for c in range(len(SB2_COMPONENTS) if kind == "sb2" else 1)
+        ]
+    )
+    enough = (by_component.min(axis=0) > 0) & (
+        by_component.max(axis=0) >= config.prepare.min_n_obs
+    )
+    if kind == "sb2":
+        logger.info(
+            "prepare: %d sources lack measurements of one component",
+            int((by_component.min(axis=0) == 0).sum()),
+        )
     rows = np.repeat(enough, counts)
     source_id, time = source_id[rows], time[rows]
     values = {name: arr[rows] for name, arr in values.items()}
@@ -168,6 +210,11 @@ def prepare(
         ids=ids,
         n_obs=counts,
         time_baseline=baseline,
+        n_obs_components=(
+            dict(zip(SB2_COMPONENTS, by_component[:, enough], strict=True))
+            if kind == "sb2"
+            else {}
+        ),
         metadata=catalog_metadata,
     )
 
@@ -228,7 +275,29 @@ def _builtin_cuts(table: Table, config: Config) -> np.ndarray:
         keep &= ~_missing(column)
         keep &= np.isfinite(np.asarray(np.ma.getdata(column), dtype=float))
     keep &= np.asarray(np.ma.getdata(table[err_col]), dtype=float) > 0
+    if config.run.kind == "sb2":
+        keep &= ~_missing(table[data.component])
     return keep
+
+
+def _component_index(table: Table, config: Config) -> np.ndarray:
+    """Each row's index into ``SB2_COMPONENTS``, from ``[data] components``."""
+    data = config.data
+    if data.component is None or data.components is None:  # Config requires them
+        msg = "[data] component and components are required for kind = 'sb2'"
+        raise ConfigError(msg)
+    labels = _id_array(table[data.component]).astype(str)
+    index = np.full(len(labels), -1, dtype=np.int8)
+    for i, name in enumerate(SB2_COMPONENTS):
+        index[labels == data.components[name]] = i
+    unknown = sorted(set(labels[index < 0].tolist()))
+    if unknown:
+        msg = (
+            f"[data] component column {data.component!r} has label(s) "
+            f"{unknown[:5]} that [data] components ({data.components}) does not map"
+        )
+        raise ConfigError(msg)
+    return index
 
 
 def _id_list_mask(ids: np.ndarray, config: Config) -> np.ndarray:
@@ -298,11 +367,16 @@ def _write_catalog(
     ids: np.ndarray,
     n_obs: np.ndarray,
     time_baseline: np.ndarray,
+    n_obs_components: dict[str, np.ndarray],
     metadata: dict[str, Any],
 ) -> None:
     columns: dict[str, pa.Array] = {
         "source_id": pa.array(ids),
         "n_obs": pa.array(n_obs.astype(np.int64)),
+        **{
+            f"n_obs_{name}": pa.array(count.astype(np.int64))
+            for name, count in n_obs_components.items()
+        },
         "time_baseline": pa.array(time_baseline, type=pa.float64()),
     }
     units = {"time_baseline": "day"}
@@ -484,7 +558,7 @@ class PreparedData:
         order = sorted(ids, key=lambda sid: (self._ranges[sid][1], sid))
         return order[i::n]
 
-    def read(self, source_ids: Iterable[Any]) -> dict[Any, RVData | GaiaAstrometryData]:
+    def read(self, source_ids: Iterable[Any]) -> dict[Any, PreparedSource]:
         """Read many sources, touching only the row groups that hold them.
 
         Parameters
@@ -495,7 +569,8 @@ class PreparedData:
         Returns
         -------
             A dict from source ID (as stored: ``int`` or ``str``) to its harv
-            data object, in the order given.
+            data object (``SystemData(primary=..., secondary=...)`` for SB2
+            runs), in the order given.
 
         Raises
         ------
@@ -523,7 +598,7 @@ class PreparedData:
             position += int(self._group_starts[g + 1] - self._group_starts[g])
 
         columns = {name: table.column(name).to_numpy() for name in table.column_names}
-        out: dict[Any, RVData | GaiaAstrometryData] = {}
+        out: dict[Any, PreparedSource] = {}
         for key, (start, n) in zip(keys, ranges, strict=True):
             lo = start + offsets[groups_spanning(self._group_starts, start, n).start]
             out[key] = self._build({k: v[lo : lo + n] for k, v in columns.items()})
@@ -536,26 +611,38 @@ class PreparedData:
             raise KeyError(msg)
         return key
 
-    def _build(self, rows: dict[str, np.ndarray]) -> RVData | GaiaAstrometryData:
-        time = Q(rows["time"], "day")
+    def _build(self, rows: dict[str, np.ndarray]) -> PreparedSource:
         if self.kind == "rv":
-            return RVData(
-                time=time,
-                rv=Q(rows["rv"], self._units["rv"]),
-                rv_err=Q(rows["rv_err"], self._units["rv_err"]),
+            return self._rv(rows)
+        if self.kind == "sb2":
+            # Rows are sorted by component, so each is one contiguous run.
+            split = int(np.searchsorted(rows["component"], 1))
+            parts = (slice(None, split), slice(split, None))
+            return SystemData(
+                **{
+                    name: self._rv({k: v[part] for k, v in rows.items()})
+                    for name, part in zip(SB2_COMPONENTS, parts, strict=True)
+                }
             )
         return GaiaAstrometryData(
-            time=time,
+            time=Q(rows["time"], "day"),
             al_position=Q(rows["al_position"], self._units["al_position"]),
             al_position_err=Q(rows["al_position_err"], self._units["al_position_err"]),
             scan_angle=Q(rows["scan_angle"], self._units["scan_angle"]),
             parallax_factor=jnp.asarray(rows["parallax_factor"]),
         )
 
+    def _rv(self, rows: dict[str, np.ndarray]) -> RVData:
+        return RVData(
+            time=Q(rows["time"], "day"),
+            rv=Q(rows["rv"], self._units["rv"]),
+            rv_err=Q(rows["rv_err"], self._units["rv_err"]),
+        )
+
 
 def read_sources(
     run_dir: str | os.PathLike, source_ids: Iterable[Any]
-) -> dict[Any, RVData | GaiaAstrometryData]:
+) -> dict[Any, PreparedSource]:
     """Read many sources' prepared data, with one read of the row groups they span.
 
     Parameters
@@ -567,14 +654,13 @@ def read_sources(
 
     Returns
     -------
-        A dict from source ID to its ``RVData`` or ``GaiaAstrometryData``.
+        A dict from source ID to its ``RVData``, ``GaiaAstrometryData``, or
+        ``SystemData``.
     """
     return PreparedData(run_dir).read(source_ids)
 
 
-def read_source(
-    run_dir: str | os.PathLike, source_id: Any
-) -> RVData | GaiaAstrometryData:
+def read_source(run_dir: str | os.PathLike, source_id: Any) -> PreparedSource:
     """Read one source's prepared data.
 
     Parameters
@@ -586,7 +672,8 @@ def read_source(
 
     Returns
     -------
-        Its ``RVData`` or ``GaiaAstrometryData``; ``time_ref`` is harv's
-        default (the mean time).
+        Its ``RVData``, ``GaiaAstrometryData``, or ``SystemData``;
+        ``time_ref`` is harv's default (the mean time, of every component for
+        ``SystemData``).
     """
     return next(iter(PreparedData(run_dir).read([source_id]).values()))

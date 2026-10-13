@@ -41,10 +41,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import SampleColumns, Samples
 from harv_hq._parquet_io import field_units, read_metadata, read_rows, write_parquet
 from harv_hq.ids import stable_hash
+from harv_hq.prepare import PreparedSource, n_obs
 from harv_hq.provenance import check_provenance
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ class Payload:
 
 def process_source(
     source_id: Any,
-    data: RVData | GaiaAstrometryData,
+    data: PreparedSource,
     *,
     stage: str,
     compute: Callable[[], tuple[Samples, dict[str, Any], dict[str, str]]],
@@ -165,7 +165,7 @@ def process_source(
     row: dict[str, Any] = {
         "source_id": source_id,
         "seed_hash": stable_hash(source_id),
-        "n_obs": int(data.n_obs),
+        "n_obs": n_obs(data),
     }
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

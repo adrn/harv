@@ -26,7 +26,6 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import Samples, make_prior_cache
 from harv_hq._model_file import ModelFile
 from harv_hq._parquet_io import read_metadata
@@ -35,7 +34,7 @@ from harv_hq.config import Config, ConfigError
 from harv_hq.execution import Progress, Setup, mpi_comm, run_pool, run_serial
 from harv_hq.ids import prior_cache_key
 from harv_hq.mcmc import SELECTION_COLUMNS, mcmc_setup, select_sources
-from harv_hq.prepare import PreparedData, prepare
+from harv_hq.prepare import PreparedData, PreparedSource, prepare
 from harv_hq.provenance import (
     MCMC_TABLES,
     PRIOR_CACHE_TABLES,
@@ -71,7 +70,7 @@ class SourceResult:
     """Everything hq holds for one source (see ``Run.load_source``)."""
 
     source_id: Any
-    data: RVData | GaiaAstrometryData
+    data: PreparedSource
     rejection: Samples | None
     mcmc: Samples | None
     rejection_status: str

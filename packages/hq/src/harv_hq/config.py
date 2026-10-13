@@ -7,6 +7,7 @@ table and key.
 """
 
 __all__ = (
+    "SB2_COMPONENTS",
     "CatalogConfig",
     "Config",
     "ConfigError",
@@ -31,7 +32,7 @@ from typing import Any, Literal, final
 
 from astropy.time import Time
 
-Kind = Literal["rv", "gaia_astrometry"]
+Kind = Literal["rv", "gaia_astrometry", "sb2"]
 
 KINDS: tuple[str, ...] = typing.get_args(Kind)
 _MCMC_SELECT_RULES = ("under_resolved", "all")
@@ -48,11 +49,15 @@ _KIND_DATA_KEYS: dict[str, tuple[str, ...]] = {
         "al_position_unit",
         "scan_angle_unit",
     ),
+    "sb2": ("rv", "rv_err", "rv_unit", "component", "components"),
 }
-_KIND_DATA_DEFAULTS: dict[str, dict[str, str]] = {
+_KIND_DATA_DEFAULTS: dict[str, dict[str, Any]] = {
     "rv": {"rv_unit": "km/s"},
     "gaia_astrometry": {"al_position_unit": "mas", "scan_angle_unit": "deg"},
+    "sb2": {"rv_unit": "km/s", "components": {"primary": "1", "secondary": "2"}},
 }
+# The SB2 component names, in the order of data.parquet's component index.
+SB2_COMPONENTS = ("primary", "secondary")
 
 
 class ConfigError(ValueError):
@@ -102,10 +107,13 @@ class DataConfig:
     hdu: int | str | None = None
     time_format: str = "jd"
     time_scale: str = "tdb"
-    # kind = "rv"
+    # kind = "rv" and "sb2"
     rv: str | None = None
     rv_err: str | None = None
     rv_unit: str | None = None
+    # kind = "sb2"
+    component: str | None = None
+    components: dict[str, str] | None = None
     # kind = "gaia_astrometry"
     al_position: str | None = None
     al_position_err: str | None = None
@@ -117,6 +125,16 @@ class DataConfig:
     def __post_init__(self) -> None:
         _require_choice("data", "time_format", self.time_format, tuple(Time.FORMATS))
         _require_choice("data", "time_scale", self.time_scale, Time.SCALES)
+        if self.components is not None:
+            if sorted(self.components) != sorted(SB2_COMPONENTS):
+                msg = (
+                    f"[data] components must name exactly {list(SB2_COMPONENTS)}, "
+                    f"got {sorted(self.components)}"
+                )
+                raise ConfigError(msg)
+            if len(set(self.components.values())) != len(self.components):
+                msg = f"[data] components need distinct labels, got {self.components}"
+                raise ConfigError(msg)
 
 
 @final
@@ -360,7 +378,7 @@ def _check_data_kind(values: dict[str, Any], kind: Any) -> dict[str, Any]:
     for other, keys in _KIND_DATA_KEYS.items():
         if other == kind:
             continue
-        stray = sorted(set(values) & set(keys))
+        stray = sorted(set(values) & (set(keys) - set(_KIND_DATA_KEYS[kind])))
         if stray:
             msg = f"[data] key(s) {stray} are for kind = {other!r}, not {kind!r}"
             raise ConfigError(msg)
@@ -408,6 +426,8 @@ def _convert(table: str, key: str, value: Any, hint: Any, run_dir: Path) -> Any:
         return run_dir / value  # an absolute value replaces run_dir
     if origin in (typing.Union, types.UnionType):
         return _convert_union(table, key, value, hint, run_dir)
+    if origin is dict:
+        return _convert_labels(table, key, value, hint)
     if origin is list:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise _type_error(table, key, value, _describe(hint))
@@ -420,6 +440,19 @@ def _convert(table: str, key: str, value: Any, hint: Any, run_dir: Path) -> Any:
     if not isinstance(value, hint) or (hint is int and isinstance(value, bool)):
         raise _type_error(table, key, value, _describe(hint))
     return value
+
+
+def _convert_labels(table: str, key: str, value: Any, hint: Any) -> dict[str, str]:
+    """``dict[str, str]``, the only dict field (``[data] components``).
+
+    TOML integers are accepted as labels, since input tables often use 1 and 2.
+    """
+    ok = isinstance(value, dict) and all(
+        isinstance(v, (str, int)) and not isinstance(v, bool) for v in value.values()
+    )
+    if not ok:
+        raise _type_error(table, key, value, _describe(hint))
+    return {k: str(v) for k, v in value.items()}
 
 
 def _convert_union(table: str, key: str, value: Any, hint: Any, run_dir: Path) -> Any:
@@ -441,6 +474,8 @@ def _describe(hint: Any) -> str:
         )
     if typing.get_origin(hint) is list:
         return "a list of strings"  # list[str] is the only list field
+    if typing.get_origin(hint) is dict:
+        return "a table of string or integer labels"
     return {str: "a string", int: "an integer", float: "a number", bool: "a boolean"}[
         hint
     ]

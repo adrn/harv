@@ -10,6 +10,7 @@ __all__ = (
     "PERCENTILES",
     "SUMMARY_COLUMNS",
     "is_statistic",
+    "mass_ratio",
     "summary_stats",
     "weighted_resample",
 )
@@ -18,9 +19,9 @@ from typing import Any, cast
 
 import jax
 import numpy as np
-from unxt import AbstractQuantity
+from unxt import AbstractQuantity, ustrip
 
-from harv.data import GaiaAstrometryData, RVData
+from harv.data import GaiaAstrometryData, RVData, SystemData
 from harv.samplers import Samples
 
 PERCENTILES = (16, 50, 84)
@@ -32,6 +33,8 @@ NAMED_STATISTICS = (
     "phase_coverage",
     "periods_spanned",
 )
+# An SB2 fit's semi-amplitudes, from which mass_ratio is derived.
+_SB2_SEMIAMPS = ("primary.rv_semiamp", "secondary.rv_semiamp")
 # The summary table's own columns besides the catalog's and the statistics
 # (spec, "Summary table"); catalog columns may not use these names.
 SUMMARY_COLUMNS = (
@@ -113,9 +116,32 @@ def _value_and_unit(value: Any) -> tuple[np.ndarray, str]:
     return np.asarray(value, dtype=float), ""
 
 
+def mass_ratio(samples: Samples) -> np.ndarray:
+    """``|K_primary| / |K_secondary|`` per sample: the SB2 mass ratio ``M2 / M1``.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> samples = Samples(
+    ...     nonlinear={"period": Q([10.0, 20.0], "day")},
+    ...     linear={
+    ...         "primary.rv_semiamp": Q([10.0, 30.0], "km/s"),
+    ...         "secondary.rv_semiamp": Q([-20.0, -40.0], "km/s"),
+    ...     },
+    ... )
+    >>> mass_ratio(samples)
+    array([0.5 , 0.75])
+    """
+    primary, secondary = (samples[k] for k in _SB2_SEMIAMPS)
+    unit = primary.unit
+    return np.abs(np.asarray(ustrip(unit, primary))) / np.abs(
+        np.asarray(ustrip(unit, secondary))
+    )
+
+
 def summary_stats(
     samples: Samples,
-    data: RVData | GaiaAstrometryData,
+    data: RVData | GaiaAstrometryData | SystemData,
     *,
     resample_key: jax.Array | None = None,
     min_evidence_ess: float | None = None,
@@ -141,7 +167,8 @@ def summary_stats(
     Returns
     -------
         The statistics as a flat dict of Python scalars, and the unit of each
-        statistic that has one.
+        statistic that has one. Samples with both SB2 semi-amplitudes also
+        get ``mass_ratio`` (:func:`mass_ratio`) statistics.
     """
     stats: dict[str, Any] = {}
     units: dict[str, str] = {}
@@ -164,9 +191,15 @@ def summary_stats(
     stats["phase_coverage"] = float(map_sample.phase_coverage(data)[0])
     stats["periods_spanned"] = float(map_sample.periods_spanned(data)[0])
 
-    for name in samples.keys():  # noqa: SIM118 -- Samples.keys() adds derived keys
-        values, unit = _value_and_unit(samples[name])
-        map_value, _ = _value_and_unit(map_sample[name])
+    params: dict[str, tuple[Any, Any]] = {
+        name: (samples[name], map_sample[name])
+        for name in samples.keys()  # noqa: SIM118 -- Samples.keys() adds derived keys
+    }
+    if all(k in params for k in _SB2_SEMIAMPS):
+        params["mass_ratio"] = (mass_ratio(samples), mass_ratio(map_sample))
+    for name, (all_values, map_values) in params.items():
+        values, unit = _value_and_unit(all_values)
+        map_value, _ = _value_and_unit(map_values)
         percentiles = (
             _weighted_percentiles(values, weights)
             if weighted

@@ -26,11 +26,11 @@ import pyarrow as pa
 # pyarrow.compute generates its functions at import, so ty cannot see them.
 import pyarrow.compute as pc
 
-from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import NumpyroSampler, Samples
 from harv_hq._model_file import ModelFile
 from harv_hq.config import Config, MCMCConfig
 from harv_hq.ids import source_key
+from harv_hq.prepare import PreparedSource
 from harv_hq.results import (
     Payload,
     ResultRecord,
@@ -43,7 +43,7 @@ from harv_hq.summary_stats import summary_stats, weighted_resample
 
 # One task: the source's data and where its rejection samples live. Workers
 # read the samples themselves, so the parent holds only the index.
-MCMCInput = tuple[RVData | GaiaAstrometryData, ResultRecord]
+MCMCInput = tuple[PreparedSource, ResultRecord]
 # The summary columns the [mcmc] rule reads; with a select_for_mcmc hook,
 # every column is read.
 SELECTION_COLUMNS = (

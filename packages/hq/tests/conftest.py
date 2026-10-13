@@ -1,9 +1,9 @@
 """Shared fixtures: small survey-style runs built from harv's simulators.
 
-``rv_run`` and ``gaia_run`` write an input table (one row per observation, as a
-survey would deliver it), a catalog, and an ``hq.toml`` + ``prior.py`` from the
-``hq init`` templates, and return the run directory with the expected
-contents. Later phases build their end-to-end tests on these.
+``rv_run``, ``gaia_run`` and ``sb2_run`` write an input table (one row per
+observation, as a survey would deliver it), a catalog, and an ``hq.toml`` +
+``prior.py`` from the ``hq init`` templates, and return the run directory with
+the expected contents. Later phases build their end-to-end tests on these.
 """
 
 from dataclasses import dataclass
@@ -14,6 +14,7 @@ import pytest
 from astropy.table import Table
 from unxt import Q, ustrip
 
+from harv.kepler.orbits import rv_at_times
 from harv.simulate import simulate_gaia_epoch_astrometry, simulate_rv_sb1_data
 from harv_hq import init_run
 
@@ -39,9 +40,9 @@ def _write_config(run_dir, kind, data_file, extra=""):
     path = run_dir / "hq.toml"
     text = path.read_text()
     text = text.replace(
-        'file = "observations.fits"'
-        if kind == "rv"
-        else 'file = "epoch_astrometry.fits"',
+        'file = "epoch_astrometry.fits"'
+        if kind == "gaia_astrometry"
+        else 'file = "observations.fits"',
         f'file = "{data_file}"',
     )
     text = text.replace("n_samples = 10_000_000", "n_samples = 20_000")
@@ -171,4 +172,89 @@ def make_gaia_run(base):
     _write_config(run_dir, "gaia_astrometry", "epoch_astrometry.ecsv")
     return RunFixture(  # every source has >= 12 epochs; template min_n_obs = 10
         run_dir=run_dir, table=table, catalog=Table(), n_obs=n_obs, kept=n_obs
+    )
+
+
+# The orbit every sb2_run source shares. hq's mass_ratio is
+# |K_primary| / |K_secondary| = M_secondary / M_primary.
+SB2_ORBIT = {
+    "period": Q(137.0, "day"),
+    "eccentricity": 0.25,
+    "arg_peri": Q(1.1, "rad"),
+    "time_peri": Q(11.0, "day"),
+    "v_sys": Q(-8.0, "km/s"),
+}
+SB2_SEMIAMPS = (Q(28.0, "km/s"), Q(41.0, "km/s"))
+SB2_MASS_RATIO = 28.0 / 41.0
+# source_id -> (primary epochs, secondary epochs)
+SB2_EPOCHS = {
+    101: (24, 24),  # well sampled
+    102: (10, 6),
+    103: (8, 2),  # sparse secondary: kept, the primary has min_n_obs
+    104: (6, 0),  # no secondary: dropped
+    105: (2, 2),  # neither component has min_n_obs: dropped
+}
+
+
+@pytest.fixture
+def sb2_run(tmp_path):
+    """An SB2 run: 5 sources with integer IDs, long format, labels 1 and 2."""
+    return make_sb2_run(tmp_path)
+
+
+@pytest.fixture(scope="session")
+def sb2_run_factory():
+    """``make_sb2_run``, for fixtures with a wider scope than ``sb2_run``."""
+    return make_sb2_run
+
+
+def make_sb2_run(base):
+    """Write the ``sb2_run`` fixture's run under ``base`` (for wider scopes).
+
+    Both stars follow one orbit, the secondary at ``arg_peri + pi``, as in
+    harv's SB2 integration test. Each source's secondary is measured at a
+    subset of the primary's epochs, so some epochs have one row, some two.
+    """
+    run_dir = init_run(base / "run", kind="sb2")
+    rows = {k: [] for k in ("source_id", "time", "rv", "rv_err", "component")}
+    n_obs = {}
+    for sid, (n_1, n_2) in SB2_EPOCHS.items():
+        rng = np.random.default_rng(sid)
+        times = Q(np.sort(rng.uniform(0.0, 600.0, n_1)), "day")
+        for label, n, semiamp, shift, err in (
+            (1, n_1, SB2_SEMIAMPS[0], 0.0, 0.6),
+            (2, n_2, SB2_SEMIAMPS[1], np.pi, 0.8),
+        ):
+            t = times[np.sort(rng.choice(n_1, n, replace=False))]
+            rv = rv_at_times(
+                t,
+                SB2_ORBIT["period"],
+                SB2_ORBIT["eccentricity"],
+                SB2_ORBIT["time_peri"],
+                SB2_ORBIT["arg_peri"] + Q(shift, "rad"),
+                semiamp,
+                SB2_ORBIT["v_sys"],
+            )
+            rows["source_id"] += [sid] * n
+            rows["time"] += list(np.asarray(ustrip("day", t)) + JD_OFFSET)
+            rows["rv"] += list(
+                np.asarray(ustrip("km/s", rv)) + err * rng.normal(size=n)
+            )
+            rows["rv_err"] += [err] * n
+            rows["component"] += [label] * n
+        n_obs[sid] = n_1 + n_2
+    table = Table(rows)
+    table.write(run_dir / "observations.ecsv")
+
+    # A period range around the injected one, so a small cache resolves it.
+    prior = run_dir / "prior.py"
+    prior.write_text(
+        prior.read_text()
+        .replace('period_min=Q(2, "day")', 'period_min=Q(64, "day")')
+        .replace('period_max=Q(4096, "day")', 'period_max=Q(256, "day")')
+    )
+    _write_config(run_dir, "sb2", "observations.ecsv")
+    kept = {sid: n_obs[sid] for sid in (101, 102, 103)}
+    return RunFixture(
+        run_dir=run_dir, table=table, catalog=Table(), n_obs=n_obs, kept=kept
     )

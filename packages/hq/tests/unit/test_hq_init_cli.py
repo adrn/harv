@@ -9,7 +9,7 @@ from harv_hq._model_file import ModelFile
 from harv_hq.cli import WORKFLOW_URL, main, parse_shard
 
 
-@pytest.mark.parametrize("kind", ["rv", "gaia_astrometry"])
+@pytest.mark.parametrize("kind", ["rv", "gaia_astrometry", "sb2"])
 def test_init_templates_load_and_set_up(tmp_path, kind):
     run_dir = init_run(tmp_path / "run", kind=kind)
     config = Config.from_file(run_dir / "hq.toml")
@@ -31,7 +31,7 @@ def test_init_refuses_non_empty_directory(tmp_path):
 
 def test_init_unknown_kind(tmp_path):
     with pytest.raises(ValueError, match="kind must be one of"):
-        init_run(tmp_path / "run", kind="sb2")
+        init_run(tmp_path / "run", kind="joint")
 
 
 def test_cli_init(tmp_path, capsys):

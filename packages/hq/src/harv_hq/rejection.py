@@ -14,18 +14,18 @@ from typing import Any
 
 import jax
 
-from harv.data import GaiaAstrometryData, RVData
 from harv.samplers import RejectionSampler, Samples
 from harv_hq._model_file import ModelFile
 from harv_hq.config import Config, RejectionConfig
 from harv_hq.ids import source_key
+from harv_hq.prepare import PreparedSource
 from harv_hq.results import Payload, process_source
 from harv_hq.summary_stats import summary_stats
 
 
 def rejection_setup(
     config: Config, prior_cache: Path
-) -> Callable[[Any, RVData | GaiaAstrometryData], Payload]:
+) -> Callable[[Any, PreparedSource], Payload]:
     """Build a run's per-source rejection function, once per process.
 
     Imports the model file, calls ``make_setup()``, and builds one
@@ -62,7 +62,7 @@ def rejection_setup(
 
 def process_rejection(
     source_id: Any,
-    data: RVData | GaiaAstrometryData,
+    data: PreparedSource,
     *,
     sampler: RejectionSampler,
     prior_cache: Path,
