@@ -55,7 +55,11 @@ library is HDF5, and `logs/` holds plain-text logs.
 non-finite times or measurements, non-positive uncertainties) and then the model
 file's `select_rows`, if it defines one, converts the times to TCB, and drops sources
 with fewer than `[prepare] min_n_obs` observations. It also joins the `[catalog]`
-table, if there is one, onto the prepared sources.
+table, if there is one, onto the prepared sources. In an `sb2` run, each row is one
+star's RV, and its `[data] component` column says which star. There, `min_n_obs`
+applies to the better-sampled star, so a source is kept if either star has enough RVs
+and the other has at least one, and the catalog gets `n_obs_primary` and
+`n_obs_secondary` columns.
 
 `hq prior-cache` draws `[prior_cache] n_samples` samples from the prior that
 `make_setup()` returns and writes them to one HDF5 file, which every source then

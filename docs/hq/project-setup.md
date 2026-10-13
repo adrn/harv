@@ -102,10 +102,12 @@ per telescope, or one run on a single telescope. If the survey documents the two
 on a common zero point, combining them in one run is an explicit assumption, so write
 it down. Fitting offsets between instruments is a planned hq feature.
 
-Which sources are SB2s? Sources with RVs for both components should go to a separate
-run with its own config, once hq supports SB2 runs (a planned feature). Until then,
-exclude them from the SB1 run with `select_rows`: fitting a single-lined model to
-blended or mislabeled component RVs gives spurious orbits.
+Which sources are SB2s? Sources with RVs for both stars go to a separate `sb2` run
+(see step 8), because fitting a single-lined model to two stars' RVs gives spurious
+orbits. Find out how the survey flags them, and how its component labels are
+assigned. The two-component fit assumes that component 1 is the same star at every
+epoch. If the labels are assigned per exposure (e.g., "the brighter line"), they can
+swap between epochs, and the labels need to be made consistent before hq sees them.
 
 Should you fit exposures or visits? Exposures within one visit are taken minutes
 apart and can share systematics, so treating them as independent epochs can overstate
@@ -265,6 +267,47 @@ exclude_ids = "/scratch/sdss5/sb2-ids.txt"
 `hq prepare` logs how many listed IDs are not in the input table, which catches a list
 built from a different data release. A split by a column of the table (e.g., by
 telescope) needs no list: put it in each run's `select_rows`.
+
+The SB2 run itself starts from its own template:
+
+```bash
+uv run hq init runs/sb2 --kind sb2
+```
+
+Its model file fits each source with `JointModel.for_sb2`, which shares the orbit and
+the systemic velocity between the two stars and gives each its own semi-amplitude
+(the secondary's is negative). The input table needs one row per star per
+measurement, with a column saying which star the RV belongs to. `[data] component`
+names that column, and `[data] components` maps its labels to the two stars:
+
+```toml
+[data]
+component = "component"
+components = { primary = 1, secondary = 2 }
+```
+
+If the survey delivers both stars' RVs on one row, reshape the table in
+`make_input_table.py`. Give the SB1 rows in the same file the primary's label, and
+both runs can read it:
+
+```python
+import numpy as np
+from astropy.table import Table, vstack
+
+paired = Table.read("sb2-exposures.fits")  # rv_1, rv_err_1, rv_2, rv_err_2 per row
+stars = []
+for label in (1, 2):
+    star = paired["source_id", "time", f"rv_{label}", f"rv_err_{label}"]
+    star.rename_columns([f"rv_{label}", f"rv_err_{label}"], ["rv", "rv_err"])
+    star["component"] = label
+    stars.append(star[np.isfinite(star["rv"])])  # an unmeasured star has no row
+long = vstack(stars)
+```
+
+The summary of an `sb2` run has columns for each star's semi-amplitude
+(`primary.rv_semiamp_p50`, `secondary.rv_semiamp_p50`, ...) and a derived
+`mass_ratio` (`|K_primary| / |K_secondary|`, which is `M_secondary / M_primary`), and
+the viewer draws both stars on one RV panel.
 
 
 ## 9. Explore and keep track

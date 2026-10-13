@@ -10,7 +10,7 @@ the results in the viewer. Everything here runs on a laptop in a few minutes. Se
 ## 1. Making a run directory
 
 A run lives in its own directory. `hq init` creates one from a template for the kind
-of data you have (`rv` or `gaia_astrometry`):
+of data you have (`rv`, `gaia_astrometry`, or `sb2` for double-lined binaries):
 
 ```bash
 hq init my-run --kind rv
