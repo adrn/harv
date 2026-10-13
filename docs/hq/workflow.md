@@ -142,8 +142,9 @@ selection keys only changes which sources get MCMC, so existing MCMC results sta
 valid and the next `hq mcmc` runs any newly selected sources. A new version of hq,
 harv, or JAX is logged but not refused.
 
-hq does not hash the input table itself, only the `[data]` settings that point to it.
-If you replace or edit the input file in place, run `hq prepare --overwrite`. If the
+hq does not hash the input table itself, only the `[data]` settings that point to it,
+and the same goes for the ID lists in `[prepare] include_ids` and `exclude_ids`. If you
+replace or edit one of these files in place, run `hq prepare --overwrite`. If the
 prepared rows change, the later stages then refuse the old results, and you rerun them
 with `--overwrite` as for a `[data]` change.
 

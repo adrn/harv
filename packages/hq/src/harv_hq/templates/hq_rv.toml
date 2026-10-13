@@ -20,6 +20,8 @@ rv_unit = "km/s"      # used only if the column carries no unit
 
 [prepare]
 min_n_obs = 3
+# include_ids = "ids.txt"   # keep only these sources (one ID per line)
+# exclude_ids = "ids.txt"   # drop these sources
 
 # Optional: one row per source, joined onto the results for the viewer.
 # [catalog]

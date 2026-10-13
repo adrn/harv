@@ -155,7 +155,8 @@ is expected, but a boolean is never accepted as a number.
 Each table is an attribute of `Config` holding a frozen dataclass of its keys
 (`config.run.seed`, `config.data.rv`, ...). The optional `[catalog]` and
 `[mcmc]` tables are `None` when absent; the other optional tables take their
-defaults. Path values (`run.model_file`, `data.file`, `catalog.file`) are
+defaults. Path values (`run.model_file`, `data.file`, `prepare.include_ids`,
+`prepare.exclude_ids`, `catalog.file`) are
 stored as absolute `pathlib.Path`s, and `config.run_dir` is the directory
 holding `hq.toml`.
 
@@ -214,9 +215,23 @@ data objects are built.
 
 ### `[prepare]`
 
-| Key         | Type  | Default | Description                                        |
-| ----------- | ----- | ------- | -------------------------------------------------- |
-| `min_n_obs` | `int` | `3`     | Sources with fewer usable observations are dropped |
+| Key           | Type          | Default | Description                                        |
+| ------------- | ------------- | ------- | -------------------------------------------------- |
+| `min_n_obs`   | `int`         | `3`     | Sources with fewer usable observations are dropped |
+| `include_ids` | `str \| None` | `None`  | File of source IDs; only these sources are kept    |
+| `exclude_ids` | `str \| None` | `None`  | File of source IDs; these sources are dropped      |
+
+`include_ids` and `exclude_ids` route sources between runs that read the
+same input table: e.g. an SB2 run includes a list of double-lined sources and
+the SB1 run excludes the same list, so the two are disjoint by construction.
+Either file holds one ID per line with no header (suffix `.txt` or none), or
+is a one-column table read with `astropy.table.Table.read`. Its IDs are cast
+to the `[data]` ID type as for `[catalog]` (a failed cast raises
+`ConfigError`). `prepare` logs how many listed IDs are not in the input
+table, and raises `ConfigError` if no ID in `include_ids` is. Like the input
+table, the lists are referenced by path, not hashed: a list edited in place
+changes the prepared rows, and so the `data_id`, at the next
+`hq prepare --overwrite`.
 
 Row-level quality cuts (flags, error limits, finite checks beyond the
 built-in ones) are not expressed in TOML. They go in the optional
@@ -450,7 +465,8 @@ from the rejection parts, which must all agree on it.
 ### `prepare`
 
 1. Read the `[data]` table.
-1. Apply the built-in cuts and then `select_rows`, if defined. `select_rows`
+1. Apply the built-in cuts, the `include_ids` and `exclude_ids` lists, and
+   then `select_rows`, if defined. `select_rows`
    receives the full input table, every column included, so it can cut on
    flags and other columns the config does not map. Only the configured
    columns are kept after the cuts.

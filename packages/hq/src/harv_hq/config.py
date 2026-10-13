@@ -125,6 +125,8 @@ class PrepareConfig:
     """The ``[prepare]`` table."""
 
     min_n_obs: int = 3
+    include_ids: Path | None = None
+    exclude_ids: Path | None = None
 
     def __post_init__(self) -> None:
         _require_positive("prepare", min_n_obs=self.min_n_obs)
@@ -231,7 +233,8 @@ class Config:
     Each table is an attribute holding a frozen dataclass of its keys. The
     optional ``[catalog]`` and ``[mcmc]`` tables are ``None`` when absent; the
     other optional tables take their defaults. Paths (``run.model_file``,
-    ``data.file``, ``catalog.file``) are resolved against the run directory,
+    ``data.file``, ``prepare.include_ids``, ``prepare.exclude_ids``,
+    ``catalog.file``) are resolved against the run directory,
     the directory holding ``hq.toml``; absolute paths are kept as given.
 
     Examples

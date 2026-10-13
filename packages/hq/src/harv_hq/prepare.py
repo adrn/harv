@@ -105,6 +105,7 @@ def prepare(
     n_input = len(table)
 
     keep = _builtin_cuts(table, config)
+    keep &= _id_list_mask(_id_array(table[data.source_id]), config)
     if select_rows is not None:
         keep &= np.asarray(select_rows(table), dtype=bool)
     table = table[keep]
@@ -230,6 +231,41 @@ def _builtin_cuts(table: Table, config: Config) -> np.ndarray:
     return keep
 
 
+def _id_list_mask(ids: np.ndarray, config: Config) -> np.ndarray:
+    """Rows allowed by ``[prepare] include_ids`` and ``exclude_ids``."""
+    keep = np.ones(len(ids), dtype=bool)
+    for key in ("include_ids", "exclude_ids"):
+        path = getattr(config.prepare, key)
+        if path is None:
+            continue
+        listed = _read_id_list(path, ids.dtype, key)
+        listed_rows = np.isin(ids, listed)
+        logger.info(
+            "prepare: [prepare] %s lists %d IDs, %d of them not in the input table",
+            key,
+            len(listed),
+            len(np.setdiff1d(listed, ids)),
+        )
+        if key == "include_ids" and not listed_rows.any():
+            msg = f"[prepare] include_ids: no ID in {path} is in {config.data.file}"
+            raise ConfigError(msg)
+        keep &= listed_rows if key == "include_ids" else ~listed_rows
+    return keep
+
+
+def _read_id_list(path: Path, dtype: np.dtype, key: str) -> np.ndarray:
+    """Read an ID list: one ID per line (``.txt`` or no suffix), or one column."""
+    if path.suffix in ("", ".txt"):
+        column = np.array(path.read_text().split(), dtype=str)
+    else:
+        table = _read_table(path, None, None)
+        if len(table.colnames) != 1:
+            msg = f"[prepare] {key}: {path} must have one column, has {table.colnames}"
+            raise ConfigError(msg)
+        column = table.columns[0]
+    return _cast_ids(column, dtype, f"[prepare] {key}")
+
+
 def _id_array(column: Any) -> np.ndarray:
     """Source IDs as int64 for integer columns, str otherwise."""
     values = np.asarray(np.ma.getdata(column))
@@ -304,7 +340,7 @@ def _write_catalog(
             msg = f"[catalog] column(s) {missing} are not in {catalog.file}"
             raise ConfigError(msg)
 
-        catalog_ids = _cast_catalog_ids(table[catalog.source_id], ids.dtype)
+        catalog_ids = _cast_ids(table[catalog.source_id], ids.dtype, "[catalog]")
         position = {cid: i for i, cid in enumerate(catalog_ids.tolist())}
         if len(position) != len(catalog_ids):
             msg = f"[catalog] source IDs in {catalog.file} are not unique"
@@ -341,17 +377,15 @@ def _catalog_values(column: Any) -> np.ndarray:
     return values
 
 
-def _cast_catalog_ids(column: Any, dtype: np.dtype) -> np.ndarray:
+def _cast_ids(column: Any, dtype: np.dtype, what: str) -> np.ndarray:
+    """IDs from another table, cast to the data table's ID type."""
     values = _id_array(column)
     if dtype.kind != "i":
         return values.astype(str)
     try:
         return values.astype(np.int64)
     except ValueError as err:
-        msg = (
-            "[catalog] source IDs cannot be cast to the data table's integer "
-            f"IDs: {err}"
-        )
+        msg = f"{what} source IDs cannot be cast to the data table's integer IDs: {err}"
         raise ConfigError(msg) from err
 
 

@@ -247,6 +247,95 @@ class TestGaia:
         assert index.schema.field("source_id").type == "int64"
 
 
+def _set_prepare(run_dir, text):
+    config = run_dir / "hq.toml"
+    config.write_text(
+        config.read_text().replace("min_n_obs = 3", f"min_n_obs = 3\n{text}")
+    )
+
+
+def _prepared_ids(run_dir):
+    return set(
+        read_parquet(run_dir / "data_index.parquet").table["source_id"].to_pylist()
+    )
+
+
+class TestIDLists:
+    """``[prepare] include_ids`` / ``exclude_ids`` route sources between runs."""
+
+    def test_include_and_exclude_split_the_sources(self, rv_run):
+        listed = sorted(rv_run.kept)[::3]
+        (rv_run.run_dir / "sb2.txt").write_text("\n".join([*listed, "not-a-source"]))
+        run_dir = rv_run.run_dir
+
+        _set_prepare(run_dir, 'include_ids = "sb2.txt"')
+        Run(run_dir).prepare()
+        included = _prepared_ids(run_dir)
+        included_id = read_metadata(run_dir / "data.parquet")["data_id"]
+
+        config = run_dir / "hq.toml"
+        config.write_text(config.read_text().replace("include_ids", "exclude_ids"))
+        Run(run_dir).prepare(overwrite=True)
+        excluded = _prepared_ids(run_dir)
+
+        assert included == set(listed)
+        assert included.isdisjoint(excluded)
+        assert included | excluded == set(rv_run.kept)
+
+        # An edited list changes the prepared rows, so the data_id changes.
+        config.write_text(config.read_text().replace("exclude_ids", "include_ids"))
+        (run_dir / "sb2.txt").write_text("\n".join(listed[1:]))
+        Run(run_dir).prepare(overwrite=True)
+        assert _prepared_ids(run_dir) == set(listed[1:])
+        assert read_metadata(run_dir / "data.parquet")["data_id"] != included_id
+
+    def test_unmatched_ids_are_logged(self, rv_run, caplog):
+        (rv_run.run_dir / "ids.txt").write_text("J1234/5678\nmissing-1\nmissing-2\n")
+        _set_prepare(rv_run.run_dir, 'exclude_ids = "ids.txt"')
+        with caplog.at_level("INFO", logger="harv_hq.prepare"):
+            Run(rv_run.run_dir).prepare()
+        assert (
+            "exclude_ids lists 3 IDs, 2 of them not in the input table" in caplog.text
+        )
+        assert "J1234/5678" not in _prepared_ids(rv_run.run_dir)
+
+    def test_an_include_list_matching_nothing_is_refused(self, rv_run):
+        (rv_run.run_dir / "ids.txt").write_text("missing\n")
+        _set_prepare(rv_run.run_dir, 'include_ids = "ids.txt"')
+        with pytest.raises(ConfigError, match="no ID in"):
+            Run(rv_run.run_dir).prepare()
+
+    def test_integer_ids_from_a_one_column_table(self, gaia_run):
+        ids = sorted(gaia_run.kept)[:2]
+        Table({"gaia_id": ids}).write(gaia_run.run_dir / "ids.ecsv")
+        config = gaia_run.run_dir / "hq.toml"
+        config.write_text(
+            config.read_text().replace(
+                "min_n_obs = 10", 'min_n_obs = 10\ninclude_ids = "ids.ecsv"'
+            )
+        )
+        Run(gaia_run.run_dir).prepare()
+        assert _prepared_ids(gaia_run.run_dir) == set(ids)
+
+    def test_bad_lists_are_config_errors(self, gaia_run):
+        config = gaia_run.run_dir / "hq.toml"
+        config.write_text(
+            config.read_text().replace(
+                "min_n_obs = 10", 'min_n_obs = 10\ninclude_ids = "ids"'
+            )
+        )
+        (gaia_run.run_dir / "ids").write_text("not-an-integer\n")
+        with pytest.raises(
+            ConfigError, match=r"\[prepare\] include_ids source IDs cannot"
+        ):
+            Run(gaia_run.run_dir).prepare()
+
+        Table({"a": [1], "b": [2]}).write(gaia_run.run_dir / "two.ecsv")
+        config.write_text(config.read_text().replace('"ids"', '"two.ecsv"'))
+        with pytest.raises(ConfigError, match="must have one column"):
+            Run(gaia_run.run_dir).prepare()
+
+
 class TestReading:
     def test_reads_only_the_needed_row_groups(self, rv_run, monkeypatch):
         monkeypatch.setattr(prepare_module, "ROW_GROUP_SIZE", 8)

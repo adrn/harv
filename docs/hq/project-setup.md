@@ -240,7 +240,34 @@ uv run hq summarize --run-dir runs/full
 ```
 
 
-## 8. Explore and keep track
+## 8. Several runs from one input table
+
+A project often needs more than one run on the same exposures: one run per telescope,
+or, for SDSS-V, a separate run for the double-lined (SB2) sources. Each run is its own
+directory under `runs/`, with its own `hq.toml` and `prior.py`, and every run's
+`[data] file` points at the same input table. Nothing else is shared: each run
+prepares its own subset and builds its own prior cache.
+
+To split the sources between runs, write their IDs to a file (one per line, or a
+one-column table) and list it in `[prepare]`. One run includes the listed sources and
+the other excludes them, so every source lands in exactly one run:
+
+```toml
+# runs/sb2/hq.toml
+[prepare]
+include_ids = "/scratch/sdss5/sb2-ids.txt"
+
+# runs/full/hq.toml
+[prepare]
+exclude_ids = "/scratch/sdss5/sb2-ids.txt"
+```
+
+`hq prepare` logs how many listed IDs are not in the input table, which catches a list
+built from a different data release. A split by a column of the table (e.g., by
+telescope) needs no list: put it in each run's `select_rows`.
+
+
+## 9. Explore and keep track
 
 To browse a run on the cluster, serve it there and tunnel the port from your laptop:
 
