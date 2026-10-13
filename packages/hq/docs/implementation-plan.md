@@ -534,8 +534,9 @@ too; `run_mcmc` also checks the summary's provenance and raises
 `run_mcmc` share one driver (`_run_stage` / `_run_slice`), and
 `results.process_source` holds the per-source timing, warning capture and
 failure handling both stages use. `PreparedData.slice_ids` takes `among=`.
-`arviz` is now an hq dependency. numpyro prints a progress bar per source;
-harv's `NumpyroSampler.run` has no switch for it yet. From our own review:
+`arviz` is now an hq dependency. numpyro printed a progress bar per source;
+since `NumpyroSampler.run` gained `mcmc_kwargs` (after phase 8), hq passes
+`{"progress_bar": False}`. From our own review:
 the summary gains `rejection_period_unimodal`, and the rule selects on it,
 so MCMC results and re-summarizing between shards never change the
 selection; a summary is current only if no rejection result finished after

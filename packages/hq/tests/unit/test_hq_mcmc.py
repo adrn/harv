@@ -99,7 +99,7 @@ def all_samples(run):
 
 
 class TestEndToEnd:
-    def test_selected_sources_get_mcmc_results(self, run, monkeypatch):
+    def test_selected_sources_get_mcmc_results(self, run, monkeypatch, capfd):
         loads = []
         load = ModelFile.load
         monkeypatch.setattr(
@@ -107,6 +107,7 @@ class TestEndToEnd:
         )
         run.run_mcmc()
         assert len(loads) == 1  # the parent's import is reused, not repeated
+        assert "warmup" not in capfd.readouterr().err  # no numpyro progress bar
         records = index(run).records
         assert set(records) == set(SELECTED)
         assert {r.status for r in records.values()} == {"ok"}

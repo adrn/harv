@@ -359,6 +359,34 @@ class TestNumpyroSamplerRun:
         )
         assert result.n_samples == 10  # 2 chains x 5 samples
 
+    def test_mcmc_kwargs_reach_numpyro(self, rv_samples, rv_sampler_and_data, capfd):
+        """mcmc_kwargs are forwarded: no progress bar, and thinning applies."""
+        sampler, data = rv_sampler_and_data
+        result = sampler.run(
+            data,
+            init_samples=rv_samples,
+            key=jax.random.key(3),
+            num_chains=2,
+            num_warmup=5,
+            num_samples=6,
+            chain_method="sequential",
+            mcmc_kwargs={"progress_bar": False, "thinning": 2},
+        )
+        assert result.n_samples == 6  # 2 chains x 6 samples, thinned by 2
+        assert "warmup" not in capfd.readouterr().err
+
+    def test_mcmc_kwargs_cannot_repeat_run_arguments(
+        self, rv_samples, rv_sampler_and_data
+    ):
+        sampler, data = rv_sampler_and_data
+        with pytest.raises(ValueError, match=r"repeats \['num_samples'\]"):
+            sampler.run(
+                data,
+                init_samples=rv_samples,
+                key=jax.random.key(3),
+                mcmc_kwargs={"num_samples": 10},
+            )
+
     def test_data_type_preserved(self, rv_samples, rv_sampler_and_data):
         """Output model_type matches the model's model_type."""
         sampler, data = rv_sampler_and_data

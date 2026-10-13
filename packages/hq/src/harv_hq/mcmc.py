@@ -287,6 +287,8 @@ def process_mcmc(
             num_samples=config.num_samples,
             chain_method=config.chain_method,
             return_logprobs=True,
+            # One bar per source would flood a pipeline's logs.
+            mcmc_kwargs={"progress_bar": False},
         )
         r_hat_max, ess_bulk_min = convergence(samples)
         converged = (
