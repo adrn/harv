@@ -32,8 +32,9 @@ my-run/
 
 Besides `hq.toml` and `prior.py`, the run directory may also hold your input table
 and catalog, if `[data]` and `[catalog]` point there (as in {doc}`getting-started`).
-Everything else in it is written by hq, and everything except `prior_cache.h5` is
-Parquet, so it can be read with pyarrow, pandas, or polars without hq.
+Everything else in it is written by hq. The data, catalog, results, and summary are
+Parquet, so they can be read with pyarrow, pandas, or polars without hq; the prior
+library is HDF5, and `logs/` holds plain-text logs.
 
 
 ## 2. The stages, in order
