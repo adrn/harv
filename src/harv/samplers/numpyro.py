@@ -6,7 +6,7 @@ builds the numpyro model closure directly.
 """
 
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast, final
 
 import jax
@@ -241,6 +241,21 @@ def _build_extra_numpyro_model(
     return model_fn
 
 
+# numpyro.infer.MCMC arguments that NumpyroSampler.run sets itself.
+_MCMC_RUN_ARGUMENTS = frozenset(
+    {"num_chains", "num_warmup", "num_samples", "chain_method"}
+)
+
+
+def _mcmc_options(mcmc_kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
+    """``mcmc_kwargs`` as a dict, refusing arguments ``run`` sets itself."""
+    options = dict(mcmc_kwargs or {})
+    if repeated := sorted(set(options) & _MCMC_RUN_ARGUMENTS):
+        msg = f"mcmc_kwargs repeats {repeated}; pass them as run() arguments instead"
+        raise ValueError(msg)
+    return options
+
+
 @final
 class NumpyroSampler(AbstractSampler):
     """MCMC sampler for Keplerian orbital parameters using numpyro.
@@ -295,6 +310,7 @@ class NumpyroSampler(AbstractSampler):
         num_samples: int = 1000,
         chain_method: str = "parallel",
         return_logprobs: bool = False,
+        mcmc_kwargs: Mapping[str, Any] | None = None,
     ) -> "Samples":
         """Run MCMC warm-started from rejection-sampler output.
 
@@ -338,6 +354,13 @@ class NumpyroSampler(AbstractSampler):
             :meth:`Samples.map_sample` and :attr:`Samples.ln_posterior`.
             Requires ``marginalized=True`` and no ``extra_model``. Default
             ``False``.
+        mcmc_kwargs
+            Further keyword arguments for ``numpyro.infer.MCMC``, e.g.
+            ``{"progress_bar": False}`` to silence the per-run progress bar
+            (as a pipeline running many sources wants) or ``{"thinning": 2}``.
+            The arguments this method sets itself (``num_chains``,
+            ``num_warmup``, ``num_samples``, ``chain_method``) cannot be
+            repeated here.
 
         Returns
         -------
@@ -368,6 +391,8 @@ class NumpyroSampler(AbstractSampler):
             if extra_model is not None:
                 msg = "return_logprobs is not supported together with extra_model."
                 raise NotImplementedError(msg)
+
+        mcmc_options = _mcmc_options(mcmc_kwargs)
 
         if kernel is None:
             kernel = _numpyro_infer.NUTS
@@ -439,6 +464,7 @@ class NumpyroSampler(AbstractSampler):
             num_warmup=num_warmup,
             num_samples=num_samples,
             chain_method=chain_method,
+            **mcmc_options,
         )
         mcmc.run(rng_key, init_params=init_params)
         posterior = mcmc.get_samples()

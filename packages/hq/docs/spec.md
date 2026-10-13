@@ -567,7 +567,9 @@ source in its slice:
    start at draws in proportion to their posterior weight. The source's MCMC
    key (see "Per-source randomness") is split with `jax.random.split` into
    two keys: the first drives the sampler, the second these draws.
-1. `sampler.run(data, init_samples=..., key=..., num_chains=..., num_warmup=..., num_samples=..., chain_method=..., return_logprobs=True)`.
+1. `sampler.run(data, init_samples=..., key=..., num_chains=..., num_warmup=..., num_samples=..., chain_method=..., return_logprobs=True, mcmc_kwargs={"progress_bar": False})`;
+   numpyro's progress bar is turned off, since one per source would flood the
+   logs.
 1. Compute `r_hat_max` and `ess_bulk_min` over every nonlinear and linear
    parameter from `samples.to_arviz()` (`arviz.rhat`, `arviz.ess` with
    `method="bulk"`), and the summary statistics (unweighted). Any non-finite

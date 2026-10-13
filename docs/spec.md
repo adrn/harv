@@ -2126,6 +2126,12 @@ still sampled explicitly even if they appear in that tuple; truncated and
 mixture Gaussians are *not* in that category and are honoured. Pass
 `verbose=True` to be warned when a name is dropped.
 
+`NumpyroSampler.run` passes `mcmc_kwargs` (a mapping, default `None`) on to
+`numpyro.infer.MCMC` as further keyword arguments, e.g.
+`{"progress_bar": False}` to silence the progress bar when running many
+sources, or `{"thinning": 2}`. Keys that `run` sets itself (`num_chains`,
+`num_warmup`, `num_samples`, `chain_method`) raise `ValueError`.
+
 `NumpyroSampler.run` also accepts `return_logprobs` (default `False`). When
 `True` the returned `Samples` carries `ln_likelihood` (the marginal
 log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
