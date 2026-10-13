@@ -8,9 +8,10 @@ no step scans the table per source. Readers find a source's rows through
 
 __all__ = ("PreparedData", "prepare", "read_source", "read_sources")
 
+import hashlib
+import json
 import logging
 import os
-import uuid
 from collections.abc import Callable, Collection, Iterable
 from pathlib import Path
 from typing import Any, final
@@ -79,9 +80,9 @@ def prepare(
         The model file's optional ``select_rows(table)`` hook. It receives the
         full input table, every column included, after the built-in cuts.
     overwrite
-        Replace existing prepared files. Doing so invalidates every
-        downstream output, which then refuses to resume (``data_id``
-        changes).
+        Replace existing prepared files. If the prepared rows change, the
+        ``data_id`` changes and every downstream output is refused; preparing
+        the same rows again (e.g. after a ``[catalog]`` edit) keeps it.
 
     Raises
     ------
@@ -141,7 +142,7 @@ def prepare(
         config.prepare.min_n_obs,
     )
 
-    data_id = uuid.uuid4().hex
+    data_id = _content_id(kind, source_id, time, values, units)
     metadata = {
         "provenance": make_provenance(config, tables=PREPARED_TABLES, data_id=data_id),
         "kind": kind,
@@ -175,6 +176,31 @@ def prepare(
         {"source_id": ids, "row_start": starts, "n_obs": counts.astype(np.int64)},
         metadata=metadata,
     )
+
+
+def _content_id(
+    kind: str,
+    source_id: np.ndarray,
+    time: np.ndarray,
+    values: dict[str, np.ndarray],
+    units: dict[str, str],
+) -> str:
+    """The prepared data's ``data_id``: a hash of exactly what was prepared.
+
+    Preparing the same rows again (e.g. after a ``[catalog]`` edit) gives the
+    same ID, so the results built on them stay valid; any change to the
+    prepared rows gives a new one.
+    """
+    digest = hashlib.sha256(json.dumps([kind, sorted(units.items())]).encode())
+    for name, array in [
+        ("source_id", source_id),
+        ("time", time),
+        *sorted(values.items()),
+    ]:
+        contiguous = np.ascontiguousarray(array)
+        digest.update(f"{name}:{contiguous.dtype.str}:{contiguous.shape}".encode())
+        digest.update(contiguous.tobytes())
+    return digest.hexdigest()[:32]
 
 
 def _read_table(path: Path, fmt: str | None, hdu: int | str | None) -> Table:

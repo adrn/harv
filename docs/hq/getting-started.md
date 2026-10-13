@@ -115,8 +115,8 @@ of these gets MCMC chains started from its rejection samples. MCMC is much slowe
 source than the rejection step, which is why only some sources get it: here, it takes
 about two minutes for the 30 or so selected sources on four cores.
 
-Every stage can be interrupted and run again with the same command. A rerun skips the
-sources that are already done, so nothing finished is computed twice.
+`hq run` and `hq mcmc` can be interrupted and run again with the same command. A
+rerun skips the sources that are already done, so nothing finished is computed twice.
 
 
 ## 5. Looking at the results
@@ -134,15 +134,15 @@ orbit curves, and a scatter matrix of its samples. Selecting samples in the scat
 matrix limits the curves to those samples, and a toggle switches between the rejection
 and MCMC samples when a source has both.
 
-The results are also available from Python. `summary.parquet` is an ordinary Parquet
-file (e.g., `pandas.read_parquet("summary.parquet")`), and a `harv_hq.Run`
-loads everything hq holds for one source, including its data and its samples as harv
-{py:class}`~harv.samplers.Samples` objects:
+The results are also available from Python. Still inside `my-run`, `summary.parquet`
+is an ordinary Parquet file (e.g., `pandas.read_parquet("summary.parquet")`), and a
+`harv_hq.Run` loads everything hq holds for one source, including its data and its
+samples as harv {py:class}`~harv.samplers.Samples` objects:
 
 ```python
 import harv_hq
 
-run = harv_hq.Run("my-run")
+run = harv_hq.Run(".")  # the run directory
 result = run.load_source("star-007")
 result.rejection_status, result.mcmc_status
 samples = result.mcmc if result.mcmc is not None else result.rejection

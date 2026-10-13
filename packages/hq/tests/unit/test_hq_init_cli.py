@@ -56,7 +56,8 @@ def test_parse_shard():
 
 
 @pytest.mark.parametrize("argv", [["--help"], ["run", "--help"], ["serve", "--help"]])
-def test_help_links_the_workflow_tutorial(argv, capsys):
+def test_help_links_the_workflow_tutorial(argv, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "40")  # narrow: the URL must not be wrapped
     with pytest.raises(SystemExit):
         main(argv)
-    assert WORKFLOW_URL in capsys.readouterr().out.replace("\n", "")
+    assert WORKFLOW_URL in capsys.readouterr().out.splitlines()[-1]

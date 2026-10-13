@@ -28,6 +28,7 @@ _EVIDENCE = (
     "max_ln_likelihood",
     "weight_captured",
     "well_resolved",
+    "wall_time_s",
 )
 _MCMC = ("r_hat_max", "ess_bulk_min")
 # Small row groups over rows sorted by source_id, so a one-source read

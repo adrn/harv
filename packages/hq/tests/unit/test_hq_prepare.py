@@ -144,6 +144,12 @@ class TestRV:
         first = read_metadata(rv_run.run_dir / "data.parquet")["data_id"]
         with pytest.raises(FileExistsError, match="overwrite"):
             run.prepare()
+        # The same rows again: the same data_id, so results stay valid.
+        run.prepare(overwrite=True)
+        assert read_metadata(rv_run.run_dir / "data.parquet")["data_id"] == first
+        # Different rows: a different data_id.
+        table = rv_run.table[rv_run.table["source_id"] != "J1234/5678"]
+        table.write(rv_run.run_dir / "observations.ecsv", overwrite=True)
         run.prepare(overwrite=True)
         assert read_metadata(rv_run.run_dir / "data.parquet")["data_id"] != first
 
@@ -279,6 +285,9 @@ class TestReading:
         shutil.copy(
             rv_run.run_dir / "data_index.parquet", tmp_path / "old_index.parquet"
         )
+        # Different rows (identical ones would give the same data_id).
+        table = rv_run.table[rv_run.table["source_id"] != "J1234/5678"]
+        table.write(rv_run.run_dir / "observations.ecsv", overwrite=True)
         Run(rv_run.run_dir).prepare(overwrite=True)
         shutil.copy(
             tmp_path / "old_index.parquet", rv_run.run_dir / "data_index.parquet"

@@ -10,8 +10,9 @@ Every `hq` subcommand's `--help` links back to this page.
 ## 1. The run directory
 
 A run is a directory holding `hq.toml` and the model file (`prior.py`). Every stage
-reads from and writes to this directory, and every subcommand takes `--run-dir`
-(the default is the current directory). After a full run, it looks like this:
+reads from and writes to this directory, and every subcommand except `hq init` takes
+`--run-dir` (the default is the current directory; `hq init` takes the directory to
+create as its argument). After a full run, it looks like this:
 
 ```
 my-run/
@@ -29,9 +30,10 @@ my-run/
 └── logs/
 ```
 
-Only `hq.toml` and `prior.py` are yours to edit. Everything else is written by hq,
-and everything except `prior_cache.h5` is Parquet, so it can be read with pyarrow,
-pandas, or polars without hq.
+Besides `hq.toml` and `prior.py`, the run directory may also hold your input table
+and catalog, if `[data]` and `[catalog]` point there (as in {doc}`getting-started`).
+Everything else in it is written by hq, and everything except `prior_cache.h5` is
+Parquet, so it can be read with pyarrow, pandas, or polars without hq.
 
 
 ## 2. The stages, in order
@@ -121,7 +123,7 @@ have to be rerun with `--overwrite`, in order:
 | `prior.py` (any edit, even to the prior alone)      | `prepare`, `prior-cache`, `run`, `mcmc`; then `summarize` |
 | `[run]`                                             | `prepare`, `prior-cache`, `run`, `mcmc`; then `summarize` |
 | `[data]` or `[prepare]`                             | `prepare`, `run`, `mcmc`; then `summarize`                |
-| `[catalog]`                                         | `prepare`, `run`, `mcmc`; then `summarize`                |
+| `[catalog]`, or the catalog file                    | `prepare`; then `summarize`                               |
 | `[prior_cache]`                                     | `prior-cache`, `run`, `mcmc`; then `summarize`            |
 | `[rejection]`                                       | `run`, `mcmc`; then `summarize`                           |
 | `[mcmc]` (except `select` and `require_unimodal`)   | `mcmc`; then `summarize`                                  |
@@ -129,22 +131,32 @@ have to be rerun with `--overwrite`, in order:
 | `[results]` or `[serve]`                            | nothing                                                   |
 
 The model file is hashed as a whole, because its `select_rows` decides which rows are
-prepared. So even a prior-only change means preparing again. A `[catalog]` change
-is not refused anywhere: it only affects `catalog.parquet`, and it takes effect the
-next time you prepare. But `hq prepare --overwrite` rewrites the prepared data too,
-so the results built on them have to be redone. Changing the `[mcmc]`
+prepared. So even a prior-only change means preparing again. The prepared data are
+identified by a hash of their contents, so preparing the same rows again keeps every
+result valid. That is what makes a `[catalog]` change cheap: `hq prepare --overwrite`
+rebuilds `catalog.parquet`, the prepared rows are unchanged, and `hq summarize` picks
+up the new columns. A catalog edit is not refused anywhere, though, so it takes effect
+only once you prepare again. Changing the `[mcmc]`
 selection keys only changes which sources get MCMC, so existing MCMC results stay
 valid and the next `hq mcmc` runs any newly selected sources. A new version of hq,
 harv, or JAX is logged but not refused.
 
 hq does not hash the input table itself, only the `[data]` settings that point to it.
-If you replace or edit the input file in place, run `hq prepare --overwrite` (and the
-stages after it) yourself.
+If you replace or edit the input file in place, run `hq prepare --overwrite`. If the
+prepared rows change, the later stages then refuse the old results, and you rerun them
+with `--overwrite` as for a `[data]` change.
 
 
 ## 5. Starting over
 
-To start a run over completely while keeping its configuration, delete everything in
-the run directory except `hq.toml` and `prior.py`, and run the stages again from
-`hq prepare`. Running every stage with `--overwrite` in order does the same thing,
+To start a run over completely while keeping its configuration, delete the outputs
+hq wrote and run the stages again from `hq prepare`:
+
+```bash
+rm -r data.parquet data_index.parquet catalog.parquet prior_cache.h5 \
+    summary.parquet results logs
+```
+
+This leaves `hq.toml`, `prior.py`, and any input files you keep in the run
+directory. Running every stage with `--overwrite` in order does the same thing,
 except that it keeps the old results in `results/superseded-*` directories.

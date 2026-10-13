@@ -38,6 +38,16 @@ Homepage = "https://github.com/adrn/harv"
 "Source Code" = "https://github.com/adrn/harv/tree/main/packages/hq"
 "Bug Tracker" = "https://github.com/adrn/harv/issues"
 
+[tool.uv]
+# The dependencies come from hatch_build.py and the version (and so the harv
+# pin) from git, so changes to either rebuild the package metadata, not only
+# changes to this file.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "hatch_build.py" },
+    { git = { commit = true, tags = true } },
+]
+
 [tool.uv.sources]
 harv = { workspace = true }
 
