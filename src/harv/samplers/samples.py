@@ -18,6 +18,7 @@ import quaxed.numpy as jnp
 from unxt import AbstractQuantity, Q, ustrip
 
 from harv._optional_deps import get_arviz
+from harv.data.containers import AbstractDatasetContainer
 from harv.data.datasets import AbstractData
 from harv.kepler import masses
 from harv.models.parameterizations.base import AbstractParameterization
@@ -166,6 +167,22 @@ def _overlay_corner_truths(  # noqa: C901
                 ax.axhline(y_truth, **line_kwargs)
             if x_truth is not None and y_truth is not None:
                 ax.scatter([x_truth], [y_truth], **point_kwargs)
+
+
+def _times(
+    data: AbstractData | AbstractDatasetContainer, time_unit: str
+) -> tuple[np.ndarray, float]:
+    """Every observation time of ``data``, and its ``time_ref``, in ``time_unit``.
+
+    A container (e.g. a ``SystemData`` for an SB2) contributes the times of all
+    its components; its components share one ``time_ref``.
+    """
+    datasets = (
+        list(data.values()) if isinstance(data, AbstractDatasetContainer) else [data]
+    )
+    time = np.concatenate([np.asarray(ustrip(time_unit, d.time)) for d in datasets])
+    time_ref = 0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
+    return time, time_ref
 
 
 def _assemble_sample_params(
@@ -563,6 +580,74 @@ class Samples(eqx.Module):
         if "semi_major_axis" in self.linear and "parallax" in self.linear:
             derived_keys.append("semi_major_axis_AU")
         return base_keys + derived_keys
+
+    def component(self, name: str) -> "Samples":
+        """The samples of one component of a joint model (e.g. one star of an SB2).
+
+        Joint-model samples name a component's own parameters
+        ``"<component>.<param>"`` (e.g. ``"primary.rv_semiamp"``) and shared
+        ones without a prefix (``"period"``, ``"v_sys"``). The component view
+        keeps that component's parameters under their bare names, keeps the
+        shared ones, and drops every other component's. ``ln_likelihood``,
+        ``ln_prior``, and ``metadata`` are the joint model's, unchanged.
+
+        Parameters
+        ----------
+        name
+            The component name, as used in the parameter names.
+
+        Returns
+        -------
+            Single-component samples, with ``model_type`` ``"<joint>.<name>"``.
+
+        Raises
+        ------
+        KeyError
+            If no parameter belongs to ``name``.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from unxt import Q
+        >>> from harv.samplers import Samples
+        >>> joint = Samples(
+        ...     nonlinear={"period": Q(np.array([10.0, 11.0]), "day")},
+        ...     linear={
+        ...         "primary.rv_semiamp": Q(np.array([20.0, 21.0]), "km/s"),
+        ...         "secondary.rv_semiamp": Q(np.array([-30.0, -31.0]), "km/s"),
+        ...         "v_sys": Q(np.array([5.0, 5.0]), "km/s"),
+        ...     },
+        ...     model_type="JointModel",
+        ... )
+        >>> primary = joint.component("primary")
+        >>> sorted(primary.linear), primary.model_type
+        (['rv_semiamp', 'v_sys'], 'JointModel.primary')
+        """
+        prefix = f"{name}."
+
+        def pick(params: dict[str, Any]) -> dict[str, Any]:
+            return {
+                key.removeprefix(prefix): value
+                for key, value in params.items()
+                if key.startswith(prefix) or "." not in key
+            }
+
+        if not any(k.startswith(prefix) for k in (*self.nonlinear, *self.linear)):
+            msg = f"no parameters of a component named {name!r} in these samples"
+            raise KeyError(msg)
+        return Samples(
+            nonlinear=pick(self.nonlinear),
+            linear=pick(self.linear),
+            model_type=f"{self.model_type}.{name}",
+            metadata=dict(self.metadata),
+            linear_extension_names=tuple(
+                n.removeprefix(prefix)
+                for n in self.linear_extension_names
+                if n.startswith(prefix) or "." not in n
+            ),
+            ln_likelihood=self.ln_likelihood,
+            ln_prior=self.ln_prior,
+        )
 
     def __contains__(self, key: object) -> bool:
         return key in self.keys()
@@ -1094,7 +1179,22 @@ class Samples(eqx.Module):
             )
             raise NotImplementedError(msg)
 
-    def _phases(self, data: AbstractData) -> np.ndarray:
+    def _require_shared_period(self, method: str) -> None:
+        """Raise unless the samples carry one orbital ``period`` for every component.
+
+        Single-component samples always do; joint samples do when the period is
+        a shared parameter (as in ``JointModel.for_sb2``), and then the
+        time-based diagnostics use every component's observation times.
+        """
+        if "period" not in self.nonlinear:
+            namespaced = sorted(k for k in self.nonlinear if k.endswith(".period"))
+            msg = (
+                f"{method}() needs one orbital 'period' shared by every component; "
+                f"these samples have per-component periods {namespaced!r}"
+            )
+            raise NotImplementedError(msg)
+
+    def _phases(self, data: AbstractData | AbstractDatasetContainer) -> np.ndarray:
         """Return ``(n_samples, n_obs)`` orbital phases in ``[0, 1)``.
 
         Phase is ``((time - time_ref) / period) mod 1`` evaluated at each sample's
@@ -1102,10 +1202,7 @@ class Samples(eqx.Module):
         """
         period = self.nonlinear["period"]
         time_unit = str(period.unit)
-        time = np.asarray(ustrip(time_unit, data.time))
-        time_ref = (
-            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
-        )
+        time, time_ref = _times(data, time_unit)
         period_val = np.asarray(ustrip(time_unit, period))
         return ((time[None, :] - time_ref) / period_val[:, None]) % 1.0
 
@@ -1206,7 +1303,7 @@ class Samples(eqx.Module):
             "message": message,
         }
 
-    def period_unimodal(self, data: AbstractData) -> bool:
+    def period_unimodal(self, data: AbstractData | AbstractDatasetContainer) -> bool:
         """Whether the period samples lie within a single mode.
 
         Uses the criterion ``ptp(P) < 4 * P_min**2 / (2*pi*T)``, where ``T`` is
@@ -1218,18 +1315,18 @@ class Samples(eqx.Module):
         data
             The data the samples were fit to (for the observed time span).
         """
-        self._require_single_component("period_unimodal")
+        self._require_shared_period("period_unimodal")
         period = self.nonlinear["period"]
         time_unit = str(period.unit)
         period_val = np.asarray(ustrip(time_unit, period))
-        time = np.asarray(ustrip(time_unit, data.time))
+        time, _ = _times(data, time_unit)
         span = float(np.ptp(time))
         p_min = float(np.min(period_val))
         delta = 4.0 * p_min**2 / (2.0 * np.pi * span)
         return bool(np.ptp(period_val) < delta)
 
     def period_modes(
-        self, data: AbstractData, n_clusters: int = 2
+        self, data: AbstractData | AbstractDatasetContainer, n_clusters: int = 2
     ) -> tuple[bool, Q, np.ndarray]:
         """Cluster the period samples and test each mode for unimodality.
 
@@ -1249,7 +1346,7 @@ class Samples(eqx.Module):
             is individually unimodal, the median period of each mode (a ``Q``),
             and the sample count per mode.
         """
-        self._require_single_component("period_modes")
+        self._require_shared_period("period_modes")
         try:
             from sklearn.cluster import KMeans  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -1275,7 +1372,9 @@ class Samples(eqx.Module):
 
         return all(unimodal), Q(np.array(mode_periods), time_unit), np.array(n_per_mode)
 
-    def max_phase_gap(self, data: AbstractData) -> np.ndarray:
+    def max_phase_gap(
+        self, data: AbstractData | AbstractDatasetContainer
+    ) -> np.ndarray:
         """Largest gap in orbital-phase coverage, per sample.
 
         The maximum gap between consecutive observations on the (circular)
@@ -1290,7 +1389,7 @@ class Samples(eqx.Module):
         -------
             Array of shape ``(n_samples,)``; values in ``[0, 1]``.
         """
-        self._require_single_component("max_phase_gap")
+        self._require_shared_period("max_phase_gap")
         phases = np.sort(self._phases(data), axis=1)
         if phases.shape[1] < 2:
             return np.ones(phases.shape[0])
@@ -1298,7 +1397,9 @@ class Samples(eqx.Module):
         wrap = 1.0 - (phases[:, -1] - phases[:, 0])
         return np.maximum(gaps.max(axis=1), wrap)
 
-    def phase_coverage(self, data: AbstractData, n_bins: int = 10) -> np.ndarray:
+    def phase_coverage(
+        self, data: AbstractData | AbstractDatasetContainer, n_bins: int = 10
+    ) -> np.ndarray:
         """Fraction of phase bins containing at least one observation.
 
         The ESA Gaia "phase coverage" statistic, per sample.
@@ -1314,7 +1415,7 @@ class Samples(eqx.Module):
         -------
             Array of shape ``(n_samples,)``; values in ``[0, 1]``.
         """
-        self._require_single_component("phase_coverage")
+        self._require_shared_period("phase_coverage")
         phases = self._phases(data)  # (n_samples, n_obs)
         bin_idx = np.clip((phases * n_bins).astype(int), 0, n_bins - 1)
         # Count occupied bins per sample with bincount, so the only allocations
@@ -1325,7 +1426,9 @@ class Samples(eqx.Module):
         )
         return occupied / n_bins
 
-    def periods_spanned(self, data: AbstractData) -> np.ndarray:
+    def periods_spanned(
+        self, data: AbstractData | AbstractDatasetContainer
+    ) -> np.ndarray:
         """Number of orbital periods spanned by the data, per sample.
 
         Parameters
@@ -1337,14 +1440,16 @@ class Samples(eqx.Module):
         -------
             Array of shape ``(n_samples,)``.
         """
-        self._require_single_component("periods_spanned")
+        self._require_shared_period("periods_spanned")
         period = self.nonlinear["period"]
         time_unit = str(period.unit)
-        time = np.asarray(ustrip(time_unit, data.time))
+        time, _ = _times(data, time_unit)
         period_val = np.asarray(ustrip(time_unit, period))
         return float(np.ptp(time)) / period_val
 
-    def phase_coverage_per_period(self, data: AbstractData) -> np.ndarray:
+    def phase_coverage_per_period(
+        self, data: AbstractData | AbstractDatasetContainer
+    ) -> np.ndarray:
         """Maximum number of observations within any single period, per sample.
 
         Parameters
@@ -1356,13 +1461,10 @@ class Samples(eqx.Module):
         -------
             Array of shape ``(n_samples,)``.
         """
-        self._require_single_component("phase_coverage_per_period")
+        self._require_shared_period("phase_coverage_per_period")
         period = self.nonlinear["period"]
         time_unit = str(period.unit)
-        time = np.asarray(ustrip(time_unit, data.time))
-        time_ref = (
-            0.0 if data.time_ref is None else float(ustrip(time_unit, data.time_ref))
-        )
+        time, time_ref = _times(data, time_unit)
         period_val = np.asarray(ustrip(time_unit, period))
         n_per = (time - time_ref) / period_val[:, None]  # (n_samples, n_obs)
 
