@@ -169,8 +169,10 @@ import harv_hq
 
 def select_rows(table):
     good = table["snr"] > 20  # your quality cuts
-    subset = np.array([harv_hq.stable_hash(sid) % 100 == 0 for sid in table["source_id"]])
-    return good & subset
+    # Hash each source once, not each exposure.
+    ids = np.unique(table["source_id"])
+    kept = ids[[harv_hq.stable_hash(sid) % 100 == 0 for sid in ids]]
+    return good & np.isin(table["source_id"], kept)
 ```
 
 
@@ -193,9 +195,9 @@ that slipped past `select_rows`). The distributions of `ln_Z_int_ess` and
 clear variability are under-resolved, the library is too small or the period range
 too wide. Values of `weight_captured` well below 1 mean `top_k` is too small. We
 also open a few known binaries and a few known constant stars in the viewer, to check
-that the orbits and the null cases look right. Finally, the
-per-source wall time in the summary, multiplied by the full source count, tells you
-how large the full run will be.
+that the orbits and the null cases look right. Finally, the summary's per-source
+`wall_time_s`, multiplied by the full source count, tells you how large the full run
+will be.
 
 After changing `hq.toml` or `prior.py`, rerun the affected stages with `--overwrite`
 (see {doc}`workflow` for which ones). hq refuses to mix outputs built from old and new

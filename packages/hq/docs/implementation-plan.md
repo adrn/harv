@@ -402,10 +402,10 @@ every payload to `writer.add`.
   this rank's own `PartWriter`, then `comm.Barrier()`. Rank 0 logs a periodic
   progress line from its own count times `n`; no other communication.
 
-Each worker and rank imports harv itself, so each prints harv's one-time
-float64 warning unless `JAX_ENABLE_X64` is set in the environment. hq does
-not set it (a library should not edit the environment). The cluster examples
-in "Setting up a project" export `JAX_ENABLE_X64=1` instead.
+Each worker and rank imports harv itself, so each would print harv's
+one-time float64 warning. Since phase 8, `import harv_hq` enables float64
+first when `JAX_ENABLE_X64` is unset, so workers, ranks, and `hq` commands
+stay quiet, and the cluster examples no longer export it (spec, "Dependencies").
 
 `Run.run_rejection(shard, workers, mpi)` validates the mutually exclusive
 options and picks a driver. Part stems are `{i:04d}-of-{n:04d}-{uuid8}`, and
@@ -663,7 +663,14 @@ listed statically. `publish-hq` waits for `publish`, so a release never
 requires a harv that is not on PyPI yet. Also: `harv_hq` enables float64
 before importing harv, so every `hq` command no longer prints harv's
 float64 warning (spec updated), and the classifier is now Pre-Alpha, as
-harv's is. The PyPI name check could not be done from here.
+harv's is. The PyPI name check could not be done from here. From our own
+review: `data_id` is a hash of the prepared rows rather than a uuid, so
+re-preparing after a `[catalog]` edit keeps every result valid (spec
+updated); the float64 flip honors an explicit `JAX_ENABLE_X64`; the summary
+gains `wall_time_s`; `--help` links `stable` docs from a release and `latest`
+otherwise, on an unwrapped line; uv `cache-keys` cover `hatch_build.py` and
+git; the hook has tests (and `hatchling` joined the test group); and several
+docs statements were corrected to match the code.
 
 - An `hq` section in the harv Sphinx docs (`docs/hq/`): a getting-started page
   that runs the tiny example, and a page adapted from "Setting up a project"
