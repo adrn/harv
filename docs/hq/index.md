@@ -13,8 +13,9 @@ project-setup
 observation for thousands to millions of sources, and optionally a catalog with one
 row per source. It organizes a run as a directory holding a configuration file
 (`hq.toml`) and a model file (`prior.py`), and it provides a command-line tool, `hq`,
-whose subcommands are the stages of a run. Each stage writes Parquet files that the
-next stage reads, every stage can be resumed after a crash or a timed-out job, and
+whose subcommands are the stages of a run. The stages write files that the later
+stages read (Parquet tables, and one HDF5 file for the shared prior library), the
+per-source stages pick up where they stopped after a crash or a timed-out job, and
 every output records what it was built from so that stale results are refused rather
 than mixed in. A local web viewer plots the catalog and each source's data and
 posterior samples.

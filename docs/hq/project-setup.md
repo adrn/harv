@@ -250,6 +250,6 @@ ssh -L 8000:localhost:8000 <cluster-login-node>        # on your laptop
 ```
 
 When a run is final, commit `runs/full/hq.toml` and `prior.py` and tag the
-repository. Every output records the sha256 of both files and the versions of hq,
-harv, and JAX, so any result file can be traced back to the configuration that
-produced it.
+repository. Every output records a sha256 of each `hq.toml` table it depends on, a
+sha256 of the whole model file, and the versions of hq, harv, and JAX, so any result
+file can be traced back to the configuration that produced it.

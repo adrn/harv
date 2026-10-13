@@ -4,8 +4,9 @@ Companion package to [harv](https://github.com/adrn/harv) for running it on whol
 surveys: thousands to millions of sources, each with a handful of epochs. hq prepares
 a survey's observation table, runs harv's rejection sampler on every source (on one
 machine, a job array, or MPI), follows up under-resolved sources with MCMC, collects a
-summary table, and serves a local web viewer for exploring the results. Every stage
-can be resumed, and every output records what it was built from, so stale results are
+summary table, and serves a local web viewer for exploring the results. The
+per-source stages (rejection and MCMC) pick up where they stopped after a crash or a
+timed-out job, and every output records what it was built from, so stale results are
 refused rather than mixed in.
 
 ```bash
