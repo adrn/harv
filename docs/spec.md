@@ -2299,6 +2299,12 @@ the first entry.
 ### Methods
 
 - `keys() -> list[str]` — nonlinear + linear + derived parameter names
+- `component(name) -> Samples` — the samples of one component of a joint model
+  (e.g. one star of an SB2): that component's `"<name>.<param>"` parameters under
+  their bare names, plus the shared (unprefixed) parameters; other components'
+  parameters are dropped. `ln_likelihood`, `ln_prior`, and `metadata` are the
+  joint model's, unchanged, and `model_type` becomes `"<model_type>.<name>"`.
+  Raises `KeyError` if no parameter belongs to `name`.
 - `n_samples -> int` — number of samples per batch entry (trailing-axis
   length; equals total samples for a flat 1-D `Samples`)
 - `batch_shape -> tuple[int, ...]` — leading batch dimensions
@@ -2412,8 +2418,16 @@ come back sorted by name within each group.
 #### Sample analysis
 
 Ported from `thejoker.samples_analysis`. Methods that need the observed time
-sampling take the `data` object; all support single-component samples only
-(namespaced joint-model samples raise a clear error).
+sampling take the `data` object. The time-based methods (`period_unimodal`,
+`period_modes`, `max_phase_gap`, `phase_coverage`, `periods_spanned`,
+`phase_coverage_per_period`) need only the orbital `period` and the data's
+times, so they also accept joint-model samples whose `period` is shared by
+every component (as in `JointModel.for_sb2`), with a container (`SystemData`,
+`SourceData`) as `data`: they then use every component's observation times and
+the container's shared `time_ref`. Joint samples with per-component periods
+raise `NotImplementedError`. `map_sample` and `acceptance_diagnostics` work on
+any samples; the goodness-of-fit and derived-quantity methods below need one
+component's model and raise for joint samples (use `component(name)` first).
 
 - `map_sample(return_index=False) -> Samples` — the maximum a posteriori sample
   (highest `ln_posterior`), as a length-1 `Samples`. Requires `return_logprobs`.

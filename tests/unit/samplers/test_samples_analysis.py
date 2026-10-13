@@ -242,8 +242,11 @@ class TestSingleComponentGuard:
             model_type="JointModel",
             metadata={"time_ref": 0.0},
         )
-        with pytest.raises(NotImplementedError, match="single-component"):
+        # Time-based diagnostics need one shared period; this has none.
+        with pytest.raises(NotImplementedError, match="shared"):
             s.periods_spanned(rv_data)
+        with pytest.raises(NotImplementedError, match="single-component"):
+            s.binary_mass_function()
 
 
 # ---------------------------------------------------------------------------
