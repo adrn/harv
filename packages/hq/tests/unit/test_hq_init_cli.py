@@ -6,7 +6,7 @@ import pytest
 
 from harv_hq import Config, init_run
 from harv_hq._model_file import ModelFile
-from harv_hq.cli import main, parse_shard
+from harv_hq.cli import WORKFLOW_URL, main, parse_shard
 
 
 @pytest.mark.parametrize("kind", ["rv", "gaia_astrometry"])
@@ -53,3 +53,11 @@ def test_parse_shard():
     for bad in ["16/16", "-1/4", "3", "a/b", "1/0"]:
         with pytest.raises(argparse.ArgumentTypeError):
             parse_shard(bad)
+
+
+@pytest.mark.parametrize("argv", [["--help"], ["run", "--help"], ["serve", "--help"]])
+def test_help_links_the_workflow_tutorial(argv, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "40")  # narrow: the URL must not be wrapped
+    with pytest.raises(SystemExit):
+        main(argv)
+    assert WORKFLOW_URL in capsys.readouterr().out.splitlines()[-1]

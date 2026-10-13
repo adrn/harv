@@ -12,10 +12,21 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from harv_hq._version import __version__
 from harv_hq.config import KINDS, Config, ConfigError
 from harv_hq.init import init_run
 from harv_hq.provenance import ProvenanceError
 from harv_hq.run import Run
+
+# The workflow tutorial: every stage in order, re-running, and what each
+# change to the inputs invalidates. Every --help ends with it.
+# A release links to the docs of the latest release; a development version to
+# the docs built from main.
+_DOCS_VERSION = "latest" if "dev" in __version__ or "+" in __version__ else "stable"
+WORKFLOW_URL = f"https://harvey.readthedocs.io/en/{_DOCS_VERSION}/hq/workflow.html"
+# On its own line and never wrapped (RawDescriptionHelpFormatter), so the URL
+# stays in one piece on narrow terminals.
+_EPILOG = f"Walkthrough of every stage, and of re-running them:\n  {WORKFLOW_URL}"
 
 # Errors that mean "the run directory or config is not in a state for this";
 # the CLI reports them in one line instead of a traceback.
@@ -117,14 +128,23 @@ def _init(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="hq", description="Run harv over large samples (harv-hq)."
+        prog="hq",
+        description="Run harv over large samples (harv-hq).",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(
         name: str, help_: str, handler: Callable[[argparse.Namespace], int]
     ) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, help=help_, description=help_)
+        p = sub.add_parser(
+            name,
+            help=help_,
+            description=help_,
+            epilog=_EPILOG,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
         p.set_defaults(handler=handler)
         if name != "init":
             p.add_argument(

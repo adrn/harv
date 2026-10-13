@@ -439,6 +439,8 @@ class TestSummarize:
             "max_ln_likelihood",
             "weight_captured",
             "well_resolved",
+            "wall_time_s",
+            "rejection_period_unimodal",
             "mcmc_status",
             "r_hat_max",
             "ess_bulk_min",
@@ -555,9 +557,25 @@ class TestConcurrentCompaction:
 
 def test_status_refuses_stale_results(rv_run):
     run = rejected_run(rv_run)
-    run.prepare(overwrite=True)  # a new data_id: the old results are stale
+    # Different prepared rows, so a new data_id: the old results are stale.
+    table = rv_run.table[rv_run.table["source_id"] != "J1234/5678"]
+    table.write(rv_run.run_dir / "observations.ecsv", overwrite=True)
+    run.prepare(overwrite=True)
     with pytest.raises(ProvenanceError, match="data_id"):
         Run(run.run_dir).status()
+
+
+def test_a_catalog_edit_keeps_results_valid(rv_run):
+    """Re-preparing for a new [catalog] column keeps the data_id and the results."""
+    run = rejected_run(rv_run)
+    catalog = rv_run.catalog.copy()
+    catalog["teff"] = 5000.0
+    catalog.write(rv_run.run_dir / "catalog.ecsv", overwrite=True)
+    run.prepare(overwrite=True)
+    run = Run(run.run_dir)
+    assert run.status()["rejection"]["ok"] == len(rv_run.kept)
+    summary = pq.read_table(run.summarize())
+    assert "teff" in summary.column_names
 
 
 def test_summary_is_sorted_by_source_id(rv_run):

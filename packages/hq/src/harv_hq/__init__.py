@@ -19,6 +19,17 @@ __all__ = (
 
 from typing import Any
 
+import os
+
+import jax
+
+# harv's likelihoods need float64. harv enables it on import with a warning
+# meant for interactive users; hq always wants it, so it enables it first,
+# before any module imports harv, and hq commands stay quiet. Like harv, it
+# leaves an explicit JAX_ENABLE_X64 (e.g. =0) to the user.
+if "JAX_ENABLE_X64" not in os.environ:
+    jax.config.update("jax_enable_x64", True)  # noqa: FBT003
+
 from harv_hq._version import __version__
 from harv_hq.compact import CompactReport
 from harv_hq.config import Config, ConfigError

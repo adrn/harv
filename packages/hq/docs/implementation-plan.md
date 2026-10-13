@@ -29,9 +29,9 @@ Updated as each phase lands. A phase is done when its PR is merged.
 | 3     | prior cache, serial rejection, result parts, resume    | Done (PR #61)                                     |
 | 4     | execution modes: shards, pool, MPI                     | Done (PR #63)                                     |
 | 5     | compaction, summarize, status                          | Done (PR #65)                                     |
-| 6     | MCMC follow-up                                         | Implemented on branch `hq-phase6`, awaiting merge |
-| 7     | web viewer                                             | Implemented on branch `hq-phase7`, awaiting merge |
-| 8     | docs (workflow tutorial, `hq --help` link) and release | Not started                                       |
+| 6     | MCMC follow-up                                         | Done (PR #66)                                     |
+| 7     | web viewer                                             | Done (PR #67)                                     |
+| 8     | docs (workflow tutorial, `hq --help` link) and release | Implemented on branch `hq-phase8`, awaiting merge |
 
 ______________________________________________________________________
 
@@ -402,10 +402,10 @@ every payload to `writer.add`.
   this rank's own `PartWriter`, then `comm.Barrier()`. Rank 0 logs a periodic
   progress line from its own count times `n`; no other communication.
 
-Each worker and rank imports harv itself, so each prints harv's one-time
-float64 warning unless `JAX_ENABLE_X64` is set in the environment. hq does
-not set it (a library should not edit the environment). The cluster examples
-in "Setting up a project" export `JAX_ENABLE_X64=1` instead.
+Each worker and rank imports harv itself, so each would print harv's
+one-time float64 warning. Since phase 8, `import harv_hq` enables float64
+first when `JAX_ENABLE_X64` is unset, so workers, ranks, and `hq` commands
+stay quiet, and the cluster examples no longer export it (spec, "Dependencies").
 
 `Run.run_rejection(shard, workers, mpi)` validates the mutually exclusive
 options and picks a driver. Part stems are `{i:04d}-of-{n:04d}-{uuid8}`, and
@@ -518,9 +518,9 @@ samples reader to raise).
 
 ______________________________________________________________________
 
-## Phase 6: MCMC follow-up — awaiting merge
+## Phase 6: MCMC follow-up — done
 
-Implemented on branch `hq-phase6` (off `hq`). Deviations from the text below:
+Implemented on branch `hq-phase6` (off `hq`), merged as PR #66. Deviations from the text below:
 pool workers read their sources' rejection samples themselves (each task
 carries the source's data and its `ResultRecord`), so the parent holds no
 samples. Chains start from `num_chains` equal-weight draws (not `top_k`),
@@ -572,10 +572,10 @@ summary raises. `select_for_mcmc` overrides the rule. Resume as in phase 3.
 
 ______________________________________________________________________
 
-## Phase 7: web viewer — awaiting merge
+## Phase 7: web viewer — done
 
 Implemented on branch `hq-phase7`, off `hq-phase6` (it needs MCMC results to
-show). Deviations from the text below: the joined table is
+show), merged as PR #67. Deviations from the text below: the joined table is
 `summary.parquet` itself, which already holds the catalog columns
 (`catalog.parquet` before `hq summarize`). The app reuses `Run.load_source`
 instead of its own `ResultsIndex`es, and `SourceResult` gains `rejection_row`
@@ -648,7 +648,29 @@ selection, phase fold).
 
 ______________________________________________________________________
 
-## Phase 8: docs and release
+## Phase 8: docs and release — awaiting merge
+
+Implemented on branch `hq-phase8` (off `hq`). The docs are `docs/hq/`:
+`index.md` (overview, install), `getting-started.md` (a 50-source simulated
+survey through every stage; run end to end while writing it, a few minutes
+on a laptop), `workflow.md` (the tutorial), and `project-setup.md` (adapted
+from the section below, which now points there). Deviations: the harv pin
+applies to released versions only (development versions leave harv
+unpinned, or the workspace lock would change with every commit), and the
+static dependency list moved into the hook's config
+(`[tool.hatch.metadata.hooks.custom]`), since a dynamic field cannot also be
+listed statically. `publish-hq` waits for `publish`, so a release never
+requires a harv that is not on PyPI yet. Also: `harv_hq` enables float64
+before importing harv, so every `hq` command no longer prints harv's
+float64 warning (spec updated), and the classifier is now Pre-Alpha, as
+harv's is. The PyPI name check could not be done from here. From our own
+review: `data_id` is a hash of the prepared rows rather than a uuid, so
+re-preparing after a `[catalog]` edit keeps every result valid (spec
+updated); the float64 flip honors an explicit `JAX_ENABLE_X64`; the summary
+gains `wall_time_s`; `--help` links `stable` docs from a release and `latest`
+otherwise, on an unwrapped line; uv `cache-keys` cover `hatch_build.py` and
+git; the hook has tests (and `hatchling` joined the test group); and several
+docs statements were corrected to match the code.
 
 - An `hq` section in the harv Sphinx docs (`docs/hq/`): a getting-started page
   that runs the tiny example, and a page adapted from "Setting up a project"
@@ -692,249 +714,5 @@ ______________________________________________________________________
 
 ## Setting up a project: an SDSS-V exposure-level RV run
 
-These instructions assume hq through phase 7 exists. They are written for
-SDSS-V APOGEE exposure-level RVs but do not assume a particular file format:
-every survey-specific choice is a step where you look at the data and decide.
-
-### 1. Create the project repository
-
-A run is configuration plus code, and both belong in git. The data and the
-outputs do not.
-
-```
-sdss5-binaries/
-├── pyproject.toml          # depends on harv-hq
-├── uv.lock
-├── README.md               # what each run is, and where its data lives
-├── scripts/
-│   ├── make_input_table.py # raw SDSS-V products -> one flat exposure table
-│   └── make_catalog.py     # raw SDSS-V products -> one row per star
-├── runs/
-│   ├── test-1pct/          # small subset, for tuning
-│   │   ├── hq.toml
-│   │   └── prior.py
-│   └── full/
-│       ├── hq.toml
-│       └── prior.py
-├── slurm/
-│   ├── rejection.sbatch
-│   └── mcmc.sbatch
-└── .gitignore
-```
-
-```
-# .gitignore
-runs/*/*.parquet
-runs/*/prior_cache.h5
-runs/*/results/
-runs/*/logs/
-```
-
-Set up the environment with uv:
-
-```bash
-uv init --bare sdss5-binaries && cd sdss5-binaries
-uv python pin 3.12            # or newer; harv requires >= 3.12
-```
-
-Until `harv-hq` is on PyPI, depend on the harv repository directly. While you
-are also developing harv and hq, use editable paths to your checkout:
-
-```toml
-# pyproject.toml
-[project]
-name = "sdss5-binaries"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = ["harv", "harv-hq"]
-
-[tool.uv.sources]
-harv = { path = "../harv", editable = true }
-harv-hq = { path = "../harv/packages/hq", editable = true }
-# or, pinned to a commit:
-# harv = { git = "https://github.com/adrn/harv", rev = "<sha>" }
-# harv-hq = { git = "https://github.com/adrn/harv", rev = "<sha>", subdirectory = "packages/hq" }
-
-[tool.uv]
-# harv currently needs a fork of unxt. uv applies override-dependencies only
-# from the project being locked, so this must be repeated here until harv no
-# longer needs it. Copy the line from harv's own pyproject.toml.
-override-dependencies = [
-    "unxt @ git+https://github.com/adrn/unxt.git@quantity-stub",
-]
-```
-
-Add `mpi4py` (`uv add "harv-hq[mpi]"`) only on machines where you will use
-`--mpi`, and build it against the cluster's MPI (`MPICC=... uv pip install --no-binary mpi4py mpi4py`) rather than using a generic wheel.
-
-### 2. Understand the exposure-level data before writing any config
-
-Open the raw files in a notebook and answer these questions. Write the answers
-in the README, because they determine the config.
-
-- **Which column identifies a star?** SDSS-V carries several ID systems. Pick
-  the one that is stable across the data release and unique per star, and
-  check that one star never appears under two IDs. If the IDs you want to
-  browse by in the viewer differ from the ones you fit on, put the crosswalk
-  in the catalog table (step 4).
-- **What is the time column, exactly?** Find its format (JD, MJD, ...), its
-  time scale (TDB, TAI, UTC, ...), and whether it is already barycentric. hq
-  converts format and scale but does not apply barycentric corrections. If the
-  exposure times are topocentric, compute barycentric times in
-  `make_input_table.py` with astropy (`Time.light_travel_time` with the star's
-  coordinates and the observatory location). Also check whether the time is
-  the exposure start or its midpoint.
-- **What are the RV and uncertainty columns, and in what units?** Check
-  whether the RV is already barycentric-corrected. Look at the uncertainty
-  distribution: exposure-level errors are often underestimated, which matters
-  for false-positive binaries.
-- **Which rows are bad?** Find the quality flags, failed-fit sentinels (e.g.
-  `-9999`), and S/N cuts the survey recommends. These become `select_rows`.
-- **How many instruments are there?** SDSS-V APOGEE observes from APO and LCO.
-  hq currently fits one instrument per run (no zero-point offsets). Decide
-  between one run per telescope, or one run on a single telescope. If the
-  survey documents the two as on a common zero point, combining them
-  in one run is an explicit assumption; write it down. Multi-instrument offset
-  fitting is a planned hq feature.
-- **Which sources are SB2s?** Sources with RVs for both components are
-  identified in advance and go to a separate run with its own config (both
-  runs can read the same input table, with `select_rows` keeping or
-  excluding the SB2 list). This needs hq's planned `kind = "sb2"` support
-  (spec, "Planned features"). Find out how the SB2 RVs are delivered (one row
-  per component per exposure, or both components' RVs on one row) and how
-  component labels are assigned, since that decides the `[data]` schema.
-  Until `kind = "sb2"` exists, exclude these sources from the SB1 run: fitting
-  a single-lined model to blended or mislabeled component RVs gives
-  spurious orbits.
-- **Exposures versus visits.** Exposures within one visit are taken minutes
-  apart and can share systematics, so treating them as independent epochs can
-  overstate the evidence for short-period variability. Decide whether to fit
-  exposures as given, add a `Jitter` extension in `prior.py`, or set
-  `period_min` well above the intra-visit spacing. Also note that harv's cost
-  scales with `n_obs`, so exposure-level runs cost several times more than
-  visit-level ones.
-
-### 3. Write the input-table script
-
-`scripts/make_input_table.py` turns the raw products into one flat table, one
-row per exposure, written as Parquet or FITS. It does only what hq cannot do:
-gather files, compute barycentric times if needed, and normalize column
-names. It applies no quality cuts. Those go in `select_rows` so that they are
-covered by the run's provenance (the model file's hash is recorded in every
-output, but the script that made the input table is not).
-
-Write the output to scratch, not into the repository, and record its path and
-the git commit of the script in the README.
-
-### 4. Write the catalog script
-
-`scripts/make_catalog.py` writes one row per star with whatever you want to
-plot in the viewer: Gaia photometry and parallax, derived colors and absolute
-magnitudes (the viewer plots columns as given, so compute `bp_rp` and
-`abs_g` here), stellar parameters, targeting flags, and any ID crosswalk.
-
-### 5. Initialize a test run
-
-```bash
-uv run hq init runs/test-1pct --kind rv
-```
-
-Edit `runs/test-1pct/hq.toml`: point `[data]` at the input table (absolute
-path), set `source_id`, `time`, `time_format`, `time_scale`, `rv`, `rv_err`,
-and `rv_unit` from step 2, point `[catalog]` at the catalog, and start small:
-
-```toml
-[prior_cache]
-n_samples = 1_000_000
-
-[rejection]
-top_k = 256
-```
-
-Edit `runs/test-1pct/prior.py`:
-
-- `make_setup()`: choose `period_min` (above the intra-visit spacing, per
-  step 2), `period_max` (several times the longest baseline), `sigma_K0`, and
-  `sigma_v0` (wide enough to cover the survey's systemic velocities, since
-  harv does no centering). Add `Jitter` if you decided to in step 2.
-- `select_rows(table)`: the quality cuts from step 2, plus, for the test run
-  only, a deterministic subset, e.g. keep sources whose
-  `harv_hq.ids.stable_hash(id) % 100 == 0`.
-
-### 6. Run the test locally and tune
-
-```bash
-cd runs/test-1pct
-uv run hq prepare
-uv run hq prior-cache
-uv run hq run --workers 8
-uv run hq status
-uv run hq summarize
-uv run hq serve          # http://127.0.0.1:8000
-```
-
-What to look at:
-
-- `hq status`: any `failed` sources. Read their tracebacks in the viewer and
-  fix the cause (usually units or a bad row that slipped past `select_rows`).
-- The `ln_Z_int_ess` and `well_resolved` distributions. If most sources with
-  clear variability are under-resolved, the prior library is too small or the
-  period range too wide.
-- `weight_captured`. Values well below 1 mean `top_k` is too small.
-- A few known binaries and a few known constant stars in the viewer, to check
-  that the orbits and the null cases look right.
-- Per-source wall time in the summary, multiplied by the full source count,
-  to size the full run.
-
-Change `hq.toml` or `prior.py`, then rerun the affected stages with
-`--overwrite`. Provenance checks will refuse to mix old and new outputs.
-
-### 7. Full run on a cluster
-
-Copy the tuned config to `runs/full/`, remove the subset line from
-`select_rows`, and set the full `n_samples` (the cache holds about
-`n_samples x n_params x 8` bytes, e.g. about 5 GB for `10^8` samples with six
-stored parameters; put it on fast scratch). Run `prepare` and `prior-cache`
-once, then the rejection stage with either launcher:
-
-```bash
-# SLURM job array: 64 independent shards
-#SBATCH --array=0-63
-export JAX_ENABLE_X64=1   # harv would enable it anyway; this just silences the warning
-uv run hq run --run-dir runs/full --shard ${SLURM_ARRAY_TASK_ID}/64
-
-# or MPI across nodes (compacts automatically at the end)
-srun uv run hq run --run-dir runs/full --mpi
-```
-
-If jobs time out or nodes fail, resubmit the same command; finished sources
-are skipped regardless of how the work was sharded before. A job array leaves
-many small result parts, so merge them once the whole array has finished,
-for example with a dependent job:
-
-```bash
-sbatch --dependency=afterok:<array job id> --wrap "uv run hq compact --run-dir runs/full"
-```
-
-Then:
-
-```bash
-uv run hq summarize --run-dir runs/full
-uv run hq mcmc --run-dir runs/full --shard ${SLURM_ARRAY_TASK_ID}/16   # array job
-uv run hq compact --run-dir runs/full --stage mcmc                     # after the array
-uv run hq summarize --run-dir runs/full
-```
-
-### 8. Explore and keep track
-
-Serve on the cluster and tunnel from your laptop:
-
-```bash
-uv run hq serve --run-dir runs/full                    # on the cluster
-ssh -L 8000:localhost:8000 <cluster-login-node>        # on your laptop
-```
-
-Commit `runs/full/hq.toml` and `prior.py` and tag the repository when a run is
-final. Every output records the sha256 of both files and the versions of hq,
-harv, and JAX, so any result file can be traced back to the exact
-configuration that produced it.
+Moved to the harv docs as `docs/hq/project-setup.md` in phase 8, so there is
+one copy to keep current.
