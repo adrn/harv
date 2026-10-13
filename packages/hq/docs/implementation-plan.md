@@ -20,18 +20,18 @@ ______________________________________________________________________
 
 Updated as each phase lands. A phase is done when its PR is merged.
 
-| Phase | Scope                                                  | Status                                            |
-| ----- | ------------------------------------------------------ | ------------------------------------------------- |
-| 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57)                             |
-| —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58)                             |
-| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59)                             |
-| 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)                                     |
-| 3     | prior cache, serial rejection, result parts, resume    | Done (PR #61)                                     |
-| 4     | execution modes: shards, pool, MPI                     | Done (PR #63)                                     |
-| 5     | compaction, summarize, status                          | Done (PR #65)                                     |
-| 6     | MCMC follow-up                                         | Done (PR #66)                                     |
-| 7     | web viewer                                             | Done (PR #67)                                     |
-| 8     | docs (workflow tutorial, `hq --help` link) and release | Implemented on branch `hq-phase8`, awaiting merge |
+| Phase | Scope                                                  | Status                |
+| ----- | ------------------------------------------------------ | --------------------- |
+| 0     | harv: `Samples.to_columns` / `from_columns`            | Done (merged, PR #57) |
+| —     | hq scaffolding, spec, and this plan                    | Done (merged, PR #58) |
+| 1     | config, model file, IDs, Parquet I/O, provenance, CLI  | Done (merged, PR #59) |
+| 2     | prepare, `read_source`, `read_sources`                 | Done (PR #60)         |
+| 3     | prior cache, serial rejection, result parts, resume    | Done (PR #61)         |
+| 4     | execution modes: shards, pool, MPI                     | Done (PR #63)         |
+| 5     | compaction, summarize, status                          | Done (PR #65)         |
+| 6     | MCMC follow-up                                         | Done (PR #66)         |
+| 7     | web viewer                                             | Done (PR #67)         |
+| 8     | docs (workflow tutorial, `hq --help` link) and release | Done (PR #68)         |
 
 ______________________________________________________________________
 
@@ -648,9 +648,9 @@ selection, phase fold).
 
 ______________________________________________________________________
 
-## Phase 8: docs and release — awaiting merge
+## Phase 8: docs and release — done
 
-Implemented on branch `hq-phase8` (off `hq`). The docs are `docs/hq/`:
+Implemented on branch `hq-phase8` (off `hq`), merged as PR #68. The docs are `docs/hq/`:
 `index.md` (overview, install), `getting-started.md` (a 50-source simulated
 survey through every stage; run end to end while writing it, a few minutes
 on a laptop), `workflow.md` (the tutorial), and `project-setup.md` (adapted
