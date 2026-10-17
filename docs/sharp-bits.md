@@ -158,3 +158,22 @@ samples = sampler.run(
 This is not specific to `EcoswEsinwRV` -- any prior that can produce a non-finite
 likelihood needs the same flag -- but that parameterization's default prior guarantees
 it on about a fifth of all draws.
+
+## `stop_at_ess` changes the library size per source
+
+`run_with_samples(..., stop_at_ess=...)` stops reading a prior cache once the running
+evidence ESS reaches the threshold. Each source then reports results for the part of
+the library it read, so `n_prior_samples` differs between sources, and two sources'
+`ln_Z_int_ess` values are no longer counts out of the same total. Compare
+`ln_Z_int_mcse` instead, which is what the threshold controls
+(`ln_Z_int_mcse ~ sqrt(1/ESS - 1/M)`, so `stop_at_ess = 10_000` gives about 0.01
+nats).
+
+Stopping when a quantity computed from the data crosses a threshold also biases the
+estimate a little: a run stops just after a batch that happened to push the ESS up. At
+thresholds of a few thousand or more, the bias is far below `ln_Z_int_mcse`. With a
+threshold of a few tens it is not, so we do not recommend values that small.
+
+A prior that can produce a non-finite likelihood gives a `NaN` ESS unless you pass
+`ignore_non_finite=True` (see the previous section). The comparison with the threshold
+is then false, so the run reads the whole library, as it would without `stop_at_ess`.
