@@ -10,6 +10,10 @@ benchmarks for different model parameterizations, epoch counts, prior library si
 - `test_rejection_scaling.py` is the benchmark itself, one `pytest-benchmark`
   test parametrized over that grid.
 - `report.py` merges `results/*.json` into `docs/benchmarks.md` and its figures.
+- `periodogram_grid.py`, `test_periodogram_scaling.py`, and `report_periodogram.py`
+  are the same three pieces for `harv.periodogram.periodogram`, rendered into
+  `docs/benchmarks-periodogram.md`. Each report reads only its own records, so
+  both kinds of result file share `results/`.
 - `results/` holds the committed JSON from the runs that page is built from.
 
 These are deliberately not part of the test suite: they live outside
@@ -23,6 +27,3 @@ them see `docs/running-benchmarks.md`, and for how to use the numbers when
 running over a survey see `docs/at-scale.md`.
 
 Most of the code in this directory was written by Claude Opus 5.
-
-TODO: generalize the benchmark code so we can benchmark other functionality, like the
-periodogram code.

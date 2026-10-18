@@ -14,6 +14,7 @@ api/index
 math-notes/index
 at-scale
 benchmarks
+benchmarks-periodogram
 running-benchmarks
 :::
 

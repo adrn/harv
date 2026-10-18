@@ -21,6 +21,9 @@ from typing import Any  # noqa: E402
 import jax.random as jr  # noqa: E402
 import pytest  # noqa: E402
 from grid import Cell, build_prior_and_model, enumerate_cells  # noqa: E402
+from periodogram_grid import (  # noqa: E402
+    enumerate_cells as enumerate_periodogram_cells,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,13 +128,17 @@ def pytest_collection_modifyitems(
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize over the grid, chosen by the --bench-* flags."""
-    if "cell" not in metafunc.fixturenames:
-        return
-    cells = enumerate_cells(
-        full=metafunc.config.getoption("--bench-full"),
-        smoke=metafunc.config.getoption("--bench-smoke"),
-    )
-    metafunc.parametrize("cell", cells, ids=[c.ident for c in cells])
+    for name, enumerate_fn in (
+        ("cell", enumerate_cells),
+        ("pgram_cell", enumerate_periodogram_cells),
+    ):
+        if name not in metafunc.fixturenames:
+            continue
+        cells = enumerate_fn(
+            full=metafunc.config.getoption("--bench-full"),
+            smoke=metafunc.config.getoption("--bench-smoke"),
+        )
+        metafunc.parametrize(name, cells, ids=[c.ident for c in cells])
 
 
 @pytest.fixture(scope="session")

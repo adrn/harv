@@ -36,6 +36,28 @@ uv run --no-sync python benchmarks/report.py
 git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
 ```
 
+## Periodogram benchmarks
+
+`benchmarks/test_periodogram_scaling.py` times one jitted
+`harv.periodogram.periodogram` call per cell and renders into
+{doc}`benchmarks-periodogram`. It takes minutes, not hours, and shares every flag
+above (`--bench-smoke`, `--bench-full`, `--bench-expect`, `--bench-rounds`):
+
+```bash
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_periodogram_scaling.py --bench --bench-expect=cpu \
+    --benchmark-json=benchmarks/results/periodogram-cpu.json
+uv run --no-sync python benchmarks/report_periodogram.py
+```
+
+Run it on its own file rather than as part of `pytest benchmarks/`, so a periodogram
+re-run does not mean redoing the multi-hour rejection grid. The star design varies
+`n_obs` (8 … 256), `n_grid` (1e3 … 1e5), and `n_terms` (1 … 4) around a baseline of
+`FourierGaiaAstrometry`, `n_terms=2`, `n_obs=64`, `n_grid=1e4`, and draws every curve
+for both Fourier models under all three prior modes (`flat`, `period_dependent`,
+`profile`). `periodogram_grid.py` is the source of truth. Each cell also records
+`eager_seconds`, the cost of calling `periodogram` without `jax.jit`.
+
 ## Running both CPU and GPU from one install
 
 You do **not** need two environments. Installing CUDA-enabled jaxlib does not take the
