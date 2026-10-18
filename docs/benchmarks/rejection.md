@@ -1,4 +1,4 @@
-# Benchmarks
+# Rejection sampling
 
 Wall-clock scaling of harv's `RejectionSampler` across model parameterizations, dataset
 sizes, prior library sizes, and `batch_size`. Every number here is measured, not
@@ -6,7 +6,7 @@ modelled.
 
 :::{note}
 This page is generated from committed benchmark results by Claude and is **not** rebuilt
-when the docs build. To regenerate it, see {doc}`running-benchmarks`.
+when the docs build. To regenerate it, see {doc}`running-the-benchmarks`.
 :::
 
 ## Run metadata
@@ -24,7 +24,7 @@ changes (see the Top-K selection section of the design spec).
 
 Computed from the results in this page, on the hardware above. The
 interpretation is fixed; the figures are not, so regenerating on your own
-machine ({doc}`running-benchmarks`) updates them rather than contradicting
+machine ({doc}`running-the-benchmarks`) updates them rather than contradicting
 them.
 
 ### The GPU advantage grows with library size
@@ -37,7 +37,7 @@ GPU, because a small library cannot fill the device. Below roughly
 **Consequence for population runs.** That floor is paid once per
 source. Millions of sources at small `M` spend most of their time in
 per-call overhead, so a GPU pays off through *bigger libraries*, not
-through more calls. See {doc}`at-scale`.
+through more calls. See {doc}`/at-scale`.
 
 ### Throughput, in millions of prior samples per second
 
@@ -82,7 +82,7 @@ Every CPU cell here is a **single process on an otherwise idle node**, so
 these are per-core ceilings, not per-node predictions. Under many-rank
 contention the optimum moves *down*, because ranks compete for memory
 bandwidth — a large batch that wins alone can starve a full node. Measure
-it under the contention you will actually run. See {doc}`at-scale`.
+it under the contention you will actually run. See {doc}`/at-scale`.
 :::
 
 ### Streaming from HDF5 costs the GPU much more than the CPU
@@ -105,7 +105,7 @@ for libraries that genuinely cannot.
 Paid once per shape, so a population loop over identically-shaped data
 amortizes it to nothing — and a catalog with a different epoch count per
 source pays it *per source*, which is why bucketing epoch counts is the
-first thing to do with real astrometry. See {doc}`at-scale`.
+first thing to do with real astrometry. See {doc}`/at-scale`.
 
 ### The GPU advantage falls away at large `n_obs`
 
@@ -166,7 +166,7 @@ All other axes are held at the baseline: `n_obs=64`, `M=1e6`, `batch_size=1e5`, 
 `slope` is the exponent of a log-log least-squares fit: 1.0 is linear
 in number of observations, 0.0 is free.
 
-![Scaling with number of observations](_static/benchmarks/n_obs.png)
+![Scaling with number of observations](figures/rejection-n_obs.png)
 
 ## Scaling with prior library size
 
@@ -209,7 +209,7 @@ All other axes are held at the baseline: `n_obs=64`, `M=1e6`, `batch_size=1e5`, 
 `slope` is the exponent of a log-log least-squares fit: 1.0 is linear
 in prior library size $M$, 0.0 is free.
 
-![Scaling with prior library size](_static/benchmarks/n_prior_samples.png)
+![Scaling with prior library size](figures/rejection-n_prior_samples.png)
 
 ## Effect of `batch_size`
 
@@ -246,7 +246,7 @@ All other axes are held at the baseline: `n_obs=64`, `M=1e6`, `batch_size=1e5`, 
 `slope` is the exponent of a log-log least-squares fit: 1.0 is linear
 in `batch_size`, 0.0 is free.
 
-![Effect of `batch_size`](_static/benchmarks/batch_size.png)
+![Effect of `batch_size`](figures/rejection-batch_size.png)
 
 ## In-memory library vs streamed HDF5 cache
 

@@ -1,4 +1,4 @@
-# Periodogram benchmarks
+# Periodograms
 
 Wall-clock cost of one `harv.periodogram.periodogram` call for a single
 source, under `jax.jit`, by model, prior mode, number of observations,
@@ -6,7 +6,7 @@ number of trial frequencies, and number of harmonics.
 
 :::{note}
 Generated from committed results; not rebuilt with the docs. See
-{doc}`running-benchmarks`.
+{doc}`running-the-benchmarks`.
 :::
 
 ## Run metadata
@@ -38,7 +38,7 @@ Held at `n_grid=10,000`, `n_terms=2`.
 | FourierGaiaAstrometry period_dependent | 8.5 ms | 9.0 ms | 14.7 ms | 30.9 ms | 51.1 ms | 91.2 ms | 0.73 | 150.2 ms |
 | FourierGaiaAstrometry profile | 61.9 ms | 95.3 ms | 221.6 ms | 266.0 ms | 356.8 ms | 511.4 ms | 0.61 | 315.7 ms |
 
-![number of observations](_static/benchmarks/periodogram-n_obs.png)
+![number of observations](figures/periodogram-n_obs.png)
 
 ## Scaling with number of trial frequencies
 
@@ -55,7 +55,7 @@ Held at `n_obs=64`, `n_terms=2`.
 | FourierGaiaAstrometry period_dependent | 3.2 ms | 30.9 ms | 283.0 ms | 0.97 | 150.2 ms |
 | FourierGaiaAstrometry profile | 27.4 ms | 266.0 ms | 2.62 s | 0.99 | 315.7 ms |
 
-![number of trial frequencies](_static/benchmarks/periodogram-n_grid.png)
+![number of trial frequencies](figures/periodogram-n_grid.png)
 
 ## Scaling with number of Fourier harmonics `n_terms`
 
@@ -72,7 +72,7 @@ Held at `n_grid=10,000`, `n_obs=64`.
 | FourierGaiaAstrometry period_dependent | 19.1 ms | 30.9 ms | 35.8 ms | 49.4 ms | 0.65 | 150.2 ms |
 | FourierGaiaAstrometry profile | 152.1 ms | 266.0 ms | 385.4 ms | 554.6 ms | 0.91 | 315.7 ms |
 
-![number of Fourier harmonics `n_terms`](_static/benchmarks/periodogram-n_terms.png)
+![number of Fourier harmonics `n_terms`](figures/periodogram-n_terms.png)
 
 ## First-call compile cost
 

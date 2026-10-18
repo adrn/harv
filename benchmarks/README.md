@@ -1,29 +1,29 @@
 # benchmarks
 
 This directory contains the code and results for scaling benchmarks of `harv` functionality.
-Currently, this is mainly for `harv.samplers.RejectionSampler`, and we compare
-benchmarks for different model parameterizations, epoch counts, prior library sizes, and
-`batch_size`.
+Currently this covers `harv.samplers.RejectionSampler` (model parameterizations, epoch
+counts, prior library sizes, and `batch_size`) and `harv.periodogram.periodogram`
+(models, prior modes, epoch counts, grid sizes, and `n_terms`).
 
 - `grid.py` defines the grid of benchmark cells and builds the data, priors, and
   models for each one.
 - `test_rejection_scaling.py` is the benchmark itself, one `pytest-benchmark`
   test parametrized over that grid.
-- `report.py` merges `results/*.json` into `docs/benchmarks.md` and its figures.
+- `report.py` merges `results/*.json` into `docs/benchmarks/rejection.md` and its figures.
 - `periodogram_grid.py`, `test_periodogram_scaling.py`, and `report_periodogram.py`
   are the same three pieces for `harv.periodogram.periodogram`, rendered into
-  `docs/benchmarks-periodogram.md`. Each report reads only its own records, so
+  `docs/benchmarks/periodograms.md`. Each report reads only its own records, so
   both kinds of result file share `results/`.
-- `results/` holds the committed JSON from the runs that page is built from.
+- `results/` holds the committed JSON from the runs those pages are built from.
 
 These are deliberately not part of the test suite: they live outside
 `testpaths`, require `--bench` to run, and depend on the `bench` group that
 is not installed in CI.
-The results page is committed rather than rebuilt so we can compare CPU and GPU
+The results pages are committed rather than rebuilt so we can compare CPU and GPU
 performance.
 
-For the measurements themselves see `docs/benchmarks.md`, for how to reproduce
-them see `docs/running-benchmarks.md`, and for how to use the numbers when
+For the measurements themselves see `docs/benchmarks/`, for how to reproduce them
+see `docs/benchmarks/running-the-benchmarks.md`, and for how to use the numbers when
 running over a survey see `docs/at-scale.md`.
 
 Most of the code in this directory was written by Claude Opus 5.

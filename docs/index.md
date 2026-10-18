@@ -13,9 +13,7 @@ tutorials/index
 api/index
 math-notes/index
 at-scale
-benchmarks
-benchmarks-periodogram
-running-benchmarks
+benchmarks/index
 :::
 
 **harv** (pronounced _harvey_) is a Python package for inferring Keplerian orbital

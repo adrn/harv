@@ -6,7 +6,7 @@ series, because the three prior modes take different code paths (a fixed Gaussia
 a ``LinearPriorCallable`` resolved per trial period, and the unregularized
 least-squares solve) and that difference is the thing worth seeing.
 
-Axes and baselines are documented in ``docs/running-benchmarks.md``.
+Axes and baselines are documented in ``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 __all__ = (

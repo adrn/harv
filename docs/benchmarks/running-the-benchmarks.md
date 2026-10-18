@@ -1,6 +1,6 @@
 # Running the benchmarks
 
-How to regenerate {doc}`benchmarks`. This is a developer page — the benchmarks
+How to regenerate {doc}`rejection` and {doc}`periodograms`. This is a developer page — the benchmarks
 are **not** part of the test suite and never run on CI.
 
 ## TL;DR
@@ -33,14 +33,14 @@ HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench \
 # Regenerate the docs page + figures from whatever is in benchmarks/results/
 uv run --no-sync python benchmarks/report.py
 
-git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
+git add benchmarks/results docs/benchmarks
 ```
 
 ## Periodogram benchmarks
 
 `benchmarks/test_periodogram_scaling.py` times one jitted
 `harv.periodogram.periodogram` call per cell and renders into
-{doc}`benchmarks-periodogram`. It takes minutes, not hours, and shares every flag
+{doc}`periodograms`. It takes minutes, not hours, and shares every flag
 above (`--bench-smoke`, `--bench-full`, `--bench-expect`, `--bench-rounds`):
 
 ```bash

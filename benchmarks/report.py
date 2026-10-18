@@ -1,4 +1,4 @@
-"""Turn pytest-benchmark JSON into the tracked ``docs/benchmarks.md`` page.
+"""Turn pytest-benchmark JSON into the tracked ``docs/benchmarks/rejection.md`` page.
 
 Usage::
 
@@ -33,8 +33,7 @@ from grid import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
-PAGE_PATH = REPO_ROOT / "docs" / "benchmarks.md"
-FIG_DIR = REPO_ROOT / "docs" / "_static" / "benchmarks"
+PAGE_PATH = REPO_ROOT / "docs" / "benchmarks" / "rejection.md"
 
 AXIS_LABELS = {
     "n_obs": "number of observations",
@@ -97,7 +96,7 @@ def load_results(
     if not files:
         msg = (
             f"no result files in {results_dir}. Run the benchmarks first "
-            f"(see docs/running-benchmarks.md)."
+            f"(see docs/benchmarks/running-the-benchmarks.md)."
         )
         raise SystemExit(msg)
 
@@ -400,8 +399,13 @@ def render_compile_table(
     return md_table(["parameterization", *devices], rows)
 
 
-def render_plots(curve: str, plot: dict, devices: list[str]) -> str | None:
-    """Log-log figure for one curve. Returns the markdown image line, or None."""
+def render_plots(
+    curve: str, plot: dict, devices: list[str], fig_dir: Path
+) -> str | None:
+    """Log-log figure for one curve, written under ``fig_dir``.
+
+    Returns the markdown image line, or None.
+    """
     if not plot or not any(plot["devices"].values()):
         return None
     import matplotlib as mpl
@@ -447,11 +451,11 @@ def render_plots(curve: str, plot: dict, devices: list[str]) -> str | None:
             alpha=0.7,
         )
 
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIG_DIR / f"{curve}.png"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    out = fig_dir / f"rejection-{curve}.png"
     fig.savefig(out, dpi=140)
     plt.close(fig)
-    return f"![{CURVE_TITLES.get(curve, curve)}](_static/benchmarks/{out.name})"
+    return f"![{CURVE_TITLES.get(curve, curve)}](figures/{out.name})"
 
 
 # --- findings ---------------------------------------------------------------
@@ -646,9 +650,9 @@ def render_findings(  # noqa: C901
         "## What the numbers say",
         "",
         "Computed from the results in this page, on the hardware above. The",
-        "interpretation is fixed; the figures are not, so regenerating on your own",
-        "machine ({doc}`running-benchmarks`) updates them rather than contradicting",
-        "them.",
+        "interpretation is fixed; the figures are not, so regenerating on your",
+        "own machine ({doc}`running-the-benchmarks`) updates them rather than",
+        "contradicting them.",
         "",
     ]
 
@@ -684,7 +688,7 @@ def render_findings(  # noqa: C901
                 "**Consequence for population runs.** That floor is paid once per",
                 "source. Millions of sources at small `M` spend most of their time in",
                 "per-call overhead, so a GPU pays off through *bigger libraries*, not",
-                "through more calls. See {doc}`at-scale`.",
+                "through more calls. See {doc}`/at-scale`.",
                 "",
             ]
 
@@ -757,7 +761,7 @@ def render_findings(  # noqa: C901
             "these are per-core ceilings, not per-node predictions. Under many-rank",
             "contention the optimum moves *down*, because ranks compete for memory",
             "bandwidth — a large batch that wins alone can starve a full node. Measure",
-            "it under the contention you will actually run. See {doc}`at-scale`.",
+            "it under the contention you will actually run. See {doc}`/at-scale`.",
             ":::",
             "",
         ]
@@ -809,7 +813,7 @@ def render_findings(  # noqa: C901
             "Paid once per shape, so a population loop over identically-shaped data",
             "amortizes it to nothing — and a catalog with a different epoch count per",
             "source pays it *per source*, which is why bucketing epoch counts is the",
-            "first thing to do with real astrometry. See {doc}`at-scale`.",
+            "first thing to do with real astrometry. See {doc}`/at-scale`.",
             "",
         ]
 
@@ -847,7 +851,7 @@ SMOKE_BANNER = [
     "`--bench-smoke` run: a handful of tiny cells at `M = 1e4` whose only",
     "job is to prove the harness and this report generator work end to end.",
     "The timings are meaningless as a description of harv's performance.",
-    "Replace them with a real run -- see {doc}`running-benchmarks`.",
+    "Replace them with a real run -- see {doc}`running-the-benchmarks`.",
     ":::",
     "",
 ]
@@ -903,7 +907,7 @@ def main() -> None:
     definitions = curve_definitions(full=mode == "full", smoke=mode == "smoke")
 
     lines = [
-        "# Benchmarks",
+        "# Rejection sampling",
         "",
     ]
     lines += SMOKE_BANNER if mode == "smoke" else []
@@ -915,7 +919,7 @@ def main() -> None:
         ":::{note}",
         "This page is generated from committed benchmark results and is **not**",
         "rebuilt when the docs build — ReadTheDocs has no GPU. To regenerate it, see",
-        "{doc}`running-benchmarks`.",
+        "{doc}`running-the-benchmarks`.",
         ":::",
         "",
         "## Run metadata",
@@ -954,7 +958,8 @@ def main() -> None:
                 "",
             ]
         if not args.no_plots:
-            img = render_plots(curve, plot, devices)
+            # Figures live beside the page, so a smoke report never touches docs/.
+            img = render_plots(curve, plot, devices, Path(args.out).parent / "figures")
             if img:
                 lines += [img, ""]
 

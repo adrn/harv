@@ -5,7 +5,7 @@ curve varies a single axis with the others pinned to :data:`BASELINE`, which is
 what a fitted scaling exponent actually needs. ``--bench-full`` swaps in the full
 cartesian product when an interaction is suspected.
 
-Axes and baselines are documented in ``docs/running-benchmarks.md``.
+Axes and baselines are documented in ``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 __all__ = (

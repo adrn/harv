@@ -175,7 +175,7 @@ method in `harv.kepler` validates its argument shapes and dtypes at call time du
 tests.
 
 Setting the environment variable `HARV_NO_TYPECHECK` skips the hooks entirely. It
-exists for the benchmark harness (`benchmarks/`, see `docs/running-benchmarks.md`):
+exists for the benchmark harness (`benchmarks/`, see `docs/benchmarks/running-the-benchmarks.md`):
 beartype decorates Python-level functions, and the hot paths are called inside
 `jax.vmap` under `eqx.filter_jit`, so the checks run once at *trace* time. That does
 not affect warm timings, but it does inflate the first-call compile cost the
@@ -1970,7 +1970,7 @@ intermediate.
 
 **Measured, superseding earlier advice.** This section previously said to set
 `batch_size = n_prior_samples` on GPU "to let XLA fully utilize the device". The
-`batch_size` curve in `docs/benchmarks.md` does not support that: across the whole
+`batch_size` curve in `docs/benchmarks/rejection.md` does not support that: across the whole
 sweep the GPU spans only 1.04-1.13x between its best and worst batch size, and at
 `M = 1e7` the best measured GPU batch was `1e5`, not the largest. The device is
 already saturated at far smaller batches.
@@ -3519,7 +3519,7 @@ role is already filled by `v_sys` / `ra0` / `dec0`.
 ### JIT compile time (TTFX)
 
 First-call JIT compile time is measured per parameterization by the benchmark
-harness (`docs/benchmarks.md`, "First-call compile cost") as `cold - warm` against a
+harness (`docs/benchmarks/rejection.md`, "First-call compile cost") as `cold - warm` against a
 cleared JIT cache. It has not yet been *optimized*. Potential approaches: smaller
 pytrees, pre-compilation of hot paths, compile-time caching.
 

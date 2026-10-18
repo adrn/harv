@@ -51,7 +51,7 @@ This is not imperative, but we have found the following from our own experience:
 `batch_size`
 : How many prior draws are evaluated in one vmapped step, which sets the working-set
 size of the `(batch_size, n_obs, n_linear)` intermediate. The default of 100,000 is a
-reasonable place to start. In our measurements (see {doc}`benchmarks`) it barely matters
+reasonable place to start. In our measurements (see {doc}`benchmarks/rejection`) it barely matters
 on GPU, since the device is already saturated at much smaller batches, and is worth a
 factor of roughly 1.5 to 2 on a single CPU core.
 

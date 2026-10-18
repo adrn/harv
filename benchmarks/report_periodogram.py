@@ -1,4 +1,4 @@
-"""Turn periodogram pytest-benchmark JSON into ``docs/benchmarks-periodogram.md``.
+"""Turn periodogram pytest-benchmark JSON into ``docs/benchmarks/periodograms.md``.
 
 Usage::
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from periodogram_grid import BASELINE, curve_definitions
 from report import REPO_ROOT, RESULTS_DIR, device_label, fmt_time, log_slope, md_table
 
-PAGE_PATH = REPO_ROOT / "docs" / "benchmarks-periodogram.md"
+PAGE_PATH = REPO_ROOT / "docs" / "benchmarks" / "periodograms.md"
 
 AXIS_LABELS = {
     "n_obs": "number of observations",
@@ -70,7 +70,10 @@ def load_results(
                 },
             )
     if not measurements:
-        msg = f"no periodogram results in {results_dir}; see docs/running-benchmarks.md"
+        msg = (
+            f"no periodogram results in {results_dir}; "
+            "see docs/benchmarks/running-the-benchmarks.md"
+        )
         raise SystemExit(msg)
     if len(modes) > 1:
         msg = f"results mix grid modes {sorted(modes)}; keep one mode per directory"
@@ -176,7 +179,7 @@ def render_plot(
     out = fig_dir / f"periodogram-{curve}.png"
     fig.savefig(out, dpi=140)
     plt.close(fig)
-    return f"![{AXIS_LABELS[curve]}](_static/benchmarks/{out.name})"
+    return f"![{AXIS_LABELS[curve]}](figures/{out.name})"
 
 
 def main() -> None:
@@ -192,12 +195,12 @@ def main() -> None:
     )
     devices = sorted(device_meta, key=lambda d: (not d.startswith("CPU"), d))
 
-    lines = ["# Periodogram benchmarks", ""]
+    lines = ["# Periodograms", ""]
     if mode == "smoke":
         lines += [
             ":::{warning}",
             "Smoke-test numbers from a `--bench-smoke` run. They only prove the",
-            "harness works; see {doc}`running-benchmarks`.",
+            "harness works; see {doc}`running-the-benchmarks`.",
             ":::",
             "",
         ]
@@ -208,7 +211,7 @@ def main() -> None:
         "",
         ":::{note}",
         "Generated from committed results; not rebuilt with the docs. See",
-        "{doc}`running-benchmarks`.",
+        "{doc}`running-the-benchmarks`.",
         ":::",
         "",
         "## Run metadata",
@@ -255,7 +258,7 @@ def main() -> None:
         body, plot = render_curve(curve, cells, measurements, devices)
         lines += body
         # Figures live beside the page, so a smoke report never touches docs/.
-        fig_dir = args.out.parent / "_static" / "benchmarks"
+        fig_dir = args.out.parent / "figures"
         if not args.no_plots and (img := render_plot(curve, plot, devices, fig_dir)):
             lines += [img, ""]
 

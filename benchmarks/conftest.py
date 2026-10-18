@@ -1,6 +1,7 @@
 """Fixtures and options for the rejection-sampler benchmarks.
 
-Nothing here runs unless ``--bench`` is passed. See ``docs/running-benchmarks.md``.
+Nothing here runs unless ``--bench`` is passed. See
+``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 # x64 FIRST, before anything imports harv (and therefore JAX). harv enables it on
@@ -91,8 +92,8 @@ def pytest_configure(config: pytest.Config) -> None:
                 f"({jax.devices()[0].device_kind}). "
                 + (
                     "JAX falls back to CPU when CUDA-enabled jaxlib or the driver is "
-                    "missing; see docs/running-benchmarks.md, 'Installing with GPU "
-                    "support'."
+                    "missing; see docs/benchmarks/running-the-benchmarks.md, "
+                    "'Installing with GPU support'."
                     if expect == "gpu"
                     else "Pass JAX_PLATFORMS=cpu to force the CPU backend."
                 )
@@ -119,7 +120,8 @@ def pytest_collection_modifyitems(
     if config.getoption("--bench"):
         return
     skip = pytest.mark.skip(
-        reason="benchmarks require --bench (see docs/running-benchmarks.md)"
+        reason="benchmarks require --bench "
+        "(see docs/benchmarks/running-the-benchmarks.md)"
     )
     for item in items:
         if "benchmarks/" in str(item.fspath).replace(os.sep, "/"):

@@ -1,7 +1,7 @@
 """Scaling benchmarks for :func:`harv.periodogram.periodogram`.
 
 One test, parametrized over the grid in :mod:`periodogram_grid`. Run with
-``--bench``; see ``docs/running-benchmarks.md``.
+``--bench``; see ``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 import statistics
