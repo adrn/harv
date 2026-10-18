@@ -50,9 +50,9 @@ def test_periodogram(
     def run(d: Any, f: Any) -> Any:
         return periodogram(
             d, f, prior=prior, n_terms=cell.n_terms, prior_params=prior_params
-        ).delta_ln_likelihood
+        )
 
-    jitted = jax.jit(run)
+    jitted = jax.jit(lambda d, f: run(d, f).delta_ln_likelihood)
 
     # Cold = compile + execute against a cleared cache, as in the rejection harness.
     jax.clear_caches()
@@ -65,7 +65,9 @@ def test_periodogram(
     # Calling periodogram() directly, unjitted, is what a one-off user does. It is
     # dominated by op-by-op dispatch rather than arithmetic, so it gets recorded
     # alongside rather than plotted against the jitted numbers.
-    jax.block_until_ready(run(data, freq))
+    # Profile mode lowers n_terms when the trial model would be underdetermined,
+    # so record what was actually timed, not what was asked for.
+    n_terms_effective = jax.block_until_ready(run(data, freq)).n_terms
     eager = []
     for _ in range(EAGER_ROUNDS):
         t0 = time.perf_counter()
@@ -76,6 +78,7 @@ def test_periodogram(
     benchmark.extra_info["grid_mode"] = grid_mode
     benchmark.extra_info["cold_seconds"] = cold_seconds
     benchmark.extra_info["eager_seconds"] = statistics.median(eager)
+    benchmark.extra_info["n_terms_effective"] = n_terms_effective
 
     benchmark.pedantic(
         lambda: jax.block_until_ready(jitted(data, freq)),

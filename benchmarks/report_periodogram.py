@@ -89,6 +89,38 @@ def _stat(record: dict | None, which: str) -> float | None:
     return record["extra_info"].get(f"{which}_seconds")
 
 
+def _capped(record: dict | None) -> bool:
+    """Whether profile mode timed fewer harmonics than the cell asked for."""
+    if record is None:
+        return False
+    info = record["extra_info"]
+    return info.get("n_terms_effective", info["n_terms"]) != info["n_terms"]
+
+
+def _fmt(record: dict | None) -> str:
+    return fmt_time(_stat(record, "warm")) + (" †" if _capped(record) else "")
+
+
+def render_flat(
+    cells: list[Any], measurements: dict[tuple, dict[str, dict]], devices: list[str]
+) -> list[str]:
+    """One row per cell, for the full factorial, which has no single axis."""
+    rows = [
+        [
+            c.model,
+            c.prior,
+            str(c.n_terms),
+            str(c.n_obs),
+            f"{c.n_grid:,}",
+            *(_fmt(measurements[c.key].get(d)) for d in devices),
+        ]
+        for c in cells
+        if c.key in measurements
+    ]
+    header = ["model", "prior", "n_terms", "n_obs", "n_grid", *devices]
+    return [md_table(header, rows), ""]
+
+
 def render_curve(
     curve: str,
     cells: list[Any],
@@ -107,11 +139,11 @@ def render_curve(
         rows = []
         plot[device] = {}
         for name, by_x in series.items():
-            warm = [
-                _stat(measurements.get(by_x.get(x), {}).get(device), "warm") for x in xs
-            ]
-            if not any(warm):
+            records = [measurements.get(by_x.get(x), {}).get(device) for x in xs]
+            if not any(records):
                 continue
+            # Capped cells timed a smaller model, so they stay out of fits and plots.
+            warm = [None if _capped(r) else _stat(r, "warm") for r in records]
             eager = _stat(
                 measurements.get(by_x.get(getattr(BASELINE, curve)), {}).get(device),
                 "eager",
@@ -123,7 +155,7 @@ def render_curve(
             rows.append(
                 [
                     name,
-                    *(fmt_time(t) for t in warm),
+                    *(_fmt(r) for r in records),
                     "--" if slope is None else f"{slope:.2f}",
                     fmt_time(eager),
                 ]
@@ -237,14 +269,20 @@ def main() -> None:
         "`periodogram` directly, without `jax.jit`, at the baseline value of the",
         "axis: that is what a one-off call costs, and it is dominated by op-by-op",
         "dispatch rather than arithmetic. `slope` is the log-log exponent of the",
-        "jitted times.",
+        "jitted times. † marks a profile-mode cell where `periodogram` lowered",
+        "`n_terms` to keep the trial model overdetermined, so it timed fewer",
+        "harmonics than the cell asked for; those cells are left out of `slope`",
+        "and the figures.",
         "",
     ]
 
     for curve, cells in curve_definitions(
         full=mode == "full", smoke=mode == "smoke"
     ).items():
-        if curve not in AXIS_LABELS or not any(c.key in measurements for c in cells):
+        if not any(c.key in measurements for c in cells):
+            continue
+        if curve not in AXIS_LABELS:
+            lines += ["## Full grid", "", *render_flat(cells, measurements, devices)]
             continue
         lines += [f"## Scaling with {AXIS_LABELS[curve]}", ""]
         if mode == "star":
