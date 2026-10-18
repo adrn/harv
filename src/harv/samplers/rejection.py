@@ -178,10 +178,13 @@ def _read_padded(dataset: Any, start: int, stop: int, size: int) -> jax.Array:
     >>> from harv.samplers.rejection import _read_padded
     >>> _read_padded(np.arange(5.0), 3, 5, 4).tolist()
     [3.0, 4.0, 4.0, 4.0]
+    >>> _read_padded(np.arange(6.0).reshape(3, 2), 2, 3, 2).tolist()
+    [[4.0, 5.0], [4.0, 5.0]]
     """
     arr = np.asarray(dataset[start:stop])
     if arr.shape[0] < size:
-        arr = np.concatenate([arr, np.repeat(arr[-1:], size - arr.shape[0])])
+        pad = np.repeat(arr[-1:], size - arr.shape[0], axis=0)
+        arr = np.concatenate([arr, pad])
     return jnp.asarray(arr)
 
 
@@ -550,8 +553,12 @@ class RejectionSampler(AbstractSampler):
             If ``True``, any ``NaN`` or infinite log-likelihood values are
             treated as rejected samples by replacing them with ``-inf`` before
             the rejection step. If ``False`` (default), non-finite values are
-            left unchanged. On the ``top_k`` path this is a no-op: non-finite
-            log-likelihoods always sort last and carry zero weight.
+            left unchanged. On the ``top_k`` path non-finite log-likelihoods
+            always sort last, so the selected rows are the same either way,
+            but without this flag a ``NaN`` makes the evidence statistics
+            (``ln_Z_int``, and with it ``Samples["weight"]``) ``NaN``, and in
+            :meth:`run_with_samples` it makes the running ESS ``NaN``, so
+            ``stop_at_ess`` never stops the run early.
         return_logprobs
             If ``True``, store per-sample log-probabilities on the returned
             :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
@@ -911,9 +918,12 @@ class RejectionSampler(AbstractSampler):
             See :meth:`run`. This is the intended entry point for
             population-scale loops: one shared prior library, one call per
             system, exactly ``top_k`` rows out of every call regardless of how
-            constraining that system's data are. Selection depends only on the
-            log-likelihoods, so it is unaffected by
-            ``randomize_prior_order``.
+            constraining that system's data are. Without ``stop_at_ess``,
+            selection depends only on the log-likelihoods, so it is unaffected
+            by ``randomize_prior_order`` (up to ties, which keep read order).
+            With ``stop_at_ess``, the read order decides where the run stops,
+            so the selection and every output depend on
+            ``randomize_prior_order`` and ``key``.
         key
             See :meth:`run`.
         ignore_non_finite
@@ -931,13 +941,20 @@ class RejectionSampler(AbstractSampler):
         stop_at_ess
             Disk-streaming branch only: stop reading the library once the
             running evidence ESS (``ln_Z_int_ess``) reaches this value, and at
-            least ``top_k`` rows have been read. ``None`` (default) reads the
+            least ``top_k`` rows have been read. Must be at least the sampler's
+            ``min_evidence_ess``. ``None`` (default) reads the
             whole library. The rows read so far are a smaller library of
             i.i.d. prior draws, so every output, ``n_prior_samples`` included,
-            describes that library. Stopping on a data-dependent quantity
-            biases ``ln_Z_int`` slightly; at thresholds of ~1e3 or more the
-            bias is far below ``ln_Z_int_mcse``. Sources that the data
-            constrain never reach the threshold and read the whole library.
+            describes that library. This is a heuristic: the ESS and
+            ``ln_Z_int_mcse`` are estimated from the draws read so far, so they
+            cannot account for a high-likelihood region of small prior mass
+            that no draw has hit yet, and a run can stop with a large ESS and
+            a small reported MCSE while ``ln_Z_int`` is still well off.
+            Stopping on a data-dependent quantity also biases ``ln_Z_int``.
+            Sources whose draws show them to be constrained never reach the
+            threshold and read the whole library, as does any run with a
+            non-finite log-likelihood unless ``ignore_non_finite`` is set.
+            See ``docs/sharp-bits.md``.
 
         Returns
         -------
@@ -950,8 +967,8 @@ class RejectionSampler(AbstractSampler):
         ValueError
             If both ``max_posterior_samples`` and ``top_k`` are set, if
             ``top_k`` is not positive, if ``prior_samples`` is empty, or if
-            ``stop_at_ess`` is not positive or is passed with an in-memory
-            ``prior_samples``.
+            ``stop_at_ess`` is below ``min_evidence_ess`` or is passed with an
+            in-memory ``prior_samples``.
 
         Examples
         --------
@@ -980,8 +997,14 @@ class RejectionSampler(AbstractSampler):
         """
         _validate_data(data, self.model)
         _validate_selection_policy(max_posterior_samples, top_k)
-        if stop_at_ess is not None and not stop_at_ess > 0:
-            msg = f"stop_at_ess must be positive, got {stop_at_ess}."
+        if stop_at_ess is not None and not stop_at_ess >= self.min_evidence_ess:
+            # Stopping there would leave a run the resolution check flags as
+            # under-resolved, after reading only part of the library. Written
+            # as `not >=` so NaN is rejected too.
+            msg = (
+                f"stop_at_ess ({stop_at_ess}) must be at least this sampler's "
+                f"min_evidence_ess ({self.min_evidence_ess})."
+            )
             raise ValueError(msg)
         if stop_at_ess is not None and isinstance(prior_samples, Samples):
             msg = (
@@ -1161,8 +1184,8 @@ class RejectionSampler(AbstractSampler):
         The evidence statistics are accumulated per batch and returned
         alongside the rows.  With ``top_k``, only the running best ``top_k``
         rows are kept, so memory does not grow with the library; the merge
-        keeps earlier rows first on ties, so it selects exactly what one
-        :func:`_top_k_indices` over the whole library would.  Without it,
+        keeps earlier-read rows first on ties, so it selects exactly what one
+        :func:`_top_k_indices` over the rows, in the order read, would.  Without it,
         every row is kept for the rejection step.  ``stop_at_ess`` ends the
         loop early (see :meth:`run_with_samples`).
         """
@@ -1239,10 +1262,12 @@ class RejectionSampler(AbstractSampler):
                 ln_lik_chunks.append(ln_lik)
                 for k in expected_keys:
                     sample_chunks[k].append(batch[k][:actual])
-                if top_k is not None:
-                    # Merge into the running top-k, earlier rows first.
+                if top_k is not None and n_read > top_k:
+                    # Merge into the running top-k, earlier rows first. Until more
+                    # than top_k rows are in, nothing can be dropped, so the chunks
+                    # just accumulate and _finalize_posterior does the selection.
                     ll = jnp.concatenate(ln_lik_chunks)
-                    idx = _top_k_indices(ll, min(top_k, int(ll.shape[0])))
+                    idx = _top_k_indices(ll, top_k)
                     ln_lik_chunks = [ll[idx]]
                     sample_chunks = {
                         k: [jnp.concatenate(v)[idx]] for k, v in sample_chunks.items()
@@ -1258,8 +1283,11 @@ class RejectionSampler(AbstractSampler):
 
         ln_likelihoods = jnp.concatenate(ln_lik_chunks)
         flat = {k: jnp.concatenate(v) for k, v in sample_chunks.items()}
-        stats = _evidence_stats_from_sums(ln_s1, ln_s2, max_ll, n_read)
-        return flat, ln_likelihoods, stats
+        return (
+            flat,
+            ln_likelihoods,
+            _evidence_stats_from_sums(ln_s1, ln_s2, max_ll, n_read),
+        )
 
     @eqx.filter_jit
     def _sample_prior_and_evaluate_batched(

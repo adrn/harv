@@ -33,10 +33,6 @@ def _prior() -> HarvPrior:
     )
 
 
-def _sampler() -> RejectionSampler:
-    return RejectionSampler(_prior(), RVModel(), batch_size=BATCH)
-
-
 def _broad_data() -> RVData:
     """Three noisy points: the posterior is close to the prior."""
     return RVData(
@@ -64,17 +60,19 @@ def library(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _run(path: Path | Samples, data: RVData, **kwargs: object) -> Samples:
-    return _sampler().run_with_samples(
+    return RejectionSampler(_prior(), RVModel(), batch_size=BATCH).run_with_samples(
         data, path, key=jr.key(1), randomize_prior_order=False, **kwargs
     )
 
 
 class TestStreamingTopK:
-    def test_matches_selection_over_the_whole_library(self, library: Path):
+    # 1200 > BATCH: the first batches are kept whole before any pruning.
+    @pytest.mark.parametrize("top_k", [64, 1200])
+    def test_matches_selection_over_the_whole_library(self, library: Path, top_k: int):
         """Merging per batch picks the same rows, in the same order, as one
         top-k over the whole library (the in-memory path)."""
-        streamed = _run(library, _broad_data(), top_k=64)
-        whole = _run(Samples.from_hdf5(library), _broad_data(), top_k=64)
+        streamed = _run(library, _broad_data(), top_k=top_k)
+        whole = _run(Samples.from_hdf5(library), _broad_data(), top_k=top_k)
         np.testing.assert_array_equal(
             np.asarray(streamed["period"].value), np.asarray(whole["period"].value)
         )
@@ -109,7 +107,7 @@ class TestStopAtESS:
 
     def test_never_stops_before_top_k_rows(self, library: Path):
         """A threshold below ``top_k`` still fills the fixed-shape output."""
-        samples = _run(library, _broad_data(), top_k=1200, stop_at_ess=1)
+        samples = _run(library, _broad_data(), top_k=1200, stop_at_ess=3)
         assert samples.metadata["n_prior_samples"] == 3 * BATCH
         assert samples.n_samples == 1200
 
@@ -124,9 +122,9 @@ class TestStopAtESS:
         samples = _run(library, _broad_data(), return_evidence_stats=True)
         assert samples.metadata["n_prior_samples"] == N_LIBRARY
 
-    @pytest.mark.parametrize("value", [0, -5.0])
-    def test_rejects_non_positive(self, library: Path, value: float):
-        with pytest.raises(ValueError, match="must be positive"):
+    @pytest.mark.parametrize("value", [-5.0, 0, 0.5, 2.0, float("nan")])
+    def test_rejects_below_min_evidence_ess(self, library: Path, value: float):
+        with pytest.raises(ValueError, match="min_evidence_ess"):
             _run(library, _broad_data(), stop_at_ess=value)
 
     def test_rejects_an_in_memory_library(self, library: Path):

@@ -2049,8 +2049,8 @@ sampler.run_with_samples(
   the file may be much larger than RAM. Same key handling as the in-memory
   branch: missing keys raise, extra keys are ignored. The evidence statistics
   are accumulated batch by batch, and with `top_k` only the running best `top_k`
-  rows are kept (merged per batch, earlier rows first on ties, so the selection
-  is identical to one top-K over the whole library). So with `top_k`, memory
+  rows are kept (merged per batch, earlier-read rows first on ties, so the
+  selection is identical to one top-K over the rows in the order they were read). So with `top_k`, memory
   does not grow with the library size; the rejection path still keeps every row.
 
 Both branches return parameters in declaration order: the prior's nonlinear
@@ -2067,9 +2067,12 @@ debugging).
 
 The other keyword arguments behave exactly as on `run`. This is the intended
 entry point for `top_k`: one shared prior library, one call per system, exactly
-`top_k` rows out of every call. Top-K selection depends only on the
-log-likelihoods, so it selects the same library draws either way and is
-unaffected by `randomize_prior_order`.
+`top_k` rows out of every call. Without `stop_at_ess`, top-K selection depends
+only on the log-likelihoods, so it selects the same library draws whatever
+`randomize_prior_order` is, up to ties: rows with equal log-likelihoods (e.g.
+`-inf`) are kept in read order. With `stop_at_ess`, the read order decides which
+batches are read before the run stops, so the selected draws and every output
+depend on `randomize_prior_order` and `key`.
 
 `stop_at_ess` (HDF5 path only): stop reading the library once the running
 evidence ESS (`ln_Z_int_ess`, computed after every batch) reaches this value
@@ -2082,13 +2085,27 @@ them in i.i.d. order, and any set of whole batches from it is again i.i.d.,
 whatever `randomize_prior_order` is), so they form a smaller library of
 `M' <= M` draws, and every output describes it: `n_prior_samples = M'`, and
 `ln_Z_int`, `ln_Z_int_mcse`, `ln_Z_int_ess`, `weight_captured`, and the
-resolution check all use `M'`. Since `ln_Z_int_mcse ~ sqrt(1/ESS - 1/M')`, the
-threshold also sets the evidence precision: `stop_at_ess = 10_000` gives about
-0.01 nats. Stopping when a data-dependent quantity crosses a threshold biases
-`ln_Z_int` slightly; at thresholds of ~1e3 or more the bias is far below
-`ln_Z_int_mcse` (see `docs/sharp-bits.md`). Errors: `ValueError` if
-`stop_at_ess` is not positive, or if it is passed with an in-memory `Samples`
-library (pass fewer samples instead).
+resolution check all use `M'`.
+
+The stopping rule is a heuristic, not an accuracy guarantee. The ESS and
+`ln_Z_int_mcse ~ sqrt(1/ESS - 1/M')` are estimated from the draws read, so they
+measure the scatter among those draws and say nothing about high-likelihood
+regions of small prior mass that no draw has hit. For example, if the likelihood
+is 1 everywhere except on a region of prior mass 1e-5 where it is 1e6, 10,000
+draws miss that region about 90% of the time; the run then reports ESS 10,000 and
+`ln_Z_int_mcse = 0` while `ln_Z_int` is low by about 2.4 nats. Any finite library
+has this blind spot, but stopping early reads fewer draws and so is more exposed
+to it, and for the same reason a constrained source reads the whole library only
+if the draws it has read show that it is constrained. `ln_Z_int_mcse` is
+therefore the Monte Carlo error only when the draws have sampled every region that
+carries evidence. Stopping when a data-dependent quantity crosses a threshold also
+biases `ln_Z_int`, by an amount `ln_Z_int_mcse` does not bound (see
+`docs/sharp-bits.md`). The running ESS is `NaN` when any
+log-likelihood is non-finite, and the run then never stops early; pass
+`ignore_non_finite=True` for priors that can produce one. Errors: `ValueError` if
+`stop_at_ess` is below the sampler's `min_evidence_ess` (the run would stop at an
+ESS the resolution check then flags as under-resolved), or if it is passed with an
+in-memory `Samples` library (pass fewer samples instead).
 
 ### Building a prior cache (`make_prior_cache`)
 
@@ -3498,6 +3515,34 @@ a single shared `make_prior_cache` library. A planned utility would take a
 shared prior cache and, per source, resample/reweight the period column to a
 tailored interim prior — combining the cache's one-time prior-draw cost with
 per-source period priors.
+
+### Streaming prior-cache loop performance
+
+Two known costs in `RejectionSampler._evaluate_from_hdf5`, the batch loop behind
+`run_with_samples` on an HDF5 cache. Neither has been measured yet; the
+`benchmarks/` harness is where to do it, on GPU for the first.
+
+1. **`stop_at_ess` serializes reads and compute.** The stopping test calls
+   `float(...)` on the running ESS after every batch, which waits for the device.
+   Without it, JAX dispatch is asynchronous, so the h5py read of the next batch
+   overlaps the current likelihood evaluation; with it, the two alternate. The
+   cost lands on the sources that never reach the threshold and read the whole
+   library, which are the expensive ones. Options: test the previous batch's ESS
+   (stop one batch late, which is still a whole-batch library and so i.i.d.), or
+   test only every N batches.
+1. **Per-batch top-k merge overhead.** Each merge issues about `2 * n_keys + 3`
+   small eager ops (a concatenate and a gather per parameter), and
+   `_top_k_indices` recompiles for every new `(input length, k)` while the kept
+   buffer is filling and wherever a partial batch lands under random order. With
+   `stop_at_ess`, the jitted rejection step also recompiles for every distinct
+   `M'`. This matters for a small `batch_size` over a large library (thousands of
+   batches). Options: one `eqx.filter_jit` merge over the whole dict with a fixed
+   buffer of `top_k + batch_size` rows; on the rejection path without
+   `stop_at_ess`, compute the evidence statistics once from the concatenated
+   array instead of per batch. Routing in-memory `Samples` libraries through the
+   same loop would also remove the separate full-array top-k/evidence path and
+   the `evidence_stats` override on `_finalize_posterior`, and let `stop_at_ess`
+   work for in-memory libraries.
 
 ### Periodogram for 2-d astrometry
 
