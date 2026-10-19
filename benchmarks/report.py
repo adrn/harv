@@ -4,8 +4,8 @@ Usage::
 
     uv run -g bench python benchmarks/report.py
 
-Reads every ``benchmarks/results/*.json``, merges the runs by device, and writes
-the results page plus its log-log figures. The page is committed because
+Reads every ``benchmarks/results/rejection/*.json``, merges the runs by device, and
+writes the results page plus its log-log figures. The page is committed because
 ReadTheDocs has no GPU and must never try to regenerate it.
 """
 
@@ -32,7 +32,7 @@ from grid import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
+RESULTS_DIR = REPO_ROOT / "benchmarks" / "results" / "rejection"
 PAGE_PATH = REPO_ROOT / "docs" / "benchmarks" / "rejection.md"
 
 AXIS_LABELS = {
@@ -897,6 +897,9 @@ def main() -> None:
     measurements, device_meta = load_results(
         Path(args.results), include_smoke=args.include_smoke
     )
+    if not measurements:
+        msg = f"no rejection-sampler results in {args.results}."
+        raise SystemExit(msg)
     devices = sorted(device_meta, key=lambda d: (not d.startswith("CPU"), d))
 
     mode = next(

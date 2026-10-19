@@ -35,7 +35,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--bench",
         action="store_true",
         default=False,
-        help="Run the rejection-sampler benchmarks. Without this they all skip, "
+        help="Run the benchmarks. Without this they all skip, "
         "so a stray `pytest benchmarks/` cannot start a multi-hour run.",
     )
     group.addoption(
@@ -48,7 +48,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--bench-smoke",
         action="store_true",
         default=False,
-        help="Two tiny cells that exercise the whole pipeline in under a minute.",
+        help="A few tiny cells per benchmark that exercise the whole pipeline in "
+        "under a minute.",
     )
     group.addoption(
         "--bench-rounds",

@@ -16,7 +16,6 @@ __all__ = (
     "N_TERMS_VALUES",
     "PRIORS",
     "PeriodogramCell",
-    "build_prior",
     "curve_definitions",
     "enumerate_cells",
 )
@@ -105,10 +104,15 @@ def curve_definitions(
     series = list(itertools.product(MODELS, PRIORS))
 
     if smoke:
+        # Every model and prior mode, at n_obs low enough that profile mode caps
+        # n_terms, so the run reaches every build_prior branch and the report's
+        # capped-cell marking.
         return {
             "n_obs": [
-                replace(BASELINE, model=m, n_obs=n, n_grid=1_000, curve="n_obs")
-                for m in MODELS
+                replace(
+                    BASELINE, model=m, prior=p, n_obs=n, n_grid=1_000, curve="n_obs"
+                )
+                for m, p in series
                 for n in (8, 16, 32)
             ]
         }
@@ -151,45 +155,3 @@ def enumerate_cells(
         for cell in cells:
             seen.setdefault(cell.key, cell)
     return sorted(seen.values())
-
-
-# --- prior construction ----------------------------------------------------
-
-
-def build_prior(cell: PeriodogramCell) -> tuple[Any, dict[str, Any] | None]:
-    """Return ``(prior, prior_params)`` for ``periodogram(..., prior=, prior_params=)``.
-
-    Imported lazily so that ``benchmarks/conftest.py`` can pin x64 before harv
-    (and therefore JAX) is imported.
-    """
-    import harv.models as hm
-
-    if cell.prior == "profile":
-        return False, None
-
-    bounds = {"period_min": PERIOD_MIN, "period_max": PERIOD_MAX}
-    period_dependent = cell.prior == "period_dependent"
-    param = getattr(hm, cell.model)(n_terms=cell.n_terms)
-
-    if cell.model_kind == "rv":
-        amp = (
-            {"sigma_K0": Q(30.0, "km/s"), "period_ref": Q(365.25, "day")}
-            if period_dependent
-            else {"sigma_amp": Q(30.0, "km/s")}
-        )
-        return param.default_prior(**bounds, **amp, sigma_v0=Q(50.0, "km/s")), None
-
-    amp = (
-        {"sigma_a0": Q(1.0, "AU"), "period_ref": Q(365.25, "day")}
-        if period_dependent
-        else {"sigma_amp": Q(10.0, "mas")}
-    )
-    prior = param.default_prior(
-        **bounds,
-        **amp,
-        sigma_pos=Q(1e3, "mas"),
-        sigma_pm=Q(100.0, "mas/yr"),
-        sigma_parallax=Q(100.0, "mas"),
-    )
-    # The period-dependent Gaia prior needs a parallax to turn sigma_a0 into an angle.
-    return prior, {"parallax": Q(10.0, "mas")} if period_dependent else None

@@ -4,9 +4,8 @@ Usage::
 
     uv run --group bench python benchmarks/report_periodogram.py
 
-Reads the periodogram records from every ``benchmarks/results/*.json`` (records
-from the rejection benchmarks are ignored, as ``report.py`` ignores these) and
-writes the results page plus one log-log figure per curve.
+Reads every ``benchmarks/results/periodogram/*.json`` and writes the results page
+plus one log-log figure per curve.
 """
 
 import argparse
@@ -21,8 +20,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from periodogram_grid import BASELINE, curve_definitions
-from report import REPO_ROOT, RESULTS_DIR, device_label, fmt_time, log_slope, md_table
+from report import REPO_ROOT, device_label, fmt_time, log_slope, md_table
 
+RESULTS_DIR = REPO_ROOT / "benchmarks" / "results" / "periodogram"
 PAGE_PATH = REPO_ROOT / "docs" / "benchmarks" / "periodograms.md"
 
 AXIS_LABELS = {
@@ -39,6 +39,7 @@ def load_results(
     measurements: dict[tuple, dict[str, dict]] = defaultdict(dict)
     device_meta: dict[str, dict] = {}
     modes: set[str] = set()
+    n_smoke = 0
     for path in sorted(results_dir.glob("*.json")):
         payload = json.loads(path.read_text())
         machine = payload.get("machine_info", {})
@@ -47,6 +48,7 @@ def load_results(
             if info.get("benchmark") != "periodogram":
                 continue
             if info["grid_mode"] == "smoke" and not include_smoke:
+                n_smoke += 1
                 continue
             modes.add(info["grid_mode"])
             label = device_label(record, machine)
@@ -71,7 +73,10 @@ def load_results(
             )
     if not measurements:
         msg = (
-            f"no periodogram results in {results_dir}; "
+            f"only smoke-run results in {results_dir}; pass --include-smoke to "
+            "render them"
+            if n_smoke
+            else f"no periodogram results in {results_dir}; "
             "see docs/benchmarks/running-the-benchmarks.md"
         )
         raise SystemExit(msg)
@@ -267,8 +272,10 @@ def main() -> None:
         "`LinearPriorCallable` resolved at every trial period, and `profile` is",
         "`prior=False` (amplitudes maximized). `eager` is the median of calling",
         "`periodogram` directly, without `jax.jit`, at the baseline value of the",
-        "axis: that is what a one-off call costs, and it is dominated by op-by-op",
-        "dispatch rather than arithmetic. `slope` is the log-log exponent of the",
+        "axis, after a first call has compiled the scan: that is what each call",
+        "in a plain Python loop over same-shape sources costs. The difference",
+        "from the jitted time is per-op dispatch of the code around the scan.",
+        "`slope` is the log-log exponent of the",
         "jitted times. † marks a profile-mode cell where `periodogram` lowered",
         "`n_terms` to keep the trial model overdetermined, so it timed fewer",
         "harmonics than the cell asked for; those cells are left out of `slope`",
@@ -312,7 +319,8 @@ def main() -> None:
         "## First-call compile cost",
         "",
         "Median of `cold - warm` across every cell, the cold call against a cleared",
-        "JIT cache. Paid once per distinct data shape.",
+        "JIT cache. Paid once per distinct data shape, whether or not the caller",
+        "wraps `periodogram` in `jax.jit`.",
         "",
         md_table(["device", "compile"], compile_rows),
     ]

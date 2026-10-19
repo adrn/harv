@@ -14,23 +14,27 @@ uv sync --group bench --group bench-cuda
 # Confirm JAX actually sees the GPU -- you should see a CudaDevice:
 uv run --no-sync python -c "import jax; print(jax.devices())"
 
-# Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline).
-# Writes outside benchmarks/results/ so it cannot contaminate a real run, and
-# renders to its own file so it cannot overwrite the committed docs page.
+# Verify the harness works (~30 s, 24 tiny cells across both benchmarks, exercises
+# the whole pipeline). Writes outside benchmarks/results/ so it cannot contaminate a
+# real run, and renders to its own files so it cannot overwrite the committed pages.
 HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench --bench-smoke \
     --benchmark-json=benchmarks/smoke/smoke.json
 uv run --no-sync python benchmarks/report.py \
-    --results benchmarks/smoke --out benchmarks/smoke/benchmarks.md --include-smoke
+    --results benchmarks/smoke --out benchmarks/smoke/rejection.md --include-smoke
+uv run --no-sync python benchmarks/report_periodogram.py \
+    --results benchmarks/smoke --out benchmarks/smoke/periodograms.md --include-smoke
 
-# The real thing, on the workstation (hours per device).
-# report.py merges EVERY *.json in benchmarks/results/, so clear out old runs first.
-rm -f benchmarks/results/*.json
-HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest benchmarks/ --bench \
-    --bench-expect=cpu --benchmark-json=benchmarks/results/cpu.json
-HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench \
-    --bench-expect=gpu --benchmark-json=benchmarks/results/gpu.json
+# The real rejection-sampler run, on the workstation (hours per device).
+# report.py merges EVERY *.json in benchmarks/results/rejection/, so clear out old
+# runs first.
+rm -f benchmarks/results/rejection/*.json
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_rejection_scaling.py --bench \
+    --bench-expect=cpu --benchmark-json=benchmarks/results/rejection/cpu.json
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/test_rejection_scaling.py \
+    --bench --bench-expect=gpu --benchmark-json=benchmarks/results/rejection/gpu.json
 
-# Regenerate the docs page + figures from whatever is in benchmarks/results/
+# Regenerate the docs page + figures from whatever is in benchmarks/results/rejection/
 uv run --no-sync python benchmarks/report.py
 
 git add benchmarks/results docs/benchmarks
@@ -46,17 +50,19 @@ above (`--bench-smoke`, `--bench-full`, `--bench-expect`, `--bench-rounds`):
 ```bash
 HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
     benchmarks/test_periodogram_scaling.py --bench --bench-expect=cpu \
-    --benchmark-json=benchmarks/results/periodogram-cpu.json
+    --benchmark-json=benchmarks/results/periodogram/cpu.json
 uv run --no-sync python benchmarks/report_periodogram.py
 ```
 
-Run it on its own file rather than as part of `pytest benchmarks/`, so a periodogram
-re-run does not mean redoing the multi-hour rejection grid. The star design varies
+Each benchmark writes to its own folder under `benchmarks/results/`, and each report
+reads only its own folder, so the two can be re-run independently. The star design varies
 `n_obs` (8 … 256), `n_grid` (1e3 … 1e5), and `n_terms` (1 … 4) around a baseline of
 `FourierGaiaAstrometry`, `n_terms=2`, `n_obs=64`, `n_grid=1e4`, and draws every curve
 for both Fourier models under all three prior modes (`flat`, `period_dependent`,
-`profile`). `periodogram_grid.py` is the source of truth. Each cell also records
-`eager_seconds`, the cost of calling `periodogram` without `jax.jit`.
+`profile`). `periodogram_grid.py` is the source of truth. Each cell records
+`n_terms_effective` (profile mode can lower `n_terms`), and each series' baseline
+cell also records `eager_seconds`, the cost of calling `periodogram` without
+`jax.jit`.
 
 ## Running both CPU and GPU from one install
 
@@ -85,7 +91,7 @@ back to CPU produces a second CPU dataset and you find out after the hours are s
 not before.
 
 The two runs are independent, so order does not matter and you can do them on
-different days; `report.py` merges whatever is in `benchmarks/results/`.
+different days; `report.py` merges whatever is in `benchmarks/results/rejection/`.
 
 ## Installing with GPU support
 
@@ -175,8 +181,8 @@ discard hours of compute at the very end.
 | Flag | Default | What it does |
 |---|---|---|
 | `--bench` | off | Required opt-in. Everything skips without it. |
-| `--bench-smoke` | off | 6 tiny cells that exercise tables, slope fitting, and plotting in ~15 s. |
-| `--bench-full` | off | Full cartesian product (~650 cells) instead of the star design. |
+| `--bench-smoke` | off | 24 tiny cells (6 rejection, 18 periodogram) that exercise tables, slope fitting, and plotting in ~30 s. |
+| `--bench-full` | off | Full cartesian product (~650 rejection and 432 periodogram cells) instead of the star design. |
 | `--bench-rounds N` | 5 | Timed rounds per cell, after one warmup round. `3` cuts roughly a third off the wall clock. |
 | `--bench-expect cpu\|gpu` | off | Abort before collection unless JAX is on that backend. |
 | `--bench-cache-dir DIR` | pytest temp | Where HDF5 prior caches live. Point it somewhere persistent to reuse them between runs. |

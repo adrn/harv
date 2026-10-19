@@ -9,12 +9,12 @@ counts, prior library sizes, and `batch_size`) and `harv.periodogram.periodogram
   models for each one.
 - `test_rejection_scaling.py` is the benchmark itself, one `pytest-benchmark`
   test parametrized over that grid.
-- `report.py` merges `results/*.json` into `docs/benchmarks/rejection.md` and its figures.
+- `report.py` merges `results/rejection/*.json` into `docs/benchmarks/rejection.md` and its figures.
 - `periodogram_grid.py`, `test_periodogram_scaling.py`, and `report_periodogram.py`
   are the same three pieces for `harv.periodogram.periodogram`, rendered into
-  `docs/benchmarks/periodograms.md`. Each report reads only its own records, so
-  both kinds of result file share `results/`.
-- `results/` holds the committed JSON from the runs those pages are built from.
+  `docs/benchmarks/periodograms.md`.
+- `results/rejection/` and `results/periodogram/` hold the committed JSON from the
+  runs those pages are built from.
 
 These are deliberately not part of the test suite: they live outside
 `testpaths`, require `--bench` to run, and depend on the `bench` group that
@@ -27,3 +27,7 @@ see `docs/benchmarks/running-the-benchmarks.md`, and for how to use the numbers 
 running over a survey see `docs/at-scale.md`.
 
 Most of the code in this directory was written by Claude Opus 5.
+
+TODO: `report_periodogram.py` and `periodogram_grid.py` copy parts of `report.py` and
+`grid.py` (result loading, deduplication, plotting, the compile table). Share that
+code before adding a third benchmark.
