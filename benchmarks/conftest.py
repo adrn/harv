@@ -1,6 +1,7 @@
 """Fixtures and options for the rejection-sampler benchmarks.
 
-Nothing here runs unless ``--bench`` is passed. See ``docs/running-benchmarks.md``.
+Nothing here runs unless ``--bench`` is passed. See
+``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 # x64 FIRST, before anything imports harv (and therefore JAX). harv enables it on
@@ -21,6 +22,9 @@ from typing import Any  # noqa: E402
 import jax.random as jr  # noqa: E402
 import pytest  # noqa: E402
 from grid import Cell, build_prior_and_model, enumerate_cells  # noqa: E402
+from periodogram_grid import (  # noqa: E402
+    enumerate_cells as enumerate_periodogram_cells,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,7 +35,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--bench",
         action="store_true",
         default=False,
-        help="Run the rejection-sampler benchmarks. Without this they all skip, "
+        help="Run the benchmarks. Without this they all skip, "
         "so a stray `pytest benchmarks/` cannot start a multi-hour run.",
     )
     group.addoption(
@@ -44,7 +48,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--bench-smoke",
         action="store_true",
         default=False,
-        help="Two tiny cells that exercise the whole pipeline in under a minute.",
+        help="A few tiny cells per benchmark that exercise the whole pipeline in "
+        "under a minute.",
     )
     group.addoption(
         "--bench-rounds",
@@ -88,8 +93,8 @@ def pytest_configure(config: pytest.Config) -> None:
                 f"({jax.devices()[0].device_kind}). "
                 + (
                     "JAX falls back to CPU when CUDA-enabled jaxlib or the driver is "
-                    "missing; see docs/running-benchmarks.md, 'Installing with GPU "
-                    "support'."
+                    "missing; see docs/benchmarks/running-the-benchmarks.md, "
+                    "'Installing with GPU support'."
                     if expect == "gpu"
                     else "Pass JAX_PLATFORMS=cpu to force the CPU backend."
                 )
@@ -116,7 +121,8 @@ def pytest_collection_modifyitems(
     if config.getoption("--bench"):
         return
     skip = pytest.mark.skip(
-        reason="benchmarks require --bench (see docs/running-benchmarks.md)"
+        reason="benchmarks require --bench "
+        "(see docs/benchmarks/running-the-benchmarks.md)"
     )
     for item in items:
         if "benchmarks/" in str(item.fspath).replace(os.sep, "/"):
@@ -125,13 +131,17 @@ def pytest_collection_modifyitems(
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize over the grid, chosen by the --bench-* flags."""
-    if "cell" not in metafunc.fixturenames:
-        return
-    cells = enumerate_cells(
-        full=metafunc.config.getoption("--bench-full"),
-        smoke=metafunc.config.getoption("--bench-smoke"),
-    )
-    metafunc.parametrize("cell", cells, ids=[c.ident for c in cells])
+    for name, enumerate_fn in (
+        ("cell", enumerate_cells),
+        ("pgram_cell", enumerate_periodogram_cells),
+    ):
+        if name not in metafunc.fixturenames:
+            continue
+        cells = enumerate_fn(
+            full=metafunc.config.getoption("--bench-full"),
+            smoke=metafunc.config.getoption("--bench-smoke"),
+        )
+        metafunc.parametrize(name, cells, ids=[c.ident for c in cells])
 
 
 @pytest.fixture(scope="session")

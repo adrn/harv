@@ -1,7 +1,7 @@
 """Scaling benchmarks for :class:`harv.samplers.rejection.RejectionSampler`.
 
 One test, parametrized over the grid in :mod:`grid`. Run with ``--bench``; see
-``docs/running-benchmarks.md``.
+``docs/benchmarks/running-the-benchmarks.md``.
 """
 
 import time

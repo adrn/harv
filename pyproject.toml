@@ -154,7 +154,7 @@ bench = [
     # Deliberately NOT included in `dev`, and CI installs only the `test` group
     # (`uv sync --no-default-groups --group test`), so pytest-benchmark is never
     # present on CI. That absence is one of the belts keeping benchmarks/ off CI;
-    # see docs/running-benchmarks.md.
+    # see docs/benchmarks/running-the-benchmarks.md.
     "pytest",
     "pytest-benchmark>=5.0",
     "matplotlib>=3.10.7",

@@ -1,9 +1,14 @@
 # Running the benchmarks
 
-How to regenerate {doc}`benchmarks`. This is a developer page — the benchmarks
+How to regenerate {doc}`rejection` and {doc}`periodograms`. This is a developer page — the benchmarks
 are **not** part of the test suite and never run on CI.
 
 ## TL;DR
+
+The full sequence, both benchmarks on both devices. Each benchmark writes to its own
+folder under `benchmarks/results/` and each report reads only its own folder, so either
+half can be re-run alone; see {ref}`rejection-sampler-benchmark` and
+{ref}`periodogram-benchmark` below.
 
 ```bash
 # One-time: install the benchmark tooling. `bench-cuda` adds CUDA-enabled jaxlib and
@@ -14,26 +19,40 @@ uv sync --group bench --group bench-cuda
 # Confirm JAX actually sees the GPU -- you should see a CudaDevice:
 uv run --no-sync python -c "import jax; print(jax.devices())"
 
-# Verify the harness works (~15 s, 6 tiny cells, exercises the whole pipeline).
-# Writes outside benchmarks/results/ so it cannot contaminate a real run, and
-# renders to its own file so it cannot overwrite the committed docs page.
+# Verify the harness works (~30 s, 24 tiny cells across both benchmarks, exercises
+# the whole pipeline). Writes outside benchmarks/results/ so it cannot contaminate a
+# real run, and renders to its own files so it cannot overwrite the committed pages.
 HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench --bench-smoke \
     --benchmark-json=benchmarks/smoke/smoke.json
 uv run --no-sync python benchmarks/report.py \
-    --results benchmarks/smoke --out benchmarks/smoke/benchmarks.md --include-smoke
+    --results benchmarks/smoke --out benchmarks/smoke/rejection.md --include-smoke
+uv run --no-sync python benchmarks/report_periodogram.py \
+    --results benchmarks/smoke --out benchmarks/smoke/periodograms.md --include-smoke
 
-# The real thing, on the workstation (hours per device).
-# report.py merges EVERY *.json in benchmarks/results/, so clear out old runs first.
-rm -f benchmarks/results/*.json
-HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest benchmarks/ --bench \
-    --bench-expect=cpu --benchmark-json=benchmarks/results/cpu.json
-HARV_NO_TYPECHECK=1 uv run --no-sync pytest benchmarks/ --bench \
-    --bench-expect=gpu --benchmark-json=benchmarks/results/gpu.json
+# Clear out old runs: each report merges EVERY *.json in its results folder.
+rm -f benchmarks/results/rejection/*.json benchmarks/results/periodogram/*.json
 
-# Regenerate the docs page + figures from whatever is in benchmarks/results/
+# Rejection sampler (hours per device).
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_rejection_scaling.py --bench --bench-expect=cpu \
+    --benchmark-json=benchmarks/results/rejection/cpu.json
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest \
+    benchmarks/test_rejection_scaling.py --bench --bench-expect=gpu \
+    --benchmark-json=benchmarks/results/rejection/gpu.json
+
+# Periodogram (minutes per device).
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_periodogram_scaling.py --bench --bench-expect=cpu \
+    --benchmark-json=benchmarks/results/periodogram/cpu.json
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest \
+    benchmarks/test_periodogram_scaling.py --bench --bench-expect=gpu \
+    --benchmark-json=benchmarks/results/periodogram/gpu.json
+
+# Regenerate both docs pages and their figures.
 uv run --no-sync python benchmarks/report.py
+uv run --no-sync python benchmarks/report_periodogram.py
 
-git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
+git add benchmarks/results docs/benchmarks
 ```
 
 ## Running both CPU and GPU from one install
@@ -46,7 +65,7 @@ CPU backend away — `JAX_PLATFORMS` selects the backend per run:
 | CPU | `JAX_PLATFORMS=cpu` | CPU, even with a working GPU present |
 | GPU | *(nothing)* | GPU, because JAX prefers it when visible |
 
-So the two real runs in the TL;DR differ by exactly that one variable, and both come
+So each CPU/GPU pair of runs in the TL;DR differs by exactly that one variable, and both come
 from the single `uv sync --group bench --group bench-cuda`.
 
 Each run also passes `--bench-expect`, which checks `jax.default_backend()` before
@@ -57,13 +76,13 @@ ERROR: --bench-expect=gpu but JAX is on 'cpu' (cpu). JAX falls back to CPU when
 CUDA-enabled jaxlib or the driver is missing; ...
 ```
 
-This matters because a filename says nothing about which device ran — `report.py`
-labels devices from `jax.devices()[0]`. Without the guard, a GPU run that silently fell
+This matters because a filename says nothing about which device ran — the reports
+label devices from `jax.devices()[0]`. Without the guard, a GPU run that silently fell
 back to CPU produces a second CPU dataset and you find out after the hours are spent,
 not before.
 
-The two runs are independent, so order does not matter and you can do them on
-different days; `report.py` merges whatever is in `benchmarks/results/`.
+The runs are independent, so order does not matter and you can do them on
+different days; each report merges whatever is in its own results folder.
 
 ## Installing with GPU support
 
@@ -142,7 +161,7 @@ cannot start a multi-hour run by accident.
 
 `--benchmark-json=...`
 : pytest-benchmark prints a table but does not persist anything by default. The
-JSON is what `report.py` consumes; without this flag a finished run leaves
+JSON is what the report scripts consume; without this flag a finished run leaves
 nothing behind. pytest-benchmark writes it from `pytest_sessionfinish` — *after*
 every benchmark has run — so `benchmarks/conftest.py` creates the parent
 directory and checks it is writable at startup. Otherwise a typo'd path would
@@ -153,16 +172,50 @@ discard hours of compute at the very end.
 | Flag | Default | What it does |
 |---|---|---|
 | `--bench` | off | Required opt-in. Everything skips without it. |
-| `--bench-smoke` | off | 6 tiny cells that exercise tables, slope fitting, and plotting in ~15 s. |
-| `--bench-full` | off | Full cartesian product (~650 cells) instead of the star design. |
+| `--bench-smoke` | off | 24 tiny cells (6 rejection, 18 periodogram) that exercise tables, slope fitting, and plotting in ~30 s. |
+| `--bench-full` | off | Full cartesian product (~650 rejection and 432 periodogram cells) instead of the star design. |
 | `--bench-rounds N` | 5 | Timed rounds per cell, after one warmup round. `3` cuts roughly a third off the wall clock. |
 | `--bench-expect cpu\|gpu` | off | Abort before collection unless JAX is on that backend. |
 | `--bench-cache-dir DIR` | pytest temp | Where HDF5 prior caches live. Point it somewhere persistent to reuse them between runs. |
 
-Useful pytest selectors: `-k StandardRV` runs one parameterization,
-`-k "n64 and memory"` one slice of the grid.
+Useful pytest selectors: `-k StandardRV` runs one rejection parameterization,
+`-k "n64 and memory"` one slice of its grid, and `-k "FourierRV and profile"` one
+periodogram series.
 
-## What is measured
+## Why this never runs on CI
+
+Three independent reasons, so that no single mistake exposes CI to a multi-hour job:
+
+1. `benchmarks/` is outside `testpaths = ["README.md", "tests", "src"]`, and CI runs
+   bare `pytest` with no path arguments.
+2. `pytest-benchmark` lives in the `bench` dependency group. CI installs
+   `uv sync --no-default-groups --group test`, so the plugin is not even present.
+3. `--bench` is required; without it every benchmark skips.
+
+To confirm belt 1 still holds after touching pytest config:
+
+```bash
+uv run --no-sync pytest --collect-only -q | grep -c benchmarks/   # must print 0
+```
+
+(rejection-sampler-benchmark)=
+## Rejection sampler
+
+`benchmarks/test_rejection_scaling.py` times `RejectionSampler.run_with_samples` and
+renders into {doc}`rejection` through `benchmarks/report.py`. To re-run it alone:
+
+```bash
+rm -f benchmarks/results/rejection/*.json
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_rejection_scaling.py --bench --bench-expect=cpu \
+    --benchmark-json=benchmarks/results/rejection/cpu.json
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest \
+    benchmarks/test_rejection_scaling.py --bench --bench-expect=gpu \
+    --benchmark-json=benchmarks/results/rejection/gpu.json
+uv run --no-sync python benchmarks/report.py
+```
+
+### What is measured
 
 One `RejectionSampler.run_with_samples(...)` call per grid cell, with `top_k=256`.
 `top_k` is deliberate: it gives a **static** output shape, so the `jax.vmap` over
@@ -180,7 +233,7 @@ float64 is pinned on. harv enables it on import anyway, but
 before any array exists. float32 changes the sampler's *arithmetic* rather than just
 its precision — a float32 timing would not describe how anyone runs harv.
 
-## The grid
+### The grid
 
 A **star** design: each curve varies one axis with the rest pinned to the baseline
 (`n_obs=64`, `M=1e6`, `batch_size=1e5`, in-memory cache, `top_k=256`).
@@ -199,7 +252,7 @@ full product when a curve looks like it is hiding an interaction.
 Axes, baselines, and the simulated systems are defined in `benchmarks/grid.py` —
 that file is the source of truth, this table is a summary.
 
-## Cost and resources
+### Cost and resources
 
 Expect **1–3 hours per device**, dominated by the ~16 cells at `M = 1e7`.
 
@@ -211,23 +264,7 @@ roughly 500 MB. On GPU it lives in device memory.
 Disk: the HDF5 caches for the `backend` curve need ~2 GB. They go to a pytest temp
 directory unless `--bench-cache-dir` says otherwise.
 
-## Why this never runs on CI
-
-Three independent reasons, so that no single mistake exposes CI to a multi-hour job:
-
-1. `benchmarks/` is outside `testpaths = ["README.md", "tests", "src"]`, and CI runs
-   bare `pytest` with no path arguments.
-2. `pytest-benchmark` lives in the `bench` dependency group. CI installs
-   `uv sync --no-default-groups --group test`, so the plugin is not even present.
-3. `--bench` is required; without it every benchmark skips.
-
-To confirm belt 1 still holds after touching pytest config:
-
-```bash
-uv run --no-sync pytest --collect-only -q | grep -c benchmarks/   # must print 0
-```
-
-## Adding a parameterization or an axis
+### Adding a parameterization or an axis
 
 Both live in `benchmarks/grid.py`:
 
@@ -240,3 +277,66 @@ Both live in `benchmarks/grid.py`:
 
 Run `--bench-smoke` after either — it is the check that catches a broken
 `report.py` before, rather than after, a three-hour run.
+
+(periodogram-benchmark)=
+## Periodogram
+
+`benchmarks/test_periodogram_scaling.py` times `harv.periodogram.periodogram` and
+renders into {doc}`periodograms` through `benchmarks/report_periodogram.py`. To re-run
+it alone:
+
+```bash
+rm -f benchmarks/results/periodogram/*.json
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --no-sync pytest \
+    benchmarks/test_periodogram_scaling.py --bench --bench-expect=cpu \
+    --benchmark-json=benchmarks/results/periodogram/cpu.json
+HARV_NO_TYPECHECK=1 uv run --no-sync pytest \
+    benchmarks/test_periodogram_scaling.py --bench --bench-expect=gpu \
+    --benchmark-json=benchmarks/results/periodogram/gpu.json
+uv run --no-sync python benchmarks/report_periodogram.py
+```
+
+### What is measured
+
+One jitted `periodogram` call per grid cell, on simulated data from the same
+generators as the rejection benchmark, over a fixed frequency grid (`period_min=1 d`,
+`period_max=3000 d`, `n_grid` points). As there, each cell records a cold call against
+a cleared JIT cache, then a warmup round, then `--bench-rounds` timed rounds, each
+wrapped in `jax.block_until_ready`.
+
+Each cell also records `n_terms_effective`, read with `jax.eval_shape`: profile mode
+(`prior=False`) lowers `n_terms` when the trial model would be underdetermined, and
+the report marks those cells and leaves them out of slope fits. Each series' baseline
+cell additionally records `eager_seconds`, the median of calling `periodogram`
+directly without `jax.jit` after a first call has compiled the scan.
+
+### The grid
+
+The same **star** design, around a baseline of `FourierGaiaAstrometry`, flat prior,
+`n_terms=2`, `n_obs=64`, `n_grid=1e4`. Every curve is drawn for both Fourier models
+under all three prior modes (`flat`, `period_dependent`, `profile`), because the modes
+take different code paths.
+
+| Curve | Varies | Over |
+|---|---|---|
+| `n_obs` | 8 … 256 observations | 2 models × 3 prior modes |
+| `n_grid` | 1e3, 1e4, 1e5 trial frequencies | 2 models × 3 prior modes |
+| `n_terms` | 1 … 4 harmonics | 2 models × 3 prior modes |
+
+66 measurements after deduplication; `--bench-full` expands to the 432-cell product.
+`benchmarks/periodogram_grid.py` is the source of truth for axes and baselines.
+
+### Cost and resources
+
+About 1.5 minutes on a laptop CPU (Apple M4 Max), dominated by the `n_grid=1e5`
+profile-mode cells. The scan is a single `jax.vmap` over the grid with no chunking, so
+peak memory grows with `n_grid × n_obs`; the `n_grid=1e5` cells are also a memory
+probe, which matters most on a GPU.
+
+### Adding a model, prior mode, or axis
+
+Models and prior modes are `MODELS` / `PRIORS` in `benchmarks/periodogram_grid.py`,
+with the matching prior in `build_prior` in `benchmarks/test_periodogram_scaling.py`.
+A new axis needs values and a curve in `curve_definitions`, plus an `AXIS_LABELS`
+entry in `benchmarks/report_periodogram.py`. Run `--bench-smoke` afterwards: its
+periodogram cells cover every model and prior mode.
