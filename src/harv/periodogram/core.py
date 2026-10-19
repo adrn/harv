@@ -219,6 +219,21 @@ def _nl(period: Any, period_unit: str) -> dict[str, Any]:
     return {"period": Q(period, period_unit), "eccentricity": 0.0}
 
 
+class _BoundPrior(eqx.Module):
+    """A ``LinearPriorCallable`` with extra resolution values bound in.
+
+    A Module rather than a closure so that ``eqx.filter_jit`` sees the bound
+    values as pytree leaves: a fresh lambda per call would be a new static
+    argument each time and defeat the compile cache of the scan.
+    """
+
+    prior: Any
+    extra: dict[str, Any]
+
+    def __call__(self, params: Mapping[str, Any]) -> Any:
+        return self.prior({**self.extra, **params})
+
+
 def _bind_prior_params(
     linear_priors: dict[str, Any], prior_params: Mapping[str, Any] | None
 ) -> dict[str, Any]:
@@ -239,15 +254,13 @@ def _bind_prior_params(
         return linear_priors
     extra = dict(prior_params)
 
-    def bind(prior: Any) -> Any:
-        if not _is_callable_prior(prior):
-            return prior
-        # Still a plain callable, so _is_callable_prior and
-        # _needs_explicit_sampling classify the wrapper exactly as they did the
-        # prior: it stays analytically marginalized.
-        return lambda params, _p=prior: _p({**extra, **params})
-
-    return {name: bind(prior) for name, prior in linear_priors.items()}
+    # _BoundPrior is still a plain callable, so _is_callable_prior and
+    # _needs_explicit_sampling classify it exactly as they did the prior: it
+    # stays analytically marginalized.
+    return {
+        name: _BoundPrior(prior, extra) if _is_callable_prior(prior) else prior
+        for name, prior in linear_priors.items()
+    }
 
 
 def _check_callable_priors(
@@ -346,6 +359,39 @@ def _resolve_linear_priors(
     return _bind_prior_params(eff_lp, prior_params)
 
 
+# Module-level and filter-jitted so the compiled scan is cached across calls:
+# a fresh jax.jit of a closure over the data would retrace and recompile on
+# every unjitted periodogram() call. The models, data and priors are arguments,
+# so the cache keys on their structure and array shapes, not their values.
+@eqx.filter_jit
+def _scan_marginal(
+    model: "AbstractComponentModel",
+    dataset: AbstractData,
+    linear_priors: dict[str, Any],
+    p_vals: jax.Array,
+    period_unit: str,
+) -> NFloatArray:
+    """``model.log_prob`` at every trial period, linear parameters marginalized."""
+    return jax.vmap(
+        lambda p: model.log_prob(
+            _nl(p, period_unit), dataset, linear_priors=linear_priors
+        )
+    )(p_vals)
+
+
+@eqx.filter_jit
+def _scan_profile(
+    model: "AbstractComponentModel",
+    dataset: AbstractData,
+    p_vals: jax.Array,
+    period_unit: str,
+) -> NFloatArray:
+    """Profile log-likelihood at every trial period (``prior=False``)."""
+    return jax.vmap(lambda p: model._log_prob_profile(_nl(p, period_unit), dataset))(
+        p_vals
+    )
+
+
 def _dataset_delta_lnl(
     dataset: AbstractData,
     prior: HarvPrior | Literal[False],
@@ -390,10 +436,8 @@ def _dataset_delta_lnl(
         # No priors at all, so every linear column is profiled and the base --
         # which carries no Fourier columns and no callable prior to resolve --
         # is period-independent by construction: one evaluation.
-        def lnl_at(p: jax.Array) -> jax.Array:
-            return model._log_prob_profile(_nl(p, period_unit), dataset)
-
         lnl0 = base_model._log_prob_profile(_nl(p_vals[0], period_unit), dataset)
+        lnl = _scan_profile(model, dataset, p_vals, period_unit)
     else:
         eff_lp = _resolve_linear_priors(
             prior, model, fourier_cls, n_terms, prior_params
@@ -405,25 +449,19 @@ def _dataset_delta_lnl(
         # probing full_lp covers both models.
         _check_callable_priors(full_lp, _nl(p_vals[0], period_unit))
 
-        def base_at(p: jax.Array) -> jax.Array:
-            return base_model.log_prob(
-                _nl(p, period_unit), dataset, linear_priors=base_lp
-            )
-
-        def lnl_at(p: jax.Array) -> jax.Array:
-            return model.log_prob(_nl(p, period_unit), dataset, linear_priors=full_lp)
-
         # The base model carries no Fourier columns, so it is period-independent
         # and one evaluation suffices -- unless one of its own linear priors
         # resolves against the trial period (a LinearPriorCallable such as
         # PeriodDependentKPrior on v_sys). Then its baseline genuinely varies
         # across the grid and subtracting a single value would tilt every Delta.
         if any(_is_callable_prior(p) for p in base_lp.values()):
-            lnl0 = jax.jit(jax.vmap(base_at))(p_vals)
+            lnl0 = _scan_marginal(base_model, dataset, base_lp, p_vals, period_unit)
         else:
-            lnl0 = base_at(p_vals[0])
+            lnl0 = base_model.log_prob(
+                _nl(p_vals[0], period_unit), dataset, linear_priors=base_lp
+            )
+        lnl = _scan_marginal(model, dataset, full_lp, p_vals, period_unit)
 
-    lnl = jax.jit(jax.vmap(lnl_at))(p_vals)
     return lnl - lnl0, lnl0, eff_terms
 
 

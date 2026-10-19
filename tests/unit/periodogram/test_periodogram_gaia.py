@@ -1,8 +1,10 @@
 """Unit tests for the Gaia astrometry and joint paths of harv.periodogram."""
 
 import jax
+import jax.monitoring
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from unxt import Q, ustrip
 
 import harv.models as hm
@@ -169,3 +171,47 @@ class TestJitVmap:
                     rtol=1e-8,
                     atol=1e-8,
                 )
+
+
+# Counts XLA compiles process-wide; tests read it as a before/after difference.
+_N_COMPILES = [0]
+jax.monitoring.register_event_duration_secs_listener(
+    lambda event, _duration, **_: _N_COMPILES.__setitem__(
+        0, _N_COMPILES[0] + (event == "/jax/core/compile/backend_compile_duration")
+    )
+)
+
+
+class TestCompileCache:
+    """Unjitted calls on same-shape data reuse the compiled scan."""
+
+    @pytest.mark.parametrize("mode", ["flat", "period_dependent", "profile"])
+    def test_repeat_call_does_not_recompile(self, mode: str):
+        grid = hp.frequency_grid(
+            time_span=Q(2000.0, "day"), period_min=Q(20.0, "day"), n_grid=64
+        )
+        kw: dict[str, object] = {"prior": _gaia_prior()}
+        if mode == "period_dependent":
+            # prior_params is bound into the callable priors on every call.
+            kw = {
+                "prior": hm.FourierGaiaAstrometry(n_terms=2).default_prior(
+                    period_min=Q(20.0, "day"),
+                    period_max=Q(2000.0, "day"),
+                    sigma_a0=Q(0.1, "AU"),
+                    period_ref=Q(1.0, "yr"),
+                    sigma_pos=Q(500.0, "mas"),
+                    sigma_pm=Q(500.0, "mas/yr"),
+                    sigma_parallax=Q(500.0, "mas"),
+                ),
+                "prior_params": {"parallax": Q(20.0, "mas")},
+            }
+        elif mode == "profile":
+            kw = {"prior": False}
+
+        first, second = _sim_gaia(seed=1)[0], _sim_gaia(seed=2)[0]
+        jax.block_until_ready(hp.periodogram(first, grid, **kw).delta_ln_likelihood)
+        before = _N_COMPILES[0]
+        result = hp.periodogram(second, grid, **kw)
+        jax.block_until_ready(result.delta_ln_likelihood)
+        assert _N_COMPILES[0] == before
+        assert bool(jnp.isfinite(result.delta_ln_likelihood).all())

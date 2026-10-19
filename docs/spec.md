@@ -2897,6 +2897,11 @@ base model is period-dependent), `time_span`, `time_ref`, optional
 `statistic` (`"marginal"` | `"profile"`); plus `period` (property,
 `1/frequency`), `max_period()`, and `plot(ax=None, x="period" | "frequency")`.
 
+**Compile cache.** The scan over the grid is compiled once per distinct data
+shape and model structure, and plain (unjitted) calls reuse it: a Python loop
+over same-shape sources compiles on the first call only. Values bound through
+`prior_params` are pytree leaves, so changing them does not recompile.
+
 **`jax.jit` / `jax.vmap` over sources.** `periodogram` is traceable, and
 `jax.vmap` over a batched data pytree gives one periodogram per source, in
 every mode — marginal and profile, non-callable and `LinearPriorCallable`
