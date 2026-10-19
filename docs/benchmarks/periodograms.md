@@ -13,7 +13,8 @@ Generated from committed results; not rebuilt with the docs. See
 
 | device | date | platform | jax | harv | float64 |
 |---|---|---|---|---|---|
-| CPU (Apple M4 Max) | 2026-10-18 | Darwin / py3.14.8 | 0.8.1 | 0.0.2.dev181+gba91d27bb.d20261018 | yes |
+| CPU (Intel(R) Xeon(R) w5-3435X) | 2026-10-19 | Linux / py3.14.5 | 0.8.1 | 0.0.2.dev184+g8912c38de | yes |
+| GPU (NVIDIA RTX 6000 Ada Generation) | 2026-10-19 | Linux / py3.14.5 | 0.8.1 | 0.0.2.dev184+g8912c38de | yes |
 
 `flat` is a fixed Gaussian amplitude prior, `period_dependent` a
 `LinearPriorCallable` resolved at every trial period, and `profile` is
@@ -32,16 +33,27 @@ and the figures.
 
 Held at `n_grid=10,000`, `n_terms=2`.
 
-**CPU (Apple M4 Max)**
+**CPU (Intel(R) Xeon(R) w5-3435X)**
 
 | series | 8 | 16 | 32 | 64 | 128 | 256 | slope | eager @ 64 |
 |---|---|---|---|---|---|---|---|---|
-| FourierRV flat | 3.0 ms | 4.6 ms | 8.4 ms | 14.4 ms | 26.4 ms | 50.6 ms | 0.82 | 20.6 ms |
-| FourierRV period_dependent | 3.2 ms | 5.0 ms | 8.8 ms | 14.6 ms | 27.3 ms | 51.2 ms | 0.80 | 22.9 ms |
-| FourierRV profile | 26.7 ms † | 46.1 ms | 50.8 ms | 60.0 ms | 81.3 ms | 139.6 ms | 0.39 | 63.6 ms |
-| FourierGaiaAstrometry flat | 6.3 ms | 7.9 ms | 13.5 ms | 29.1 ms | 47.3 ms | 83.6 ms | 0.79 | 42.8 ms |
-| FourierGaiaAstrometry period_dependent | 8.6 ms | 9.3 ms | 14.3 ms | 30.5 ms | 51.2 ms | 91.9 ms | 0.73 | 45.6 ms |
-| FourierGaiaAstrometry profile | 61.4 ms † | 95.0 ms † | 220.2 ms | 266.0 ms | 360.9 ms | 517.2 ms | 0.41 | 269.1 ms |
+| FourierRV flat | 12.6 ms | 16.3 ms | 17.6 ms | 31.7 ms | 52.7 ms | 97.9 ms | 0.59 | 44.7 ms |
+| FourierRV period_dependent | 12.7 ms | 13.6 ms | 17.3 ms | 28.3 ms | 54.6 ms | 101.6 ms | 0.62 | 50.2 ms |
+| FourierRV profile | 30.4 ms † | 66.8 ms | 80.8 ms | 99.1 ms | 149.8 ms | 236.0 ms | 0.45 | 112.9 ms |
+| FourierGaiaAstrometry flat | 21.1 ms | 28.9 ms | 59.9 ms | 107.4 ms | 190.4 ms | 340.0 ms | 0.83 | 138.1 ms |
+| FourierGaiaAstrometry period_dependent | 53.9 ms | 50.0 ms | 65.3 ms | 115.4 ms | 205.0 ms | 352.6 ms | 0.58 | 149.9 ms |
+| FourierGaiaAstrometry profile | 95.2 ms † | 152.9 ms † | 308.3 ms | 363.2 ms | 491.6 ms | 734.5 ms | 0.42 | 380.5 ms |
+
+**GPU (NVIDIA RTX 6000 Ada Generation)**
+
+| series | 8 | 16 | 32 | 64 | 128 | 256 | slope | eager @ 64 |
+|---|---|---|---|---|---|---|---|---|
+| FourierRV flat | 0.6 ms | 0.6 ms | 0.7 ms | 0.7 ms | 0.9 ms | 5.3 ms | 0.52 | 19.2 ms |
+| FourierRV period_dependent | 0.6 ms | 0.6 ms | 0.7 ms | 0.8 ms | 0.9 ms | 5.4 ms | 0.50 | 25.8 ms |
+| FourierRV profile | 12.0 ms † | 17.2 ms | 18.7 ms | 8.64 s | 8.58 s | 8.55 s | 2.68 | 8.66 s |
+| FourierGaiaAstrometry flat | 1.1 ms | 1.1 ms | 1.6 ms | 2.1 ms | 3.7 ms | 6.3 ms | 0.52 | 46.3 ms |
+| FourierGaiaAstrometry period_dependent | 1.8 ms | 1.9 ms | 2.2 ms | 2.9 ms | 4.3 ms | 7.1 ms | 0.39 | 46.8 ms |
+| FourierGaiaAstrometry profile | 27.6 ms † | 33.0 ms † | 52.5 ms | 15.27 s | 15.79 s | 16.25 s | 2.49 | 16.13 s |
 
 ![number of observations](figures/periodogram-n_obs.png)
 
@@ -49,16 +61,27 @@ Held at `n_grid=10,000`, `n_terms=2`.
 
 Held at `n_obs=64`, `n_terms=2`.
 
-**CPU (Apple M4 Max)**
+**CPU (Intel(R) Xeon(R) w5-3435X)**
 
 | series | 1,000 | 10,000 | 100,000 | slope | eager @ 10,000 |
 |---|---|---|---|---|---|
-| FourierRV flat | 1.7 ms | 14.4 ms | 108.3 ms | 0.90 | 20.6 ms |
-| FourierRV period_dependent | 1.8 ms | 14.6 ms | 108.7 ms | 0.89 | 22.9 ms |
-| FourierRV profile | 6.2 ms | 60.0 ms | 581.8 ms | 0.99 | 63.6 ms |
-| FourierGaiaAstrometry flat | 3.6 ms | 29.1 ms | 269.0 ms | 0.94 | 42.8 ms |
-| FourierGaiaAstrometry period_dependent | 3.1 ms | 30.5 ms | 283.1 ms | 0.98 | 45.6 ms |
-| FourierGaiaAstrometry profile | 27.5 ms | 266.0 ms | 2.60 s | 0.99 | 269.1 ms |
+| FourierRV flat | 3.3 ms | 31.7 ms | 234.9 ms | 0.92 | 44.7 ms |
+| FourierRV period_dependent | 4.4 ms | 28.3 ms | 236.4 ms | 0.86 | 50.2 ms |
+| FourierRV profile | 9.6 ms | 99.1 ms | 947.8 ms | 1.00 | 112.9 ms |
+| FourierGaiaAstrometry flat | 11.2 ms | 107.4 ms | 868.3 ms | 0.95 | 138.1 ms |
+| FourierGaiaAstrometry period_dependent | 10.9 ms | 115.4 ms | 906.9 ms | 0.96 | 149.9 ms |
+| FourierGaiaAstrometry profile | 41.4 ms | 363.2 ms | 3.54 s | 0.97 | 380.5 ms |
+
+**GPU (NVIDIA RTX 6000 Ada Generation)**
+
+| series | 1,000 | 10,000 | 100,000 | slope | eager @ 10,000 |
+|---|---|---|---|---|---|
+| FourierRV flat | 0.3 ms | 0.7 ms | 5.3 ms | 0.62 | 19.2 ms |
+| FourierRV period_dependent | 0.3 ms | 0.8 ms | 5.7 ms | 0.62 | 25.8 ms |
+| FourierRV profile | 866.2 ms | 8.64 s | 86.37 s | 1.00 | 8.66 s |
+| FourierGaiaAstrometry flat | 0.9 ms | 2.1 ms | 19.1 ms | 0.66 | 46.3 ms |
+| FourierGaiaAstrometry period_dependent | 0.6 ms | 2.9 ms | 27.4 ms | 0.84 | 46.8 ms |
+| FourierGaiaAstrometry profile | 1.58 s | 15.27 s | 152.70 s | 0.99 | 16.13 s |
 
 ![number of trial frequencies](figures/periodogram-n_grid.png)
 
@@ -66,16 +89,27 @@ Held at `n_obs=64`, `n_terms=2`.
 
 Held at `n_grid=10,000`, `n_obs=64`.
 
-**CPU (Apple M4 Max)**
+**CPU (Intel(R) Xeon(R) w5-3435X)**
 
 | series | 1 | 2 | 3 | 4 | slope | eager @ 2 |
 |---|---|---|---|---|---|---|
-| FourierRV flat | 6.3 ms | 14.4 ms | 18.2 ms | 21.1 ms | 0.88 | 20.6 ms |
-| FourierRV period_dependent | 6.5 ms | 14.6 ms | 18.6 ms | 21.3 ms | 0.87 | 22.9 ms |
-| FourierRV profile | 34.7 ms | 60.0 ms | 93.2 ms | 156.1 ms | 1.05 | 63.6 ms |
-| FourierGaiaAstrometry flat | 20.9 ms | 29.1 ms | 36.4 ms | 50.3 ms | 0.60 | 42.8 ms |
-| FourierGaiaAstrometry period_dependent | 19.6 ms | 30.5 ms | 36.0 ms | 49.5 ms | 0.64 | 45.6 ms |
-| FourierGaiaAstrometry profile | 153.5 ms | 266.0 ms | 385.3 ms | 547.4 ms | 0.90 | 269.1 ms |
+| FourierRV flat | 16.7 ms | 31.7 ms | 55.1 ms | 59.2 ms | 0.97 | 44.7 ms |
+| FourierRV period_dependent | 16.5 ms | 28.3 ms | 57.8 ms | 57.6 ms | 0.98 | 50.2 ms |
+| FourierRV profile | 52.4 ms | 99.1 ms | 156.5 ms | 215.1 ms | 1.02 | 112.9 ms |
+| FourierGaiaAstrometry flat | 55.8 ms | 107.4 ms | 138.4 ms | 176.0 ms | 0.82 | 138.1 ms |
+| FourierGaiaAstrometry period_dependent | 69.2 ms | 115.4 ms | 102.5 ms | 140.6 ms | 0.45 | 149.9 ms |
+| FourierGaiaAstrometry profile | 199.6 ms | 363.2 ms | 579.1 ms | 834.5 ms | 1.02 | 380.5 ms |
+
+**GPU (NVIDIA RTX 6000 Ada Generation)**
+
+| series | 1 | 2 | 3 | 4 | slope | eager @ 2 |
+|---|---|---|---|---|---|---|
+| FourierRV flat | 0.5 ms | 0.7 ms | 1.0 ms | 1.4 ms | 0.69 | 19.2 ms |
+| FourierRV period_dependent | 0.5 ms | 0.8 ms | 1.1 ms | 1.6 ms | 0.76 | 25.8 ms |
+| FourierRV profile | 6.25 s | 8.64 s | 11.09 s | 12.38 s | 0.50 | 8.66 s |
+| FourierGaiaAstrometry flat | 1.4 ms | 2.1 ms | 2.6 ms | 3.6 ms | 0.64 | 46.3 ms |
+| FourierGaiaAstrometry period_dependent | 1.6 ms | 2.9 ms | 4.9 ms | 6.6 ms | 1.04 | 46.8 ms |
+| FourierGaiaAstrometry profile | 13.07 s | 15.27 s | 19.14 s | 23.65 s | 0.42 | 16.13 s |
 
 ![number of Fourier harmonics `n_terms`](figures/periodogram-n_terms.png)
 
@@ -87,4 +121,5 @@ wraps `periodogram` in `jax.jit`.
 
 | device | compile |
 |---|---|
-| CPU (Apple M4 Max) | 161.6 ms |
+| CPU (Intel(R) Xeon(R) w5-3435X) | 357.4 ms |
+| GPU (NVIDIA RTX 6000 Ada Generation) | 943.0 ms |
