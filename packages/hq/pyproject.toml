@@ -48,9 +48,6 @@ cache-keys = [
     { git = { commit = true, tags = true } },
 ]
 
-[tool.uv.sources]
-harv = { workspace = true }
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/harv_hq"]
 
