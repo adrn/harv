@@ -12,28 +12,43 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, final
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt
 
 from harv_hq._parquet_io import read_parquet
 from harv_hq.prepare import CATALOG_FILE
 from harv_hq.run import STAGES, Run
 from harv_hq.summarize import SUMMARY_FILE
-from harv_hq.web.payload import column_info, filter_mask, jsonable, source_payload
+from harv_hq.web.payload import (
+    _numeric,
+    column_info,
+    filter_mask,
+    jsonable,
+    source_payload,
+)
 
 _HERE = Path(__file__).parent
 
 
 @final
 class RowsRequest(BaseModel):
-    """Body of ``POST /api/rows``."""
+    """Body of ``POST /api/rows``.
+
+    The rows of ``source_ids``, sorted by ``sort`` (nulls last) when given,
+    and only the first ``limit``.
+    """
 
     source_ids: list[Any]
     columns: list[str]
+    sort: str | None = None
+    descending: bool = False
+    limit: PositiveInt | None = None
 
 
 Stamp = tuple[int, int] | None  # the summary's (inode, mtime in ns), or None
@@ -109,11 +124,25 @@ class _Snapshot:
             raise HTTPException(404, f"no source {text!r} in this run")
         return source_id
 
-    def columns(self, names: list[str]) -> list[str]:
-        """``names`` checked against the table; 400 for an unknown one."""
+    def columns(self, names: list[str], *, numeric: bool = False) -> list[str]:
+        """``names`` checked against the table.
+
+        400 for an unknown column, or with ``numeric``, for one that cannot
+        be plotted.
+        """
         if unknown := [n for n in names if n not in self.table.column_names]:
             raise HTTPException(400, f"unknown columns {unknown}")
+        schema = self.table.schema
+        if numeric and (
+            text := [n for n in names if not _numeric(schema.field(n).type)]
+        ):
+            raise HTTPException(400, f"columns {text} are not numeric")
         return names
+
+    @property
+    def version(self) -> str:
+        """Names this snapshot, so the browser can tell when its IDs are stale."""
+        return "catalog" if self.stamp is None else "{}-{}".format(*self.stamp)
 
     def summary_row(self, source_id: Any) -> dict[str, Any] | None:
         """The source's row of this snapshot's summary (``None`` before one)."""
@@ -158,6 +187,38 @@ def _columns_json(rows: pa.Table) -> dict[str, list[Any]]:
         name: jsonable(column.cast(pa.string()) if name == "source_id" else column)
         for name, column in zip(rows.column_names, rows.columns, strict=True)
     }
+
+
+def _sort_indices(column: pa.ChunkedArray, *, descending: bool) -> pa.Array:
+    """The order that sorts ``column``, nulls last either way."""
+    return pc.array_sort_indices(  # ty: ignore[unresolved-attribute]
+        column,
+        order="descending" if descending else "ascending",
+        null_placement="at_end",
+    )
+
+
+def _plot_columns(rows: pa.Table, positions: np.ndarray) -> bytes:
+    """The plot's columns as float32, then each row's table position as int32.
+
+    Little-endian, one array after another, so the browser reads them with
+    typed arrays instead of parsing JSON. Nulls and non-finite values are NaN,
+    which Plotly leaves out. float32 halves the transfer and still resolves
+    far more than a screen's pixels.
+
+    Examples
+    --------
+    >>> import numpy as np, pyarrow as pa
+    >>> raw = _plot_columns(pa.table({"g": [1.5, None]}), np.array([0, 4]))
+    >>> np.frombuffer(raw[:8], "<f4").tolist(), np.frombuffer(raw[8:], "<i4").tolist()
+    ([1.5, nan], [0, 4])
+    """
+    arrays = []
+    for column in rows.columns:
+        values = column.cast(pa.float64()).to_numpy(zero_copy_only=False)
+        arrays.append(np.where(np.isfinite(values), values, np.nan).astype("<f4"))
+    arrays.append(positions.astype("<i4"))
+    return b"".join(a.tobytes() for a in arrays)
 
 
 def create_app(run_dir: str | os.PathLike) -> FastAPI:
@@ -208,28 +269,43 @@ def create_app(run_dir: str | os.PathLike) -> FastAPI:
         current = state()
         return column_info(current.table, current.units)
 
+    @app.get("/api/ids")
+    def api_ids() -> JSONResponse:
+        current = state()
+        ids = jsonable(current.table["source_id"].cast(pa.string()))
+        return JSONResponse(ids, headers={"X-HQ-Version": current.version})
+
     @app.get("/api/catalog")
     def api_catalog(
-        columns: str = "source_id",
+        columns: str = "",
         filter_: Annotated[str, Query(alias="filter")] = "",
         status: str = "",
-    ) -> JSONResponse:
+    ) -> Response:
         current = state()
-        names = current.columns([c for c in columns.split(",") if c])
+        names = current.columns([c for c in columns.split(",") if c], numeric=True)
         try:
             mask = filter_mask(current.table, filter_, status)
         except ValueError as err:
             raise HTTPException(400, str(err)) from None
-        rows = current.table.select(names).filter(mask)
-        return JSONResponse(_columns_json(rows))
+        positions = np.flatnonzero(mask.to_numpy(zero_copy_only=False))
+        rows = current.table.select(names).take(positions)
+        return Response(
+            _plot_columns(rows, positions),
+            media_type="application/octet-stream",
+            headers={"X-HQ-Version": current.version},
+        )
 
     @app.post("/api/rows")
     def api_rows(body: RowsRequest) -> JSONResponse:
         current = state()
         names = current.columns(body.columns)
+        sort = [] if body.sort is None else current.columns([body.sort])
         ids = [current.source_id(str(sid)) for sid in body.source_ids]
-        rows = current.table.select(names).take([current.positions[i] for i in ids])
-        return JSONResponse(_columns_json(rows))
+        rows = current.table.select(list(dict.fromkeys([*names, *sort])))
+        rows = rows.take([current.positions[i] for i in ids])
+        if sort:
+            rows = rows.take(_sort_indices(rows[sort[0]], descending=body.descending))
+        return JSONResponse(_columns_json(rows.select(names).slice(0, body.limit)))
 
     @app.get("/api/source/{source_id:path}")
     def api_source(source_id: str) -> JSONResponse:

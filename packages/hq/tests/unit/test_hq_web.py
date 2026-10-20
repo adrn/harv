@@ -110,6 +110,20 @@ def summary(rv_dir):
     return pq.read_table(rv_dir / SUMMARY_FILE)
 
 
+def plot_columns(client, columns, query=""):
+    """``/api/catalog``, decoded as catalog.js does, with its IDs from ``/api/ids``."""
+    response = client.get(f"/api/catalog?columns={','.join(columns)}&{query}")
+    assert response.status_code == 200, response.text
+    raw = np.frombuffer(response.content, "<f4")
+    n = raw.size // (len(columns) + 1)
+    body = {name: raw[i * n : (i + 1) * n] for i, name in enumerate(columns)}
+    positions = np.frombuffer(response.content[4 * n * len(columns) :], "<i4")
+    ids = client.get("/api/ids")
+    assert ids.headers["X-HQ-Version"] == response.headers["X-HQ-Version"]
+    body["source_id"] = [ids.json()[i] for i in positions]
+    return body
+
+
 class TestPages:
     def test_index(self, client):
         response = client.get("/")
@@ -140,15 +154,31 @@ class TestCatalog:
         assert not columns["rejection_status"]["numeric"]
 
     def test_whole_columns(self, client, rv_dir):
-        body = client.get("/api/catalog?columns=source_id,abs_g,ln_Z_int").json()
+        body = plot_columns(client, ["abs_g", "n_obs"])
         table = summary(rv_dir)
         assert body["source_id"] == table["source_id"].to_pylist()
-        assert body["abs_g"] == table["abs_g"].to_pylist()
+        # float32, with nulls (sources missing from the catalog) as NaN.
+        expected = np.array(table["abs_g"].to_pylist(), dtype=float)
+        np.testing.assert_allclose(body["abs_g"], expected, rtol=1e-6)
+        assert np.isnan(body["abs_g"]).any()
+        assert body["n_obs"].tolist() == table["n_obs"].to_pylist()
+
+    def test_only_numeric_columns_are_plotted(self, client):
+        response = client.get("/api/catalog?columns=rejection_status")
+        assert response.status_code == 400
+        assert "not numeric" in response.json()["detail"]
+
+    def test_ids_follow_the_summary_version(self, rv_dir, tmp_path):
+        run_dir = shutil.copytree(rv_dir, tmp_path / "run")
+        client = TestClient(create_app(run_dir))
+        before = client.get("/api/ids").headers["X-HQ-Version"]
+        assert before != "catalog"
+        (run_dir / SUMMARY_FILE).unlink()
+        response = client.get("/api/catalog?columns=abs_g")
+        assert response.headers["X-HQ-Version"] == "catalog"
 
     def test_filters(self, client, rv_dir):
-        body = client.get(
-            "/api/catalog?columns=source_id,abs_g,n_obs&filter=abs_g:1:,n_obs::6"
-        ).json()
+        body = plot_columns(client, ["abs_g", "n_obs"], "filter=abs_g:1:,n_obs::6")
         table = summary(rv_dir).to_pylist()
         # Sources missing from the catalog have a null abs_g: filtered out.
         expected = [
@@ -158,9 +188,9 @@ class TestCatalog:
         ]
         assert body["source_id"] == expected
         assert 0 < len(expected) < len(table)
-        ok = client.get("/api/catalog?status=ok").json()["source_id"]
+        ok = plot_columns(client, ["n_obs"], "status=ok")["source_id"]
         assert len(ok) == len(table)
-        assert client.get("/api/catalog?status=failed").json() == {"source_id": []}
+        assert plot_columns(client, ["n_obs"], "status=failed")["source_id"] == []
 
     @pytest.mark.parametrize(
         "query",
@@ -190,13 +220,31 @@ class TestCatalog:
         missing = {"source_ids": ["nope"], "columns": ["source_id"]}
         assert client.post("/api/rows", json=missing).status_code == 404
 
+    def test_rows_sorted_and_limited(self, client, rv_dir):
+        """The server sorts the whole selection, nulls last, then cuts it."""
+        table = summary(rv_dir).to_pylist()
+        ids = [r["source_id"] for r in table]
+        request = {"source_ids": ids, "columns": ["source_id", "abs_g"]}
+        body = client.post(
+            "/api/rows", json={**request, "sort": "abs_g", "descending": True}
+        ).json()
+        values = [r["abs_g"] for r in table if r["abs_g"] is not None]
+        n_null = len(table) - len(values)
+        assert body["abs_g"] == sorted(values, reverse=True) + [None] * n_null
+        top = client.post(
+            "/api/rows", json={**request, "sort": "abs_g", "limit": 3}
+        ).json()
+        assert top["abs_g"] == sorted(values)[:3]
+        bad = [{**request, "limit": 0}, {**request, "sort": "nope"}]
+        assert [client.post("/api/rows", json=b).status_code for b in bad] == [422, 400]
+
     def test_reloads_when_the_summary_changes(self, rv_dir, tmp_path):
         run_dir = shutil.copytree(rv_dir, tmp_path / "run")
         client = TestClient(create_app(run_dir))
-        assert client.get("/api/catalog?status=ok").status_code == 200
+        assert client.get("/api/catalog?columns=abs_g&status=ok").status_code == 200
         (run_dir / SUMMARY_FILE).unlink()
         # Back to catalog.parquet alone: no statuses to filter on yet.
-        response = client.get("/api/catalog?status=ok")
+        response = client.get("/api/catalog?columns=abs_g&status=ok")
         assert response.status_code == 400
         assert "hq summarize" in response.json()["detail"]
         assert "rejection_status" not in {
@@ -244,7 +292,7 @@ class TestSourcePayload:
         client, fixture = gaia_client
         sid = next(iter(fixture.kept))
         # 19-digit IDs travel as strings: JS numbers cannot hold them exactly.
-        ids = client.get("/api/catalog").json()["source_id"]
+        ids = client.get("/api/ids").json()
         assert str(sid) in ids
         body = client.get(f"/api/source/{sid}").json()
         assert body["source_id"] == str(sid)

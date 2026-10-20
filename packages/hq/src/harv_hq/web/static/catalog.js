@@ -8,7 +8,17 @@ const $ = (id) => document.getElementById(id);
 const CONTROLS = ["x", "y", "color", "status", "filter", "cols"];
 const FLAGS = ["logx", "logy", "revx", "revy"];
 
+// The table shows at most this many rows of a selection; the server sorts
+// the whole selection first, so the column headers still order all of it.
+const MAX_TABLE_ROWS = 1000;
+
 let COLUMNS = []; // [{name, dtype, unit, numeric}]
+// Every source ID, by table position, for the summary version in idsVersion.
+// The plot's points carry positions, so the IDs are fetched once per version
+// instead of with every plot.
+let ids = [];
+let idsVersion = null;
+let selected = []; // the selected points' source IDs
 let rows = null; // the table's current rows, as {column: values}
 let sortKey = null;
 let sortDir = 1;
@@ -58,21 +68,41 @@ async function getJson(url, options) {
   return body;
 }
 
+// The plot's columns, decoded from /api/catalog: one float32 array per
+// column, then the rows' table positions as int32.
+async function getColumns(columns) {
+  const query = new URLSearchParams({
+    columns: columns.join(","),
+    filter: $("filter").value,
+    status: $("status").value,
+  });
+  const resp = await fetch(`/api/catalog?${query}`);
+  if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+  const version = resp.headers.get("X-HQ-Version");
+  const buffer = await resp.arrayBuffer();
+  const n = buffer.byteLength / 4 / (columns.length + 1);
+  const data = { positions: new Int32Array(buffer, 4 * n * columns.length, n) };
+  columns.forEach((name, i) => (data[name] = new Float32Array(buffer, 4 * n * i, n)));
+  if (version !== idsVersion) {
+    const idsResp = await fetch("/api/ids");
+    ids = await idsResp.json();
+    idsVersion = idsResp.headers.get("X-HQ-Version");
+    // The summary changed between the two requests: start over.
+    if (idsVersion !== version) return getColumns(columns);
+  }
+  return data;
+}
+
 async function plot() {
   writeUrl();
   const x = $("x").value,
     y = $("y").value,
     color = $("color").value;
-  const columns = ["source_id", x, y, ...(color ? [color] : [])];
-  const query = new URLSearchParams({
-    columns: [...new Set(columns)].join(","),
-    filter: $("filter").value,
-    status: $("status").value,
-  });
+  const columns = [...new Set([x, y, ...(color ? [color] : [])])];
   const token = ++plotToken;
   let data;
   try {
-    data = await getJson(`/api/catalog?${query}`);
+    data = await getColumns(columns);
   } catch (err) {
     if (token !== plotToken) return;
     $("message").textContent = err.message;
@@ -81,7 +111,7 @@ async function plot() {
   }
   if (token !== plotToken) return;
   $("message").className = "hint";
-  $("message").textContent = `${data.source_id.length} sources`;
+  $("message").textContent = `${data.positions.length} sources`;
   const marker = { size: 4, opacity: 0.7 };
   if (color) {
     marker.color = data[color];
@@ -102,7 +132,7 @@ async function plot() {
         mode: "markers",
         x: data[x],
         y: data[y],
-        customdata: data.source_id,
+        customdata: Array.from(data.positions, (i) => ids[i]),
         marker,
         hovertemplate: "%{customdata}<extra></extra>",
       },
@@ -116,14 +146,22 @@ async function plot() {
   );
 }
 
-async function showRows(ids) {
+async function showRows() {
   const token = ++rowsToken;
+  const columns = tableColumns();
+  if (!columns.includes(sortKey)) sortKey = null; // its column was removed
   let fetched;
   try {
     fetched = await getJson("/api/rows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source_ids: ids, columns: tableColumns() }),
+      body: JSON.stringify({
+        source_ids: selected,
+        columns,
+        sort: sortKey,
+        descending: sortDir < 0,
+        limit: MAX_TABLE_ROWS,
+      }),
     });
   } catch (err) {
     if (token !== rowsToken) return;
@@ -138,18 +176,11 @@ async function showRows(ids) {
 
 function renderTable() {
   const names = Object.keys(rows);
-  if (!names.includes(sortKey)) sortKey = null; // its column was removed
   const n = rows.source_id.length;
-  const order = [...Array(n).keys()];
-  if (sortKey) {
-    const v = rows[sortKey];
-    order.sort((a, b) => {
-      if (v[a] === v[b]) return 0;
-      if (v[a] === null) return 1;
-      if (v[b] === null) return -1;
-      return (v[a] < v[b] ? -1 : 1) * sortDir;
-    });
-  }
+  $("table-note").textContent =
+    n < selected.length
+      ? `Showing ${n} of ${selected.length} selected sources; click a column to sort them all.`
+      : `${n} selected sources.`;
   const head = $("rows").tHead;
   head.innerHTML = "";
   const tr = head.insertRow();
@@ -159,13 +190,13 @@ function renderTable() {
     th.onclick = () => {
       sortDir = sortKey === name ? -sortDir : 1;
       sortKey = name;
-      renderTable();
+      showRows();
     };
     tr.appendChild(th);
   }
   const body = $("rows").tBodies[0];
   body.innerHTML = "";
-  for (const i of order) {
+  for (let i = 0; i < n; i++) {
     const row = body.insertRow();
     for (const name of names) {
       const v = rows[name][i];
@@ -212,7 +243,8 @@ async function main() {
   await Plotly.newPlot($("scatter"), [], { margin: { t: 20 } });
   $("scatter").on("plotly_selected", (ev) => {
     if (ev && ev.points && ev.points.length) {
-      showRows(ev.points.map((p) => p.customdata));
+      selected = ev.points.map((p) => p.customdata);
+      showRows();
     }
   });
   await plot();

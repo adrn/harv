@@ -991,7 +991,9 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
   on any column.
 - Box or lasso selection fills a sortable table below the plot. The table
   shows `source_id` plus user-chosen columns, and each row links to the
-  source page.
+  source page. It shows at most 1000 rows; clicking a column header sorts
+  the whole selection on the server, so the rows shown are the first 1000 in
+  that order.
 - A search box opens the source page for an exact source ID.
 - The chosen axes, filters and columns are kept in the URL query string so a
   view can be bookmarked or shared.
@@ -1031,12 +1033,13 @@ out.
 
 ### JSON API
 
-| Route                                                  | Returns                                                          |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| `GET /api/columns`                                     | Column names, dtypes, units, and whether each is numeric         |
-| `GET /api/catalog?columns=a,b,c&filter=...&status=...` | The requested columns as arrays, for all rows passing the filter |
-| `POST /api/rows`                                       | Body `{source_ids, columns}`; the requested rows                 |
-| `GET /api/source/{source_id}`                          | Data, samples, curves, summary row, statuses, errors, warnings   |
+| Route                                                  | Returns                                                                   |
+| ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `GET /api/columns`                                     | Column names, dtypes, units, and whether each is numeric                  |
+| `GET /api/ids`                                         | Every source ID, as strings, in table order                               |
+| `GET /api/catalog?columns=a,b,c&filter=...&status=...` | The requested numeric columns, binary, for the rows passing the filter    |
+| `POST /api/rows`                                       | Body `{source_ids, columns, sort, descending, limit}`; the requested rows |
+| `GET /api/source/{source_id}`                          | Data, samples, curves, summary row, statuses, errors, warnings            |
 
 The `filter` parameter is a comma-separated list of `column:min:max` terms
 (an empty bound is open, e.g. `bp_rp:0.5:` or `n_obs::20`), combined with
@@ -1050,9 +1053,19 @@ exceed the integers a browser represents exactly. `/api/source` returns
 `source_id`, `kind`, `data` (arrays and units), `summary`, and per stage its
 `status`, `mcmc_status`, `error`, `warnings` and, when it has samples,
 `params`, `units`, `curves` or `curves_error` (and `weight` for
-rejection). `/api/catalog` returns whole columns, so the catalog view scales to
-roughly 10^6 sources before payload size dominates; larger runs should filter
-first.
+rejection).
+
+`/api/catalog` is built for runs of ~10^6 sources, so it sends no JSON and no
+IDs. Its body is `application/octet-stream`: each requested column as
+little-endian float32, in the order requested, followed by each row's
+position in the table as little-endian int32. Nulls and non-finite values
+are NaN. A column that is not numeric returns 400. The browser takes the IDs
+from `/api/ids` by position. Both responses carry an `X-HQ-Version` header
+naming the table version (`catalog` before `hq summarize`), so the browser
+fetches the IDs again only when the version changes. `/api/rows` sorts the
+requested rows by `sort` (optional; nulls last, `descending` default false)
+and returns the first `limit` (optional, positive); an unknown `sort`
+column returns 400.
 
 ______________________________________________________________________
 
