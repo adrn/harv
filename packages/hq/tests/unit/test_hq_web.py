@@ -1,8 +1,11 @@
 """Tests for the web viewer: routes, filters, IDs, and source payloads."""
 
+import json
 import shutil
+import subprocess
 import types
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
@@ -25,6 +28,7 @@ from harv_hq.results import (
     read_source_rows,
 )
 from harv_hq.summarize import SUMMARY_FILE
+from harv_hq.web import app as app_module
 from harv_hq.web import payload as payload_module
 from harv_hq.web.app import _Viewer
 from harv_hq.web.payload import (
@@ -501,3 +505,61 @@ def test_cli_serve(rv_dir, monkeypatch):
     ((app, kwargs),) = calls
     assert kwargs == {"host": "0.0.0.0", "port": 9001}  # noqa: S104
     assert app.title.startswith("hq:")
+
+
+# A box, a lasso (a triangle), and the lasso again on log axes, where its
+# edges are straight in log space: the point (10, 10) is inside the
+# triangle with corners (1, 1), (1000, 1), (1, 1000) either way, and
+# (50, 50) only in linear space.
+SELECTION_SCRIPT = """
+const s = require(process.argv[1]);
+const xs = [0.5, 2, 3, 10, 50, NaN, 2, -1];
+const ys = [0.5, 2, 3, 10, 50, 2, NaN, 1];
+const box = s.encodeSelection({range: {x: [1.5, 3.5], y: [0, 2.5]}});
+const lasso = s.encodeSelection({lassoPoints: {x: [1, 1000, 1], y: [1, 1, 1000]}});
+const result = {
+  box,
+  lasso,
+  inBox: s.selectedIndices(s.decodeSelection(box), xs, ys, false, false),
+  inLasso: s.selectedIndices(s.decodeSelection(lasso), xs, ys, false, false),
+  inLogLasso: s.selectedIndices(s.decodeSelection(lasso), xs, ys, true, true),
+  bad: ["", "box:1,2,3", "lasso:1,2,3,4", "box:1,a,2,3", "circle:1"].map(
+    s.decodeSelection),
+  rect: s.selectionShape(s.decodeSelection(box)),
+  path: s.selectionShape(s.decodeSelection(lasso)).path,
+  none: s.encodeSelection({points: []}),
+};
+console.log(JSON.stringify(result));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_selection_round_trips_through_the_url():
+    """The selection kept in the URL selects the same points when redrawn."""
+    script = Path(app_module.__file__).parent / "static" / "selection.js"
+    run = subprocess.run(  # noqa: S603
+        ["node", "-e", SELECTION_SCRIPT, str(script)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result = json.loads(run.stdout)
+    assert result["box"] == "box:1.5,3.5,0,2.5"
+    assert result["lasso"] == "lasso:1,1,1000,1,1,1000"
+    assert result["inBox"] == [1]  # (3, 3) is above the box
+    # Linear: (10, 10) and (50, 50) are inside x + y < 1001; (0.5, 0.5) is not.
+    assert result["inLasso"] == [1, 2, 3, 4]
+    # Log: x + y < 3 in decades, so (50, 50) is outside; -1 has no log.
+    assert result["inLogLasso"] == [1, 2, 3]
+    assert result["bad"] == [None] * 5
+    assert result["rect"] == {
+        "type": "rect",
+        "xref": "x",
+        "yref": "y",
+        "x0": 1.5,
+        "x1": 3.5,
+        "y0": 0,
+        "y1": 2.5,
+    }
+    assert result["path"] == "M1,1L1000,1L1,1000Z"
+    assert result["none"] is None

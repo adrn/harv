@@ -995,8 +995,12 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
   the whole selection on the server, so the rows shown are the first 1000 in
   that order.
 - A search box opens the source page for an exact source ID.
-- The chosen axes, filters and columns are kept in the URL query string so a
-  view can be bookmarked or shared.
+- The chosen axes, filters and columns, the selection (its box or lasso, in
+  data values) and the table's sort are kept in the URL query string, so a
+  view can be bookmarked or shared, and going back from a source page
+  restores the selection and its table. A kept selection is redrawn, and
+  selects the points inside it again, only while the axes, log scales and
+  filters it was drawn with are unchanged; changing them clears it.
 
 #### Source page (`/source/{source_id}`)
 

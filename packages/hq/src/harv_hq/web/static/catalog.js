@@ -1,8 +1,9 @@
 "use strict";
 
 // Catalog explorer: a scattergl plot of two columns of the joined catalog +
-// summary table, with a selection-driven table. Every control lives in the
-// URL query string, so a view can be bookmarked or shared.
+// summary table, with a selection-driven table. Every control, the selection
+// and the table's sort live in the URL query string, so a view can be
+// bookmarked or shared, and going back to it from a source page restores it.
 
 const $ = (id) => document.getElementById(id);
 const CONTROLS = ["x", "y", "color", "status", "filter", "cols"];
@@ -19,6 +20,10 @@ let COLUMNS = []; // [{name, dtype, unit, numeric}]
 let ids = [];
 let idsVersion = null;
 let selected = []; // the selected points' source IDs
+// The selection as text (see selection.js), and the plot it was drawn on:
+// a box or lasso drawn on other axes, or on other rows, selects other points.
+let selection = null;
+let selectionKey = null;
 let rows = null; // the table's current rows, as {column: values}
 let sortKey = null;
 let sortDir = 1;
@@ -40,17 +45,39 @@ function fillSelect(select, names, allowNone) {
   for (const name of names) select.add(new Option(name, name));
 }
 
+// What decides which points a selection covers.
+const plotKey = () =>
+  ["x", "y", "logx", "logy", "filter", "status"]
+    .map((id) => ($(id).type === "checkbox" ? $(id).checked : $(id).value))
+    .join("|");
+
 function readUrl() {
   const params = new URLSearchParams(location.search);
   for (const id of CONTROLS) if (params.has(id)) $(id).value = params.get(id);
   for (const id of FLAGS) $(id).checked = params.get(id) === "1";
+  selection = params.get("sel");
+  selectionKey = plotKey();
+  sortKey = params.get("sort");
+  sortDir = params.get("desc") === "1" ? -1 : 1;
 }
 
 function writeUrl() {
   const params = new URLSearchParams();
   for (const id of CONTROLS) if ($(id).value) params.set(id, $(id).value);
   for (const id of FLAGS) if ($(id).checked) params.set(id, "1");
+  if (selection) params.set("sel", selection);
+  if (sortKey) params.set("sort", sortKey);
+  if (sortKey && sortDir < 0) params.set("desc", "1");
   history.replaceState(null, "", `?${params}`);
+}
+
+function clearSelection() {
+  selection = null;
+  selected = [];
+  rows = null;
+  $("rows").tHead.innerHTML = "";
+  $("rows").tBodies[0].innerHTML = "";
+  $("table-note").textContent = "";
 }
 
 function tableColumns() {
@@ -94,6 +121,7 @@ async function getColumns(columns) {
 }
 
 async function plot() {
+  if (selection && selectionKey !== plotKey()) clearSelection();
   writeUrl();
   const x = $("x").value,
     y = $("y").value,
@@ -124,26 +152,32 @@ async function plot() {
     type: log ? "log" : "linear",
     autorange: rev ? "reversed" : true,
   });
-  Plotly.react(
-    $("scatter"),
-    [
-      {
-        type: "scattergl",
-        mode: "markers",
-        x: data[x],
-        y: data[y],
-        customdata: Array.from(data.positions, (i) => ids[i]),
-        marker,
-        hovertemplate: "%{customdata}<extra></extra>",
-      },
-    ],
-    {
-      dragmode: "lasso",
-      margin: { t: 20 },
-      xaxis: axis(x, $("logx").checked, $("revx").checked),
-      yaxis: axis(y, $("logy").checked, $("revy").checked),
-    },
-  );
+  const trace = {
+    type: "scattergl",
+    mode: "markers",
+    x: data[x],
+    y: data[y],
+    customdata: Array.from(data.positions, (i) => ids[i]),
+    marker,
+    hovertemplate: "%{customdata}<extra></extra>",
+  };
+  const layout = {
+    dragmode: "lasso",
+    margin: { t: 20 },
+    xaxis: axis(x, $("logx").checked, $("revx").checked),
+    yaxis: axis(y, $("logy").checked, $("revy").checked),
+  };
+  // Redraw a selection kept from before (from the URL, say, after going
+  // back from a source page), and select its points again.
+  const shape = decodeSelection(selection);
+  if (shape) {
+    const inside = selectedIndices(shape, trace.x, trace.y, $("logx").checked, $("logy").checked);
+    trace.selectedpoints = inside;
+    layout.selections = [selectionShape(shape)];
+    selected = inside.map((i) => trace.customdata[i]);
+  }
+  Plotly.react($("scatter"), [trace], layout);
+  if (shape) showRows();
 }
 
 async function showRows() {
@@ -190,6 +224,7 @@ function renderTable() {
     th.onclick = () => {
       sortDir = sortKey === name ? -sortDir : 1;
       sortKey = name;
+      writeUrl();
       showRows();
     };
     tr.appendChild(th);
@@ -243,9 +278,20 @@ async function main() {
   await Plotly.newPlot($("scatter"), [], { margin: { t: 20 } });
   $("scatter").on("plotly_selected", (ev) => {
     if (ev && ev.points && ev.points.length) {
+      // Plotly also reports a redrawn selection, with no shape: keep ours.
+      const text = encodeSelection(ev);
+      if (text) {
+        selection = text;
+        selectionKey = plotKey();
+      }
       selected = ev.points.map((p) => p.customdata);
+      writeUrl();
       showRows();
     }
+  });
+  $("scatter").on("plotly_deselect", () => {
+    clearSelection();
+    writeUrl();
   });
   await plot();
 }
