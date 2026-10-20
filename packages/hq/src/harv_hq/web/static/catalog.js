@@ -12,6 +12,11 @@ const FLAGS = ["logx", "logy", "revx", "revy"];
 // The table shows at most this many rows of a selection; the server sorts
 // the whole selection first, so the column headers still order all of it.
 const MAX_TABLE_ROWS = 1000;
+// Points per scattergl trace. At 1e5 points or more Plotly indexes a trace
+// for hover (on linear axes), and at ~10^6 points that index makes every
+// hover and lasso step take seconds; below it Plotly scans the points, which
+// takes milliseconds. So the plot is split into traces just under the limit.
+const TRACE_POINTS = 99_999;
 
 let COLUMNS = []; // [{name, dtype, unit, numeric}]
 // Every source ID, by table position, for the summary version in idsVersion.
@@ -151,27 +156,47 @@ async function plot() {
   if (token !== plotToken) return;
   $("message").className = "hint";
   $("message").textContent = `${data.positions.length} sources`;
-  const marker = { size: 4, opacity: 0.7 };
+  // One color scale for every trace, so it needs explicit limits.
+  let cmin = Infinity,
+    cmax = -Infinity;
   if (color) {
-    marker.color = data[color];
-    marker.colorscale = "Viridis";
-    marker.showscale = true;
-    marker.colorbar = { title: label(color) };
+    for (const v of data[color]) {
+      if (v < cmin) cmin = v;
+      if (v > cmax) cmax = v;
+    }
   }
   const axis = (name, log, rev) => ({
     title: label(name),
     type: log ? "log" : "linear",
     autorange: rev ? "reversed" : true,
   });
-  const trace = {
-    type: "scattergl",
-    mode: "markers",
-    x: data[x],
-    y: data[y],
-    customdata: Array.from(data.positions, (i) => ids[i]),
-    marker,
-    hovertemplate: "%{customdata}<extra></extra>",
-  };
+  const customdata = Array.from(data.positions, (i) => ids[i]);
+  const n = customdata.length;
+  const traces = [];
+  for (let start = 0; start < n || start === 0; start += TRACE_POINTS) {
+    const end = Math.min(start + TRACE_POINTS, n);
+    const marker = { size: 4, opacity: 0.7 };
+    if (color) {
+      Object.assign(marker, {
+        color: data[color].subarray(start, end),
+        colorscale: "Viridis",
+        cmin,
+        cmax,
+        showscale: start === 0,
+        colorbar: { title: label(color) },
+      });
+    }
+    traces.push({
+      type: "scattergl",
+      mode: "markers",
+      x: data[x].subarray(start, end),
+      y: data[y].subarray(start, end),
+      customdata: customdata.slice(start, end),
+      marker,
+      hovertemplate: "%{customdata}<extra></extra>",
+      showlegend: false,
+    });
+  }
   const layout = {
     dragmode: "lasso",
     margin: { t: 20 },
@@ -182,12 +207,13 @@ async function plot() {
   // back from a source page), and select its points again.
   const shape = decodeSelection(selection);
   if (shape) {
-    const inside = selectedIndices(shape, trace.x, trace.y, $("logx").checked, $("logy").checked);
-    trace.selectedpoints = inside;
+    const inside = selectedIndices(shape, data[x], data[y], $("logx").checked, $("logy").checked);
+    for (const trace of traces) trace.selectedpoints = [];
+    for (const i of inside) traces[Math.floor(i / TRACE_POINTS)].selectedpoints.push(i % TRACE_POINTS);
     layout.selections = [selectionShape(shape)];
-    selected = inside.map((i) => trace.customdata[i]);
+    selected = inside.map((i) => customdata[i]);
   }
-  Plotly.react($("scatter"), [trace], layout);
+  Plotly.react($("scatter"), traces, layout);
   if (shape) showRows();
 }
 
