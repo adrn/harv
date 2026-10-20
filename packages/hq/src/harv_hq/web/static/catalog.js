@@ -175,7 +175,8 @@ async function plot() {
   const traces = [];
   for (let start = 0; start < n || start === 0; start += TRACE_POINTS) {
     const end = Math.min(start + TRACE_POINTS, n);
-    const marker = { size: 4, opacity: 0.7 };
+    // One color, or Plotly gives each trace its own from the palette.
+    const marker = { size: 4, opacity: 0.7, color: "#1f77b4" };
     if (color) {
       Object.assign(marker, {
         color: data[color].subarray(start, end),
