@@ -88,11 +88,21 @@ function tableColumns() {
   return [...new Set(["source_id", $("x").value, $("y").value, ...extra])];
 }
 
+// An error response's message: the API's JSON detail, or the HTTP status
+// when the body is not JSON (a crash, or a proxy's error page).
+async function failure(resp) {
+  const text = await resp.text();
+  try {
+    return new Error(JSON.parse(text).detail || resp.statusText);
+  } catch {
+    return new Error(`${resp.status} ${resp.statusText} from ${resp.url}`);
+  }
+}
+
 async function getJson(url, options) {
   const resp = await fetch(url, options);
-  const body = await resp.json();
-  if (!resp.ok) throw new Error(body.detail || resp.statusText);
-  return body;
+  if (!resp.ok) throw await failure(resp);
+  return resp.json();
 }
 
 // The plot's columns, decoded from /api/catalog: one float32 array per
@@ -104,7 +114,7 @@ async function getColumns(columns) {
     status: $("status").value,
   });
   const resp = await fetch(`/api/catalog?${query}`);
-  if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+  if (!resp.ok) throw await failure(resp);
   const version = resp.headers.get("X-HQ-Version");
   const buffer = await resp.arrayBuffer();
   const n = buffer.byteLength / 4 / (columns.length + 1);
@@ -112,6 +122,7 @@ async function getColumns(columns) {
   columns.forEach((name, i) => (data[name] = new Float32Array(buffer, 4 * n * i, n)));
   if (version !== idsVersion) {
     const idsResp = await fetch("/api/ids");
+    if (!idsResp.ok) throw await failure(idsResp);
     ids = await idsResp.json();
     idsVersion = idsResp.headers.get("X-HQ-Version");
     // The summary changed between the two requests: start over.

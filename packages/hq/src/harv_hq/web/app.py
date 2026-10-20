@@ -6,6 +6,7 @@ whose scripts fetch the JSON API; Plotly.js comes from a CDN.
 
 __all__ = ("create_app",)
 
+import hashlib
 import os
 import threading
 from dataclasses import dataclass, replace
@@ -221,6 +222,15 @@ def _plot_columns(rows: pa.Table, positions: np.ndarray) -> bytes:
     return b"".join(a.tobytes() for a in arrays)
 
 
+def _static_version(directory: Path) -> str:
+    """A short hash of every file under ``directory``, names and contents."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in directory.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(directory).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
 def create_app(run_dir: str | os.PathLike) -> FastAPI:
     """The web viewer for one run directory.
 
@@ -241,7 +251,13 @@ def create_app(run_dir: str | os.PathLike) -> FastAPI:
     viewer = _Viewer(Path(run_dir))
     app = FastAPI(title=f"hq: {viewer.run.config.run.name}")
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
-    templates = Jinja2Templates(directory=_HERE / "templates")
+    # Asset URLs carry a hash of the static files, so a browser fetches them
+    # again after an hq update instead of running a cached, older script
+    # against the new API.
+    assets = {"static_version": _static_version(_HERE / "static")}
+    templates = Jinja2Templates(
+        directory=_HERE / "templates", context_processors=[lambda _: assets]
+    )
 
     # Responses are built with JSONResponse, which refuses NaN, rather than
     # through FastAPI's encoder, which walks every element of large arrays.

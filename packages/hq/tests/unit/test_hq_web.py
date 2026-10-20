@@ -134,6 +134,20 @@ class TestPages:
         assert response.status_code == 200
         assert "catalog.js" in response.text
 
+    def test_asset_urls_change_with_the_assets(self, client, tmp_path):
+        """A browser cannot run a cached script against a newer API."""
+        static = Path(app_module.__file__).parent / "static"
+        version = app_module._static_version(static)
+        assert f"/static/catalog.js?v={version}" in client.get("/").text
+        assert (
+            f"/static/source.js?v={version}"
+            in client.get(f"/source/{quote(PLUS, safe='')}").text
+        )
+        copy = shutil.copytree(static, tmp_path / "static")
+        assert app_module._static_version(copy) == version
+        (copy / "catalog.js").write_text("// edited\n", encoding="utf-8")
+        assert app_module._static_version(copy) != version
+
     @pytest.mark.parametrize("sid", [PLUS, SLASH])
     def test_source_page(self, client, sid):
         response = client.get(f"/source/{quote(sid, safe='')}")

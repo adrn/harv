@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ source_id }} &mdash; {{ run_name }} &mdash; hq</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version }}" />
     <script
       src="https://cdn.plot.ly/plotly-2.35.2.min.js"
       charset="utf-8"
@@ -45,6 +45,6 @@
     <script>
       const SOURCE_ID = {{ source_id|tojson }};
     </script>
-    <script src="/static/source.js"></script>
+    <script src="/static/source.js?v={{ static_version }}"></script>
   </body>
 </html>

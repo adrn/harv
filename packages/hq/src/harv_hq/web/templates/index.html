@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ run_name }} &mdash; hq</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version }}" />
     <script
       src="https://cdn.plot.ly/plotly-2.35.2.min.js"
       charset="utf-8"
@@ -56,7 +56,7 @@
       </table>
     </div>
 
-    <script src="/static/selection.js"></script>
-    <script src="/static/catalog.js"></script>
+    <script src="/static/selection.js?v={{ static_version }}"></script>
+    <script src="/static/catalog.js?v={{ static_version }}"></script>
   </body>
 </html>
