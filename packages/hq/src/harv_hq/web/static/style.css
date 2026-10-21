@@ -88,3 +88,10 @@ pre {
   overflow: auto;
   font-size: 0.8rem;
 }
+/* Plotly draws a box or lasso selection as shapes that take the mouse, so
+   the points under it could not be hovered or clicked. The selection is
+   only ever redrawn here, never moved, so let events through to the plot. */
+#scatter .selectionlayer,
+#scatter .selectionlayer * {
+  pointer-events: none !important;
+}
