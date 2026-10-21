@@ -327,6 +327,17 @@ async function main() {
       showRows();
     }
   });
+  // A click offers the source's page rather than opening it, so a click
+  // that only meant to hover or start a selection does not navigate.
+  $("scatter").on("plotly_click", (ev) => {
+    const point = ev && ev.points && ev.points[0];
+    if (!point) return;
+    const link = Object.assign(document.createElement("a"), {
+      href: sourceUrl(point.customdata),
+      textContent: `Open ${point.customdata}`,
+    });
+    $("picked").replaceChildren(link);
+  });
   $("scatter").on("plotly_deselect", () => {
     clearSelection();
     writeUrl();

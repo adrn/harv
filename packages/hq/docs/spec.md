@@ -994,6 +994,8 @@ run on a remote machine, use an SSH tunnel (`ssh -L 8000:localhost:8000 host`).
   source page. It shows at most 1000 rows; clicking a column header sorts
   the whole selection on the server, so the rows shown are the first 1000 in
   that order.
+- Clicking a point shows a link to its source page below the plot; the
+  click does not navigate by itself, and leaves any selection in place.
 - A search box opens the source page for an exact source ID.
 - The chosen axes, filters and columns, the selection (its box or lasso, in
   data values) and the table's sort are kept in the URL query string, so a
