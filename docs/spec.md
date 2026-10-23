@@ -396,7 +396,8 @@ plus a `plot(ax=None, *, add_legend=True, color_cycler=None, **kwargs)` method t
 inherits the shared implementation on `AbstractDatasetContainer`. `SourceData.plot()`
 raises `TypeError` if the contained datasets are not all the same concrete type, since
 overlaying heterogeneous datasets (e.g. RV in km/s and astrometry in mas) on one axes
-is meaningless. Use `get_datasets_by_type(...)` to filter first if needed.
+is meaningless. Use `get_datasets_by_type(...)` to filter first if needed. All
+datasets share one `time_ref`, see §Shared reference epoch.
 
 **Important:** `SourceData` is for heterogeneous or multi-instrument data for a
 *single stellar photocenter*. It is *not* the right container for SB2 systems (see
@@ -426,7 +427,8 @@ user-defined (not restricted to "primary"/"secondary").
 `plot(...)` (inherited; no homogeneity check is needed because the constructor
 already enforces one), plus:
 
-- `time_ref` — delegates to the first component's `time_ref`
+- `time_ref` — delegates to the first component's `time_ref` (all components share
+  it, see §Shared reference epoch)
 - `_get_obs()` — concatenates observations across all components (key order)
 - `_get_obs_err()` — concatenates uncertainties across all components (key order)
 
@@ -436,11 +438,39 @@ different instruments. Eventually `SystemData` and `SourceData` will compose:
 per-component spectroscopy in a `SystemData` alongside unresolved photocenter
 astrometry in `SourceData` or a standalone `GaiaAstrometryData`.
 
+### Shared reference epoch (`time_ref`)
+
+Every dataset in a `SourceData` or `SystemData` carries the same `time_ref`, because
+the shared `phase_peri` (and the astrometric proper-motion epoch) is measured from it.
+Both constructors take a keyword-only `time_ref: Q["time"] | None = None`, and the
+shared value is resolved in this order:
+
+1. **Explicit:** `SourceData(time_ref=t0, **datasets)` sets `t0` on every dataset,
+   replacing whatever `time_ref` each one carried.
+1. **Already shared:** if every dataset already has the same `time_ref`, that value is
+   kept.
+1. **Otherwise:** the mean of all observation times across the datasets.
+
+Rule 2 is what lets a reference epoch survive being put in a container. For example,
+RV datasets built with `RVData(..., time_ref=t0)` and placed in a `SourceData` keep
+`t0`. A dataset cannot record whether its `time_ref` was set explicitly or filled in by
+`__check_init__` (the mean of its own times), so rule 2 applies to any agreeing values.
+It never changes the result for datasets built without a `time_ref`: if their per-dataset
+means all agree, the mean over all observations equals that same value.
+
+A container holding a single dataset follows the same rules; only an explicit
+`time_ref` changes it. Because the keyword is reserved, a dataset cannot be named
+`time_ref`. Values are compared after converting to the first dataset's `time_ref`
+unit, and the selection uses `jnp.where`, so construction does not concretize
+tracers.
+
 ### Helper functions
 
 - `stack_datasets(datasets: dict[str, AbstractData]) -> AbstractData` — concatenates
-  multiple datasets of the same type into a single stacked dataset. Scalar fields
-  like `time_ref` are recomputed from the concatenated time array via `__check_init__`.
+  multiple datasets of the same type into a single stacked dataset. The stacked
+  `time_ref` follows rules 2-3 of §Shared reference epoch: datasets that share a
+  `time_ref` (e.g. the datasets of one `SourceData`) keep it; otherwise it is the mean
+  of the concatenated times.
 
 - `build_indicator_matrix(datasets: dict[str, AbstractData], reference: str) -> tuple[AbstractData, jax.Array | None, tuple[str, ...] | None]` — stacks datasets
   and builds an indicator matrix for multi-survey data. Returns

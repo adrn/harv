@@ -6,11 +6,14 @@ __all__ = (
 )
 
 from dataclasses import fields
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import equinox as eqx
 import jax
 import quaxed.numpy as jnp
+from unxt import Q, ustrip
+
+from harv.custom_types import ScalarQTime
 
 from .datasets import AbstractData
 
@@ -18,34 +21,71 @@ if TYPE_CHECKING:
     from unxt import AbstractQuantity
 
 
+def _common_time_ref(datasets: dict[str, AbstractData]) -> ScalarQTime:
+    """The ``time_ref`` a set of datasets should share.
+
+    The datasets' own ``time_ref`` when they all agree, otherwise the mean of all
+    their observation times (rules 2-3 of spec §Shared reference epoch). Selected
+    with ``jnp.where`` so that tracers are never concretized.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv.data import RVData
+    >>> from harv.data.helpers import _common_time_ref
+    >>> rv1 = RVData(time=Q([0.0, 10.0], "day"), rv=Q([1.0, 2.0], "km/s"),
+    ...              rv_err=Q([0.1, 0.1], "km/s"), time_ref=Q(100.0, "day"))
+    >>> rv2 = RVData(time=Q([20.0, 30.0], "day"), rv=Q([1.0, 2.0], "km/s"),
+    ...              rv_err=Q([0.1, 0.1], "km/s"), time_ref=Q(100.0, "day"))
+    >>> _common_time_ref({"a": rv1, "b": rv2}).value.item()
+    100.0
+    >>> rv3 = RVData(time=Q([20.0, 30.0], "day"), rv=Q([1.0, 2.0], "km/s"),
+    ...              rv_err=Q([0.1, 0.1], "km/s"))
+    >>> _common_time_ref({"a": rv1, "b": rv3}).value.item()
+    15.0
+    """
+    # __check_init__ has already filled in every dataset's time_ref
+    time_refs = [cast("ScalarQTime", ds.time_ref) for ds in datasets.values()]
+    unit = time_refs[0].unit
+    ref_values = jnp.stack([ustrip(unit, t) for t in time_refs])
+    time_values = jnp.concatenate([ustrip(unit, ds.time) for ds in datasets.values()])
+    shared = jnp.where(
+        jnp.all(ref_values == ref_values[0]), ref_values[0], jnp.mean(time_values)
+    )
+    return Q(shared, unit)
+
+
 def _synchronize_time_refs(
     datasets: dict[str, AbstractData],
+    time_ref: ScalarQTime | None = None,
 ) -> dict[str, AbstractData]:
-    """Return datasets sharing a ``time_ref`` set to the mean of all observation times.
+    """Return datasets that all carry the same ``time_ref``.
 
     When multiple datasets are combined (e.g., in SourceData, SystemData, or a
     JointModel), the shared ``phase_peri`` parameter is interpreted as a fraction of
     the orbit relative to ``time_ref``.  All component datasets must therefore use the
-    same reference epoch.  This function computes the global mean time and rebuilds
-    each dataset with that shared value.
+    same reference epoch. See spec §Shared reference epoch.
 
     Parameters
     ----------
     datasets
         Named datasets, possibly with different ``time_ref`` values.
+    time_ref
+        Explicit reference epoch to set on every dataset. When ``None``, the
+        datasets keep their ``time_ref`` if they already agree, and otherwise use
+        the mean of all observation times.
 
     Returns
     -------
-        Same datasets with ``time_ref`` replaced by the global mean time.
+        Same datasets with a shared ``time_ref``.
     """
-    if len(datasets) <= 1:
-        return dict(datasets)
-
-    all_times = jnp.concatenate([ds.time for ds in datasets.values()])
-    shared_time_ref = jnp.mean(all_times)
+    if time_ref is None:
+        if len(datasets) <= 1:
+            return dict(datasets)
+        time_ref = _common_time_ref(datasets)
 
     return {
-        name: eqx.tree_at(lambda d: d.time_ref, ds, shared_time_ref)
+        name: eqx.tree_at(lambda d: d.time_ref, ds, time_ref)
         for name, ds in datasets.items()
     }
 
@@ -80,6 +120,12 @@ def stack_datasets[DT: AbstractData](
     >>> stacked = stack_datasets({"instr1": rv1, "instr2": rv2})
     >>> stacked.n_obs
     4
+
+    The two datasets have different ``time_ref`` values (their own mean times), so
+    the stacked ``time_ref`` is the mean of all four times:
+
+    >>> stacked.time_ref.value.item()
+    30.0
     """
     # first make sure that all datasets have the same type:
     dset_types = {type(ds) for ds in datasets.values()}
@@ -95,7 +141,7 @@ def stack_datasets[DT: AbstractData](
     all_fields = {
         field.name
         for field in fields(ref)
-        if field.name != "time_ref"  # scalar, not array -- skip and recompute below
+        if field.name != "time_ref"  # scalar, not array -- skip and set below
     }
 
     # NOTE: we assume that all datasets have the same fields and units, and we assume
@@ -106,10 +152,8 @@ def stack_datasets[DT: AbstractData](
         name: jnp.concatenate([getattr(ds, name) for ds in datasets.values()])
         for name in all_fields
     }
-    # NOTE: time_ref is recomputed from the stacked time by __check_init__
-    # TODO: we need to add a note somewhere (probably SourceData or all of the *Data
-    # class docstrings) about how time_ref is handled when stacking datasets.
-    return type(ref)(**all_data)
+    # Datasets that share a time_ref keep it; otherwise it is the mean stacked time.
+    return type(ref)(**all_data, time_ref=_common_time_ref(datasets))
 
 
 def build_indicator_matrix[DT: AbstractData](
