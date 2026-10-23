@@ -30,6 +30,7 @@ smooth one-dimensional integral for two, and unsupported above that.
 """
 
 __all__ = (
+    "DiagonalMarginalizedLinear",
     "GeneralizedMarginalizedLinear",
     "ResolvedLinearPrior",
     "build_marginalized",
@@ -37,7 +38,7 @@ __all__ = (
 
 import math
 from collections.abc import Callable
-from typing import final
+from typing import Any, final
 
 import equinox as eqx
 import jax
@@ -793,17 +794,129 @@ class GeneralizedMarginalizedLinear(eqx.Module):
         return _GeneralizedConditional(mean, cov, ln_w, self.prior)
 
 
+@final
+class DiagonalMarginalizedLinear(eqx.Module):
+    r"""Linear marginalization with diagonal noise and a diagonal Gaussian prior.
+
+    The same model and the same two methods as the vendored
+    :class:`~harv.stats.MarginalizedLinear` -- ``y = X beta + eps`` with
+    ``beta ~ N(mu, diag(s^2))`` and ``eps ~ N(m, diag(v))`` -- specialized to the
+    case every model without a GP is in. That lets it skip the general path's
+    dense prior inverse (two triangular solves against the identity), its
+    materialized whitened design matrix ``X / sqrt(v)``, and its batched
+    ``X^T X`` matmul, which XLA runs slowly on CPU for the small ``k`` here.
+
+    With ``W = diag(1/v)`` and ``Lambda = diag(1/s^2) + X^T W X``,
+
+    .. math::
+
+        \ln p(y) = -\tfrac12\left[r^T W r - b^T \Lambda^{-1} b
+            + \ln|\Lambda| + \sum \ln s^2 + \sum \ln v + n \ln 2\pi\right],
+
+    with ``r = y - m - X mu`` and ``b = X^T W r`` (determinant lemma plus
+    Woodbury), and the conditional posterior is
+    ``N(Lambda^{-1}(mu/s^2 + X^T W (y - m)), Lambda^{-1})``.
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> import numpyro.distributions as dist
+    >>> from harv.stats import MarginalizedLinear
+    >>> from harv.stats.marginalized import DiagonalMarginalizedLinear
+    >>> X = jnp.array([[1.0, 1.0], [0.5, 1.0], [-1.0, 1.0]])
+    >>> y = jnp.array([1.0, 0.4, -1.2])
+    >>> fast = DiagonalMarginalizedLinear(X, jnp.zeros(2), jnp.full(2, 3.0),
+    ...                                   0.0, jnp.full(3, 0.04))
+    >>> general = MarginalizedLinear(
+    ...     X, dist.MultivariateNormal(jnp.zeros(2), scale_tril=3.0 * jnp.eye(2)),
+    ...     dist.Normal(0.0, jnp.full(3, 0.2)))
+    >>> bool(jnp.isclose(fast.log_prob(y), general.log_prob(y), rtol=1e-12))
+    True
+    """
+
+    design_matrix: jax.Array
+    prior_loc: jax.Array
+    prior_scale: jax.Array
+    data_loc: jax.Array | float
+    noise_var: jax.Array
+    # Derived once here, because a Jacobian-corrected model calls both log_prob
+    # and conditional on the same instance.
+    weighted_design: jax.Array  # X W
+    precision: jax.Array  # Lambda
+    precision_tril: jax.Array  # chol(Lambda)
+
+    def __init__(
+        self,
+        design_matrix: jax.Array,
+        prior_loc: jax.Array,
+        prior_scale: jax.Array,
+        data_loc: jax.Array | float,
+        noise_var: jax.Array,
+    ) -> None:
+        if jnp.ndim(design_matrix) != 2:
+            msg = (
+                "DiagonalMarginalizedLinear takes one (n, k) design matrix; got "
+                f"shape {jnp.shape(design_matrix)}. Use jax.vmap to batch."
+            )
+            raise ValueError(msg)
+        X = design_matrix
+        Xw = X / noise_var[:, None]
+        # ponytail: k < 8 threshold measured on CPU (jax 0.8.1, Apple M-series):
+        # the elementwise multiply+sum beats XLA's batched matmul ~3x for small k,
+        # then slows sharply from k = 8 on, where XLA stops fusing the (n, k, k)
+        # product. Re-measure with benchmarks/test_gaia_likelihood.py if XLA or
+        # the hardware changes.
+        if X.shape[-1] < 8:
+            gram = jnp.sum(X[:, :, None] * Xw[:, None, :], axis=0)
+        else:
+            gram = X.T @ Xw
+        self.design_matrix = X
+        self.prior_loc = prior_loc
+        self.prior_scale = prior_scale
+        self.data_loc = data_loc
+        self.noise_var = noise_var
+        self.weighted_design = Xw
+        self.precision = gram + jnp.diag(1 / prior_scale**2)
+        self.precision_tril = jnp.linalg.cholesky(self.precision)
+
+    def log_prob(self, value: jax.Array) -> jax.Array:
+        """Marginal log-likelihood of ``value`` with ``beta`` integrated out."""
+        r = value - self.data_loc - self.design_matrix @ self.prior_loc
+        b = self.weighted_design.T @ r
+        quad = jnp.sum(r * r / self.noise_var)
+        quad = quad - b @ cho_solve((self.precision_tril, True), b)
+        ln_det = (
+            2 * jnp.sum(jnp.log(jnp.diag(self.precision_tril)))
+            + 2 * jnp.sum(jnp.log(self.prior_scale))
+            + jnp.sum(jnp.log(self.noise_var))
+        )
+        n = self.design_matrix.shape[-2]
+        return -0.5 * (quad + ln_det + n * jnp.log(2 * jnp.pi))
+
+    # Typed ``Any`` like the vendored class it stands in for: numpyro annotates
+    # ``MultivariateNormal.mean`` / ``.sample`` too loosely for callers to index.
+    def conditional(self, value: jax.Array) -> Any:
+        """Conditional posterior (a ``MultivariateNormal``) over ``beta``."""
+        rhs = self.prior_loc / self.prior_scale**2
+        rhs = rhs + self.weighted_design.T @ (value - self.data_loc)
+        return dist.MultivariateNormal(
+            loc=cho_solve((self.precision_tril, True), rhs),
+            precision_matrix=self.precision,
+        )
+
+
 def build_marginalized(
     design_matrix: jax.Array,
     prior: ResolvedLinearPrior,
     data_distribution: dist.Distribution,
-) -> MarginalizedLinear | GeneralizedMarginalizedLinear:
+) -> DiagonalMarginalizedLinear | MarginalizedLinear | GeneralizedMarginalizedLinear:
     """Assemble the marginalized likelihood for a resolved linear prior.
 
-    Returns a bare :class:`~harv.stats.MarginalizedLinear` for an untruncated
-    single Gaussian, so that the overwhelmingly common path is bit-identical to
-    the pre-existing code and costs nothing extra. Anything else gets the
-    :class:`GeneralizedMarginalizedLinear` wrapper.
+    An untruncated single Gaussian prior gets the direct Gaussian-integral path:
+    :class:`DiagonalMarginalizedLinear` when the noise is diagonal (a
+    ``dist.Normal``), the vendored :class:`~harv.stats.MarginalizedLinear` when it
+    is not (e.g. a GP covariance). Anything else gets the
+    :class:`GeneralizedMarginalizedLinear` wrapper around the vendored class.
 
     Examples
     --------
@@ -820,11 +933,25 @@ def build_marginalized(
     ...         low, jnp.full(2, jnp.inf), (low_finite, False), (False, False),
     ...         ("a", "b"),
     ...     )
-    >>> type(build_marginalized(design, prior(False), data_dist)) is MarginalizedLinear
+    >>> type(build_marginalized(design, prior(False), data_dist)).__name__
+    'DiagonalMarginalizedLinear'
+    >>> mvn = dist.MultivariateNormal(jnp.zeros(3), 0.04 * jnp.eye(3))
+    >>> type(build_marginalized(design, prior(False), mvn)) is MarginalizedLinear
     True
     >>> type(build_marginalized(design, prior(True), data_dist)).__name__
     'GeneralizedMarginalizedLinear'
     """
+    diagonal_noise = isinstance(data_distribution, dist.Normal)
+    if prior.is_plain_gaussian and diagonal_noise and design_matrix.ndim == 2:
+        return DiagonalMarginalizedLinear(
+            design_matrix=design_matrix,
+            prior_loc=prior.loc[0],
+            prior_scale=prior.scale[0],
+            data_loc=data_distribution.loc,
+            noise_var=jnp.broadcast_to(
+                data_distribution.scale**2, design_matrix.shape[-2:-1]
+            ),
+        )
     if prior.is_plain_gaussian:
         return MarginalizedLinear(
             design_matrix=design_matrix,

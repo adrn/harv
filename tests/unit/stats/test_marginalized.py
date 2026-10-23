@@ -20,6 +20,7 @@ from scipy.stats import norm, truncnorm
 from harv.stats import MarginalizedLinear
 from harv.stats import marginalized as m
 from harv.stats.marginalized import (
+    DiagonalMarginalizedLinear,
     GeneralizedMarginalizedLinear,
     ResolvedLinearPrior,
     _ln_bvn_rect,
@@ -326,16 +327,15 @@ def test_error_names_the_offending_params(problem):
 # ---------------------------------------------------------------------------
 
 
-def test_untruncated_single_gaussian_takes_the_bare_fast_path(problem):
-    """An ordinary Gaussian prior must not pay for this feature.
+def test_untruncated_single_gaussian_takes_the_diagonal_fast_path(problem):
+    """An ordinary Gaussian prior with diagonal noise skips the general path.
 
-    Asserts both that no wrapper is constructed and that ``log_prob`` is
-    *bitwise* identical to the pre-existing construction.
+    It must agree with the vendored construction it replaces to round-off.
     """
     design, _, obs, data_dist = problem
     prior = _prior([-INF, -INF], [INF, INF])
     built = build_marginalized(jnp.asarray(design), prior, data_dist)
-    assert type(built) is MarginalizedLinear
+    assert type(built) is DiagonalMarginalizedLinear
 
     direct = MarginalizedLinear(
         design_matrix=jnp.asarray(design),
@@ -344,9 +344,19 @@ def test_untruncated_single_gaussian_takes_the_bare_fast_path(problem):
         ),
         data_distribution=data_dist,
     )
-    assert float(built.log_prob(jnp.asarray(obs))) == float(
-        direct.log_prob(jnp.asarray(obs))
+    assert float(built.log_prob(jnp.asarray(obs))) == pytest.approx(
+        float(direct.log_prob(jnp.asarray(obs))), rel=1e-13
     )
+
+
+def test_untruncated_gaussian_with_full_noise_keeps_the_vendored_path(problem):
+    design, err, _, _ = problem
+    prior = _prior([-INF, -INF], [INF, INF])
+    noise = dist.MultivariateNormal(
+        jnp.zeros(len(err)), jnp.diag(jnp.asarray(err) ** 2)
+    )
+    built = build_marginalized(jnp.asarray(design), prior, noise)
+    assert type(built) is MarginalizedLinear
 
 
 def test_truncated_prior_takes_the_wrapper(problem):
@@ -735,3 +745,64 @@ def test_deep_tail_draws_match_the_analytic_truncated_moments():
     assert draws.min() >= 8.0
     assert draws.mean() == pytest.approx(ref_m, abs=5 * np.sqrt(ref_v / n_draws))
     assert draws.std() == pytest.approx(np.sqrt(ref_v), rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# DiagonalMarginalizedLinear against the dense Gaussian
+# ---------------------------------------------------------------------------
+
+
+def _diag_problem(k: int, n: int = 40):
+    rng = np.random.default_rng(k)
+    X = rng.normal(size=(n, k))
+    mu = rng.normal(size=k)
+    s = rng.uniform(0.5, 3.0, size=k)
+    v = rng.uniform(0.05, 0.3, size=n) ** 2
+    y = X @ (mu + s * rng.normal(size=k)) + 0.3 + np.sqrt(v) * rng.normal(size=n)
+    return X, mu, s, v, y
+
+
+@pytest.mark.parametrize("k", [3, 9])  # both Gram branches (k < 8 and k >= 8)
+def test_diagonal_matches_dense_gaussian(k: int) -> None:
+    X, mu, s, v, y = _diag_problem(k)
+    marg = DiagonalMarginalizedLinear(
+        jnp.asarray(X), jnp.asarray(mu), jnp.asarray(s), 0.3, jnp.asarray(v)
+    )
+    cov = np.diag(v) + (X * s**2) @ X.T
+    expected = smvn(X @ mu + 0.3, cov).logpdf(y)
+    assert float(marg.log_prob(jnp.asarray(y))) == pytest.approx(expected, rel=1e-11)
+
+    precision = np.diag(1 / s**2) + X.T @ (X / v[:, None])
+    mean = np.linalg.solve(precision, mu / s**2 + X.T @ ((y - 0.3) / v))
+    cond = marg.conditional(jnp.asarray(y))
+    np.testing.assert_allclose(cond.mean, mean, rtol=1e-10)
+    np.testing.assert_allclose(cond.precision_matrix, precision, rtol=1e-12)
+
+
+def test_diagonal_is_jit_vmap_and_grad_safe() -> None:
+    """log_prob and conditional mean, and their gradients in every input that a
+    sampler differentiates through (X via the nonlinear params, the noise via
+    jitter, the prior scale via callable priors), match the vendored class."""
+    X, mu, s, v, y = (jnp.asarray(a) for a in _diag_problem(4))
+
+    def fast(X, v, s, y):
+        m = DiagonalMarginalizedLinear(X, mu, s, 0.0, v)
+        return m.log_prob(y) + jnp.sum(m.conditional(y).mean)
+
+    def vendored(X, v, s, y):
+        m = MarginalizedLinear(
+            X,
+            dist.MultivariateNormal(mu, scale_tril=jnp.diag(s)),
+            dist.Normal(0.0, jnp.sqrt(v)),
+        )
+        return m.log_prob(y) + jnp.sum(m.conditional(y).mean)
+
+    ys = jnp.stack([y, y + 0.1])
+    batched = jax.jit(jax.vmap(fast, in_axes=(None, None, None, 0)))(X, v, s, ys)
+    expected = jax.vmap(vendored, in_axes=(None, None, None, 0))(X, v, s, ys)
+    np.testing.assert_allclose(batched, expected, rtol=1e-12)
+
+    grads = jax.jit(jax.grad(fast, argnums=(0, 1, 2)))(X, v, s, y)
+    expected_grads = jax.grad(vendored, argnums=(0, 1, 2))(X, v, s, y)
+    for got, want in zip(grads, expected_grads, strict=True):
+        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-9)
