@@ -24,7 +24,6 @@ __all__ = (
 from typing import cast
 
 import quaxed.numpy as jnp
-from jaxoplanet.core.kepler import kepler
 from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
@@ -40,6 +39,7 @@ from harv.custom_types import (
     ScalarQSpeed,
     ScalarQTime,
 )
+from harv.kepler._kepler_solver import kepler
 
 
 def mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle:
@@ -64,8 +64,11 @@ def true_anomaly_from_mean(
 ) -> tuple[BatchFloat, BatchFloat]:
     """Solve Kepler's equation: mean anomaly -> (sin f, cos f).
 
-    Wraps ``jaxoplanet.core.kepler.kepler``. The mean anomaly is stripped to
-    radians internally.
+    Uses harv's trig-free port of the orvara / Raposo-Pulido & Pelaez solver
+    (:mod:`harv.kepler._kepler_solver`), accurate to float64 round-off for
+    eccentricities up to 0.9999 and differentiable through a custom JVP. The mean
+    anomaly is stripped to radians internally; ``eccentricity`` must be a scalar
+    (plain or dimensionless ``Q``).
 
     Examples
     --------
@@ -73,7 +76,7 @@ def true_anomaly_from_mean(
     >>> from harv.kepler.orbits import true_anomaly_from_mean
     >>> sin_f, cos_f = true_anomaly_from_mean(Q(1.0, "rad"), 0.3)
     """
-    return kepler(ustrip("rad", M), eccentricity)
+    return kepler(ustrip("rad", M), ustrip(AllowValue, "", eccentricity))
 
 
 def rv_shape(
@@ -359,7 +362,7 @@ def compute_true_anomaly_components(
     ... )
     """
     M = mean_anomaly(time - time_peri, period)
-    return true_anomaly_from_mean(M, ustrip(AllowValue, "", eccentricity))
+    return true_anomaly_from_mean(M, eccentricity)
 
 
 def rv_at_times(

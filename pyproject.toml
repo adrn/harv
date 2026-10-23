@@ -35,7 +35,6 @@ dependencies = [
     "equinox>=0.13.2",
     "h5py>=3.15.1",
     "jax>=0.8.1",
-    "jaxoplanet>=0.1.0",
     "jaxtyping>=0.3.3",
     # Imported directly across the package; np.trapezoid is 2.0+ (1.x: trapz).
     "numpy>=2.0",
@@ -134,12 +133,14 @@ test = [
     #   scikit-learn -> Samples.period_modes
     #   arviz        -> Samples.to_arviz (and the tests that monkeypatch samples.az)
     #   tinygp       -> the GP likelihood extension
+    #   jaxoplanet   -> cross-check for harv's own Kepler solver
     # What is deliberately absent is the *docs* toolchain, nox, hatch, and the git
     # checkout of gaiaunlimited -- that is the weight this scoping removes.
     "corner>=2.2.3",
     "scikit-learn>=1.5",
     "arviz>=1.0.0",
     "tinygp>=0.3.1",
+    "jaxoplanet>=0.1.0",
 ]
 nox = [
     "nox>=2026.4.10",
