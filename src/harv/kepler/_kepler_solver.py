@@ -19,9 +19,19 @@ anyway. Against a converged Newton solve, ``E - e sin E - M`` stays at the
 float64 round-off of the range reduction (~1e-14) for every ``e <= 0.9999``.
 
 The only transcendental is the ``cbrt`` of the corner starter; everything else is
-arithmetic and ``sqrt``. That matters beyond the call count: XLA's CPU fusion
-recomputes cheap elementwise producers in every consumer fusion, so a solver built
-on ``sin``/``cos``/``tan`` pays for them several times over inside a likelihood.
+arithmetic and ``sqrt``. That matters beyond the call count. As observed with
+jax/jaxlib 0.8.1 on CPU, XLA splits a long elementwise chain into several loop
+fusions and recomputes the cheap-looking producers in each one rather than
+reading them back (``jax.lax.optimization_barrier`` did not prevent it). With
+jaxoplanet's ``sin``/``cos``/``tan`` solver that multiplied the transcendental
+count inside the Gaia likelihood several-fold; here a recomputed producer is a
+few multiplies, and the in-model cost matches the standalone cost.
+
+The quintic piece is picked with a chain of ``where`` selects, not by indexing
+the coefficient table: XLA lowers ``coeffs[:, piece]`` to a gather that it
+materializes as a separate ``(..., 6)`` array, which measured slower. Both claims
+are tracked by ``benchmarks/test_gaia_likelihood.py`` (results in
+``benchmarks/results/likelihood/``).
 
 orvara is distributed under the following license, which applies to the parts of
 this module derived from it:
@@ -129,11 +139,15 @@ def _sin_cos_ecc_anomaly(M: Array, ecc: Array) -> tuple[Array, Array]:
     lower_half = pi < M
     M = jnp.where(lower_half, 2 * pi - M, M)
 
-    # Starting guess: the quintic piece containing M, unrolled so it stays elementwise.
+    # Starting guess: the quintic piece containing M, picked by selects (see module
+    # docstring for why not a gather).
     bounds, coeffs = _quintic_table(ecc)
-    piece = sum((bounds[k] < M).astype(jnp.int32) for k in range(1, 12))
-    a = coeffs[:, piece]
-    x = M - bounds[piece]
+    lo, a = bounds[0], list(coeffs[:, 0])
+    for k in range(1, 12):
+        above = bounds[k] < M
+        lo = jnp.where(above, bounds[k], lo)
+        a = [jnp.where(above, coeffs[j, k], a[j]) for j in range(6)]
+    x = M - lo
     E = a[0] + x * (a[1] + x * (a[2] + x * (a[3] + x * (a[4] + x * a[5]))))
     # The corner starter runs for every element (a vectorized where evaluates both
     # sides; a lax.cond on ecc becomes the same select under vmap). ~1 ns/element.

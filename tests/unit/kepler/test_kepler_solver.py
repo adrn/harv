@@ -113,3 +113,15 @@ def test_integer_eccentricity_is_differentiable() -> None:
     M = jnp.linspace(0.1, 6.0, 5)
     jac = jax.jacfwd(lambda m: kepler(m, 0)[0])(M)
     np.testing.assert_allclose(jnp.diag(jac), jnp.cos(M), atol=1e-12)
+
+
+@pytest.mark.parametrize("e", [0.3, 0.9])
+def test_piece_boundaries(e: float) -> None:
+    """M on, and one ULP either side of, every boundary of the quintic pieces."""
+    E_k = np.arange(1, 12) * np.pi / 12
+    bounds = E_k - e * np.sin(E_k)
+    M = np.concatenate([bounds, np.nextafter(bounds, 0), np.nextafter(bounds, 4)])
+    sin_f, cos_f = kepler(jnp.asarray(M), e)
+    sin_ref, cos_ref = _newton(M, e)
+    np.testing.assert_allclose(sin_f, sin_ref, rtol=0, atol=1e-14)
+    np.testing.assert_allclose(cos_f, cos_ref, rtol=0, atol=1e-14)

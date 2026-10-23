@@ -469,8 +469,9 @@ a JAX port of the orvara eccentric-anomaly solver (Brandt et al. 2021, §3.1), w
 follows Raposo-Pulido & Peláez (2017): a per-eccentricity piecewise-quintic starting
 guess (RPP's series in the `e → 1`, `M → 0` corner), `sin E`/`cos E` from a Taylor
 series plus a square root, and one Householder step. It makes no trig calls, which
-matters on CPU because XLA recomputes cheap elementwise producers in every consumer
-fusion. Contract:
+matters on CPU: XLA splits long elementwise chains into several loop fusions and
+recomputes their producers in each one, so trig calls in the solver are paid
+several times over inside a likelihood. Contract:
 
 - `eccentricity` is a scalar (plain or dimensionless `Q`); batch over eccentricities
   with `jax.vmap`. A non-scalar eccentricity raises `ValueError`.
