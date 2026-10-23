@@ -866,12 +866,6 @@ class DiagonalMarginalizedLinear(eqx.Module):
         # then slows sharply from k = 8 on, where XLA stops fusing the (n, k, k)
         # product. Re-measure with benchmarks/test_gaia_likelihood.py if XLA or
         # the hardware changes.
-        # Not done (idea): the k >= 8 branch is ~0.7 us/sample for Thiele-Innes
-        # Gaia (k = 8). Half its columns (ra0, dec0, pmra, pmdec) depend only on
-        # the data, so their block of X^T W X is sum_n w_n d_n d_n^T -- one
-        # (B, n) @ (n, 10) GEMM across the batch -- and the cross terms are
-        # GEMMs too; only the 4x4 orbit block is per-sample. Needs the
-        # parameterization to say which columns are data-only.
         if X.shape[-1] < 8:
             gram = jnp.sum(X[:, :, None] * Xw[:, None, :], axis=0)
         else:
