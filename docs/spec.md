@@ -2702,16 +2702,9 @@ wrong, and it has a dedicated brute-force test.
 
 #### Scope
 
-- The untruncated single-Gaussian case pays nothing for this feature. With
-  diagonal noise (a `dist.Normal`, i.e. any model without a GP), `build_marginalized`
-  returns the harv-owned `DiagonalMarginalizedLinear`: the same model and the same
-  `log_prob(y)` / `conditional(y)` methods as the vendored class, specialized to a
-  diagonal prior and diagonal noise (no dense prior inverse via triangular solves
-  against the identity, the Gram matrix and its Cholesky factor computed once and
-  shared by both methods, and an `X^T W X` formulation chosen for XLA on CPU). It
-  takes a single `(n, k)` design matrix (batch with `jax.vmap`) and agrees with
-  the vendored class to round-off. With a full noise covariance (a GP),
-  it returns a bare vendored `MarginalizedLinear`.
+- The untruncated single-Gaussian case returns a bare `MarginalizedLinear`, so
+  the common path is **bit-identical** to the pre-existing code and costs
+  nothing.
 - Truncated priors work in `JointModel`; bounds ride the same per-slot layout as
   the means and scales. **Mixture linear priors inside a `JointModel` raise
   `NotImplementedError`** -- their components would multiply across the joint
@@ -3369,8 +3362,6 @@ Truncated and mixture priors are added *around* it, in the harv-owned
 two methods harv calls — `log_prob(y)` and `conditional(y)` — so every call site
 is unchanged, the vendored code stays re-syncable with upstream, and the new code
 is linted and type-checked normally.
-The diagonal-noise fast path (`DiagonalMarginalizedLinear`) follows the same rule:
-it is harv-owned code beside the vendored class, not an edit to it.
 
 ### Why `eqx.field(static=True)` for metadata fields?
 

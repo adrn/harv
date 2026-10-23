@@ -38,7 +38,6 @@ from harv.models.component import (
 from harv.models.extensions.base import ParamInfo
 from harv.stats import MarginalizedLinear
 from harv.stats.marginalized import (
-    DiagonalMarginalizedLinear,
     GeneralizedMarginalizedLinear,
     ResolvedLinearPrior,
     build_marginalized,
@@ -614,7 +613,7 @@ class JointModel(eqx.Module):
         data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
     ) -> tuple[
-        DiagonalMarginalizedLinear | MarginalizedLinear | GeneralizedMarginalizedLinear,
+        MarginalizedLinear | GeneralizedMarginalizedLinear,
         jax.Array,
         list[tuple[str, str | None]],
         dict[str, dict[str, Any]],

@@ -37,7 +37,6 @@ from harv.models.parameterizations.base import AbstractParameterization
 from harv.stats import MarginalizedLinear
 from harv.stats.linear_op import to_linear_op
 from harv.stats.marginalized import (
-    DiagonalMarginalizedLinear,
     GeneralizedMarginalizedLinear,
     ResolvedLinearPrior,
     build_marginalized,
@@ -47,9 +46,7 @@ from harv.stats.marginalized import (
 class _MargComponents(NamedTuple):
     """Internal return type of ``_build_marginalized_linear``."""
 
-    dist: (
-        DiagonalMarginalizedLinear | MarginalizedLinear | GeneralizedMarginalizedLinear
-    )
+    dist: MarginalizedLinear | GeneralizedMarginalizedLinear
     obs: jax.Array
     marg_names: tuple[str, ...]
     explicit_names: tuple[str, ...]
@@ -493,10 +490,9 @@ class AbstractComponentModel(eqx.Module):
                 loc=jnp.zeros(blocks.cov.shape[0]), covariance_matrix=blocks.cov
             )
 
-        # Diagonal noise with an ordinary Gaussian prior gets the specialized
-        # DiagonalMarginalizedLinear; a GP covariance gets the vendored class; a
-        # truncated or mixture prior gets the wrapper. All expose the same two
-        # methods.
+        # Returns a bare MarginalizedLinear for the ordinary untruncated
+        # single-Gaussian case, so that path is unchanged; a truncated or mixture
+        # prior gets the wrapper, which exposes the same two methods.
         marg_dist = build_marginalized(blocks.X, blocks.prior, data_dist)
         explicit_names = tuple(blocks.explicit_linear.keys())
         return _MargComponents(
