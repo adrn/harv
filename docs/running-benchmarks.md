@@ -245,8 +245,7 @@ The number to read is `extra_info.ns_per_sample` (per prior draw, from the faste
 round) and, for the solver, `extra_info.ns_per_element`. Results go in the
 `likelihood/` subdirectory so `report.py`, which only reads `results/*.json`, never
 sees them; it also skips any record that is not a grid cell, so running
-`pytest benchmarks/` whole is safe. `baseline-cpu.json` is the reference before the
-Kepler-solver and marginalization speedups.
+`pytest benchmarks/` whole is safe.
 
 ## Adding a parameterization or an axis
 
