@@ -315,3 +315,93 @@ class TestFullNumpyroModelWithTheGaiaDefaults:
         sigma_pm = float(trace["pmra"]["fn"].scale)
         expected = float(ustrip("AU/yr", Q(50.0, "km/s")) * parallax)
         assert sigma_pm == pytest.approx(expected, rel=1e-10)
+
+
+class TestMarginalizedLikelihoodMatchesDenseOracle:
+    """Gaia + jitter marginal likelihood against a dense n x n Gaussian.
+
+    With an explicit parallax and Normal priors on the marginalized columns,
+    ``y - X_plx * plx ~ N(X_m mu, diag(err^2 + jitter^2) + X_m S X_m^T)`` and the
+    conditional mean of the marginalized params is the usual ridge solution.
+    Both are computed here directly, so any change to how harv assembles or
+    solves the marginalization must still reproduce them.
+    """
+
+    JITTER = 0.07
+    PARALLAX = 3.0
+
+    @staticmethod
+    def _data() -> GaiaAstrometryData:
+        n = 40
+        k1, k2, k3 = jax.random.split(jax.random.key(7), 3)
+        return GaiaAstrometryData(
+            time=Q(jnp.sort(jax.random.uniform(k1, (n,), maxval=1500.0)), "day"),
+            al_position=Q(2.0 * jax.random.normal(k2, (n,)), "mas"),
+            al_position_err=Q(jnp.linspace(0.05, 0.2, n), "mas"),
+            scan_angle=Q(jax.random.uniform(k3, (n,), maxval=2 * jnp.pi), "rad"),
+            parallax_factor=jnp.linspace(-0.8, 0.9, n),
+            time_ref=Q(700.0, "day"),
+        )
+
+    @staticmethod
+    def _prior(marg: tuple[str, ...]) -> dict[str, dist.Normal]:
+        # Nonzero means, scales within ~10x of each other and of the data: a
+        # 1000-mas prior next to 0.1-mas errors makes the dense n x n covariance
+        # ill-conditioned enough (~1e8) that the oracle, not harv, loses digits.
+        return {n: dist.Normal(0.3 * i - 1.0, 2.0 + i) for i, n in enumerate(marg)}
+
+    def _dense(self, model, nl, data, prior, marg):
+        names = model._all_linear_names()
+        X = model._full_design_matrix(nl, data)
+        y = ustrip("mas", data.al_position) - X[:, names.index("parallax")] * (
+            self.PARALLAX
+        )
+        Xm = X[:, [names.index(n) for n in marg]]
+        mu = jnp.array([prior[n].loc for n in marg])
+        s2 = jnp.array([prior[n].scale for n in marg]) ** 2
+        var = ustrip("mas", data.al_position_err) ** 2 + self.JITTER**2
+        cov = jnp.diag(var) + (Xm * s2) @ Xm.T
+        lp = dist.MultivariateNormal(Xm @ mu, cov).log_prob(y)
+        precision = jnp.diag(1 / s2) + Xm.T @ (Xm / var[:, None])
+        mean = jnp.linalg.solve(precision, mu / s2 + Xm.T @ (y / var))
+        return lp, mean
+
+    def _check(self, param, nl, prior, marg):
+        data = self._data()
+        model = GaiaAstrometryModel(
+            parameterization=param, extensions=(hm.Jitter(obs_unit="mas"),)
+        )
+        nl = {**nl, "jitter": self.JITTER}
+        explicit = {"parallax": jnp.asarray(self.PARALLAX)}
+        lp = model.log_prob(
+            nl,
+            data,
+            linear_priors=prior,
+            marginalized_names=marg,
+            linear_values=explicit,
+        )
+        c = model._build_marginalized_linear(nl, marg, explicit, data, prior)
+        mean = c.dist.conditional(c.obs).mean
+
+        lp_dense, mean_dense = self._dense(model, nl, data, prior, marg)
+        correction = param.linear_log_prior_correction(
+            dict(zip(marg, mean_dense, strict=True))
+        )
+        expected = lp_dense if correction is None else lp_dense + correction
+        assert jnp.allclose(mean, mean_dense, rtol=1e-9, atol=1e-9)
+        assert lp == pytest.approx(float(expected), rel=1e-10, abs=1e-8)
+
+    def test_standard(self):
+        marg = ("ra0", "dec0", "pmra", "pmdec", "semi_major_axis")
+        self._check(hm.StandardGaiaAstrometry(), _nl_values(), self._prior(marg), marg)
+
+    @pytest.mark.parametrize("correct", [False, True])
+    def test_thiele_innes(self, correct):
+        param = (
+            ThieleInnesGaiaAstrometry(a_floor=0.01, apply_jacobian_correction=True)
+            if correct
+            else ThieleInnesGaiaAstrometry()
+        )
+        marg = ("ra0", "dec0", "pmra", "pmdec", "ti_A", "ti_B", "ti_F", "ti_G")
+        nl = {"period": Q(300.0, "day"), "eccentricity": 0.6, "phase_peri": 0.2}
+        self._check(param, nl, self._prior(marg), marg)
