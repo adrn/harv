@@ -227,6 +227,27 @@ To confirm belt 1 still holds after touching pytest config:
 uv run --no-sync pytest --collect-only -q | grep -c benchmarks/   # must print 0
 ```
 
+## Gaia likelihood cost (`test_gaia_likelihood.py`)
+
+A second, much smaller benchmark tracks the single-device cost of one realistic
+workload rather than scaling: the Gaia-4 DR4 epoch astrometry (93 epochs) with the
+priors of the Gaia-4 case study, for the Standard and Thiele-Innes
+parameterizations, plus a micro-benchmark of the Kepler solve
+(`true_anomaly_from_mean` against `jaxoplanet`'s solver). It takes under a minute:
+
+```bash
+HARV_NO_TYPECHECK=1 JAX_PLATFORMS=cpu uv run --group bench --group dev pytest \
+    benchmarks/test_gaia_likelihood.py --bench \
+    --benchmark-json=benchmarks/results/likelihood/<label>-cpu.json
+```
+
+The number to read is `extra_info.ns_per_sample` (per prior draw, from the fastest
+round) and, for the solver, `extra_info.ns_per_element`. Results go in the
+`likelihood/` subdirectory so `report.py`, which only reads `results/*.json`, never
+sees them; it also skips any record that is not a grid cell, so running
+`pytest benchmarks/` whole is safe. `baseline-cpu.json` is the reference before the
+Kepler-solver and marginalization speedups.
+
 ## Adding a parameterization or an axis
 
 Both live in `benchmarks/grid.py`:

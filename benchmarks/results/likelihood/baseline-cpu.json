@@ -1,0 +1,267 @@
+{
+    "machine_info": {
+        "node": "L5CX476CG2",
+        "processor": "arm",
+        "machine": "arm64",
+        "python_compiler": "Clang 22.1.3 ",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.14.8",
+        "python_version": "3.14.8",
+        "python_build": [
+            "main",
+            "Oct  3 2026 00:54:40"
+        ],
+        "release": "27.0.0",
+        "system": "Darwin",
+        "cpu": {
+            "python_version": "3.14.8.final.0 (64 bit)",
+            "cpuinfo_version": [
+                10,
+                1,
+                1
+            ],
+            "cpuinfo_version_string": "10.1.1",
+            "arch": "ARM_8",
+            "bits": 64,
+            "count": 16,
+            "arch_string_raw": "arm64",
+            "brand_raw": "Apple M4 Max"
+        }
+    },
+    "commit_info": {
+        "id": "5a3ec98ada11f747fb76ff9e44bb3ac62d4c54c8",
+        "time": "2026-10-12T23:09:45-04:00",
+        "author_time": "2026-10-12T23:09:45-04:00",
+        "dirty": false,
+        "project": "harv",
+        "branch": "optimizations"
+    },
+    "benchmarks": [
+        {
+            "group": null,
+            "name": "test_gaia4_rejection[standard]",
+            "fullname": "benchmarks/test_gaia_likelihood.py::test_gaia4_rejection[standard]",
+            "params": {
+                "parameterization": "standard"
+            },
+            "param": "standard",
+            "extra_info": {
+                "device_platform": "cpu",
+                "device_kind": "cpu",
+                "device_count": 1,
+                "jax_version": "0.8.1",
+                "harv_version": "0.0.2.dev182+g579011da1",
+                "x64": true,
+                "typecheck_hooks": false,
+                "n_prior_samples": 1000000,
+                "n_obs": 93,
+                "ns_per_sample": 2408.270874992013
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "precision": null,
+                "confidence": null,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.408270874992013,
+                "max": 2.5888591250404716,
+                "mean": 2.4803876832011156,
+                "stddev": 0.07197356420642885,
+                "rounds": 5,
+                "median": 2.446380125009455,
+                "iqr": 0.09917434376257006,
+                "q1": 2.43446468723414,
+                "q3": 2.53363903099671,
+                "iqr_outliers": 0,
+                "stddev_outliers": 2,
+                "outliers": "2;0",
+                "ld15iqr": 2.408270874992013,
+                "hd15iqr": 2.5888591250404716,
+                "ops": 0.40316278248464343,
+                "total": 12.401938416005578,
+                "data": [
+                    2.408270874992013,
+                    2.4431959579815157,
+                    2.446380125009455,
+                    2.515232332982123,
+                    2.5888591250404716
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_gaia4_rejection[thiele_innes]",
+            "fullname": "benchmarks/test_gaia_likelihood.py::test_gaia4_rejection[thiele_innes]",
+            "params": {
+                "parameterization": "thiele_innes"
+            },
+            "param": "thiele_innes",
+            "extra_info": {
+                "device_platform": "cpu",
+                "device_kind": "cpu",
+                "device_count": 1,
+                "jax_version": "0.8.1",
+                "harv_version": "0.0.2.dev182+g579011da1",
+                "x64": true,
+                "typecheck_hooks": false,
+                "n_prior_samples": 1000000,
+                "n_obs": 93,
+                "ns_per_sample": 2666.979583038483
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "precision": null,
+                "confidence": null,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.666979583038483,
+                "max": 2.6825312500004657,
+                "mean": 2.676711691613309,
+                "stddev": 0.0063516590887851155,
+                "rounds": 5,
+                "median": 2.67761995800538,
+                "iqr": 0.009445541960303672,
+                "q1": 2.672626458283048,
+                "q3": 2.682072000243352,
+                "iqr_outliers": 0,
+                "stddev_outliers": 1,
+                "outliers": "1;0",
+                "ld15iqr": 2.666979583038483,
+                "hd15iqr": 2.6825312500004657,
+                "ops": 0.37359271943004047,
+                "total": 13.383558458066545,
+                "data": [
+                    2.6745087500312366,
+                    2.6819189169909805,
+                    2.6825312500004657,
+                    2.67761995800538,
+                    2.666979583038483
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_kepler_solver[jaxoplanet]",
+            "fullname": "benchmarks/test_gaia_likelihood.py::test_kepler_solver[jaxoplanet]",
+            "params": {
+                "solver": "jaxoplanet"
+            },
+            "param": "jaxoplanet",
+            "extra_info": {
+                "device_platform": "cpu",
+                "device_kind": "cpu",
+                "device_count": 1,
+                "jax_version": "0.8.1",
+                "harv_version": "0.0.2.dev182+g579011da1",
+                "x64": true,
+                "typecheck_hooks": false,
+                "ns_per_element": 13.760909461917016
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "precision": null,
+                "confidence": null,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.12797645799582824,
+                "max": 0.13388729200232774,
+                "mean": 0.12983979139244184,
+                "stddev": 0.0023216000026051458,
+                "rounds": 5,
+                "median": 0.1292014159844257,
+                "iqr": 0.0018177397432737052,
+                "q1": 0.12862427049549296,
+                "q3": 0.13044201023876667,
+                "iqr_outliers": 1,
+                "stddev_outliers": 1,
+                "outliers": "1;1",
+                "ld15iqr": 0.12797645799582824,
+                "hd15iqr": 0.13388729200232774,
+                "ops": 7.701799188643887,
+                "total": 0.6491989569622092,
+                "data": [
+                    0.12797645799582824,
+                    0.13388729200232774,
+                    0.1292935829842463,
+                    0.1288402079953812,
+                    0.1292014159844257
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_kepler_solver[harv]",
+            "fullname": "benchmarks/test_gaia_likelihood.py::test_kepler_solver[harv]",
+            "params": {
+                "solver": "harv"
+            },
+            "param": "harv",
+            "extra_info": {
+                "device_platform": "cpu",
+                "device_kind": "cpu",
+                "device_count": 1,
+                "jax_version": "0.8.1",
+                "harv_version": "0.0.2.dev182+g579011da1",
+                "x64": true,
+                "typecheck_hooks": false,
+                "ns_per_element": 13.768588710996893
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "precision": null,
+                "confidence": null,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.1280478750122711,
+                "max": 0.1299377499963157,
+                "mean": 0.129203708213754,
+                "stddev": 0.0007190139345309999,
+                "rounds": 5,
+                "median": 0.12940025003626943,
+                "iqr": 0.0008536562672816217,
+                "q1": 0.1288086247514002,
+                "q3": 0.12966228101868182,
+                "iqr_outliers": 0,
+                "stddev_outliers": 2,
+                "outliers": "2;0",
+                "ld15iqr": 0.1280478750122711,
+                "hd15iqr": 0.1299377499963157,
+                "ops": 7.739715940239152,
+                "total": 0.64601854106877,
+                "data": [
+                    0.12906220799777657,
+                    0.1299377499963157,
+                    0.1280478750122711,
+                    0.12940025003626943,
+                    0.1295704580261372
+                ],
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-10-23T14:34:57.747476+00:00",
+    "version": "5.3.0"
+}
