@@ -825,6 +825,15 @@ def build_marginalized(
     >>> type(build_marginalized(design, prior(True), data_dist)).__name__
     'GeneralizedMarginalizedLinear'
     """
+    # Not done (ideas, Oct 2026). (1) A diagonal-noise specialization of this path
+    # was tried and reverted: building X^T W X elementwise was ~3x faster than
+    # XLA's batched matmul at Gaia-4's shape, but under the sampler's vmap XLA
+    # materialized the (batch, n, k, k) product at other shapes (+2 GB in the
+    # joint periodogram test), so it is not memory-safe. (2) For Thiele-Innes Gaia
+    # (k = 8) the ra0/dec0/pmra/pmdec columns depend only on the data, so their
+    # block of X^T W X is one (batch, n) @ (n, 10) GEMM and the cross terms are
+    # GEMMs too; only the orbit block is per-sample. Needs the parameterization
+    # to say which columns are data-only.
     if prior.is_plain_gaussian:
         return MarginalizedLinear(
             design_matrix=design_matrix,
