@@ -45,7 +45,7 @@ class AbstractDatasetContainer(eqx.Module):
 
         Guaranteed to be consistent across components because every concrete
         subclass calls :func:`~harv.data.helpers._synchronize_time_refs` in its
-        ``__init__``.
+        ``__init__`` (see spec §Shared reference epoch).
         """
         return next(iter(self._datasets.values())).time_ref
 
@@ -241,11 +241,32 @@ class SystemData(AbstractDatasetContainer):
 
     Each named component holds the same concrete data class representing observations of
     a distinct physical body or photocenter in a gravitationally bound system.
+
+    All components share one ``time_ref``: the keyword-only ``time_ref`` if given,
+    else the components' own ``time_ref`` if they already agree, else the mean of all
+    observation times. The ``time_ref`` keyword is reserved, so a component cannot be
+    named ``time_ref``.
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv import RVData
+    >>> from harv.data.containers import SystemData
+    >>> def rv(time_ref=None):
+    ...     return RVData(time=Q([0.0, 50.0], "day"), rv=Q([10.0, -10.0], "km/s"),
+    ...                   rv_err=Q([0.5, 0.5], "km/s"), time_ref=time_ref)
+    >>> SystemData(primary=rv(), secondary=rv()).time_ref.value.item()
+    25.0
+    >>> data = SystemData(primary=rv(), secondary=rv(), time_ref=Q(0.0, "day"))
+    >>> data.time_ref.value.item()
+    0.0
     """
 
     _dataset_type: type[AbstractData] = eqx.field(static=True)
 
-    def __init__(self, **datasets: DatasetType) -> None:
+    def __init__(
+        self, *, time_ref: ScalarQTime | None = None, **datasets: DatasetType
+    ) -> None:
         if not datasets:
             raise ValueError("At least one component must be provided")
 
@@ -268,7 +289,7 @@ class SystemData(AbstractDatasetContainer):
 
         datasets = cast(
             "dict[str, DatasetType]",
-            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets)),
+            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets), time_ref),
         )
         self._datasets = datasets
         self._dataset_type = next(iter(dataset_types))
@@ -294,10 +315,43 @@ class SourceData(AbstractDatasetContainer):
     """Container for multiple named datasets for a single source.
 
     Accepts arbitrary named datasets via keyword arguments. Names are user-defined and
-    can be anything (e.g., gaia, keck_rv, hst_imaging).
+    can be anything (e.g., gaia, keck_rv, hst_imaging), except ``time_ref``, which is
+    reserved for the keyword below.
+
+    All datasets share one ``time_ref``: the keyword-only ``time_ref`` if given, else
+    the datasets' own ``time_ref`` if they already agree, else the mean of all
+    observation times (see spec §Shared reference epoch).
+
+    Examples
+    --------
+    >>> from unxt import Q
+    >>> from harv import RVData
+    >>> from harv.data.containers import SourceData
+    >>> def rv(start, time_ref=None):
+    ...     return RVData(time=Q([start, start + 10.0], "day"),
+    ...                   rv=Q([1.0, 2.0], "km/s"), rv_err=Q([0.1, 0.1], "km/s"),
+    ...                   time_ref=time_ref)
+
+    Datasets with different ``time_ref`` values get the mean of all times:
+
+    >>> SourceData(keck=rv(0.0), hires=rv(100.0)).time_ref.value.item()
+    55.0
+
+    A ``time_ref`` the datasets already share is kept:
+
+    >>> t0 = Q(-500.0, "day")
+    >>> SourceData(keck=rv(0.0, t0), hires=rv(100.0, t0)).time_ref.value.item()
+    -500.0
+
+    An explicit ``time_ref`` overrides the datasets' own:
+
+    >>> SourceData(keck=rv(0.0), hires=rv(100.0), time_ref=t0).time_ref.value.item()
+    -500.0
     """
 
-    def __init__(self, **datasets: DatasetType) -> None:
+    def __init__(
+        self, *, time_ref: ScalarQTime | None = None, **datasets: DatasetType
+    ) -> None:
         if not datasets:
             raise ValueError("At least one dataset must be provided")
         for name, ds in datasets.items():
@@ -308,7 +362,7 @@ class SourceData(AbstractDatasetContainer):
                 )
         datasets = cast(
             "dict[str, DatasetType]",
-            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets)),
+            _synchronize_time_refs(cast("dict[str, AbstractData]", datasets), time_ref),
         )
         object.__setattr__(self, "_datasets", datasets)
 

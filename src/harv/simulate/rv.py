@@ -308,4 +308,4 @@ def simulate_rv_multi_survey_data(  # noqa: C901
             rv_err=Q(jnp.full(n_obs, ustrip(rv_err.unit, rv_err)), rv_err.unit),
         )
 
-    return SourceData(**datasets), true_params
+    return SourceData(time_ref=None, **datasets), true_params
