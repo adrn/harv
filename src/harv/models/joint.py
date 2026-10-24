@@ -42,6 +42,7 @@ from harv.models.component import (
 )
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations import StandardGaiaAstrometry, StandardRV
+from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.rv import RVModel
 from harv.models.ties import TiedPrior, rv_semiamp_per_semi_major_axis, tied
 from harv.stats import MarginalizedLinear
@@ -425,6 +426,40 @@ class JointModel(eqx.Module):
             )
             for comp_name, comp in self.components.items()
         }
+
+    def _joint_log_prob(
+        self,
+        marg_dist: MarginalizedLinear | GeneralizedMarginalizedLinear,
+        y_joint: jax.Array,
+        global_cols: list[tuple[str, str | None]],
+    ) -> jax.Array:
+        """Joint marginal log-likelihood plus each component's prior correction.
+
+        Mirrors the per-component path, which adds
+        ``parameterization.linear_log_prior_correction`` at the conditional-mean
+        linear values (e.g. the Thiele-Innes Jacobian).  The conditional mean is
+        only solved for when some component's parameterization overrides it.
+        """
+        ln_lik = marg_dist.log_prob(y_joint)
+        correcting = {
+            name: comp.parameterization
+            for name, comp in self.components.items()
+            if type(comp.parameterization).linear_log_prior_correction
+            is not AbstractParameterization.linear_log_prior_correction
+        }
+        if not correcting:
+            return ln_lik
+        cond_mean = marg_dist.conditional(y_joint).mean
+        for comp_name, parameterization in correcting.items():
+            linear_map = {
+                nm: cond_mean[j]
+                for j, (nm, owner) in enumerate(global_cols)
+                if owner in (comp_name, None)
+            }
+            correction = parameterization.linear_log_prior_correction(linear_map)
+            if correction is not None:
+                ln_lik = ln_lik + correction
+        return ln_lik
 
     def _qualified_linear(self, key: str, role: str) -> tuple[str, str]:
         """Split ``"comp.param"`` into a known (component, linear param) pair."""
@@ -1044,10 +1079,10 @@ class JointModel(eqx.Module):
             # with shared linear columns merged.  Required when at least one
             # ``shared_linear_params`` entry is being analytically marginalized
             # so its prior is integrated *once* (not once per component).
-            marg_dist, y_joint, _, _ = self._build_joint_marginalized_linear(
+            marg_dist, y_joint, global_cols, _ = self._build_joint_marginalized_linear(
                 comp_nl, per_comp_marg, data, linear_priors
             )
-            return marg_dist.log_prob(y_joint)
+            return self._joint_log_prob(marg_dist, y_joint, global_cols)
 
         # Per-component sum path: each component marginalizes its own linear
         # params independently and we sum the resulting log-likelihoods.  This
@@ -1374,10 +1409,12 @@ class JointModel(eqx.Module):
                 # Joint path: a single MarginalizedLinear spanning all
                 # components — required so each shared linear prior is
                 # integrated once, not once per component.
-                marg_dist, y_joint, _, _ = joint._build_joint_marginalized_linear(
-                    comp_nl, per_comp_marginalized_names, data, linear_priors
+                marg_dist, y_joint, global_cols, _ = (
+                    joint._build_joint_marginalized_linear(
+                        comp_nl, per_comp_marginalized_names, data, linear_priors
+                    )
                 )
-                ln_lik = marg_dist.log_prob(y_joint)
+                ln_lik = joint._joint_log_prob(marg_dist, y_joint, global_cols)
             else:
                 # Per-component sum: each component's marginalization is
                 # independent, so the log-likelihoods simply add.

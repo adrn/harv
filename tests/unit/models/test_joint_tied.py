@@ -381,3 +381,42 @@ def test_summary_counts_tied_parameters_separately():
     # Sampled: period + parallax; tied: rv_semiamp; the rest are marginalized.
     assert "2 sampled, 6 marginalized, 1 tied" in summary
     assert "tied to astro.semi_major_axis" in summary
+
+
+def test_joint_path_applies_parameterization_prior_correction():
+    """A tie forces the joint path, which must keep e.g. the Thiele-Innes Jacobian."""
+    ti = ThieleInnesGaiaAstrometry(a_floor=0.01, apply_jacobian_correction=True)
+    model = JointModel(
+        components={"rv": RVModel(), "astro": GaiaAstrometryModel(parameterization=ti)},
+        shared_params=("period", "eccentricity", "phase_peri"),
+    )
+    unit_ratio = Q(1.0, "km/(s mas)")
+    priors = {
+        **{k: v for k, v in _linear_priors().items() if "semi_major_axis" not in k},
+        **{f"astro.ti_{c}": QD(ndist.Normal(0.0, 2.0), "mas") for c in "ABFG"},
+        "rv.rv_semiamp": tied("astro.ti_A", scale=lambda _: unit_ratio),
+    }
+    values = {k: v for k, v in _values().items() if k not in ("lon_asc_node", "cos_i")}
+    data = _data()
+    marg = (*MARGINALIZED[:4], "astro.ti_A", "astro.ti_B", "astro.ti_F", "astro.ti_G")
+    marg = (*marg, "rv.v_sys")
+    got = model.log_prob(values, data, linear_priors=priors, marginalized_names=marg)
+
+    comp_nl = {
+        "rv": {
+            k: values[k] for k in ("period", "eccentricity", "phase_peri", "arg_peri")
+        },
+        "astro": {
+            **{k: values[k] for k in ("period", "eccentricity", "phase_peri")},
+            "parallax": values["astro.parallax"],
+        },
+    }
+    per_comp_marg, _ = model._resolve_marginalization(marg, priors)
+    marg_dist, y, cols, _ = model._build_joint_marginalized_linear(
+        comp_nl, per_comp_marg, data, priors
+    )
+    mean = marg_dist.conditional(y).mean
+    astro_map = {nm: mean[j] for j, (nm, owner) in enumerate(cols) if owner == "astro"}
+    expected = marg_dist.log_prob(y) + ti.linear_log_prior_correction(astro_map)
+    assert jnp.allclose(got, expected, rtol=1e-12)
+    assert abs(float(got - marg_dist.log_prob(y))) > 1e-6  # the correction is there

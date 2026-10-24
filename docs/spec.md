@@ -1434,7 +1434,9 @@ Rules:
 - a tied parameter is never sampled: the samplers add it to the marginalized set even
   when a user-supplied `marginalized_names` omits it;
 - any tie puts the model on the joint marginalization path (as shared linear
-  parameters do), so Gaussian-mixture linear priors are unavailable there;
+  parameters do), so Gaussian-mixture linear priors are unavailable there; the joint
+  path adds each component's `linear_log_prior_correction` at the joint conditional
+  mean, as the per-component path does;
 - a linear parameter that a tie's `scale` reads from another component (e.g.
   `astro.parallax`) is pinned at the joint level, so `explicit_params` and
   `marginalized_params` report it as explicit.
