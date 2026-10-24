@@ -5,6 +5,7 @@ Spec §Tied linear parameters. ``JointModel.for_rv_and_gaia`` ties
 ``K = c * a`` with ``c = 2 pi sin(i) / (P sqrt(1 - e^2) parallax)``.
 """
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +20,7 @@ from harv.distributions import QD
 from harv.models import EcoswEsinwRV, HarvPrior, rv_semiamp_per_semi_major_axis, tied
 from harv.models._helpers import LinearRole, classify_linear_prior, pinned_linear_names
 from harv.models.parameterizations import ThieleInnesGaiaAstrometry
+from harv.models.ties import TiedPrior
 from harv.samplers import RejectionSampler
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
@@ -420,3 +422,41 @@ def test_joint_path_applies_parameterization_prior_correction():
     expected = marg_dist.log_prob(y) + ti.linear_log_prior_correction(astro_map)
     assert jnp.allclose(got, expected, rtol=1e-12)
     assert abs(float(got - marg_dist.log_prob(y))) > 1e-6  # the correction is there
+
+
+def test_no_default_tie_without_a_shared_orbit():
+    model = JointModel.for_rv_and_gaia(
+        components={"rv": RVModel(), "astro": GaiaAstrometryModel()},
+        shared_params=("period",),
+    )
+    assert model.default_linear_priors == {}
+
+
+def test_tie_pins_only_in_the_source_namespace():
+    """A per-component dict must not pin the tied component's same-named param."""
+    tie = tied("a.y", scale=rv_semiamp_per_semi_major_axis)  # reads "parallax"
+    flat = {"b.x": tie, "a.parallax": FREE_K, "b.parallax": FREE_K}
+    assert pinned_linear_names(flat) == {"a.parallax"}
+    assert pinned_linear_names({"x": tie, "parallax": FREE_K}) == frozenset()
+
+
+def test_scale_may_be_a_module_holding_arrays():
+    class Constant(eqx.Module):
+        value: Q
+
+        def __call__(self, params):
+            return self.value
+
+    prior = tied("astro.ti_A", scale=Constant(Q(2.0, "km/(s mas)")))
+    assert isinstance(prior, TiedPrior)
+    assert float(prior.scale({}).value) == 2.0
+
+
+def test_scale_accepts_integer_cos_i():
+    params = {
+        "period": Q(365.25, "day"),
+        "eccentricity": 0,
+        "cos_i": 0,
+        "parallax": Q(1.0, "mas"),
+    }
+    assert float(rv_semiamp_per_semi_major_axis(params).to("km/(s mas)").value) > 29

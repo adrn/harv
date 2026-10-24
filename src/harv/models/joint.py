@@ -198,15 +198,23 @@ class JointModel(eqx.Module):
                 )
                 raise TypeError(msg)
 
+        orbit = ("period", "eccentricity", "phase_peri", "arg_peri")
+        if shared_params is None:
+            shared_params = orbit
+
+        # The unseen-companion tie needs one shared orbit (spec §Tied linear
+        # parameters), so it is only a default when the orbit is shared.
         default_linear_priors: dict[str, Any] = {}
-        if len(rv_names) == 1 and len(astrom_names) == 1:
+        if (
+            len(rv_names) == 1
+            and len(astrom_names) == 1
+            and set(orbit) <= set(shared_params)
+        ):
             default_linear_priors[f"{rv_names[0]}.rv_semiamp"] = tied(
                 f"{astrom_names[0]}.semi_major_axis",
                 scale=rv_semiamp_per_semi_major_axis,
             )
 
-        if shared_params is None:
-            shared_params = ("period", "eccentricity", "phase_peri", "arg_peri")
         if shared_linear_params is None:
             shared_linear_params = ()
         return cls(
@@ -278,8 +286,6 @@ class JointModel(eqx.Module):
         >>> joint.shared_linear_params
         ('v_sys',)
         """
-        # Import here to avoid circular import at module load time.
-
         if len(component_names) != 2:
             raise ValueError(
                 f"SB2 expects exactly 2 component names, got {len(component_names)}."

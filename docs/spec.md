@@ -1412,8 +1412,9 @@ linear_priors = {
 component-qualified name of the linear parameter it follows, and `scale`, a function
 of a parameter dict returning a `Q` in `[tied parameter unit] / [source unit]`. `scale`
 follows the `LinearPriorCallable` conventions: it receives the *source* component's
-values exactly as that component's callable priors would (nonlinear values, explicit
-linear values with units, derived eccentricity), and an optional `requires` attribute
+values as that component's callable priors would: nonlinear values, explicitly
+*sampled* linear values with units (not `Delta`-fixed ones), and derived
+eccentricity. An optional `requires` attribute
 names what it reads. Linear parameters named in `requires` are pinned to explicit
 sampling, resolved in the source component's namespace.
 
@@ -1436,7 +1437,9 @@ Rules:
 - any tie puts the model on the joint marginalization path (as shared linear
   parameters do), so Gaussian-mixture linear priors are unavailable there; the joint
   path adds each component's `linear_log_prior_correction` at the joint conditional
-  mean, as the per-component path does;
+  mean, as the per-component path does. It also forms one dense covariance over all
+  rows whenever any component's covariance is 2-D (e.g. a GP on the RVs), which is
+  much more expensive than the per-component path for large astrometric data sets;
 - a linear parameter that a tie's `scale` reads from another component (e.g.
   `astro.parallax`) is pinned at the joint level, so `explicit_params` and
   `marginalized_params` report it as explicit.
@@ -1456,12 +1459,16 @@ K = c · a,   c = 2π sin i / (P √(1 − e²) ϖ)
 
 with `a / ϖ` read as AU. `rv_semiamp_per_semi_major_axis(params)`
 (`harv.models.ties`) computes `c`, with
-`requires = ("period", "eccentricity", "cos_i", "parallax")`.
+`requires = ("period", "eccentricity", "cos_i", "parallax")`. `c` divides by the
+parallax, so its prior must have positive support (the default `HalfNormal` does): a
+negative parallax draw flips the sign of the tie, which is exactly the mirror orbit
+the tie excludes.
 
 `JointModel.for_rv_and_gaia` requires every component to be an `RVModel` with
 `StandardRV` or a `GaiaAstrometryModel` with `StandardGaiaAstrometry` (`TypeError`
 otherwise, pointing to `Samples.thiele_innes_to_campbell()` for Thiele-Innes fits),
-and with one of each sets the default
+and with one of each, and the orbit (`period`, `eccentricity`, `phase_peri`,
+`arg_peri`) shared, sets the default
 `{"<rv>.rv_semiamp": tied("<astrom>.semi_major_axis", scale=rv_semiamp_per_semi_major_axis)}`.
 So `K` is tied unless `"<rv>.rv_semiamp"` is given a prior, which fits `K` freely
 (e.g. for a luminous companion). Fixing the relative sign of `K` and `a` is also what

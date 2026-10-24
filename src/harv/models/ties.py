@@ -29,7 +29,9 @@ class TiedPrior(eqx.Module):
     """
 
     source: str = eqx.field(static=True)
-    scale: Callable[[dict[str, Any]], Any] = eqx.field(static=True)
+    # Not static: a scale may be an eqx.Module holding arrays (like the
+    # LinearPriorCallable classes); a plain function is treated as static anyway.
+    scale: Callable[[dict[str, Any]], Any]
 
     @property
     def requires(self) -> tuple[str, ...]:
@@ -81,7 +83,7 @@ def rv_semiamp_per_semi_major_axis(params: dict[str, Any]) -> Q:
     >>> round(float(c.to("km/(s mas)").value), 2)  # Earth's orbital speed per AU
     29.79
     """
-    cos_i = jnp.asarray(ustrip(AllowValue, "", params["cos_i"]))
+    cos_i = jnp.asarray(ustrip(AllowValue, "", params["cos_i"]), dtype=float)
     # Floored so the gradient stays finite at |cos_i| = 1, which NUTS can reach.
     sin2_i = jnp.maximum((1 - cos_i) * (1 + cos_i), jnp.finfo(cos_i.dtype).tiny)
     sin_i = jnp.sqrt(sin2_i)
