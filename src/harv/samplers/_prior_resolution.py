@@ -21,6 +21,7 @@ from harv.models._helpers import (
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
+from harv.models.ties import TiedPrior
 
 __all__ = (
     "effective_linear_prior_from_prior",
@@ -59,7 +60,11 @@ def explicit_linear_names(
             if _needs_explicit_sampling(d, name=name, pinned_names=pinned)
         )
     marg = set(effective_marginalized_names)
-    return tuple(name for name in effective_linear_prior if name not in marg)
+    return tuple(
+        name
+        for name, d in effective_linear_prior.items()
+        if name not in marg and not isinstance(d, TiedPrior)
+    )
 
 
 def lookup_extension_prior(
@@ -118,6 +123,16 @@ def resolve_effective_marginalized_names(
         return marginalized_names
 
     if marginalized_names is not None:
+        # A tied parameter is never sampled: it always rides on its source's
+        # column, whether or not the user listed it (spec §Tied linear parameters).
+        marginalized_names = (
+            *marginalized_names,
+            *(
+                name
+                for name, d in effective_linear_prior.items()
+                if isinstance(d, TiedPrior) and name not in marginalized_names
+            ),
+        )
         unknown = set(marginalized_names) - set(effective_linear_prior)
         if unknown:
             msg = (
@@ -210,6 +225,10 @@ def effective_linear_prior_from_prior(
     )
     if effective is None:
         return None
+    if isinstance(model, JointModel):
+        # Model-supplied defaults (e.g. the RV <-> astrometry tie); the user's
+        # entries win.
+        effective = {**model.default_linear_priors, **effective}
     # Merge linear extension params from the model.
     for comp_name, ext in iter_component_extensions(model):
         for p in ext.extra_params():

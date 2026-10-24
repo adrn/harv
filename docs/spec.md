@@ -1174,6 +1174,7 @@ marginalize based on `linear_priors`:
 | `LinearPriorCallable`                         | Callable       | Called, result marginalized          |
 | *read by another prior's `requires`*          | Pinned         | Sampled explicitly alongside NL      |
 | `dist.Delta` or `QD(Delta)`                   | Fixed          | Treated as explicit (value fixed)    |
+| `tied(source, scale)`                         | Tied           | Folded into the source's column      |
 | anything else (`dist.Uniform`, `Gamma`, …)    | Non-Gaussian   | Sampled explicitly alongside NL      |
 
 Support-constrained and mixture Gaussians are marginalized by
@@ -1200,7 +1201,8 @@ recorded with `numpyro.deterministic`. Sampling it would hand NUTS a site whose
 log-prob is `-inf` almost everywhere — stuck chains with no error.
 
 One classifier decides the row, and the **order of its tests is normative**:
-a prior outside the marginalizable family is *Non-Gaussian* first, before the
+a `TiedPrior` is *Tied* before anything else (see §Tied linear parameters); then a
+prior outside the marginalizable family is *Non-Gaussian* first, before the
 pinned test, because the fix the *Pinned* row implies — drop the dependency —
 would leave a `Gamma` prior that still cannot be marginalized. Then *Pinned*,
 then *Fixed*, then *Marginalized*. `RejectionSampler.summary()` and the
@@ -1351,6 +1353,8 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 | --------------- | ----------------------------------- | ---------- |
 | `components`    | `dict[str, AbstractComponentModel]` | (required) |
 | `shared_params` | `tuple[str, ...]`                   | (required) |
+| `shared_linear_params` | `tuple[str, ...]`            | `()`       |
+| `default_linear_priors` | `dict[str, LinearPriorDist]` | `{}`      |
 
 **Factory classmethods:**
 
@@ -1363,6 +1367,9 @@ Composes multiple `AbstractComponentModel` instances with shared orbital paramet
 - `JointModel.for_rv_and_gaia(components, *, shared_params=None)` -- build a
   JointModel for combined RV + Gaia astrometry. Same default shared_params.
   Defaults `shared_linear_params=()` — all linear priors must be fully qualified.
+  Requires the standard RV and Gaia parameterizations, and by default ties the RV
+  semi-amplitude to the astrometric orbit (unseen companion); see §Tied linear
+  parameters.
 
 **Parameter namespacing:** Shared orbital params use bare names (`"period"`).
 Component-specific nonlinear params use `"component_name.param_name"` convention
@@ -1385,6 +1392,95 @@ systemic velocity.
   **Explicit linear routing:** Non-Gaussian linear priors (e.g. HalfNormal parallax)
   are sampled alongside nonlinear params and appear in the flat `nonlinear_values` dict.
   `JointModel._route_explicit_linear` copies them to the correct component's dict.
+
+### Tied linear parameters
+
+A linear parameter can be *tied* to another: its value is `scale(θ) × source`, where
+`scale` depends only on nonlinear and explicitly sampled values. A tie is a
+conditional delta prior and is declared like any other linear prior, in
+`linear_priors`, with `tied(source, scale)` (`harv.tied`, `harv.models.tied`):
+
+```python
+linear_priors = {
+    **astrom_linear_priors,
+    "rv.v_sys": QD(dist.Normal(0, 10), "km/s"),
+    "rv.rv_semiamp": tied("astrom.semi_major_axis", scale=rv_semiamp_per_semi_major_axis),
+}
+```
+
+`tied` returns a `TiedPrior` (`harv.models.ties`) with `source`, the
+component-qualified name of the linear parameter it follows, and `scale`, a function
+of a parameter dict returning a `Q` in `[tied parameter unit] / [source unit]`. `scale`
+follows the `LinearPriorCallable` conventions: it receives the *source* component's
+values exactly as that component's callable priors would (nonlinear values, explicit
+linear values with units, derived eccentricity), and an optional `requires` attribute
+names what it reads. Linear parameters named in `requires` are pinned to explicit
+sampling, resolved in the source component's namespace.
+
+Because `scale` is known given the sampled values, the tied parameter adds no
+dimension to the marginalized Gaussian: its design column, multiplied by `scale`, is
+added to the source's column of the joint marginalized Gaussian, and the source's
+prior is the prior on both. `sample_conditional_linear`, and hence `Samples`, carry
+the derived value `scale × source` under the tied parameter's own name.
+
+Rules:
+
+- ties are a `JointModel` feature; a `TiedPrior` reaching a single-component model
+  raises `NotImplementedError`, as does `numpyro_model(marginalized=False)`;
+- the tied key and `source` must be component-qualified linear parameters
+  (`ValueError`); the two may be in the same component or in different ones;
+- the source must be analytically marginalized (`ValueError`), and must not itself
+  be tied (`ValueError`);
+- a tied parameter is never sampled: the samplers add it to the marginalized set even
+  when a user-supplied `marginalized_names` omits it;
+- any tie puts the model on the joint marginalization path (as shared linear
+  parameters do), so Gaussian-mixture linear priors are unavailable there;
+- a linear parameter that a tie's `scale` reads from another component (e.g.
+  `astro.parallax`) is pinned at the joint level, so `explicit_params` and
+  `marginalized_params` report it as explicit.
+
+`JointModel.default_linear_priors` holds model-supplied linear priors, merged under the
+user's `linear_priors` everywhere they are read (the model's entry points and the
+samplers' effective prior); the user's entries win.
+
+#### The RV / astrometry tie (unseen companion)
+
+When the companion contributes no light, the photocenter traces the star's orbit, so
+in the sky-frame convention of §`KeplerianOrientation` (shared `ω`, `Ω`, `i`):
+
+```
+K = c · a,   c = 2π sin i / (P √(1 − e²) ϖ)
+```
+
+with `a / ϖ` read as AU. `rv_semiamp_per_semi_major_axis(params)`
+(`harv.models.ties`) computes `c`, with
+`requires = ("period", "eccentricity", "cos_i", "parallax")`.
+
+`JointModel.for_rv_and_gaia` requires every component to be an `RVModel` with
+`StandardRV` or a `GaiaAstrometryModel` with `StandardGaiaAstrometry` (`TypeError`
+otherwise, pointing to `Samples.thiele_innes_to_campbell()` for Thiele-Innes fits),
+and with one of each sets the default
+`{"<rv>.rv_semiamp": tied("<astrom>.semi_major_axis", scale=rv_semiamp_per_semi_major_axis)}`.
+So `K` is tied unless `"<rv>.rv_semiamp"` is given a prior, which fits `K` freely
+(e.g. for a luminous companion). Fixing the relative sign of `K` and `a` is also what
+lets the RVs break the astrometric `(ω + π, Ω + π)` degeneracy.
+
+Warm starts: an astrometry-only posterior contains the orbit and its
+`(ω + π, Ω + π)` mirror equally, but under the tie only one of them fits the RVs. When
+initializing a tied fit from astrometry-only samples, evaluate both (wrapping the
+shifted angles into the prior's range) and start from the better one.
+
+**Future: luminous companions.** With a luminous companion the photocenter orbit is
+`a = a₁ ϖ (1 − β / B)` (`β` the companion's fractional flux, `B = q / (1 + q)`), so
+the same tie works with a `scale` that also reads `q` and `β` (new nonlinear
+parameters). It becomes singular when `β = B` (the photocenter does not move while
+`K` does); sharing a latent physical amplitude `a₁` between the components instead
+avoids that, and also expresses the SB2 mass-ratio tie `K₂ = −K₁ / q`.
+
+**Future: perspective acceleration.** Coupling the proper motions to the systemic
+velocity through a true 3-D space velocity is bilinear in two linear parameters
+(proper motion × `v_r`), so a tie can express it only when one side is sampled
+explicitly; otherwise it needs a dedicated model term.
 
 ### Numpyro model generation
 
@@ -2068,7 +2164,7 @@ The string contains:
 
 - a header with the model class, the parameterization class (per component for a
   `JointModel`), the active extensions, and a `parameters` line giving the count of
-  sampled vs. marginalized parameters;
+  sampled vs. marginalized parameters (plus tied ones, if any);
 - a **Nonlinear parameters** table — base orbital params plus any nonlinear extension
   params (marked `(ext)`), which are always sampled explicitly;
 - a **Linear parameters** table classifying each linear param as:
@@ -2080,7 +2176,9 @@ The string contains:
     callable reads its value (`requires`), so it must stay explicit. This is
     `parallax` under the Gaia defaults. Distinguished from the next case because
     the fix is different: drop the dependency, not the `marginalized_names` entry;
-  - `sampled (could marg.)` — marginalizable but excluded via `marginalized_names`.
+  - `sampled (could marg.)` — marginalizable but excluded via `marginalized_names`;
+  - `tied to <source>` — set by `tied(...)` (see §Tied linear parameters); neither
+    sampled nor marginalized on its own.
 
 Each row shows the prior-distribution type and unit. The classification reuses the same
 `effective_linear_prior` / marginalized-name resolution that `run` uses, so the summary
@@ -3696,6 +3794,8 @@ joint = JointModel.for_rv_and_gaia(
         "astro": GaiaAstrometryModel(),
     },
 )
+# No "rv.rv_semiamp" prior: K is tied to the astrometric orbit (unseen companion).
+# Give "rv.rv_semiamp" a prior to fit K freely instead.
 sampler = RejectionSampler(joint_prior, joint)
 samples = sampler.run(
     SourceData(rv=rv_data, astro=gaia_data),
