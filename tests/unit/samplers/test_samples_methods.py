@@ -930,6 +930,54 @@ class TestPlotRV:
         assert len(model_lines) == 3
         plt.close("all")
 
+    def test_shared_model_draws_curves_once_across_instruments(self, rv_samples):
+        """One RVModel over several instruments gives one curve set, not one each.
+
+        Regression: the curves were recomputed and drawn per instrument, so three
+        instruments drew every posterior orbit three times in three colours.
+        """
+        rv_datasets = {
+            name: RVData(
+                time=Q(jnp.linspace(0.0, 100.0, 6) + i, "day"),
+                rv=Q(jnp.zeros(6), "km/s"),
+                rv_err=Q(jnp.ones(6) * 0.5, "km/s"),
+                time_ref=Q(50.0, "day"),
+            )
+            for i, name in enumerate(("a", "b", "c"))
+        }
+        ax = plot_rv(rv_samples, SourceData(**rv_datasets), n_samples=3)
+        expected_alpha = get_alpha(3)
+        model_lines = [
+            line
+            for line in ax.lines
+            if line.get_alpha() is not None
+            and abs(line.get_alpha() - expected_alpha) < 0.01
+        ]
+        assert len(model_lines) == 3
+        data_colors = {c.get_color() for c in ax.lines if c not in model_lines}
+        assert model_lines[0].get_color() not in data_colors
+        plt.close("all")
+
+    def test_shared_curves_label_keplerian_once(self, rv_samples):
+        rv_datasets = {
+            name: RVData(
+                time=Q(jnp.linspace(0.0, 100.0, 6) + i, "day"),
+                rv=Q(jnp.zeros(6), "km/s"),
+                rv_err=Q(jnp.ones(6) * 0.5, "km/s"),
+                time_ref=Q(50.0, "day"),
+            )
+            for i, name in enumerate(("a", "b"))
+        }
+        ax = plot_rv(
+            rv_samples,
+            SourceData(**rv_datasets),
+            n_samples=3,
+            show_signal_components=True,
+        )
+        labels = ax.get_legend_handles_labels()[1]
+        assert labels.count("Keplerian") == 1
+        plt.close("all")
+
     def test_raises_for_bad_data_type(self, rv_samples):
         """plot_rv() raises ValueError for unrecognised data argument."""
         with pytest.raises(ValueError, match="must be"):

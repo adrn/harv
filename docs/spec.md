@@ -464,6 +464,30 @@ so callers never need to strip units themselves:
 - `mean_anomaly(dt: BatchQTime, period: ScalarQTime) -> BatchQAngle` — `M = 2π · dt / period`
 - `true_anomaly_from_mean(M: BatchQAngle, eccentricity: ScalarFloatLike) -> (sin f, cos f)` — solve Kepler's equation
 
+`true_anomaly_from_mean` uses harv's own solver (`harv.kepler._kepler_solver.kepler`),
+a JAX port of the orvara eccentric-anomaly solver (Brandt et al. 2021, §3.1), which
+follows Raposo-Pulido & Peláez (2017): a per-eccentricity piecewise-quintic starting
+guess (RPP's series in the `e → 1`, `M → 0` corner), `sin E`/`cos E` from a Taylor
+series plus a square root, and one Householder step. It makes no trig calls, which
+matters on CPU: XLA splits long elementwise chains into several loop fusions and
+recomputes their producers in each one, so trig calls in the solver are paid
+several times over inside a likelihood. Contract:
+
+- `eccentricity` is a scalar (plain or dimensionless `Q`); batch over eccentricities
+  with `jax.vmap`. A non-scalar eccentricity raises `ValueError`.
+- `M` may have any shape and any range.
+- Accuracy: Kepler's equation is satisfied to float64 round-off of the range-reduced
+  `M` for all `0 ≤ e ≤ 0.9999`; `(sin f, cos f)` agree with a converged Newton solve
+  to `1e-13` for `e ≤ 0.9` (the error grows as `(1 − e)^(-3/2)` above that, the
+  conditioning of `f(M)` near pericenter).
+- Gradients come from a `jax.custom_jvp` with the analytic derivatives of `f(M, e)`,
+  not from differentiating the iteration.
+- `kepler` is `jax.jit`-compiled, so eager callers (plotting, simulation) make one
+  dispatch per call rather than one per operation.
+
+`jaxoplanet` is not a runtime dependency; it is in the `test` group only, to
+cross-check the solver.
+
 `rv_shape` and `thiele_innes_unit` remain pure functions on raw JAX arrays
 or dimensionless `Q` objects, because their inputs are always already dimensionless at every call site:
 
@@ -2104,7 +2128,10 @@ MCMC functionality lives on `NumpyroSampler(prior, model)`. The `run()` method
 takes the data and an optional `Samples` warm-start from `RejectionSampler.run()`,
 builds a numpyro model automatically from the component model's `numpyro_model()`
 method, draws one starting position per chain from the rejection posterior (if
-provided), runs MCMC, and returns a new `Samples` object.
+provided), runs MCMC, and returns a new `Samples` object. Its arrays live on
+a single device even when chains run in parallel across devices (numpyro returns
+those sharded per chain), because every eager use of a sharded array is a
+multi-device dispatch.
 
 ```python
 mcmc_sampler = NumpyroSampler(prior, model)
@@ -3182,6 +3209,14 @@ created and returned; otherwise draws into `ax` and returns `None`.
   data before folding so the Keplerian orbit overlays the phase-folded points.
 - `apply_median_offsets` -- when `True` (default), shift non-reference instrument
   data by the posterior median offset parameter.
+
+Curves are evaluated for all drawn samples at once (vectorized over draws, in
+chunks to bound memory), and each *distinct* curve set is drawn once: instruments
+that map to the same component model share one set (e.g. one `RVModel` over
+several instruments with a `MultiSurveyOffset`), a `JointModel` gets one set per
+component, and a model with a GP gets one set per instrument because the GP is
+conditioned on that instrument's data. Orbit curves use colour-cycle entries not
+taken by any data series.
 
 ### `plot_gaia_astrometry`
 

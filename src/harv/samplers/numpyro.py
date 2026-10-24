@@ -341,7 +341,8 @@ class NumpyroSampler(AbstractSampler):
 
         Returns
         -------
-            Posterior samples container with nonlinear and linear parameters.
+            Posterior samples container with nonlinear and linear parameters, on
+            a single device even when chains ran in parallel across devices.
         """
         _validate_data(data, self.model)
 
@@ -441,7 +442,15 @@ class NumpyroSampler(AbstractSampler):
             chain_method=chain_method,
         )
         mcmc.run(rng_key, init_params=init_params)
-        posterior = mcmc.get_samples()
+        # Parallel chains come back sharded across devices. Gather onto one device
+        # (the configured default, else this process's first): every downstream
+        # use of Samples (indexing, plotting, conversions) is a stream of small
+        # eager ops, and each op on a sharded array is a multi-device dispatch --
+        # ~5x slower, e.g. 27 s vs 5 s for plot_rv.
+        device = (
+            getattr(jax.config, "jax_default_device", None) or jax.local_devices()[0]
+        )
+        posterior = jax.device_put(mcmc.get_samples(), device)
 
         # Convert numpyro posterior dict -> Samples
         return self._posterior_to_samples(
