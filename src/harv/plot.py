@@ -1040,6 +1040,11 @@ def plot_gaia_sky_orbit(
     if data_plot_kwargs is None:
         data_plot_kwargs = {}
 
+    data_plot_kwargs.setdefault("color", "k")
+    data_plot_kwargs.setdefault("linewidth", 1.0)
+    data_plot_kwargs.setdefault("alpha", 0.7)
+    data_plot_kwargs.setdefault("marker", "")
+
     # Assemble (nl, lin) from the single sample.  Strip dimensioned nl to the
     # form the parameterization expects (period stays as Q[time]).  Linear
     # values: strip each to its own stored unit so the resulting (dRA, dDec)
@@ -1114,14 +1119,8 @@ def plot_gaia_sky_orbit(
             axis=1,
         )
 
-        seg_style = {
-            "color": "k",
-            "linewidth": 1.0,
-            "alpha": 0.7,
-            **data_plot_kwargs,
-        }
         for k in range(seg_x.shape[0]):
-            ax.plot(seg_x[k], seg_y[k], **seg_style)
+            ax.plot(seg_x[k], seg_y[k], **data_plot_kwargs)
 
     # Central star marker
     ax.plot(0, 0, marker="*", color="goldenrod", markersize=10, zorder=20)
