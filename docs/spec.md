@@ -3210,6 +3210,14 @@ created and returned; otherwise draws into `ax` and returns `None`.
 - `apply_median_offsets` -- when `True` (default), shift non-reference instrument
   data by the posterior median offset parameter.
 
+Curves are evaluated for all drawn samples at once (vectorized over draws, in
+chunks to bound memory), and each *distinct* curve set is drawn once: instruments
+that map to the same component model share one set (e.g. one `RVModel` over
+several instruments with a `MultiSurveyOffset`), a `JointModel` gets one set per
+component, and a model with a GP gets one set per instrument because the GP is
+conditioned on that instrument's data. Orbit curves use colour-cycle entries not
+taken by any data series.
+
 ### `plot_gaia_astrometry`
 
 ```python

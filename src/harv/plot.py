@@ -8,7 +8,7 @@ __all__ = (
 )
 
 import warnings
-from typing import Any
+from typing import Any, cast
 
 import equinox as eqx
 import jax
@@ -211,6 +211,12 @@ def _default_gaia_model(model: Any) -> Any:
     from harv.models.astrometry import GaiaAstrometryModel  # noqa: PLC0415
 
     return GaiaAstrometryModel()
+
+
+# Posterior draws evaluated per vectorized chunk in plot_rv: bounds peak memory
+# when n_samples is large (curves) or the noise is a dense GP covariance.
+_CURVE_DRAW_CHUNK = 64
+_COV_DRAW_CHUNK = 8
 
 
 def get_alpha(n: int) -> float:
@@ -552,6 +558,9 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     # When phase-folding, only the reference sample defines the phase axis so
     # plotting other samples (at different periods) would be misleading.
     draw_indices = [ref_idx] if phase_fold_median else range(n_draw)
+    # Curves are computed for all draws at once (vmap over this index array):
+    # per-draw eager evaluation is ~100x slower.
+    draw_idx_array = jnp.asarray(list(draw_indices))
     orbit_style.setdefault("alpha", get_alpha(len(draw_indices)))
 
     time_ref = Q(
@@ -586,20 +595,23 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
             if not comp_model.extensions:
                 continue
             ds_err = jnp.asarray(ustrip(rv_unit, ds.rv_err))
-            per_sample_eff_err: list[Any] = []
-            for i in draw_indices:
-                nonlinear_i, _lin_i = _component_sample_params(
-                    samples, comp_model, ds, ds_name, i
-                )
-                cov = comp_model._full_obs_err(ds_err, nonlinear_i, ds)
-                eff = jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov))
-                per_sample_eff_err.append(eff)
-            if per_sample_eff_err:
-                # Only show the *extra* over the raw obs error (in quadrature)
-                # so the widened bars are visually distinct from the originals.
-                median_eff = jnp.median(jnp.stack(per_sample_eff_err), axis=0)
-                extra_var = jnp.clip(median_eff**2 - ds_err**2, 0.0)
-                extra_err_per_dataset[ds_name] = Q(jnp.sqrt(extra_var), rv_unit)
+            nonlinear_draws, _ = _component_sample_params(
+                samples, comp_model, ds, ds_name, draw_idx_array
+            )
+
+            def _eff_err(
+                nl: dict[str, Any], comp_model=comp_model, ds=ds, ds_err=ds_err
+            ) -> Any:
+                cov = comp_model._full_obs_err(ds_err, nl, ds)
+                return jnp.sqrt(cov) if cov.ndim == 1 else jnp.sqrt(jnp.diag(cov))
+
+            # Only show the *extra* over the raw obs error (in quadrature)
+            # so the widened bars are visually distinct from the originals.
+            # Chunked: with a GP each draw's covariance is a dense (n, n) matrix.
+            eff = jax.lax.map(_eff_err, nonlinear_draws, batch_size=_COV_DRAW_CHUNK)
+            median_eff = jnp.median(eff, axis=0)
+            extra_var = jnp.clip(median_eff**2 - ds_err**2, 0.0)
+            extra_err_per_dataset[ds_name] = Q(jnp.sqrt(extra_var), rv_unit)
 
     # If a user specified, a global shift:
     median_v0 = (
@@ -616,6 +628,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
     # Plot the data:
+    data_colors: set[str] = set()
     for color_idx, (instr_name, rv_data) in enumerate(rv_datasets.items()):
         rv_obs = rv_data.rv
         rv_err = rv_data.rv_err
@@ -686,6 +699,7 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         instr_style = data_style.copy()
         if "color" not in instr_style:
             instr_style["color"] = colors[color_idx % len(colors)]
+        data_colors.add(mpl.colors.to_hex(instr_style["color"]))
         label = instr_name if len(rv_datasets) > 1 else "data"
         instr_style.setdefault("label", label)
 
@@ -779,115 +793,130 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
     # being applied to data points via `median_offsets` above.
     from harv.models.extensions.gp import GP  # noqa: PLC0415
 
-    def _curve_for_sample(
+    def _curves_for_draws(
         comp_model: Any,
         rv_data_ref: RVData,
         instr_name: str,
-        i: int,
     ) -> tuple[jax.Array, jax.Array, bool]:
-        """Return (kepler_rv_array, extension_rv_array, has_extension_signal).
+        """Return (kepler_rv, extension_rv, has_extension_signal) for every draw.
 
-        Both arrays are in rv_unit, bare jax arrays of shape len(time_grid).
+        Both arrays are in rv_unit, shape ``(n_draws, len(time_grid))``. The
+        deterministic part is one ``jax.vmap`` over the draws; only the GP
+        overlay (Python-float hyperparameters) is evaluated draw by draw.
         """
-        nonlinear_i, linear_i = _component_sample_params(
-            samples, comp_model, rv_data_ref, instr_name, i
+        nonlinear, linear = _component_sample_params(
+            samples, comp_model, rv_data_ref, instr_name, draw_idx_array
         )
         curve_model = _strip_multi_survey_offsets(comp_model)
         # Keplerian-only baseline (no design-matrix extensions).
         kepler_only = eqx.tree_at(lambda m: m.extensions, curve_model, ())
-        y_kepler = kepler_only.predict_at_times(
-            nonlinear_i,
-            linear_i,
-            time_grid,
-            time_ref=rv_data_ref.time_ref,
-            obs_unit=rv_unit,
-        )
+
+        def _on_grid(m: Any) -> jax.Array:
+            return jnp.asarray(
+                jax.lax.map(
+                    lambda draw: m.predict_at_times(
+                        *draw,
+                        time_grid,
+                        time_ref=rv_data_ref.time_ref,
+                        obs_unit=rv_unit,
+                    ),
+                    (nonlinear, linear),
+                    batch_size=_CURVE_DRAW_CHUNK,
+                )
+            )
+
+        y_kepler = _on_grid(kepler_only)
         # Full design-matrix prediction (Keplerian + trend + any other
-        # design-matrix extension).
-        y_full = curve_model.predict_at_times(
-            nonlinear_i,
-            linear_i,
-            time_grid,
-            time_ref=rv_data_ref.time_ref,
-            obs_unit=rv_unit,
+        # design-matrix extension); nothing to add without extensions.
+        ext_curve = (
+            _on_grid(curve_model) - y_kepler
+            if curve_model.extensions
+            else jnp.zeros_like(y_kepler)
         )
-        ext_curve = y_full - y_kepler
+        has_signal = bool(ext_curve.any())
 
         # GP conditional-mean overlay (covariance extension, not design-matrix
         # — predicted on the grid by conditioning on data residuals).
-        has_signal = bool(ext_curve.any())
-        if not phase_fold_median:
+        gps = [e for e in comp_model.extensions if isinstance(e, GP)]
+        if gps and not phase_fold_median:
             err_data_arr = jnp.asarray(ustrip(rv_unit, rv_data_ref.rv_err))
-            for ext in comp_model.extensions:
-                if isinstance(ext, GP):
-                    # Residuals against the *full* deterministic prediction at
-                    # the data times.
-                    y_at_data = curve_model.predict(nonlinear_i, linear_i, rv_data_ref)
-                    residuals = jnp.asarray(
-                        ustrip(rv_unit, rv_data_ref.rv) - jnp.asarray(y_at_data)
-                    )
-                    time_unit_ext = ext.time_unit or time_unit
-                    hp = _get_extension_sample_values(samples, (ext,), i)
-                    gp_grid = ext.conditional_mean(
-                        residuals,
+            # Residuals against the *full* deterministic prediction at the
+            # data times.
+            y_at_data = jax.vmap(
+                lambda nl, lin: curve_model.predict(nl, lin, rv_data_ref)
+            )(nonlinear, linear)
+            residuals = jnp.asarray(ustrip(rv_unit, rv_data_ref.rv)) - jnp.asarray(
+                y_at_data
+            )
+            for ext in gps:
+                time_unit_ext = ext.time_unit or time_unit
+                # Always set by this point (built above when not passed in).
+                grid = cast("BatchQTime", time_grid)
+                gp_grid = [
+                    ext.conditional_mean(
+                        residuals[row],
                         jnp.asarray(ustrip(time_unit_ext, rv_data_ref.time)),
-                        jnp.asarray(ustrip(time_unit_ext, time_grid)),
+                        jnp.asarray(ustrip(time_unit_ext, grid)),
                         err_data_arr,
-                        hp,
+                        _get_extension_sample_values(samples, (ext,), i),
                     )
-                    ext_curve = ext_curve + jnp.asarray(gp_grid)
-                    has_signal = True
-        return jnp.asarray(y_kepler), jnp.asarray(ext_curve), has_signal
+                    for row, i in enumerate(draw_indices)
+                ]
+                ext_curve = ext_curve + jnp.stack([jnp.asarray(g) for g in gp_grid])
+            has_signal = True
+        return y_kepler, ext_curve, has_signal
+
+    rv_offset = float(ustrip(AllowValue, rv_unit, median_v0))
+
+    def _plot_curves(curves: Any, style: dict[str, Any], label: str | None) -> None:
+        """All draws in one ``ax.plot`` call; ``label`` goes on the first only."""
+        curves = np.atleast_2d(np.asarray(curves))
+        if label is not None and "label" not in style:
+            ax.plot(x_plot, curves[0], **{**style, "label": label})
+            curves = curves[1:]
+        if len(curves):
+            ax.plot(x_plot, curves.T, **style)
 
     if rv_datasets:
-        # When data is present, draw one set of curves per instrument/component
-        # so SB2 secondaries (with their own rv_semiamp) and per-component GP
-        # extensions are rendered correctly.  Orbit color is offset by 1 from
-        # the data color (so C0 data pairs with a C1 orbit overlay).
-        for color_idx, (instr_name, _rv_data) in enumerate(rv_datasets.items()):
-            comp_model_curve = _component_model_for(instr_name)
+        # One set of curves per *distinct* curve: instruments share one when they
+        # map to the same component model (a single RVModel over several
+        # instruments, offsets stripped above, or SB2 instruments observing the
+        # same component; the data containers give every dataset one shared
+        # time_ref). A GP is conditioned on each instrument's own data, so it
+        # always gets its own set. Orbit colours come from the cycle entries no
+        # data series uses.
+        curve_sets: dict[tuple[Any, ...], tuple[str, RVData]] = {}
+        for instr_name, ds in rv_datasets.items():
+            comp = _component_model_for(instr_name)
+            has_gp = any(isinstance(e, GP) for e in comp.extensions)
+            key = (id(comp), instr_name if has_gp else None)
+            curve_sets.setdefault(key, (instr_name, ds))
+        free_colors = [c for c in colors if mpl.colors.to_hex(c) not in data_colors]
+        orbit_colors = free_colors or colors
+
+        for set_idx, (instr_name, _rv_data) in enumerate(curve_sets.values()):
             total_style = orbit_style.copy()
-            total_style["color"] = colors[(color_idx + 1) % len(colors)]
-            kepler_style = orbit_style.copy()
-            kepler_style["color"] = colors[(color_idx + 1) % len(colors)]
+            total_style["color"] = orbit_colors[(2 * set_idx) % len(orbit_colors)]
             extension_style = orbit_style.copy()
-            extension_style["color"] = colors[(color_idx + 2) % len(colors)]
+            extension_style["color"] = orbit_colors[
+                (2 * set_idx + 1) % len(orbit_colors)
+            ]
             extension_style.setdefault("linestyle", "--")
 
-            for draw_idx, i in enumerate(draw_indices):
-                y_kepler, y_ext, has_signal = _curve_for_sample(
-                    comp_model_curve,
-                    _rv_data,
-                    instr_name,
-                    i,
+            y_kepler, y_ext, has_signal = _curves_for_draws(
+                _component_model_for(instr_name), _rv_data, instr_name
+            )
+            if show_signal_components:
+                first = set_idx == 0
+                _plot_curves(
+                    y_kepler - rv_offset, total_style, "Keplerian" if first else None
                 )
-                if show_signal_components:
-                    kepler_plot_style = kepler_style.copy()
-                    extension_plot_style = extension_style.copy()
-                    if color_idx == 0 and draw_idx == 0:
-                        kepler_plot_style.setdefault("label", "Keplerian")
-                        extension_plot_style.setdefault("label", "Extensions")
-
-                    ax.plot(
-                        x_plot,
-                        np.asarray(y_kepler)
-                        - float(ustrip(AllowValue, rv_unit, median_v0)),
-                        **kepler_plot_style,
+                if has_signal:
+                    _plot_curves(
+                        y_ext, extension_style, "Extensions" if first else None
                     )
-                    if has_signal:
-                        ax.plot(
-                            x_plot,
-                            np.asarray(y_ext),
-                            **extension_plot_style,
-                        )
-                else:
-                    y_model = y_kepler + y_ext
-                    ax.plot(
-                        x_plot,
-                        np.asarray(y_model)
-                        - float(ustrip(AllowValue, rv_unit, median_v0)),
-                        **total_style,
-                    )
+            else:
+                _plot_curves(y_kepler + y_ext - rv_offset, total_style, None)
     else:
         # data=None: no per-instrument context — use the model directly with
         # bare keys from samples, via a synthetic single-instrument RVData
@@ -905,22 +934,17 @@ def plot_rv(  # noqa: C901 -- plotting code is inherently complex
         )
         comp_model_for_curve = model if isinstance(model, _RVModel) else _RVModel()
         curve_model = _strip_multi_survey_offsets(comp_model_for_curve)
-        for i in draw_indices:
-            nonlinear_i, linear_i = _component_sample_params(
-                samples, curve_model, dummy_data, "data", i
-            )
-            y_model = curve_model.predict_at_times(
-                nonlinear_i,
-                linear_i,
-                time_grid,
-                time_ref=time_ref,
-                obs_unit=rv_unit,
-            )
-            ax.plot(
-                x_plot,
-                np.asarray(y_model) - float(ustrip(AllowValue, rv_unit, median_v0)),
-                **orbit_style,
-            )
+        nonlinear, linear = _component_sample_params(
+            samples, curve_model, dummy_data, "data", draw_idx_array
+        )
+        curves = jax.lax.map(
+            lambda draw: curve_model.predict_at_times(
+                *draw, time_grid, time_ref=time_ref, obs_unit=rv_unit
+            ),
+            (nonlinear, linear),
+            batch_size=_CURVE_DRAW_CHUNK,
+        )
+        _plot_curves(jnp.asarray(curves) - rv_offset, orbit_style, None)
 
     # Only when something is actually labelled. Labels come from the per-instrument
     # data series (see instr_style above) and, with show_signal_components, from the
