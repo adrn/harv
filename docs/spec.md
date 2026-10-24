@@ -482,6 +482,8 @@ several times over inside a likelihood. Contract:
   conditioning of `f(M)` near pericenter).
 - Gradients come from a `jax.custom_jvp` with the analytic derivatives of `f(M, e)`,
   not from differentiating the iteration.
+- `kepler` is `jax.jit`-compiled, so eager callers (plotting, simulation) make one
+  dispatch per call rather than one per operation.
 
 `jaxoplanet` is not a runtime dependency; it is in the `test` group only, to
 cross-check the solver.

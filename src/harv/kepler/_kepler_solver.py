@@ -175,6 +175,8 @@ def _sin_cos_ecc_anomaly(M: Array, ecc: Array) -> tuple[Array, Array]:
     return jnp.where(lower_half, -sin_E, sin_E), cos_E
 
 
+# Jitted so eager callers (plotting, simulation) make one dispatch instead of ~100.
+@jax.jit
 def kepler(M: ArrayLike, ecc: ArrayLike) -> tuple[Array, Array]:
     """Solve Kepler's equation and return ``(sin f, cos f)`` of the true anomaly.
 
