@@ -967,6 +967,80 @@ class Samples(eqx.Module):
             ln_prior=self.ln_prior,
         )
 
+    def with_astrometric_mirror(self) -> "Samples":
+        """These samples followed by their astrometric mirror orbits.
+
+        Astrometry alone cannot tell an orbit from its mirror,
+        ``(arg_peri, lon_asc_node) -> (arg_peri + pi, lon_asc_node + pi)``: the
+        Thiele-Innes constants are unchanged.  RVs can, once ``rv_semiamp`` is tied
+        to the astrometric orbit (spec §Tied linear parameters), so a warm start
+        for a tied RV + astrometry fit should try both.  The mirrored copies also
+        negate any ``rv_semiamp``, which makes them an exact symmetry of every
+        *untied* model; both shifted angles are wrapped to ``[0, 2*pi)``.
+
+        ``ln_likelihood`` and ``ln_prior`` are dropped: the mirror is not
+        equally likely under a tied model, which is the point of trying it.
+
+        Returns
+        -------
+            ``2 * n_samples`` samples: the originals, then their mirrors.
+
+        Raises
+        ------
+        ValueError
+            Unless there is exactly one ``arg_peri`` and one ``lon_asc_node`` (e.g.
+            RV-only samples have no astrometric mirror).
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> from harv.samplers import Samples
+        >>> s = Samples(
+        ...     nonlinear={
+        ...         "arg_peri": Q([1.0], "rad"), "lon_asc_node": Q([4.0], "rad")
+        ...     },
+        ...     linear={"semi_major_axis": Q([0.3], "mas")},
+        ...     model_type="GaiaAstrometryModel",
+        ... )
+        >>> both = s.with_astrometric_mirror()
+        >>> both.n_samples
+        2
+        >>> [round(float(v), 3) for v in both["lon_asc_node"].value]
+        [4.0, 0.858]
+        """
+        flip = []
+        for name in ("arg_peri", "lon_asc_node"):
+            keys = _find_namespaced_keys(self.nonlinear, name)
+            if len(keys) != 1:
+                msg = f"with_astrometric_mirror needs exactly one {name!r}; got {keys}."
+                raise ValueError(msg)
+            flip.append(keys[0])
+        negate = _find_namespaced_keys(self.linear, "rv_semiamp")
+
+        def mirrored(values: dict[str, Q]) -> dict[str, Q]:
+            out = {}
+            for key, q in values.items():
+                unit = str(q.unit)
+                v = ustrip(unit, q)
+                if key in flip:  # shift by pi in radians, whatever the stored unit
+                    shifted = jnp.mod(ustrip("rad", q) + jnp.pi, 2.0 * jnp.pi)
+                    m = ustrip(unit, Q(shifted, "rad"))
+                elif key in negate:
+                    m = -v
+                else:
+                    m = v
+                # The sample axis is the last one (batched Samples are (..., n)).
+                out[key] = Q(jnp.concatenate([v, m], axis=-1), unit)
+            return out
+
+        return Samples(
+            nonlinear=mirrored(self.nonlinear),
+            linear=mirrored(self.linear),
+            model_type=self.model_type,
+            metadata=self.metadata,
+            linear_extension_names=self.linear_extension_names,
+        )
+
     def thiele_innes_to_campbell(self) -> "Samples":
         """Convert Thiele-Innes linear parameters to Campbell orbital elements.
 

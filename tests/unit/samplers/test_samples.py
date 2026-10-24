@@ -810,6 +810,103 @@ def _make_ti_samples(n: int = 4) -> Samples:
     )
 
 
+class TestSamplesAstrometricMirror:
+    """Tests for Samples.with_astrometric_mirror."""
+
+    def test_appends_mirrors_with_shifted_angles_and_negated_K(self):
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -8.0, 5.0], a_values=[2.0, 1.5, -1.0]
+        )
+        both = samples.with_astrometric_mirror()
+        assert both.n_samples == 6
+        assert both.ln_likelihood is None
+        for name in ("arg_peri", "lon_asc_node"):
+            old = samples[name].value
+            new = both[name].value
+            assert jnp.allclose(new[:3], old)
+            assert jnp.allclose(new[3:], jnp.mod(old + jnp.pi, 2 * jnp.pi))
+        assert jnp.allclose(both["rv_semiamp"].value[3:], -samples["rv_semiamp"].value)
+        assert jnp.allclose(
+            both["semi_major_axis"].value[3:], samples["semi_major_axis"].value
+        )
+
+    def test_mirror_of_mirror_is_the_original(self):
+        samples = _make_joint_samples_with_signs(
+            K_values=[10.0, -8.0], a_values=[2.0, 1.5]
+        )
+        twice = samples.with_astrometric_mirror().with_astrometric_mirror()
+        for name in ("arg_peri", "lon_asc_node"):
+            assert jnp.allclose(twice[name].value[6:], samples[name].value)
+        assert jnp.allclose(twice["rv_semiamp"].value[6:], samples["rv_semiamp"].value)
+
+    def test_mirror_leaves_astrometric_orbit_and_rv_curve_unchanged(self):
+        """The mirror is an exact symmetry of the untied model."""
+        samples = _make_joint_samples_with_signs(K_values=[10.0], a_values=[2.0])
+        both = samples.with_astrometric_mirror()
+        times = Q(jnp.linspace(0.0, 600.0, 25), "day")
+
+        def predict(i):
+            orbit = {
+                "period": both["period"][i],
+                "eccentricity": both["eccentricity"].value[i],
+                "time_peri": both["phase_peri"].value[i] * both["period"][i],
+                "arg_peri": both["arg_peri"][i],
+            }
+            sky = astrometric_orbit_at_times(
+                times,
+                **orbit,
+                cos_i=both["cos_i"].value[i],
+                lon_asc_node=both["lon_asc_node"][i],
+                semi_major_axis=both["semi_major_axis"][i],
+            )
+            rv = rv_at_times(
+                times,
+                **orbit,
+                rv_semiamp=both["rv_semiamp"][i],
+                v_sys=Q(0.0, "km/s"),
+            )
+            return [ustrip("mas", sky[0]), ustrip("mas", sky[1]), ustrip("km/s", rv)]
+
+        for original, mirrored in zip(predict(0), predict(1), strict=True):
+            assert jnp.allclose(original, mirrored, atol=1e-10)
+
+    def test_mirror_respects_angle_units(self):
+        samples = _make_joint_samples_with_signs(K_values=[10.0], a_values=[2.0])
+        in_deg = Samples(
+            nonlinear={
+                **samples.nonlinear,
+                "arg_peri": Q([30.0], "deg"),
+                "lon_asc_node": Q([200.0], "deg"),
+            },
+            linear=samples.linear,
+            model_type=samples.model_type,
+        )
+        both = in_deg.with_astrometric_mirror()
+        assert jnp.allclose(both["arg_peri"].to("deg").value, jnp.array([30.0, 210.0]))
+        assert jnp.allclose(
+            both["lon_asc_node"].to("deg").value, jnp.array([200.0, 20.0])
+        )
+
+    def test_mirror_appends_along_the_sample_axis_of_batched_samples(self):
+        batched, _ = pad_and_stack_samples(
+            [
+                _make_joint_samples_with_signs(
+                    K_values=[10.0, 9.0], a_values=[2.0, 1.0]
+                ),
+                _make_joint_samples_with_signs(
+                    K_values=[5.0, 4.0], a_values=[1.0, 3.0]
+                ),
+            ]
+        )
+        both = batched.with_astrometric_mirror()
+        assert both["arg_peri"].shape == (2, 4)
+        assert both.n_samples == 4
+
+    def test_rv_only_samples_have_no_astrometric_mirror(self):
+        with pytest.raises(ValueError, match="lon_asc_node"):
+            _make_rv_samples_with_signs([10.0]).with_astrometric_mirror()
+
+
 class TestThieleInnesToCampbell:
     def test_noop_when_no_ti_params(self):
         s = _make_astro_samples()

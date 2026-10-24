@@ -17,11 +17,17 @@ from unxt import Q, ustrip
 from harv import GaiaAstrometryData, GaiaAstrometryModel, JointModel, RVData, RVModel
 from harv.data import SourceData
 from harv.distributions import QD
-from harv.models import EcoswEsinwRV, HarvPrior, rv_semiamp_per_semi_major_axis, tied
+from harv.models import (
+    EcoswEsinwRV,
+    HarvPrior,
+    Jitter,
+    rv_semiamp_per_semi_major_axis,
+    tied,
+)
 from harv.models._helpers import LinearRole, classify_linear_prior, pinned_linear_names
 from harv.models.parameterizations import ThieleInnesGaiaAstrometry
 from harv.models.ties import TiedPrior
-from harv.samplers import RejectionSampler
+from harv.samplers import NumpyroSampler, RejectionSampler, Samples
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior,
     explicit_linear_names,
@@ -424,6 +430,40 @@ def test_joint_path_applies_parameterization_prior_correction():
     assert abs(float(got - marg_dist.log_prob(y))) > 1e-6  # the correction is there
 
 
+def test_component_fit_warm_starts_joint_extension_sites():
+    """An astrometry-only fit's ``jitter`` initializes ``astro.jitter``."""
+    joint = JointModel.for_rv_and_gaia(
+        components={
+            "rv": RVModel(extensions=(Jitter(obs_unit="km/s"),)),
+            "astro": GaiaAstrometryModel(extensions=(Jitter(obs_unit="mas"),)),
+        }
+    )
+    prior = HarvPrior(
+        nonlinear_priors={"period": QD(ndist.Normal(300.0, 5.0), "day")},
+        linear_priors=_linear_priors(),
+        extension_priors={
+            "rv.jitter": QD(ndist.HalfNormal(1.0), "km/s"),
+            "astro.jitter": QD(ndist.HalfNormal(0.1), "mas"),
+        },
+    )
+    astro_fit = Samples(
+        nonlinear={"period": Q([300.0], "day"), "jitter": Q([0.02], "mas")},
+        linear={"parallax": Q([PARALLAX], "mas")},
+        model_type="GaiaAstrometryModel",
+    )
+    init = NumpyroSampler(prior, joint)._build_init_params(
+        joint,
+        astro_fit,
+        effective_linear_prior=None,
+        effective_marginalized_names=None,
+        marginalized=True,
+        num_chains=1,
+    )
+    assert float(init["astro.jitter"]) == pytest.approx(0.02)
+    assert "jitter" not in init
+    assert "rv.jitter" not in init
+
+
 def test_no_default_tie_without_a_shared_orbit():
     model = JointModel.for_rv_and_gaia(
         components={"rv": RVModel(), "astro": GaiaAstrometryModel()},
@@ -460,3 +500,30 @@ def test_scale_accepts_integer_cos_i():
         "parallax": Q(1.0, "mas"),
     }
     assert float(rv_semiamp_per_semi_major_axis(params).to("km/(s mas)").value) > 29
+
+
+def test_component_fit_warm_starts_qualified_base_sites():
+    """A joint prior keyed "astro.cos_i" receives the astrometry fit's cos_i."""
+    joint = _model()
+    prior = HarvPrior(
+        nonlinear_priors={
+            "period": QD(ndist.Normal(300.0, 5.0), "day"),
+            "astro.cos_i": ndist.Uniform(-1.0, 1.0),
+        },
+        linear_priors=_linear_priors(),
+    )
+    astro_fit = Samples(
+        nonlinear={"period": Q([300.0], "day"), "cos_i": Q([0.4], "")},
+        linear={},
+        model_type="GaiaAstrometryModel",
+    )
+    init = NumpyroSampler(prior, joint)._build_init_params(
+        joint,
+        astro_fit,
+        effective_linear_prior=None,
+        effective_marginalized_names=None,
+        marginalized=True,
+        num_chains=1,
+    )
+    assert float(init["astro.cos_i"]) == pytest.approx(0.4)
+    assert "cos_i" not in init

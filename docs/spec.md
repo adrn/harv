@@ -1475,9 +1475,19 @@ So `K` is tied unless `"<rv>.rv_semiamp"` is given a prior, which fits `K` freel
 lets the RVs break the astrometric `(ω + π, Ω + π)` degeneracy.
 
 Warm starts: an astrometry-only posterior contains the orbit and its
-`(ω + π, Ω + π)` mirror equally, but under the tie only one of them fits the RVs. When
-initializing a tied fit from astrometry-only samples, evaluate both (wrapping the
-shifted angles into the prior's range) and start from the better one.
+`(ω + π, Ω + π)` mirror equally, but under the tie only one of them fits the RVs. To
+initialize a tied fit from astrometry-only samples, optimize both and start from the
+better one:
+
+```python
+candidates = astrom_samples.map_sample().with_astrometric_mirror()
+joint_init = joint_sampler.optimize(candidates, joint_data, key=key)
+joint_mcmc = joint_sampler.run(joint_data, init_samples=joint_init.map_sample(), ...)
+```
+
+`optimize` initializes sites the astrometry fit lacks (e.g. `rv.jitter`) with
+numpyro's default strategy, and component-specific names are mapped onto the joint
+model's (§MCMC sampling).
 
 **Future: luminous companions.** With a luminous companion the photocenter orbit is
 `a = a₁ ϖ (1 − β / B)` (`β` the companion's fractional flux, `B = q / (1 + q)`), so
@@ -2298,6 +2308,15 @@ mcmc_samples = mcmc_sampler.run(
 )
 ```
 
+Warm-start samples may come from a fit of one component of a `JointModel` (e.g. the
+astrometry alone). When `samples.model_type` names the class of exactly one
+component, that component's own nonlinear names are moved onto whichever joint site
+exists, bare or component-qualified (`jitter` -> `astrom.jitter`, and `cos_i` ->
+`astrom.cos_i` when the joint prior is keyed that way), as explicit linear parameters
+already are (`parallax` -> `astrom.parallax`). Shared orbital names need no mapping. `run` needs a
+value for every sampled site; `optimize` falls back to numpyro's default
+initialization for missing ones.
+
 Both sampler classes own marginalization policy. Set
 `marginalized_names=(...)` on `RejectionSampler` or `NumpyroSampler` to request
 an explicit subset of linear parameters to marginalize. Names whose priors the
@@ -2512,6 +2531,18 @@ the first entry.
   positive — it is a no-op. It cannot repair a genuine same-sign sample, since it
   flips both semi-amplitudes at once; only the sign prior excludes that region.
   See §Signed semi-amplitudes.
+- `with_astrometric_mirror() -> Samples` — return `2 * n_samples` samples: these
+  samples followed by copies with `arg_peri` and `lon_asc_node` both shifted by `pi`
+  (wrapped to `[0, 2*pi)`) and any `rv_semiamp` negated. Astrometry alone cannot tell
+  an orbit from this mirror (the Thiele-Innes constants are unchanged), and with
+  `rv_semiamp` negated it is an exact symmetry of every untied model; a tied
+  RV + astrometry model (§Tied linear parameters) is what tells them apart.
+  `wrap_angles` cannot: without `rv_semiamp` both mirrors already satisfy `a >= 0`,
+  and with it, applying `wrap_angles` to the mirrors maps them back onto the
+  originals (so do not wrap candidates before evaluating them). `ln_likelihood` /
+  `ln_prior` are dropped. Angles may be stored in any angular unit; samples are
+  appended along the last (sample) axis, so batched `Samples` work. `ValueError`
+  unless there is exactly one `arg_peri` and one `lon_asc_node`.
 - `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
   parameter values between supported single-component RV or Gaia parameterizations.
   Extra non-base parameters are preserved unchanged; unsupported families or

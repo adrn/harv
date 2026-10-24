@@ -675,6 +675,30 @@ class NumpyroSampler(AbstractSampler):
                 for key_name, qty in samples.nonlinear.items()
             }
 
+        # A fit of one component (e.g. the astrometry alone) warm-starts a joint
+        # model: its own nonlinear names move onto whichever joint site exists,
+        # bare or component-qualified ("jitter" -> "astrom.jitter", and
+        # "cos_i" -> "astrom.cos_i" when the joint prior is keyed that way).
+        if isinstance(_model, JointModel):
+            sources = [
+                name
+                for name, comp in _model.components.items()
+                if type(comp).__name__ == samples.model_type
+            ]
+            if len(sources) == 1:
+                source = sources[0]
+                sites = set(self.prior.nonlinear_priors) | {
+                    f"{comp_name}.{p.name}"
+                    for comp_name, comp in _model.components.items()
+                    for ext in comp.extensions
+                    for p in ext.extra_params()
+                    if not p.linear
+                }
+                for name in _model._per_component_nonlinear_names()[source]:
+                    qualified = f"{source}.{name}"
+                    if name in init_params and name not in sites and qualified in sites:
+                        init_params[qualified] = init_params.pop(name)
+
         # Include init values for explicit (non-marginalized) linear params.
         # For both the marginalized and non-marginalized cases, any linear param
         # not marginalized away must be included in init_params, because the

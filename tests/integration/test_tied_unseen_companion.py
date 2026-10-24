@@ -113,21 +113,23 @@ def test_tied_fit_recovers_injected_orbit(data):
         components={"rv": RVModel(), "astro": GaiaAstrometryModel()}
     )
     assert "tied to astro.semi_major_axis" in RejectionSampler(prior, joint).summary()
-    init = RejectionSampler(prior, joint).run(
-        data, key=jax.random.key(0), n_prior_samples=200_000, top_k=32
+
+    # Warm start (spec §Tied linear parameters): fit the astrometry alone, then
+    # let the joint model choose between that orbit and its astrometric mirror.
+    astro_fit = RejectionSampler(astro_prior, GaiaAstrometryModel()).run(
+        data["astro"], key=jax.random.key(0), n_prior_samples=200_000, top_k=32
     )
-    posterior = (
-        NumpyroSampler(prior, joint)
-        .run(
-            data,
-            key=jax.random.key(1),
-            init_samples=init,
-            num_warmup=300,
-            num_samples=300,
-            num_chains=1,
-        )
-        .wrap_angles()
-    )
+    joint_sampler = NumpyroSampler(prior, joint)
+    candidates = astro_fit.map_sample().with_astrometric_mirror()
+    joint_init = joint_sampler.optimize(candidates, data, key=jax.random.key(1))
+    posterior = joint_sampler.run(
+        data,
+        key=jax.random.key(2),
+        init_samples=joint_init.map_sample(),
+        num_warmup=300,
+        num_samples=300,
+        num_chains=1,
+    ).wrap_angles()
 
     def median(name: str) -> float:
         return float(np.median(np.asarray(posterior[name].value)))
