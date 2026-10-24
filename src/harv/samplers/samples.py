@@ -1608,7 +1608,7 @@ class Samples(eqx.Module):
 
         For RV samples the mass function is
         :func:`~harv.kepler.masses.binary_mass_function`; ``sin_i`` defaults to 1
-        (the *minimum* companion mass).  For astrometry samples the dark-companion
+        (the *minimum* companion mass).  For astrometry samples the unseen-companion
         astrometric mass function is used and ``sin_i`` is ignored (the inclination
         is already encoded in the physical orbit size).
 

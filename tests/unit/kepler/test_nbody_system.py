@@ -7,6 +7,8 @@ from unxt import Q, ustrip
 
 from harv.kepler.body import KeplerianBody
 from harv.kepler.nbody_system import TwoBodySystem
+from harv.kepler.orbits import astrometric_orbit_at_times, rv_at_times
+from harv.kepler.orientation import KeplerianOrientation
 
 # =============================================================================
 # Helpers
@@ -111,6 +113,72 @@ class TestPhysics:
         sys = _make_system()
         with pytest.raises(IndexError, match="body_idx"):
             sys.velocity_barycentric(Q(0.0, "yr"), 2)
+
+
+# =============================================================================
+# Sky-frame convention
+# =============================================================================
+
+
+class TestSkyFrameConvention:
+    """Spec §KeplerianOrientation: x = North, y = East, z = away from the observer.
+
+    The primary's barycentric orbit must match the models' along-scan orbit
+    (Thiele-Innes, Gaia LPC convention) and RV curve with the same angles and a
+    positive semi-amplitude ``K = 2 pi a sin(i) / (P sqrt(1 - e^2))``.
+    """
+
+    def test_primary_matches_astrometric_and_rv_models(self) -> None:
+        period, ecc, time_peri = Q(300.0, "day"), 0.4, Q(37.0, "day")
+        arg_peri, lon_asc_node, inc = Q(1.1, "rad"), Q(2.3, "rad"), Q(0.7, "rad")
+        companion = KeplerianBody(
+            period=period,
+            eccentricity=ecc,
+            semi_major_axis=Q(2.0, "AU"),
+            time_peri=time_peri,
+            orientation=KeplerianOrientation.from_angles(
+                arg_peri=arg_peri, lon_asc_node=lon_asc_node, inclination=inc
+            ),
+        )
+        system = TwoBodySystem(m_primary=Q(1.0, "Msun"), companion=companion)
+        times = Q(jnp.linspace(0.0, 600.0, 41), "day")
+
+        # The primary's orbit is the companion's, scaled, with omega + pi.
+        a_primary = ustrip("AU", system.m_companion / system.m_primary * Q(2.0, "AU"))
+        arg_peri_primary = arg_peri + Q(jnp.pi, "rad")
+
+        pos = ustrip("AU", system.position_barycentric(times, 0))
+        dra, ddec = astrometric_orbit_at_times(
+            times,
+            period=period,
+            eccentricity=ecc,
+            time_peri=time_peri,
+            arg_peri=arg_peri_primary,
+            cos_i=jnp.cos(ustrip("rad", inc)),
+            lon_asc_node=lon_asc_node,
+            semi_major_axis=Q(a_primary, "mas"),  # 1 AU <-> 1 mas: compare values
+        )
+        assert jnp.allclose(pos[0], ustrip("mas", ddec), atol=1e-12)  # x = North
+        assert jnp.allclose(pos[1], ustrip("mas", dra), atol=1e-12)  # y = East
+
+        rv_semiamp = (
+            2
+            * jnp.pi
+            * Q(a_primary, "AU")
+            * jnp.sin(ustrip("rad", inc))
+            / (period * jnp.sqrt(1 - ecc**2))
+        )
+        rv = rv_at_times(
+            times,
+            period=period,
+            eccentricity=ecc,
+            time_peri=time_peri,
+            arg_peri=arg_peri_primary,
+            rv_semiamp=rv_semiamp.to("km/s"),
+            v_sys=Q(0.0, "km/s"),
+        )
+        vel = ustrip("km/s", system.velocity_barycentric(times, 0))
+        assert jnp.allclose(vel[2], ustrip("km/s", rv), atol=1e-9)  # z = away
 
 
 # =============================================================================

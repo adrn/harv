@@ -561,6 +561,18 @@ the semi-major axis `a`, the orbital contribution to the sky plane is a linear
 combination of `a · (A sin ψ + B cos ψ)` and `a · (F sin ψ + G cos ψ)`. This makes
 `a` a linear parameter that can be analytically marginalized.
 
+**Sky frame.** `rotation_matrix` maps the orbital plane into the classical
+(visual-binary and Gaia DR3) frame: x = North (Δδ), y = East (Δα\*), z = away from
+the observer. This frame is left-handed on the sky; the rotation itself is an
+ordinary one. Consequently the Thiele-Innes constants give
+`Δδ = A X + F Y` and `Δα* = B X + G Y`, the z component of a velocity is the radial
+velocity (positive = receding), and `lon_asc_node` is the node at which the body
+recedes. With these conventions the same `(ω, Ω, i)` describe a star's astrometric
+orbit and its RV curve `K [cos(ω + f) + e cos ω]` with
+`K = 2π a sin i / (P √(1 − e²)) > 0`, where `a` is that star's barycentric
+semi-major axis. `tests/unit/kepler/test_nbody_system.py` pins this against
+`astrometric_orbit_at_times` and `rv_at_times`.
+
 ### `KeplerianBody`
 
 A full Keplerian orbit: `period`, `eccentricity`, `semi_major_axis`, `time_peri`, and an
@@ -584,6 +596,10 @@ positions/velocities for both components via `position_barycentric(time, body_id
 `position_relative(time)`, `velocity_barycentric(time, body_idx)`, and
 `velocity_relative(time)`.
 
+The `KeplerianBody` is the companion's barycentric orbit, so the primary's orbit has
+argument of pericenter `ω + π` (and semi-major axis scaled by `m_companion / m_primary`).
+Positions and velocities are in the sky frame of §`KeplerianOrientation`.
+
 ### Mass functions (`harv.kepler.masses`)
 
 Pure, unit-aware functions that turn posterior orbital elements into physical
@@ -597,7 +613,7 @@ quantities (see "`Samples` container").
 - `astrometric_mass_function(a_physical, period) -> Q["mass"]` —
   `f(m) = 4 pi^2 a^3 / (G P^2)`, returned in `Msun`. With `a` the primary's
   barycentric (photocentre) orbit size this equals `m_2^3 / (m_1 + m_2)^2`
-  (dark/faint-companion assumption).
+  (unseen-companion assumption).
 - `companion_mass_from_mass_function(mass_function, m_primary, sin_i=1.0) -> Q["mass"]`
   — solves `m_2^3 sin^3 i / (m_1 + m_2)^2 = f` for `m_2` by bisection;
   `sin_i=1` yields the minimum companion mass.
@@ -2524,7 +2540,7 @@ These wrap the pure functions in `harv.kepler.masses` (see "Mass functions").
   size and parallax (astrometry samples).
 - `companion_mass(m_primary, *, sin_i=None) -> Q` — companion mass given the primary
   mass `m_primary`. RV samples use the binary mass function (default `sin_i=1`, i.e. the
-  minimum companion mass); astrometry samples use the dark-companion astrometric
+  minimum companion mass); astrometry samples use the unseen-companion astrometric
   mass function and ignore `sin_i`.
 - `minimum_companion_mass(m_primary) -> Q` — convenience for `companion_mass(m_primary, sin_i=1)`.
 
