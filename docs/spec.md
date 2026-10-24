@@ -2126,7 +2126,10 @@ MCMC functionality lives on `NumpyroSampler(prior, model)`. The `run()` method
 takes the data and an optional `Samples` warm-start from `RejectionSampler.run()`,
 builds a numpyro model automatically from the component model's `numpyro_model()`
 method, draws one starting position per chain from the rejection posterior (if
-provided), runs MCMC, and returns a new `Samples` object.
+provided), runs MCMC, and returns a new `Samples` object. Its arrays live on
+a single device even when chains run in parallel across devices (numpyro returns
+those sharded per chain), because every eager use of a sharded array is a
+multi-device dispatch.
 
 ```python
 mcmc_sampler = NumpyroSampler(prior, model)
