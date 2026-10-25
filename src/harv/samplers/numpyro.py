@@ -442,15 +442,14 @@ class NumpyroSampler(AbstractSampler):
             chain_method=chain_method,
         )
         mcmc.run(rng_key, init_params=init_params)
-        # Parallel chains come back sharded across devices. Gather onto one device
-        # (the configured default, else this process's first): every downstream
-        # use of Samples (indexing, plotting, conversions) is a stream of small
-        # eager ops, and each op on a sharded array is a multi-device dispatch --
-        # ~5x slower, e.g. 27 s vs 5 s for plot_rv.
-        device = (
-            getattr(jax.config, "jax_default_device", None) or jax.local_devices()[0]
-        )
-        posterior = jax.device_put(mcmc.get_samples(), device)
+        # Parallel chains come back sharded across devices. Gather onto the default
+        # device: every downstream use of Samples (indexing, plotting, conversions)
+        # is a stream of small eager ops, and each op on a sharded array is a
+        # multi-device dispatch -- ~5x slower, e.g. 27 s vs 5 s for plot_rv.
+        # Round-trip through host so the arrays are uncommitted: jax.device_put
+        # would commit them to that device, and a later parallel run initialized
+        # from these samples would then fail with "incompatible devices".
+        posterior = jax.tree.map(jnp.asarray, jax.device_get(mcmc.get_samples()))
 
         # Convert numpyro posterior dict -> Samples
         return self._posterior_to_samples(

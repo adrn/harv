@@ -2294,7 +2294,8 @@ method, draws one starting position per chain from the rejection posterior (if
 provided), runs MCMC, and returns a new `Samples` object. Its arrays live on
 a single device even when chains run in parallel across devices (numpyro returns
 those sharded per chain), because every eager use of a sharded array is a
-multi-device dispatch.
+multi-device dispatch. They sit uncommitted on the default device, so they can
+seed another parallel run.
 
 ```python
 mcmc_sampler = NumpyroSampler(prior, model)

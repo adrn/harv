@@ -4,7 +4,8 @@ Runs in a subprocess: the number of host CPU devices is fixed when JAX first
 initializes, so a multi-device run cannot be staged inside the test process.
 Parallel chains return arrays sharded across devices, and every eager use of a
 sharded array is a multi-device dispatch (``plot_rv`` was ~5x slower), so
-``NumpyroSampler.run`` gathers the posterior onto one device.
+``NumpyroSampler.run`` gathers the posterior onto one device, uncommitted so it
+can seed another parallel run.
 """
 
 import json
@@ -37,10 +38,16 @@ PROBE = textwrap.dedent("""
     init = harv.RejectionSampler(prior, harv.RVModel()).run(
         data, key=jax.random.key(0), n_prior_samples=2000, top_k=2
     )
-    post = harv.NumpyroSampler(prior, harv.RVModel()).run(
-        data, init_samples=init, key=jax.random.key(1),
+    sampler = harv.NumpyroSampler(prior, harv.RVModel())
+    kw = dict(
         num_chains=2, num_warmup=5, num_samples=5, chain_method="parallel",
         return_logprobs=True,
+    )
+    post = sampler.run(data, init_samples=init, key=jax.random.key(1), **kw)
+    # The gathered posterior must not be committed to one device, or a parallel
+    # run seeded from it fails with "incompatible devices".
+    post = sampler.run(
+        data, init_samples=post.map_sample(), key=jax.random.key(2), **kw
     )
     arrays = [q.value for q in (*post.nonlinear.values(), *post.linear.values())]
     arrays += [post.ln_likelihood, post.ln_prior]
