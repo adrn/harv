@@ -107,6 +107,14 @@ def _priors_equal(a: Any, b: Any) -> bool:
     return bool(eqx.tree_equal(a, b))
 
 
+def _has_prior_correction(comp: Any) -> bool:
+    """True if the component's parameterization overrides the prior correction."""
+    return (
+        type(comp.parameterization).linear_log_prior_correction
+        is not AbstractParameterization.linear_log_prior_correction
+    )
+
+
 @final
 class JointModel(eqx.Module):
     """Composition of component models that share orbital parameters.
@@ -428,7 +436,8 @@ class JointModel(eqx.Module):
             comp_name: tuple(
                 n
                 for n in comp._auto_marginalized_names(per_comp_lp[comp_name])
-                if f"{comp_name}.{n}" not in pinned
+                if (n if n in self.shared_linear_params else f"{comp_name}.{n}")
+                not in pinned
             )
             for comp_name, comp in self.components.items()
         }
@@ -450,8 +459,7 @@ class JointModel(eqx.Module):
         correcting = {
             name: comp.parameterization
             for name, comp in self.components.items()
-            if type(comp.parameterization).linear_log_prior_correction
-            is not AbstractParameterization.linear_log_prior_correction
+            if _has_prior_correction(comp)
         }
         if not correcting:
             return ln_lik
@@ -495,6 +503,13 @@ class JointModel(eqx.Module):
                 )
                 raise ValueError(msg)  # noqa: TRY004 -- a bad value, not a bad type
             target = self._qualified_linear(key, "Tied parameter")
+            if _has_prior_correction(self.components[target[0]]):
+                msg = (
+                    f"Cannot tie {key!r}: {target[0]}'s parameterization applies a "
+                    "linear prior correction (e.g. the Thiele-Innes Jacobian), which "
+                    "assumes its linear parameters are independent."
+                )
+                raise NotImplementedError(msg)
             ties[target] = (prior, self._qualified_linear(prior.source, "Tie source"))
         return ties
 
@@ -1192,8 +1207,11 @@ class JointModel(eqx.Module):
             # into ``comp_nl`` above; surface them in the per-component
             # sub-dicts so consumers see the full per-component linear set.
             for comp_name, explicit_lin in explicit_by_comp.items():
-                if explicit_lin:
-                    out.setdefault(comp_name, {}).update(explicit_lin)
+                for nm, val in explicit_lin.items():
+                    if nm in self.shared_linear_params:
+                        out[nm] = val
+                    else:
+                        out.setdefault(comp_name, {})[nm] = val
 
             for target, (tie, source) in self._ties(linear_priors).items():
                 source_value = (

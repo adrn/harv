@@ -225,15 +225,17 @@ def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
     pinned: set[str] = set()
     for name, entry in prior_dict.items():
         if isinstance(entry, TiedPrior):
-            # A tie's scale reads the *source* component's values, and only
-            # those: no fallback to a bare name, which in a per-component dict
-            # would be the tied parameter's own component.
+            # A tie's scale reads the *source* component's values, shared ones
+            # included. Bare keys are shared only in the flat joint dict (where
+            # the tie's own key is qualified); in a per-component dict a bare
+            # name would be the tied parameter's own component.
             namespace = entry.source.rsplit(".", 1)[0] + "."
-            pinned.update(
-                f"{namespace}{dep}"
-                for dep in entry.requires
-                if f"{namespace}{dep}" in prior_dict
-            )
+            for dep in entry.requires:
+                shared = (dep,) if "." in name else ()
+                for candidate in (f"{namespace}{dep}", *shared):
+                    if candidate in prior_dict:
+                        pinned.add(candidate)
+                        break
             continue
         if not _is_callable_prior(entry):
             continue

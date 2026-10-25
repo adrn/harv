@@ -42,6 +42,9 @@ MARGINALIZED = (
     "astro.pmdec",
     "astro.semi_major_axis",
     "rv.v_sys",
+    # Free K must be marginalized (it is not in _values()); a tied K folds into
+    # its source's column either way.
+    "rv.rv_semiamp",
 )
 FREE_K = QD(ndist.Normal(0.0, 30.0), "km/s")
 
@@ -428,6 +431,72 @@ def test_joint_path_applies_parameterization_prior_correction():
     expected = marg_dist.log_prob(y) + ti.linear_log_prior_correction(astro_map)
     assert jnp.allclose(got, expected, rtol=1e-12)
     assert abs(float(got - marg_dist.log_prob(y))) > 1e-6  # the correction is there
+
+
+def test_rejects_tie_into_a_prior_corrected_component():
+    """The Thiele-Innes Jacobian assumes four independent constants."""
+    ti = ThieleInnesGaiaAstrometry(a_floor=0.01, apply_jacobian_correction=True)
+    model = JointModel(
+        components={"rv": RVModel(), "astro": GaiaAstrometryModel(parameterization=ti)},
+        shared_params=("period", "eccentricity", "phase_peri"),
+    )
+    priors = {
+        **{k: v for k, v in _linear_priors().items() if "semi_major_axis" not in k},
+        **{f"astro.ti_{c}": QD(ndist.Normal(0.0, 2.0), "mas") for c in "BFG"},
+        "astro.ti_A": tied("astro.ti_B", scale=lambda _: Q(0.5, "")),
+        "rv.rv_semiamp": FREE_K,
+    }
+    values = {k: v for k, v in _values().items() if k not in ("lon_asc_node", "cos_i")}
+    marg = (*MARGINALIZED, "astro.ti_A", "astro.ti_B", "astro.ti_F", "astro.ti_G")
+    with pytest.raises(NotImplementedError, match="prior correction"):
+        model.log_prob(values, _data(), linear_priors=priors, marginalized_names=marg)
+
+
+def test_tie_scale_reads_a_shared_linear_parameter():
+    """A tie whose scale reads a shared (bare-keyed) linear parameter pins it."""
+
+    def scale(params):
+        return Q(-2.0 * (1.0 + 0.1 * ustrip("km/s", params["v_sys"])), "")
+
+    scale.requires = ("v_sys",)
+    model = JointModel(
+        components={"primary": RVModel(), "secondary": RVModel()},
+        shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
+        shared_linear_params=("v_sys",),
+    )
+    priors = {
+        "primary.rv_semiamp": FREE_K,
+        "secondary.rv_semiamp": tied("primary.rv_semiamp", scale=scale),
+        "v_sys": QD(ndist.Normal(0.0, 10.0), "km/s"),
+    }
+    assert pinned_linear_names(priors) == {"v_sys"}
+    assert model.marginalized_params(priors) == ("rv_semiamp",)
+
+    rv = _data()["rv"]
+    data = SourceData(primary=rv, secondary=rv)
+    orbit = ("period", "eccentricity", "phase_peri", "arg_peri")
+    values = {**{k: _values()[k] for k in orbit}, "v_sys": jnp.asarray(1.0)}
+    got = jax.jit(lambda v: model.log_prob(v, data, linear_priors=priors))(values)
+    # The scale at v_sys = 1 km/s is -2.2.
+    constant = {
+        **priors,
+        "secondary.rv_semiamp": tied("primary.rv_semiamp", scale=lambda _: Q(-2.2, "")),
+    }
+    expected = model.log_prob(
+        values,
+        data,
+        linear_priors=constant,
+        marginalized_names=("primary.rv_semiamp", "secondary.rv_semiamp"),
+    )
+    assert jnp.allclose(got, expected, rtol=1e-12)
+
+    out = model.sample_conditional_linear(
+        values, data, key=jax.random.key(0), linear_priors=priors, use_mean=True
+    )
+    assert out["v_sys"] == 1.0  # shared explicit values stay at the top level
+    assert jnp.allclose(
+        out["secondary"]["rv_semiamp"], -2.2 * out["primary"]["rv_semiamp"]
+    )
 
 
 def test_component_fit_warm_starts_joint_extension_sites():

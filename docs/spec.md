@@ -1416,7 +1416,8 @@ values as that component's callable priors would: nonlinear values, explicitly
 *sampled* linear values with units (not `Delta`-fixed ones), and derived
 eccentricity. An optional `requires` attribute
 names what it reads. Linear parameters named in `requires` are pinned to explicit
-sampling, resolved in the source component's namespace.
+sampling, resolved in the source component's namespace and then among the shared
+linear parameters (bare keys, e.g. an SB2's `v_sys`).
 
 Because `scale` is known given the sampled values, the tied parameter adds no
 dimension to the marginalized Gaussian: its design column, multiplied by `scale`, is
@@ -1440,6 +1441,9 @@ Rules:
   mean, as the per-component path does. It also forms one dense covariance over all
   rows whenever any component's covariance is 2-D (e.g. a GP on the RVs), which is
   much more expensive than the per-component path for large astrometric data sets;
+- a tied parameter's component must not apply such a correction
+  (`NotImplementedError`): the Thiele-Innes Jacobian, for one, assumes its four
+  constants are independent;
 - a linear parameter that a tie's `scale` reads from another component (e.g.
   `astro.parallax`) is pinned at the joint level, so `explicit_params` and
   `marginalized_params` report it as explicit.
