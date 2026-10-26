@@ -1,0 +1,4 @@
+/* Notebook images carry width/height attrs; keep aspect ratio when max-width shrinks them. */
+img {
+  height: auto;
+}
