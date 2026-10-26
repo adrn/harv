@@ -7,6 +7,7 @@ End-to-end analyses of real systems with harv.
 
 population-binary-fraction
 kepler-periodogram
+Gaia-4
 <!-- HD285968
 gaia-bh3 -->
 ::::
