@@ -22,6 +22,7 @@ from harv.models.parameterizations import (
 from harv.models.extensions import GP, Jitter, MultiSurveyOffset, MonomialTrend
 from harv.models.rv import RVModel
 from harv.models.priors import HarvPrior, default_sb2_prior
+from harv.models.ties import rv_semiamp_per_semi_major_axis, tied
 
 __all__ = (
     "AbstractComponentModel",
@@ -41,4 +42,6 @@ __all__ = (
     "StandardRV",
     "default_sb2_prior",
     "parameterizations",
+    "rv_semiamp_per_semi_major_axis",
+    "tied",
 )

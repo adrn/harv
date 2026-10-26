@@ -27,6 +27,7 @@ from harv.models._helpers import (
 from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
+from harv.models.ties import TiedPrior
 from harv.samplers._prior_resolution import (
     effective_linear_prior_from_prior as _effective_linear_prior_from_prior,
 )
@@ -371,6 +372,7 @@ class RejectionSampler(AbstractSampler):
         pinned = pinned_linear_names(dict(eff_linear))
         linear_rows: list[tuple[str, ...]] = []
         n_marginalized = 0
+        n_tied = 0
         # Each row renders the parameter's role (see `classify_linear_prior`),
         # which owns the precedence between these cases, plus the one thing the
         # role cannot know: whether the *user* excluded a marginalizable name
@@ -383,7 +385,10 @@ class RejectionSampler(AbstractSampler):
         }
         for name, d in eff_linear.items():
             dist_name, unit = _describe_prior(d)
-            if name not in explicit:
+            if isinstance(d, TiedPrior):
+                status = f"tied to {d.source}"
+                n_tied += 1
+            elif name not in explicit:
                 status = "marginalized"
                 n_marginalized += 1
             else:
@@ -392,15 +397,16 @@ class RejectionSampler(AbstractSampler):
                 ]
             linear_rows.append((name, status, dist_name, unit))
 
-        # Sampled = all nonlinear params + the linear params not marginalized.
-        n_sampled = len(nonlinear_rows) + (len(linear_rows) - n_marginalized)
+        # Sampled = all nonlinear params + the linear params neither marginalized
+        # nor tied (a tied parameter is derived from its source).
+        n_sampled = len(nonlinear_rows) + len(linear_rows) - n_marginalized - n_tied
 
         bar = "=" * 60
         lines: list[str] = [bar, type(self).__name__, bar]
         lines.extend(self._summary_header_lines())
         lines.append(
             f"{'parameters'.ljust(16)} {n_sampled} sampled, "
-            f"{n_marginalized} marginalized"
+            f"{n_marginalized} marginalized" + (f", {n_tied} tied" if n_tied else "")
         )
 
         lines.append("")

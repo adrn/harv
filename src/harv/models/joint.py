@@ -19,23 +19,35 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from unxt import Q
+from unxt import Q, unit
+from unxt.quantity import AllowValue, ustrip
 
 from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
+    LinearRole,
     PriorDist,
     _is_callable_prior,
     _needs_explicit_sampling,
     _sample_explicit_linear_prior,
+    _with_derived_eccentricity,
+    classify_linear_prior,
     pinned_linear_names,
 )
+from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.component import (
     AbstractComponentModel,
     _MargBuildingBlocks,
     _sample_nonlinear_params,
 )
 from harv.models.extensions.base import ParamInfo
+from harv.models.parameterizations import (
+    StandardGaiaAstrometry,
+    StandardRV,
+    ThieleInnesGaiaAstrometry,
+)
+from harv.models.rv import RVModel
+from harv.models.ties import TiedPrior, rv_semiamp_per_semi_major_axis, tied
 from harv.stats import MarginalizedLinear
 from harv.stats.marginalized import (
     GeneralizedMarginalizedLinear,
@@ -114,12 +126,19 @@ class JointModel(eqx.Module):
     shared_params
         Names of orbital parameters shared across all components (e.g.
         ``("period", "eccentricity", "phase_peri", "arg_peri")``).
+    shared_linear_params
+        Linear parameter names shared (with one prior) across all components.
+    default_linear_priors
+        Model-supplied linear priors, merged under the user's ``linear_priors``
+        (the user's entries win).  :meth:`for_rv_and_gaia` uses it to tie the RV
+        semi-amplitude to the astrometric orbit by default.
 
     """
 
     components: dict[str, AbstractComponentModel]
     shared_params: tuple[str, ...]
     shared_linear_params: tuple[str, ...] = ()
+    default_linear_priors: dict[str, Any] = eqx.field(default_factory=dict)
 
     @classmethod
     def for_rv_and_gaia(
@@ -131,8 +150,13 @@ class JointModel(eqx.Module):
     ) -> "JointModel":
         """Build a JointModel for combined RV + Gaia astrometry.
 
-        TODO: if we want to support more complex shared parameters, look at for_sb2 to
-        see what we can generalize
+        Both components must use the standard parameterizations (``StandardRV``,
+        ``StandardGaiaAstrometry``) so that they share one orbit.  With one RV and
+        one astrometry component, the RV semi-amplitude is tied to the
+        astrometric orbit by default, assuming an unseen companion:
+        ``"<rv>.rv_semiamp": tied("<astrom>.semi_major_axis",
+        scale=rv_semiamp_per_semi_major_axis)``.  Giving ``"<rv>.rv_semiamp"`` a
+        prior of its own fits ``K`` freely instead (spec §Tied linear parameters).
 
         Parameters
         ----------
@@ -149,15 +173,61 @@ class JointModel(eqx.Module):
         Returns
         -------
             The constructed JointModel.
+
+        Raises
+        ------
+        TypeError
+            If a component is not an ``RVModel`` with ``StandardRV`` or a
+            ``GaiaAstrometryModel`` with ``StandardGaiaAstrometry``.
         """
+        rv_names, astrom_names = [], []
+        for name, comp in components.items():
+            if isinstance(comp, RVModel) and isinstance(
+                comp.parameterization, StandardRV
+            ):
+                rv_names.append(name)
+            elif isinstance(comp, GaiaAstrometryModel) and isinstance(
+                comp.parameterization, StandardGaiaAstrometry
+            ):
+                astrom_names.append(name)
+            else:
+                msg = (
+                    "for_rv_and_gaia needs RVModel(StandardRV) and "
+                    "GaiaAstrometryModel(StandardGaiaAstrometry) components so that "
+                    f"they share one orbit; {name!r} is "
+                    f"{type(comp).__name__}({type(comp.parameterization).__name__})."
+                )
+                if isinstance(comp.parameterization, ThieleInnesGaiaAstrometry):
+                    msg += (
+                        " To start from a Thiele-Innes fit, convert its samples "
+                        "with Samples.thiele_innes_to_campbell() first."
+                    )
+                raise TypeError(msg)
+
+        orbit = ("period", "eccentricity", "phase_peri", "arg_peri")
         if shared_params is None:
-            shared_params = ("period", "eccentricity", "phase_peri", "arg_peri")
+            shared_params = orbit
+
+        # The unseen-companion tie needs one shared orbit (spec §Tied linear
+        # parameters), so it is only a default when the orbit is shared.
+        default_linear_priors: dict[str, Any] = {}
+        if (
+            len(rv_names) == 1
+            and len(astrom_names) == 1
+            and set(orbit) <= set(shared_params)
+        ):
+            default_linear_priors[f"{rv_names[0]}.rv_semiamp"] = tied(
+                f"{astrom_names[0]}.semi_major_axis",
+                scale=rv_semiamp_per_semi_major_axis,
+            )
+
         if shared_linear_params is None:
             shared_linear_params = ()
         return cls(
             components=components,
             shared_params=shared_params,
             shared_linear_params=shared_linear_params,
+            default_linear_priors=default_linear_priors,
         )
 
     @classmethod
@@ -222,9 +292,6 @@ class JointModel(eqx.Module):
         >>> joint.shared_linear_params
         ('v_sys',)
         """
-        # Import here to avoid circular import at module load time.
-        from harv.models.rv import RVModel  # noqa: PLC0415
-
         if len(component_names) != 2:
             raise ValueError(
                 f"SB2 expects exactly 2 component names, got {len(component_names)}."
@@ -339,6 +406,153 @@ class JointModel(eqx.Module):
         """Names of parameters shared across all components."""
         return frozenset(self.shared_params)
 
+    def _merged_linear_priors(
+        self, linear_priors: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """The user's linear priors on top of :attr:`default_linear_priors`."""
+        if linear_priors is None or not self.default_linear_priors:
+            return linear_priors
+        return {**self.default_linear_priors, **linear_priors}
+
+    def _auto_marginalized_by_component(
+        self, linear_priors: dict[str, Any] | None
+    ) -> dict[str, tuple[str, ...]]:
+        """Each component's auto-marginalized linear names, with joint-level pinning.
+
+        A tie's scale may read another component's linear parameter (e.g. the RV
+        tie reads ``astro.parallax``), which per-component classification cannot
+        see, so the pin is applied here from the flat prior dict.
+        """
+        if linear_priors is None:
+            return {
+                name: comp._auto_marginalized_names(None)
+                for name, comp in self.components.items()
+            }
+        per_comp_lp = self._per_component_linear_prior(linear_priors)
+        pinned = pinned_linear_names(linear_priors)
+        return {
+            comp_name: tuple(
+                n
+                for n in comp._auto_marginalized_names(per_comp_lp[comp_name])
+                if (n if n in self.shared_linear_params else f"{comp_name}.{n}")
+                not in pinned
+            )
+            for comp_name, comp in self.components.items()
+        }
+
+    def _joint_log_prob(
+        self,
+        marg_dist: MarginalizedLinear | GeneralizedMarginalizedLinear,
+        y_joint: jax.Array,
+        global_cols: list[tuple[str, str | None]],
+    ) -> jax.Array:
+        """Joint marginal log-likelihood plus each component's prior correction.
+
+        Mirrors the per-component path, which adds
+        ``parameterization.linear_log_prior_correction`` at the conditional-mean
+        linear values (e.g. the Thiele-Innes Jacobian).  The conditional mean is
+        only solved for when some component's parameterization overrides it.
+        """
+        ln_lik = marg_dist.log_prob(y_joint)
+        correcting = {
+            name: comp.parameterization
+            for name, comp in self.components.items()
+            if comp.parameterization.applies_linear_prior_correction
+        }
+        if not correcting:
+            return ln_lik
+        cond_mean = marg_dist.conditional(y_joint).mean
+        for comp_name, parameterization in correcting.items():
+            linear_map = {
+                nm: cond_mean[j]
+                for j, (nm, owner) in enumerate(global_cols)
+                if owner in (comp_name, None)
+            }
+            correction = parameterization.linear_log_prior_correction(linear_map)
+            if correction is not None:
+                ln_lik = ln_lik + correction
+        return ln_lik
+
+    def _qualified_linear(self, key: str, role: str) -> tuple[str, str]:
+        """Split ``"comp.param"`` into a known (component, linear param) pair."""
+        comp_name, _, param = key.partition(".")
+        comp = self.components.get(comp_name)
+        if not param or comp is None or param not in comp._all_linear_names():
+            msg = (
+                f"{role} {key!r} must be a component-qualified linear parameter "
+                f"(components: {self.component_names})."
+            )
+            raise ValueError(msg)
+        return comp_name, param
+
+    def _ties(
+        self, linear_priors: dict[str, Any] | None
+    ) -> dict[tuple[str, str], tuple[TiedPrior, tuple[str, str]]]:
+        """``{(comp, param): (tie, (source comp, source param))}`` for tied priors."""
+        ties: dict[tuple[str, str], tuple[TiedPrior, tuple[str, str]]] = {}
+        for key, prior in (linear_priors or {}).items():
+            if not isinstance(prior, TiedPrior):
+                continue
+            if isinstance((linear_priors or {}).get(prior.source), TiedPrior):
+                msg = (
+                    f"{key!r} is tied to {prior.source!r}, which is itself tied "
+                    "(possibly by the model's default_linear_priors); give "
+                    f"{prior.source!r} a prior of its own to untie it."
+                )
+                raise ValueError(msg)  # noqa: TRY004 -- a bad value, not a bad type
+            target = self._qualified_linear(key, "Tied parameter")
+            if target[1] in self.shared_linear_params:
+                msg = (
+                    f"Cannot tie {key!r}: {target[1]!r} is a shared linear "
+                    "parameter, and a tie would unshare it for one component."
+                )
+                raise ValueError(msg)
+            target_param = self.components[target[0]].parameterization
+            if target_param.applies_linear_prior_correction:
+                msg = (
+                    f"Cannot tie {key!r}: {target[0]}'s parameterization applies a "
+                    "linear prior correction (e.g. the Thiele-Innes Jacobian), which "
+                    "assumes its linear parameters are independent."
+                )
+                raise NotImplementedError(msg)
+            ties[target] = (prior, self._qualified_linear(prior.source, "Tie source"))
+        return ties
+
+    def _tie_scale(
+        self,
+        tie: TiedPrior,
+        target: tuple[str, str],
+        source: tuple[str, str],
+        comp_nl: dict[str, dict[str, Any]],
+        data: AbstractDatasetContainer,
+    ) -> jax.Array:
+        """``scale`` of a tie, in the target's unit per the source's unit.
+
+        ``scale`` sees the source component's values as its callable priors do:
+        nonlinear values, explicit linear values with units, derived eccentricity.
+        """
+        source_comp = self.components[source[0]]
+        units = source_comp._linear_param_units(data[source[0]])
+        values = dict(comp_nl[source[0]])
+        for name in source_comp._all_linear_names():
+            if name in values and units.get(name):
+                values[name] = Q(
+                    ustrip(AllowValue, units[name], values[name]), units[name]
+                )
+        values = _with_derived_eccentricity(values, source_comp.parameterization)
+        missing = [name for name in tie.requires if name not in values]
+        if missing:
+            msg = (
+                f"The tie on {target[0]}.{target[1]} reads {missing}, which "
+                f"{source[0]} does not provide; linear parameters it reads must be "
+                "sampled explicitly, not marginalized."
+            )
+            raise ValueError(msg)
+        target_unit = self.components[target[0]]._linear_param_units(data[target[0]])[
+            target[1]
+        ]
+        return ustrip(unit(target_unit) / unit(units[source[1]]), tie.scale(values))
+
     def _base_nonlinear_names(self) -> frozenset[str]:
         """Base (non-extension) nonlinear parameter names across all components."""
         names: set[str] = set()
@@ -397,11 +611,8 @@ class JointModel(eqx.Module):
             non-shared params).  ``None`` means treat all linear params as
             marginalizable.
         """
-        per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_priors)
-            if linear_priors is not None
-            else dict.fromkeys(self.component_names)
-        )
+        linear_priors = self._merged_linear_priors(linear_priors)
+        auto_marg = self._auto_marginalized_by_component(linear_priors)
         shared = self._shared_param_names()
         per_comp = self._per_component_nonlinear_names()
 
@@ -420,8 +631,7 @@ class JointModel(eqx.Module):
         seen: set[str] = set()
         explicit_lin: list[str] = []
         for comp_name, comp in self.components.items():
-            comp_lp = per_comp_lp[comp_name]
-            marg = set(comp._auto_marginalized_names(comp_lp))
+            marg = set(auto_marg[comp_name])
             for name in comp._all_linear_names():
                 if name not in marg and name not in seen:
                     explicit_lin.append(name)
@@ -442,15 +652,11 @@ class JointModel(eqx.Module):
             The merged linear-prior dict.  ``None`` means treat all linear params
             as marginalizable.
         """
-        per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_priors)
-            if linear_priors is not None
-            else dict.fromkeys(self.component_names)
-        )
+        linear_priors = self._merged_linear_priors(linear_priors)
         seen: set[str] = set()
         names: list[str] = []
-        for comp_name, comp in self.components.items():
-            for name in comp._auto_marginalized_names(per_comp_lp[comp_name]):
+        for comp_names in self._auto_marginalized_by_component(linear_priors).values():
+            for name in comp_names:
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
@@ -486,7 +692,7 @@ class JointModel(eqx.Module):
         nonlinear_values: dict[str, Any],
         comp_nl: dict[str, dict[str, Any]],
         per_comp_lp: dict[str, dict[str, Any] | None],
-        marginalized_names: dict[str, tuple[str, ...]] | None = None,
+        marginalized_names: dict[str, tuple[str, ...]],
     ) -> None:
         """Copy explicit-linear values from *nonlinear_values* to per-component dicts.
 
@@ -497,14 +703,9 @@ class JointModel(eqx.Module):
         for comp_name, comp in self.components.items():
             comp_lp = per_comp_lp[comp_name]
             if comp_lp:
-                if marginalized_names is None:
-                    explicit_name_set = set(comp._all_linear_names()) - set(
-                        comp._auto_marginalized_names(comp_lp)
-                    )
-                else:
-                    explicit_name_set = set(comp._all_linear_names()) - set(
-                        marginalized_names.get(comp_name, ())
-                    )
+                explicit_name_set = set(comp._all_linear_names()) - set(
+                    marginalized_names.get(comp_name, ())
+                )
                 for name in comp._all_linear_names():
                     if name in explicit_name_set:
                         qualified = f"{comp_name}.{name}"
@@ -586,24 +787,39 @@ class JointModel(eqx.Module):
             which case the joint marginalization path must be used.  ``False``
             means the existing per-component summation gives the correct answer.
         """
-        per_comp_lp: dict[str, dict[str, Any] | None] = (
-            self._per_component_linear_prior(linear_priors)
-            if linear_priors is not None
-            else dict.fromkeys(self.component_names)
-        )
         per_comp_marg = self._resolve_component_marginalized_names(marginalized_names)
         if per_comp_marg is None:
             # Default: each component marginalizes its auto-classified set.
             # Pre-populating here keeps callers branch-free.
-            per_comp_marg = {
-                comp_name: comp._auto_marginalized_names(per_comp_lp[comp_name])
-                for comp_name, comp in self.components.items()
-            }
+            per_comp_marg = self._auto_marginalized_by_component(linear_priors)
         shared_lin = set(self.shared_linear_params)
         any_shared_marg = bool(
             shared_lin
             and any(shared_lin & set(names) for names in per_comp_marg.values())
         )
+        ties = self._ties(linear_priors)
+        for (target_comp, target), (_, (source_comp, source)) in ties.items():
+            # A tied column folds into its source's column of the joint
+            # marginalized Gaussian, so the source must be marginalized and the
+            # joint path is always needed (spec §Tied linear parameters).
+            source_key = source if source in shared_lin else f"{source_comp}.{source}"
+            source_prior = (linear_priors or {}).get(source_key)
+            if source not in per_comp_marg[source_comp] or (
+                source_prior is not None
+                and classify_linear_prior(source_prior) is not LinearRole.MARGINALIZED
+            ):
+                msg = (
+                    f"Tie source {source_comp}.{source} must be analytically "
+                    "marginalized (a Gaussian-family prior), not sampled explicitly "
+                    "or fixed."
+                )
+                raise ValueError(msg)
+            if target not in per_comp_marg[target_comp]:
+                per_comp_marg = {
+                    **per_comp_marg,
+                    target_comp: (*per_comp_marg[target_comp], target),
+                }
+        any_shared_marg = any_shared_marg or bool(ties)
         return per_comp_marg, any_shared_marg
 
     def _build_joint_marginalized_linear(  # noqa: C901
@@ -659,6 +875,24 @@ class JointModel(eqx.Module):
             else dict.fromkeys(self.component_names)
         )
 
+        # Tied parameters: each column joins its source's column, scaled.  It is
+        # built with a placeholder prior (only the column is used) and gets no
+        # global slot of its own.
+        ties = self._ties(linear_priors)
+        tie_columns: dict[
+            tuple[str, str], tuple[tuple[str, str | None], jax.Array]
+        ] = {}
+        for target, (tie, source) in ties.items():
+            per_comp_lp[target[0]] = {
+                **(per_comp_lp[target[0]] or {}),
+                target[1]: dist.Normal(0.0, 1.0),
+            }
+            owner = None if source[1] in shared_set else source[0]
+            tie_columns[target] = (
+                (source[1], owner),
+                self._tie_scale(tie, target, source, comp_nl, data),
+            )
+
         # --- Step (a): build blocks per component ---
         blocks_by_comp: dict[str, _MargBuildingBlocks] = {}
         for comp_name, comp in self.components.items():
@@ -684,6 +918,8 @@ class JointModel(eqx.Module):
         seen_shared: set[str] = set()
         for comp_name in self.components:
             for nm in names_by_comp[comp_name]:
+                if (comp_name, nm) in tie_columns:
+                    continue
                 if nm in shared_set:
                     if nm not in seen_shared:
                         global_cols.append((nm, None))
@@ -703,11 +939,20 @@ class JointModel(eqx.Module):
         for comp_name in self.components:
             X_c = blocks_by_comp[comp_name].X
             n_c = X_c.shape[0]
+            rows = slice(row_offset, row_offset + n_c)
+            tied_here = []
             for local_j, nm in enumerate(names_by_comp[comp_name]):
+                if (comp_name, nm) in tie_columns:
+                    tied_here.append((local_j, nm))
+                    continue
                 owner = None if nm in shared_set else comp_name
-                gj = col_idx[(nm, owner)]
-                X_joint = X_joint.at[row_offset : row_offset + n_c, gj].set(
-                    X_c[:, local_j]
+                X_joint = X_joint.at[rows, col_idx[(nm, owner)]].set(X_c[:, local_j])
+            # Added after this component's own columns are set, so a tie to a
+            # source in the same component is not overwritten.
+            for local_j, nm in tied_here:
+                source_col, scale = tie_columns[(comp_name, nm)]
+                X_joint = X_joint.at[rows, col_idx[source_col]].add(
+                    scale * X_c[:, local_j]
                 )
             y_parts.append(blocks_by_comp[comp_name].y)
             cov_blocks.append(blocks_by_comp[comp_name].cov)
@@ -744,12 +989,16 @@ class JointModel(eqx.Module):
             if prior_c.n_components > 1:
                 msg = (
                     f"Component {comp_name!r} has a Gaussian-mixture linear prior. "
-                    "Mixture linear priors are not supported inside a JointModel "
-                    "with shared linear parameters; use a single-component model, "
-                    "or give the shared parameters non-mixture priors."
+                    "Mixture linear priors are not supported on the joint "
+                    "marginalization path, which shared linear parameters and tied "
+                    "parameters (including for_rv_and_gaia's default RV tie) require; "
+                    "use non-mixture priors there, or untie by giving the tied "
+                    "parameter a prior of its own."
                 )
                 raise NotImplementedError(msg)
             for local_j, nm in enumerate(nms):
+                if (comp_name, nm) in tie_columns:
+                    continue
                 owner = None if nm in shared_set else comp_name
                 gj = col_idx[(nm, owner)]
                 # Shared global slots are populated by the FIRST component
@@ -833,6 +1082,7 @@ class JointModel(eqx.Module):
         -------
             Scalar log-likelihood.
         """
+        linear_priors = self._merged_linear_priors(linear_priors)
         per_comp_lp: dict[str, dict[str, Any] | None] = (
             self._per_component_linear_prior(linear_priors)
             if linear_priors is not None
@@ -856,10 +1106,10 @@ class JointModel(eqx.Module):
             # with shared linear columns merged.  Required when at least one
             # ``shared_linear_params`` entry is being analytically marginalized
             # so its prior is integrated *once* (not once per component).
-            marg_dist, y_joint, _, _ = self._build_joint_marginalized_linear(
+            marg_dist, y_joint, global_cols, _ = self._build_joint_marginalized_linear(
                 comp_nl, per_comp_marg, data, linear_priors
             )
-            return marg_dist.log_prob(y_joint)
+            return self._joint_log_prob(marg_dist, y_joint, global_cols)
 
         # Per-component sum path: each component marginalizes its own linear
         # params independently and we sum the resulting log-likelihoods.  This
@@ -920,6 +1170,7 @@ class JointModel(eqx.Module):
               params are top-level and per-component params are in sub-dicts
               keyed by component name.
         """
+        linear_priors = self._merged_linear_priors(linear_priors)
         per_comp_lp: dict[str, dict[str, Any] | None] = (
             self._per_component_linear_prior(linear_priors)
             if linear_priors is not None
@@ -962,8 +1213,21 @@ class JointModel(eqx.Module):
             # into ``comp_nl`` above; surface them in the per-component
             # sub-dicts so consumers see the full per-component linear set.
             for comp_name, explicit_lin in explicit_by_comp.items():
-                if explicit_lin:
-                    out.setdefault(comp_name, {}).update(explicit_lin)
+                for nm, val in explicit_lin.items():
+                    if nm in self.shared_linear_params:
+                        out[nm] = val
+                    else:
+                        out.setdefault(comp_name, {})[nm] = val
+
+            for target, (tie, source) in self._ties(linear_priors).items():
+                source_value = (
+                    out[source[1]]
+                    if source[1] in self.shared_linear_params
+                    else out[source[0]][source[1]]
+                )
+                out.setdefault(target[0], {})[target[1]] = (
+                    self._tie_scale(tie, target, source, comp_nl, data) * source_value
+                )
 
             return out
 
@@ -1016,9 +1280,16 @@ class JointModel(eqx.Module):
         -------
             A numpyro model function suitable for use with a sampler.
         """
+        linear_priors = self._merged_linear_priors(linear_priors)
         if not marginalized and marginalized_names is not None:
             msg = "marginalized_names cannot be set when marginalized=False"
             raise ValueError(msg)
+        if not marginalized and self._ties(linear_priors):
+            msg = (
+                "Tied linear parameters need marginalized=True: a tie folds into "
+                "its source's column of the marginalized Gaussian."
+            )
+            raise NotImplementedError(msg)
         if marginalized:
             return self._build_marginalized_numpyro(
                 nonlinear_priors,
@@ -1168,10 +1439,12 @@ class JointModel(eqx.Module):
                 # Joint path: a single MarginalizedLinear spanning all
                 # components — required so each shared linear prior is
                 # integrated once, not once per component.
-                marg_dist, y_joint, _, _ = joint._build_joint_marginalized_linear(
-                    comp_nl, per_comp_marginalized_names, data, linear_priors
+                marg_dist, y_joint, global_cols, _ = (
+                    joint._build_joint_marginalized_linear(
+                        comp_nl, per_comp_marginalized_names, data, linear_priors
+                    )
                 )
-                ln_lik = marg_dist.log_prob(y_joint)
+                ln_lik = joint._joint_log_prob(marg_dist, y_joint, global_cols)
             else:
                 # Per-component sum: each component's marginalization is
                 # independent, so the log-likelihoods simply add.

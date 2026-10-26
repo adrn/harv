@@ -128,3 +128,13 @@ class AbstractParameterization(eqx.Module):
             ``None`` if no correction is needed.
         """
         return None
+
+    @property
+    def applies_linear_prior_correction(self) -> bool:
+        """Whether :meth:`linear_log_prior_correction` can return a correction.
+
+        Static, so callers can skip the conditional-mean solve, and refuse ties
+        into a parameterization whose correction assumes independent linear
+        parameters (spec §Tied linear parameters). ``False`` by default.
+        """
+        return False

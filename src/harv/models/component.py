@@ -34,6 +34,7 @@ from harv.models._helpers import (
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
+from harv.models.ties import TiedPrior
 from harv.stats import MarginalizedLinear
 from harv.stats.linear_op import to_linear_op
 from harv.stats.marginalized import (
@@ -67,6 +68,16 @@ class _MargBuildingBlocks(NamedTuple):
     marg_names: tuple[str, ...]  # length k_marg
     prior: ResolvedLinearPrior  # loc/scale/weights/bounds over the marg columns
     explicit_linear: dict[str, Any]  # explicit linear param values (unit-stripped)
+
+
+def _reject_tied_priors(linear_priors: dict[str, Any] | None) -> None:
+    """Ties fold a column into another's on the joint path; a component has none."""
+    tied_names = [
+        name for name, p in (linear_priors or {}).items() if isinstance(p, TiedPrior)
+    ]
+    if tied_names:
+        msg = f"{tied_names} have tied() priors, which need a JointModel."
+        raise NotImplementedError(msg)
 
 
 class AbstractComponentModel(eqx.Module):
@@ -548,6 +559,7 @@ class AbstractComponentModel(eqx.Module):
         -------
             Scalar log-likelihood.
         """
+        _reject_tied_priors(linear_priors)
         # Auto mode: classify from linear_priors, extract explicit from values
         if (
             linear_priors is not None
@@ -779,6 +791,7 @@ class AbstractComponentModel(eqx.Module):
         :meth:`~harv.samplers.NumpyroSampler.optimize`); MCMC paths should keep
         the default ``use_mean=False``.
         """
+        _reject_tied_priors(linear_priors)
         # Auto-classify when no explicit arguments given
         if (
             marginalized_names is None
@@ -853,6 +866,7 @@ class AbstractComponentModel(eqx.Module):
         -------
             A no-argument callable suitable for ``numpyro.infer.MCMC``.
         """
+        _reject_tied_priors(linear_priors)
         if not marginalized and marginalized_names is not None:
             msg = "marginalized_names cannot be set when marginalized=False"
             raise ValueError(msg)

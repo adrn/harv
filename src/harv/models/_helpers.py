@@ -21,6 +21,7 @@ from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
 from harv.distributions import QuantityDistribution
+from harv.models.ties import TiedPrior
 from harv.stats.marginalized import ResolvedLinearPrior
 
 PriorDist = dist.Distribution | QuantityDistribution
@@ -39,7 +40,7 @@ LinearPriorCallable = Callable[
 # may also declare a ``requires`` attribute naming the parameters it reads; see
 # ``pinned_linear_names``.
 
-LinearPriorDist = PriorDist | LinearPriorCallable
+LinearPriorDist = PriorDist | LinearPriorCallable | TiedPrior
 
 LinearPriorDict = dict[str, LinearPriorDist]
 # Per-parameter linear prior dictionary.
@@ -138,6 +139,9 @@ class LinearRole(Enum):
     EXPLICIT = "explicit"
     """Outside the family the likelihood can integrate out."""
 
+    TIED = "tied"
+    """Set by :func:`~harv.models.tied`: its column joins its source's column."""
+
 
 def classify_linear_prior(
     d: LinearPriorDist,
@@ -149,6 +153,9 @@ def classify_linear_prior(
 
     The order of the tests is the whole content of this function:
 
+    0. A :class:`~harv.models.ties.TiedPrior` is ``TIED``: it is neither sampled nor
+       integrated on its own, but rides on its source's column (spec §Tied linear
+       parameters).
     1. A prior outside the Gaussian family cannot be integrated out at all, so
        it is ``EXPLICIT`` **first**. Testing ``pinned`` before this would label a
        ``Gamma`` prior on a pinned parameter as "read by another prior", whose
@@ -172,6 +179,8 @@ def classify_linear_prior(
     integrate this out", ignoring the pinning policy -- which is what an explicit
     ``marginalized_names`` request is gated on.
     """
+    if isinstance(d, TiedPrior):
+        return LinearRole.TIED
     inner = d.distribution if isinstance(d, QuantityDistribution) else d
     marginalizable = isinstance(inner, (*_MARGINALIZABLE, dist.Delta)) or (
         # A callable is resolved at evaluation time; assume it returns something
@@ -215,6 +224,19 @@ def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
     """
     pinned: set[str] = set()
     for name, entry in prior_dict.items():
+        if isinstance(entry, TiedPrior):
+            # A tie's scale reads the *source* component's values, shared ones
+            # included. Bare keys are shared only in the flat joint dict (where
+            # the tie's own key is qualified); in a per-component dict a bare
+            # name would be the tied parameter's own component.
+            namespace = entry.source.rsplit(".", 1)[0] + "."
+            for dep in entry.requires:
+                shared = (dep,) if "." in name else ()
+                for candidate in (f"{namespace}{dep}", *shared):
+                    if candidate in prior_dict:
+                        pinned.add(candidate)
+                        break
+            continue
         if not _is_callable_prior(entry):
             continue
         namespace = name.rsplit(".", 1)[0] + "." if "." in name else ""
@@ -227,7 +249,7 @@ def pinned_linear_names(prior_dict: LinearPriorDict) -> frozenset[str]:
 
 
 def _needs_explicit_sampling(
-    d: PriorDist | LinearPriorCallable,
+    d: LinearPriorDist,
     *,
     name: str = "",
     pinned_names: frozenset[str] = frozenset(),

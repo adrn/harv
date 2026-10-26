@@ -34,6 +34,7 @@ __all__ = (
     # Samplers
     "AbstractSampler",
     "HarvPrior",
+    "tied",
     "NumpyroSampler",
     "RejectionSampler",
     "Samples",
@@ -86,6 +87,7 @@ from harv.models import (
     StandardGaiaAstrometry,
     StandardRV,
     HarvPrior,
+    tied,
 )
 from harv.samplers import (
     AbstractSampler,

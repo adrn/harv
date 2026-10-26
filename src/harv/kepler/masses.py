@@ -79,7 +79,7 @@ def astrometric_mass_function(
         f(m) = \frac{4\pi^2\,a^3}{G\,P^2}
 
     With ``a`` the semi-major axis of the *primary's* barycentric orbit -- the
-    photocentre orbit when the companion is dark or faint -- this equals
+    photocentre orbit when the companion is unseen -- this equals
     :math:`m_2^3 / (m_1 + m_2)^2`.  See docs/spec.md ("Mass functions").
 
     Parameters
