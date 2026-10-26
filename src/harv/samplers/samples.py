@@ -983,7 +983,9 @@ class Samples(eqx.Module):
 
         Returns
         -------
-            ``2 * n_samples`` samples: the originals, then their mirrors.
+            ``2 * n_samples`` samples, each original followed by its mirror. A
+            padding mask for batched samples doubles to match with
+            ``np.repeat(mask, 2, axis=-1)``.
 
         Raises
         ------
@@ -1029,8 +1031,10 @@ class Samples(eqx.Module):
                     m = -v
                 else:
                     m = v
-                # The sample axis is the last one (batched Samples are (..., n)).
-                out[key] = Q(jnp.concatenate([v, m], axis=-1), unit)
+                # Interleave along the sample axis, the last one (batched Samples
+                # are (..., n)), so each mirror sits next to its original.
+                both = jnp.stack([v, m], axis=-1)
+                out[key] = Q(both.reshape(*v.shape[:-1], -1), unit)
             return out
 
         return Samples(

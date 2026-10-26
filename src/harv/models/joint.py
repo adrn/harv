@@ -41,8 +41,11 @@ from harv.models.component import (
     _sample_nonlinear_params,
 )
 from harv.models.extensions.base import ParamInfo
-from harv.models.parameterizations import StandardGaiaAstrometry, StandardRV
-from harv.models.parameterizations.base import AbstractParameterization
+from harv.models.parameterizations import (
+    StandardGaiaAstrometry,
+    StandardRV,
+    ThieleInnesGaiaAstrometry,
+)
 from harv.models.rv import RVModel
 from harv.models.ties import TiedPrior, rv_semiamp_per_semi_major_axis, tied
 from harv.stats import MarginalizedLinear
@@ -105,14 +108,6 @@ def _priors_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     return bool(eqx.tree_equal(a, b))
-
-
-def _has_prior_correction(comp: Any) -> bool:
-    """True if the component's parameterization overrides the prior correction."""
-    return (
-        type(comp.parameterization).linear_log_prior_correction
-        is not AbstractParameterization.linear_log_prior_correction
-    )
 
 
 @final
@@ -200,10 +195,13 @@ class JointModel(eqx.Module):
                     "for_rv_and_gaia needs RVModel(StandardRV) and "
                     "GaiaAstrometryModel(StandardGaiaAstrometry) components so that "
                     f"they share one orbit; {name!r} is "
-                    f"{type(comp).__name__}({type(comp.parameterization).__name__}). "
-                    "To start from a Thiele-Innes fit, convert its samples with "
-                    "Samples.thiele_innes_to_campbell() first."
+                    f"{type(comp).__name__}({type(comp.parameterization).__name__})."
                 )
+                if isinstance(comp.parameterization, ThieleInnesGaiaAstrometry):
+                    msg += (
+                        " To start from a Thiele-Innes fit, convert its samples "
+                        "with Samples.thiele_innes_to_campbell() first."
+                    )
                 raise TypeError(msg)
 
         orbit = ("period", "eccentricity", "phase_peri", "arg_peri")
@@ -459,7 +457,7 @@ class JointModel(eqx.Module):
         correcting = {
             name: comp.parameterization
             for name, comp in self.components.items()
-            if _has_prior_correction(comp)
+            if comp.parameterization.applies_linear_prior_correction
         }
         if not correcting:
             return ln_lik
@@ -503,7 +501,14 @@ class JointModel(eqx.Module):
                 )
                 raise ValueError(msg)  # noqa: TRY004 -- a bad value, not a bad type
             target = self._qualified_linear(key, "Tied parameter")
-            if _has_prior_correction(self.components[target[0]]):
+            if target[1] in self.shared_linear_params:
+                msg = (
+                    f"Cannot tie {key!r}: {target[1]!r} is a shared linear "
+                    "parameter, and a tie would unshare it for one component."
+                )
+                raise ValueError(msg)
+            target_param = self.components[target[0]].parameterization
+            if target_param.applies_linear_prior_correction:
                 msg = (
                     f"Cannot tie {key!r}: {target[0]}'s parameterization applies a "
                     "linear prior correction (e.g. the Thiele-Innes Jacobian), which "
@@ -797,7 +802,8 @@ class JointModel(eqx.Module):
             # A tied column folds into its source's column of the joint
             # marginalized Gaussian, so the source must be marginalized and the
             # joint path is always needed (spec §Tied linear parameters).
-            source_prior = (linear_priors or {}).get(f"{source_comp}.{source}")
+            source_key = source if source in shared_lin else f"{source_comp}.{source}"
+            source_prior = (linear_priors or {}).get(source_key)
             if source not in per_comp_marg[source_comp] or (
                 source_prior is not None
                 and classify_linear_prior(source_prior) is not LinearRole.MARGINALIZED

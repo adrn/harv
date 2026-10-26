@@ -339,8 +339,11 @@ def test_rejects_tie_in_single_component_model():
     ],
 )
 def test_for_rv_and_gaia_requires_standard_parameterizations(components):
-    with pytest.raises(TypeError, match="thiele_innes_to_campbell"):
+    with pytest.raises(TypeError, match="StandardRV") as err:
         JointModel.for_rv_and_gaia(components=components)
+    # The conversion hint only for a Thiele-Innes fit.
+    is_ti = isinstance(components["astro"].parameterization, ThieleInnesGaiaAstrometry)
+    assert ("thiele_innes_to_campbell" in str(err.value)) == is_ti
 
 
 def test_sampler_resolution_keeps_tied_target_marginalized():
@@ -450,6 +453,64 @@ def test_rejects_tie_into_a_prior_corrected_component():
     marg = (*MARGINALIZED, "astro.ti_A", "astro.ti_B", "astro.ti_F", "astro.ti_G")
     with pytest.raises(NotImplementedError, match="prior correction"):
         model.log_prob(values, _data(), linear_priors=priors, marginalized_names=marg)
+
+
+def test_tie_allowed_into_thiele_innes_without_correction():
+    """Only an *applied* correction blocks a tie (the TI default is off)."""
+    model = JointModel(
+        components={
+            "rv": RVModel(),
+            "astro": GaiaAstrometryModel(parameterization=ThieleInnesGaiaAstrometry()),
+        },
+        shared_params=("period", "eccentricity", "phase_peri"),
+    )
+    priors = {
+        **{k: v for k, v in _linear_priors().items() if "semi_major_axis" not in k},
+        **{f"astro.ti_{c}": QD(ndist.Normal(0.0, 2.0), "mas") for c in "BFG"},
+        "astro.ti_A": tied("astro.ti_B", scale=lambda _: Q(0.5, "")),
+        "rv.rv_semiamp": FREE_K,
+    }
+    values = {k: v for k, v in _values().items() if k not in ("lon_asc_node", "cos_i")}
+    marg = (*MARGINALIZED, "astro.ti_A", "astro.ti_B", "astro.ti_F", "astro.ti_G")
+    got = model.log_prob(values, _data(), linear_priors=priors, marginalized_names=marg)
+    assert jnp.isfinite(got)
+
+
+def _sb2_model() -> JointModel:
+    return JointModel(
+        components={"primary": RVModel(), "secondary": RVModel()},
+        shared_params=("period", "eccentricity", "phase_peri", "arg_peri"),
+        shared_linear_params=("v_sys",),
+    )
+
+
+def _sb2_args() -> tuple:
+    rv = _data()["rv"]
+    orbit = ("period", "eccentricity", "phase_peri", "arg_peri")
+    return {k: _values()[k] for k in orbit}, SourceData(primary=rv, secondary=rv)
+
+
+def test_rejects_tie_of_a_shared_linear_parameter():
+    priors = {
+        "primary.rv_semiamp": FREE_K,
+        "secondary.rv_semiamp": FREE_K,
+        "v_sys": QD(ndist.Normal(0.0, 10.0), "km/s"),
+        "primary.v_sys": tied("primary.rv_semiamp", scale=lambda _: Q(1.0, "")),
+    }
+    values, data = _sb2_args()
+    with pytest.raises(ValueError, match="shared linear parameter"):
+        _sb2_model().log_prob(values, data, linear_priors=priors)
+
+
+def test_rejects_fixed_shared_tie_source():
+    priors = {
+        "primary.rv_semiamp": tied("primary.v_sys", scale=lambda _: Q(1.0, "")),
+        "secondary.rv_semiamp": FREE_K,
+        "v_sys": QD(ndist.Delta(1.0), "km/s"),
+    }
+    values, data = _sb2_args()
+    with pytest.raises(ValueError, match="must be analytically marginalized"):
+        _sb2_model().log_prob(values, data, linear_priors=priors)
 
 
 def test_tie_scale_reads_a_shared_linear_parameter():

@@ -688,6 +688,11 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
             extension_priors=extension_priors,
         )
 
+    @property
+    def applies_linear_prior_correction(self) -> bool:
+        """``True`` when ``apply_jacobian_correction`` is set."""
+        return self.apply_jacobian_correction
+
     def linear_log_prior_correction(
         self, linear_map: dict[str, jax.Array]
     ) -> jax.Array | None:

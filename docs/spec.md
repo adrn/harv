@@ -793,6 +793,10 @@ and `m = 4` for a log-uniform prior.
 The correction can be disabled with `apply_jacobian_correction=False`, which makes
 `linear_log_prior_correction` return `None` (no correction) — appropriate when the
 priors are genuinely intended to be flat in the Thiele-Innes constants.
+`applies_linear_prior_correction` (an `AbstractParameterization` property, `False`
+by default) reports whether a correction is applied, here
+`apply_jacobian_correction`; joint models read it to skip the conditional-mean solve
+and to refuse ties into the component (§Tied linear parameters).
 
 Constructor parameters:
 
@@ -1430,7 +1434,9 @@ Rules:
 - ties are a `JointModel` feature; a `TiedPrior` reaching a single-component model
   raises `NotImplementedError`, as does `numpyro_model(marginalized=False)`;
 - the tied key and `source` must be component-qualified linear parameters
-  (`ValueError`); the two may be in the same component or in different ones;
+  (`ValueError`); the two may be in the same component or in different ones. The
+  source may be a shared linear parameter; the tied key may not (`ValueError`), since
+  tying it would unshare it for one component;
 - the source must be analytically marginalized (`ValueError`), and must not itself
   be tied (`ValueError`);
 - a tied parameter is never sampled: the samplers add it to the marginalized set even
@@ -1441,9 +1447,10 @@ Rules:
   mean, as the per-component path does. It also forms one dense covariance over all
   rows whenever any component's covariance is 2-D (e.g. a GP on the RVs), which is
   much more expensive than the per-component path for large astrometric data sets;
-- a tied parameter's component must not apply such a correction
-  (`NotImplementedError`): the Thiele-Innes Jacobian, for one, assumes its four
-  constants are independent;
+- a tied parameter's component must not apply such a correction, i.e. its
+  parameterization's `applies_linear_prior_correction` must be `False`
+  (`NotImplementedError`): the Thiele-Innes Jacobian, applied when
+  `apply_jacobian_correction=True`, assumes its four constants are independent;
 - a linear parameter that a tie's `scale` reads from another component (e.g.
   `astro.parallax`) is pinned at the joint level, so `explicit_params` and
   `marginalized_params` report it as explicit.
@@ -2536,8 +2543,8 @@ the first entry.
   positive — it is a no-op. It cannot repair a genuine same-sign sample, since it
   flips both semi-amplitudes at once; only the sign prior excludes that region.
   See §Signed semi-amplitudes.
-- `with_astrometric_mirror() -> Samples` — return `2 * n_samples` samples: these
-  samples followed by copies with `arg_peri` and `lon_asc_node` both shifted by `pi`
+- `with_astrometric_mirror() -> Samples` — return `2 * n_samples` samples: each
+  sample followed by a copy with `arg_peri` and `lon_asc_node` both shifted by `pi`
   (wrapped to `[0, 2*pi)`) and any `rv_semiamp` negated. Astrometry alone cannot tell
   an orbit from this mirror (the Thiele-Innes constants are unchanged), and with
   `rv_semiamp` negated it is an exact symmetry of every untied model; a tied
@@ -2545,8 +2552,9 @@ the first entry.
   `wrap_angles` cannot: without `rv_semiamp` both mirrors already satisfy `a >= 0`,
   and with it, applying `wrap_angles` to the mirrors maps them back onto the
   originals (so do not wrap candidates before evaluating them). `ln_likelihood` /
-  `ln_prior` are dropped. Angles may be stored in any angular unit; samples are
-  appended along the last (sample) axis, so batched `Samples` work. `ValueError`
+  `ln_prior` are dropped. Angles may be stored in any angular unit; mirrors are
+  interleaved along the last (sample) axis, so batched `Samples` work and a padding
+  mask doubles with `np.repeat(mask, 2, axis=-1)`. `ValueError`
   unless there is exactly one `arg_peri` and one `lon_asc_node`.
 - `convert_parameterization(source=..., target=...) -> Samples` — convert the stored
   parameter values between supported single-component RV or Gaia parameterizations.
