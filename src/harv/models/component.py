@@ -30,6 +30,7 @@ from harv.models._helpers import (
     _joint_site_name,
     _needs_explicit_sampling,
     _nonlinear_groups,
+    _nonlinear_unit,
     _resolve_linear_priors,
     _sample_explicit_linear_prior,
     _split_group,
@@ -926,9 +927,9 @@ def _apply_unit_conversions(
     base_params = component._base_nonlinear_names()
     result = dict(values)
     for name, d in nonlinear_priors.items():
-        if isinstance(d, QuantityDistribution) and name in base_params:
-            prior_unit = cast("str", d.unit)
-            result[name] = Q(result[name], prior_unit)
+        unit = _nonlinear_unit(d, name)
+        if unit is not None and name in base_params:
+            result[name] = Q(result[name], unit)
     return result
 
 

@@ -175,7 +175,7 @@ class TestMakePriorCache:
         )
 
         loaded = Samples.from_hdf5(path)
-        assert set(loaded.nonlinear) == {"period", "ecosw", "esinw", "phase_peri"}
+        assert set(loaded.nonlinear) == {"period", "ecosw", "esinw", "mean_longitude"}
         ecosw = np.asarray(loaded.nonlinear["ecosw"].value)
         esinw = np.asarray(loaded.nonlinear["esinw"].value)
         assert np.all(ecosw**2 + esinw**2 < 1)

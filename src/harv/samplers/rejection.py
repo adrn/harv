@@ -20,6 +20,7 @@ from harv.distributions import JointPrior, QuantityDistribution
 from harv.models._helpers import (
     LinearRole,
     _evaluate_nonlinear_log_prior,
+    _nonlinear_unit,
     _unwrap_dist,
     classify_linear_prior,
     pinned_linear_names,
@@ -103,8 +104,9 @@ def _wrap_unit_values(
     """
     result = dict(values)
     for name, d in nonlinear_priors.items():
-        if isinstance(d, QuantityDistribution) and name in base_names:
-            result[name] = Q(result[name], str(d.unit))
+        unit = _nonlinear_unit(d, name)
+        if unit is not None and name in base_names:
+            result[name] = Q(result[name], unit)
     return result
 
 
@@ -234,7 +236,8 @@ def _describe_prior(d: Any) -> tuple[str, str]:
     if isinstance(d, QuantityDistribution):
         return type(d.distribution).__name__, (str(d.unit) or "-")
     if isinstance(d, JointPrior):
-        return f"{type(d.distribution).__name__}{d.names}", "-"
+        name, _ = _describe_prior(d.distribution)
+        return f"{name}{d.names}", "-"  # per-name units: see _nonlinear_unit
     # Bare numpyro distribution or a LinearPriorCallable: the class name is the
     # most useful label, and the unit (if any) is only resolved at call time.
     return type(d).__name__, "-"
@@ -360,8 +363,8 @@ class RejectionSampler(AbstractSampler):
         # Nonlinear parameters: always sampled explicitly (base + extension).
         nonlinear_rows: list[tuple[str, ...]] = []
         for name, d in self.prior.nonlinear_priors.items():
-            dist_name, unit = _describe_prior(d)
-            nonlinear_rows.append((name, dist_name, unit))
+            dist_name, _ = _describe_prior(d)
+            nonlinear_rows.append((name, dist_name, _nonlinear_unit(d, name) or "-"))
         for name, d in prepared.nonlinear_extension_priors.items():
             dist_name, unit = _describe_prior(d)
             nonlinear_rows.append((f"{name} (ext)", dist_name, unit))
@@ -660,9 +663,7 @@ class RejectionSampler(AbstractSampler):
         for k, v in accepted_nonlinear.items():
             if k not in _all_nl_priors:
                 continue
-            d = _all_nl_priors[k]
-            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
-            nonlinear_q[k] = Q(v, unit)
+            nonlinear_q[k] = Q(v, _nonlinear_unit(_all_nl_priors[k], k) or "")
 
         # time_ref is uniformly exposed by both AbstractData and
         # AbstractDatasetContainer; no branching needed.

@@ -32,6 +32,7 @@ from harv.models._helpers import (
     _is_callable_prior,
     _joint_site_name,
     _nonlinear_groups,
+    _nonlinear_unit,
     _split_group,
     _stack_group,
     _unwrap_dist,
@@ -107,14 +108,13 @@ def _unconstrain_init_params(
     for name, val in init_params.items():
         support = site_supports.get(name)
         if support is not None:
-            # A point on the support's edge (e.g. a MAP on the UnitDisk rim)
-            # unconstrains to +-inf; pull it to a large finite value instead.
-            out[name] = jnp.nan_to_num(
-                biject_to(support).inv(jnp.asarray(val)),
-                nan=jnp.nan,
-                posinf=30.0,
-                neginf=-30.0,
-            )
+            # A finite point on the support's edge (e.g. a MAP on the UnitDisk rim)
+            # unconstrains to +-inf or NaN; pull it to a finite value instead. A
+            # non-finite init is left alone, so it still fails loudly.
+            x = jnp.asarray(val)
+            u = biject_to(support).inv(x)
+            clamped = jnp.nan_to_num(u, nan=0.0, posinf=30.0, neginf=-30.0)
+            out[name] = jnp.where(jnp.all(jnp.isfinite(x)), clamped, u)
         else:
             out[name] = val
     return out
@@ -802,8 +802,7 @@ class NumpyroSampler(AbstractSampler):
         nonlinear_q: dict[str, AbstractQuantity] = {}
         for key, d in _all_nl_priors.items():
             if key in posterior:
-                unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
-                nonlinear_q[key] = Q(posterior[key], unit)
+                nonlinear_q[key] = Q(posterior[key], _nonlinear_unit(d, key) or "")
 
         # Build linear dict.
         if marginalized:

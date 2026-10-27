@@ -480,8 +480,8 @@ class TestParameterizationDefaultPriors:
         assert sorted(prior.nonlinear_priors.keys()) == [
             "ecosw",
             "esinw",
+            "mean_longitude",
             "period",
-            "phase_peri",
         ]
         assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
@@ -723,37 +723,6 @@ class TestJointPrior:
             linear_priors={},
         )
 
-    def test_joint_expands_to_one_entry_per_name(self):
-        entries = joint(("ecosw", "esinw"), UnitDisk())
-        assert list(entries) == ["ecosw", "esinw"]
-        assert entries["ecosw"] is entries["esinw"]
-
-    @pytest.mark.parametrize(
-        ("names", "distribution", "match"),
-        [
-            (("ecosw",), UnitDisk(), "at least two distinct"),
-            (("ecosw", "ecosw"), UnitDisk(), "at least two distinct"),
-            (("a", "b", "c"), UnitDisk(), "event_shape"),
-            (("a", "b"), dist.Normal(0.0, 1.0), "event_shape"),
-            (("a", "b"), dist.Normal(jnp.zeros((3, 2)), 1.0).to_event(1), "batch"),
-        ],
-    )
-    def test_joint_prior_validation(self, names, distribution, match):
-        with pytest.raises(ValueError, match=match):
-            JointPrior(names, distribution)
-
-    @pytest.mark.parametrize("bad", [QD(UnitDisk(), "day"), "not a distribution"])
-    def test_joint_prior_rejects_non_distributions(self, bad):
-        with pytest.raises(TypeError, match="dimensionless numpyro distribution"):
-            JointPrior(("a", "b"), bad)
-
-    def test_list_names_become_tuple(self):
-        prior = HarvPrior(
-            nonlinear_priors=joint(["ecosw", "esinw"], UnitDisk()), linear_priors={}
-        )
-        assert prior.nonlinear_priors["ecosw"].names == ("ecosw", "esinw")
-        assert prior.sample_nonlinear(3, key=jr.key(0))["esinw"].shape == (3,)
-
     def test_default_prior_joint_override(self):
         # The documented override path: replace the pair through ``**joint``.
         mvn = dist.MultivariateNormal(jnp.zeros(2), 0.01 * jnp.eye(2))
@@ -765,10 +734,6 @@ class TestJointPrior:
             **joint(("ecosw", "esinw"), mvn),
         )
         assert prior.nonlinear_priors["ecosw"].distribution is mvn
-
-    def test_unit_disk_log_prob_is_batched_and_support_aware(self):
-        lp = UnitDisk().log_prob(jnp.array([[0.0, 0.0], [0.6, 0.8], [2.0, 2.0]]))
-        np.testing.assert_allclose(lp, [-jnp.log(jnp.pi)] * 2 + [-jnp.inf])
 
     def test_ln_prior_shape_with_only_the_joint(self):
         prior = HarvPrior(
@@ -795,10 +760,13 @@ class TestJointPrior:
     @pytest.mark.parametrize(
         "nonlinear",
         [
-            # Same names, different distributions (no single object to sample).
+            # Same names, different distributions (no single one to sample).
             {
                 "ecosw": JointPrior(("ecosw", "esinw"), UnitDisk()),
-                "esinw": JointPrior(("ecosw", "esinw"), UnitDisk()),
+                "esinw": JointPrior(
+                    ("ecosw", "esinw"),
+                    dist.MultivariateNormal(jnp.zeros(2), jnp.eye(2)),
+                ),
             },
             # A joint stored under a key that is not one of its names.
             {"foo": joint(("ecosw", "esinw"), UnitDisk())["ecosw"]}
@@ -820,6 +788,24 @@ class TestJointPrior:
         )
         with pytest.raises(TypeError, match="not a nonlinear parameter"):
             prior.__check_init__()
+
+    def test_joint_in_linear_priors_raises(self):
+        # e.g. StandardRV().default_prior(..., **joint(("rv_semiamp", "v_sys"), ...)).
+        # The beartype hook rejects that at the annotation; bypass it to reach the
+        # check that production code (without the hook) relies on.
+        mvn = QD(dist.MultivariateNormal(jnp.zeros(2), jnp.eye(2)), ("km/s", "km/s"))
+        prior = HarvPrior(nonlinear_priors={}, linear_priors={})
+        object.__setattr__(prior, "linear_priors", joint(("rv_semiamp", "v_sys"), mvn))
+        with pytest.raises(TypeError, match="not a nonlinear parameter"):
+            prior.__check_init__()
+
+    def test_rebuild_after_tree_round_trip(self):
+        # A tree op gives each name its own (equal) copy; rebuilding must still pass.
+        prior = jax.tree.map(lambda x: x, self._prior())
+        rebuilt = HarvPrior(
+            nonlinear_priors=dict(prior.nonlinear_priors), linear_priors={}
+        )
+        assert set(rebuilt.nonlinear_priors) == {"period", "ecosw", "esinw"}
 
     def test_sample_nonlinear_splits_inside_disk(self):
         samples = self._prior().sample_nonlinear(500, key=jr.key(1))

@@ -78,9 +78,11 @@ class RVModel(AbstractComponentModel):
         Returns (sin_f, cos_f) as unit-stripped arrays.
         """
         period = nonlinear_values["period"]
-        phase_peri = nonlinear_values["phase_peri"]
         # Fourier parameterizations never reach here (dispatched in
-        # _base_design_matrix), so they need no eccentricity():
+        # _base_design_matrix), so they need no eccentricity() / phase_peri():
+        phase_peri = self.parameterization.phase_peri(  # ty: ignore[unresolved-attribute]
+            nonlinear_values
+        )
         eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
             nonlinear_values
         )

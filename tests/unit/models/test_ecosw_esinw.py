@@ -43,6 +43,8 @@ _ECC = 0.3
 _ARG_PERI = 1.0  # rad
 _ECOSW = _ECC * float(jnp.cos(_ARG_PERI))
 _ESINW = _ECC * float(jnp.sin(_ARG_PERI))
+_PHASE_PERI = 0.3
+_MEAN_LON = Q(_ARG_PERI - 2 * float(jnp.pi) * _PHASE_PERI, "rad")
 
 
 class TestEcoswEsinwRVParameterization:
@@ -55,7 +57,7 @@ class TestEcoswEsinwRVParameterization:
             "period",
             "ecosw",
             "esinw",
-            "phase_peri",
+            "mean_longitude",
             "rv_semiamp",
             "v_sys",
         ]
@@ -175,7 +177,7 @@ class TestRVModelWithEcoswEsinw:
             "period",
             "ecosw",
             "esinw",
-            "phase_peri",
+            "mean_longitude",
         }
         assert set(model._all_linear_names()) == {"rv_semiamp", "v_sys"}
 
@@ -186,7 +188,7 @@ class TestRVModelWithEcoswEsinw:
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
         X = model._base_design_matrix(nl, data)
         assert X.shape == (10, 2)
@@ -198,7 +200,7 @@ class TestRVModelWithEcoswEsinw:
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
         linear = {
             "rv_semiamp": jnp.float32(5.0),
@@ -214,7 +216,7 @@ class TestRVModelWithEcoswEsinw:
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
         ll = model.log_prob(nl, data, linear_priors=_rv_prior())
         assert jnp.isfinite(ll)
@@ -226,7 +228,7 @@ class TestRVModelWithEcoswEsinw:
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
 
         @jax.jit
@@ -249,14 +251,14 @@ class TestNumericalEquivalence:
         nl_std = {
             "period": Q(100.0, "day"),
             "eccentricity": _ECC,
-            "phase_peri": 0.0,
+            "phase_peri": _PHASE_PERI,
             "arg_peri": _ARG_PERI,
         }
         nl_eco = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
         linear = {
             "rv_semiamp": jnp.float32(5.0),
@@ -280,14 +282,14 @@ class TestNumericalEquivalence:
         nl_std = {
             "period": Q(100.0, "day"),
             "eccentricity": _ECC,
-            "phase_peri": 0.0,
+            "phase_peri": _PHASE_PERI,
             "arg_peri": _ARG_PERI,
         }
         nl_eco = {
             "period": Q(100.0, "day"),
             "ecosw": _ECOSW,
             "esinw": _ESINW,
-            "phase_peri": 0.0,
+            "mean_longitude": _MEAN_LON,
         }
 
         ll_std = std_model.log_prob(nl_std, data, linear_priors=prior)
@@ -441,3 +443,24 @@ def test_warm_start_on_disk_edge_is_finite():
     init = {"ecosw,esinw": jnp.array([0.6, 0.8])}
     out = _unconstrain_init_params(init, prior)
     assert bool(jnp.all(jnp.isfinite(out["ecosw,esinw"])))
+
+
+def test_rim_point_unconstraining_to_nan_is_clamped():
+    # (1, 0) unconstrains to [inf, nan] (0 / sqrt(0)); both must come back finite.
+    prior, _ = TestEcoswEsinwDefaultPriorIsEvaluable._prior_and_model()
+    out = _unconstrain_init_params({"ecosw,esinw": jnp.array([1.0, 0.0])}, prior)
+    assert bool(jnp.all(jnp.isfinite(out["ecosw,esinw"])))
+
+
+def test_non_finite_init_is_not_hidden():
+    prior, _ = TestEcoswEsinwDefaultPriorIsEvaluable._prior_and_model()
+    out = _unconstrain_init_params({"ecosw,esinw": jnp.array([jnp.nan, 0.0])}, prior)
+    assert not bool(jnp.all(jnp.isfinite(out["ecosw,esinw"])))
+
+
+def test_phase_peri_override_raises():
+    # EcoswEsinwRV samples mean_longitude; a stale phase_peri= must not be dropped.
+    with pytest.raises(TypeError, match="mean_longitude"):
+        TestEcoswEsinwDefaultPriorIsEvaluable._prior_and_model(
+            phase_peri=dist.Uniform(0.0, 0.5)
+        )

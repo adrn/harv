@@ -21,6 +21,8 @@ from harv.models._helpers import (
     NonlinearPriorDist,
     PriorDist,
     _evaluate_nonlinear_log_prior,
+    _nonlinear_unit,
+    _priors_equal,
     _sample_nonlinear,
     _unwrap_dist,
 )
@@ -114,7 +116,7 @@ class HarvPrior(eqx.Module):
                 if not (
                     isinstance(other, JointPrior)
                     and other.names == d.names
-                    and other.distribution is d.distribution
+                    and _priors_equal(other.distribution, d.distribution)
                 ):
                     msg = (
                         f"Joint prior over {d.names} is missing, replaced or not "
@@ -122,7 +124,7 @@ class HarvPrior(eqx.Module):
                         f"override all of {d.names} together."
                     )
                     raise ValueError(msg)
-        for name, d in self.extension_priors.items():
+        for name, d in {**self.linear_priors, **self.extension_priors}.items():
             if isinstance(d, JointPrior):
                 msg = (
                     f"Joint prior over {d.names} given for {name!r}, which is not a "
@@ -306,9 +308,9 @@ class HarvPrior(eqx.Module):
         }
         nonlinear_q: dict[str, Q] = {}
         for name, value in {**base_nonlinear, **extension_nonlinear}.items():
-            d = all_nonlinear_priors[name]
-            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
-            nonlinear_q[name] = Q(value, unit)
+            nonlinear_q[name] = Q(
+                value, _nonlinear_unit(all_nonlinear_priors[name], name) or ""
+            )
 
         # Restore units onto explicit linear entries.
         linear_q: dict[str, Q] = {}
@@ -375,6 +377,6 @@ class HarvPrior(eqx.Module):
         ...     sigma_v0=Q(50.0, "km/s"),
         ... )
         >>> sorted(prior.nonlinear_priors.keys())
-        ['ecosw', 'esinw', 'period', 'phase_peri']
+        ['ecosw', 'esinw', 'mean_longitude', 'period']
         """
         return parameterization.default_prior(**kwargs)

@@ -71,7 +71,7 @@ class TestConvertRV:
             nl, lin, source=StandardRV(), target=EcoswEsinwRV()
         )
 
-        assert list(out_nl) == ["period", "ecosw", "esinw", "phase_peri"]
+        assert list(out_nl) == ["period", "ecosw", "esinw", "mean_longitude"]
         assert list(out_lin) == ["rv_semiamp", "v_sys"]
 
         exp_ecosw, exp_esinw = ecosw_esinw_from_ecc_omega(
@@ -79,6 +79,12 @@ class TestConvertRV:
         )
         assert jnp.allclose(out_nl["ecosw"].value, exp_ecosw.value)
         assert jnp.allclose(out_nl["esinw"].value, exp_esinw.value)
+        # mean longitude at time_ref: omega - 2*pi*phase_peri, wrapped to [0, 2pi)
+        exp_lon = jnp.mod(
+            nl["arg_peri"].value - 2 * jnp.pi * nl["phase_peri"].value, 2 * jnp.pi
+        )
+        assert jnp.allclose(out_nl["mean_longitude"].value, exp_lon)
+        assert out_nl["mean_longitude"].unit == "rad"
         # shared params and units pass through unchanged
         assert jnp.allclose(out_nl["period"].value, nl["period"].value)
         assert out_lin["rv_semiamp"].unit == lin["rv_semiamp"].unit
@@ -111,6 +117,9 @@ class TestConvertRV:
             back_nl["eccentricity"].value, nl["eccentricity"].value, atol=1e-6
         )
         assert jnp.allclose(back_nl["arg_peri"].value, nl["arg_peri"].value, atol=1e-6)
+        assert jnp.allclose(
+            back_nl["phase_peri"].value, nl["phase_peri"].value, atol=1e-6
+        )
         assert jnp.allclose(back_lin["v_sys"].value, lin["v_sys"].value)
 
     def test_extra_params_preserved(self):
@@ -408,7 +417,16 @@ class TestSamplesWrapper:
             source=StandardRV(), target=EcoswEsinwRV()
         )
         assert isinstance(converted, Samples)
-        assert set(converted.nonlinear) == {"period", "ecosw", "esinw", "phase_peri"}
+        assert set(converted.nonlinear) == {
+            "period",
+            "ecosw",
+            "esinw",
+            "mean_longitude",
+        }
+        # time_peri is derivable from the mean longitude and matches the source.
+        assert jnp.allclose(
+            converted["time_peri"].value, samples["time_peri"].value, atol=1e-9
+        )
         assert "jitter" in converted.linear
         assert converted.model_type == "RVModel"
         assert converted.metadata == samples.metadata

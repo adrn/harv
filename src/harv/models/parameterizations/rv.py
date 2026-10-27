@@ -81,6 +81,10 @@ class StandardRV(AbstractParameterization):
         """Return the orbital eccentricity from nonlinear values."""
         return nonlinear_values["eccentricity"]
 
+    def phase_peri(self, nonlinear_values: dict[str, Any]) -> Any:
+        """Return the periastron phase from nonlinear values."""
+        return nonlinear_values["phase_peri"]
+
     def strip_nonlinear_for_design(
         self, nonlinear_values: dict[str, Any]
     ) -> dict[str, Any]:
@@ -125,7 +129,7 @@ class StandardRV(AbstractParameterization):
         sigma_K0: ScalarQSpeed | None = None,
         sigma_v0: ScalarQSpeed | None = None,
         period_ref: ScalarQTime = Q(1.0, "yr"),
-        **kwargs: PriorDist | LinearPriorDist,
+        **kwargs: NonlinearPriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
@@ -176,17 +180,18 @@ class StandardRV(AbstractParameterization):
 class EcoswEsinwRV(AbstractParameterization):
     """Alternative RV parameterization using ``e*cos(w)`` and ``e*sin(w)``.
 
-    Replaces the ``(eccentricity, arg_peri)`` pair with ``(ecosw, esinw)`` =
-    ``(e*cos(omega), e*sin(omega))``, which often has better sampling geometry for low
-    eccentricities:
+    Replaces ``(eccentricity, arg_peri)`` with ``(ecosw, esinw)`` =
+    ``(e*cos(omega), e*sin(omega))`` and ``phase_peri`` with the mean longitude at the
+    reference time, ``lambda = omega - 2*pi*phase_peri``. Near ``e = 0`` the data pin
+    ``lambda`` but not ``omega`` or ``phase_peri`` separately, so this has much better
+    sampling geometry for low eccentricities (``docs/spec.md`` §EcoswEsinwRV):
 
         - Nonlinear:
             - ``period`` - the orbital period
             - ``ecosw`` - the eccentricity times cosine of argument of periastron
             - ``esinw`` - the eccentricity times sine of argument of periastron
-            - ``phase_peri`` - the phase at which the mean anomaly is zero (i.e.
-              periastron passage), using a time system relative to the data's reference
-              time
+            - ``mean_longitude`` - the mean longitude ``omega + M`` at the data's
+              reference time (an angle)
         - Linear:
             - ``rv_semiamp`` - sometimes called "K", the RV semi-amplitude
             - ``v_sys`` - the systemic velocity
@@ -196,7 +201,7 @@ class EcoswEsinwRV(AbstractParameterization):
     >>> from harv.models.parameterizations.rv import EcoswEsinwRV
     >>> p = EcoswEsinwRV()
     >>> [pi.name for pi in p.params()]
-    ['period', 'ecosw', 'esinw', 'phase_peri', 'rv_semiamp', 'v_sys']
+    ['period', 'ecosw', 'esinw', 'mean_longitude', 'rv_semiamp', 'v_sys']
     """
 
     def params(self) -> tuple[ParamInfo, ...]:
@@ -205,7 +210,7 @@ class EcoswEsinwRV(AbstractParameterization):
             ParamInfo("period", "time"),
             ParamInfo("ecosw", ""),
             ParamInfo("esinw", ""),
-            ParamInfo("phase_peri", ""),
+            ParamInfo("mean_longitude", "angle"),
             ParamInfo("rv_semiamp", "speed", linear=True),
             ParamInfo("v_sys", "speed", linear=True),
         )
@@ -215,6 +220,15 @@ class EcoswEsinwRV(AbstractParameterization):
         ecosw = nonlinear_values["ecosw"]
         esinw = nonlinear_values["esinw"]
         return jnp.sqrt(ecosw**2 + esinw**2)
+
+    def phase_peri(self, nonlinear_values: dict[str, Any]) -> Any:
+        """Return the periastron phase, ``(omega - mean_longitude) / (2*pi)``."""
+        arg_peri = jnp.arctan2(
+            ustrip(AllowValue, "", nonlinear_values["esinw"]),
+            ustrip(AllowValue, "", nonlinear_values["ecosw"]),
+        )
+        mean_longitude = ustrip(AllowValue, "rad", nonlinear_values["mean_longitude"])
+        return (arg_peri - mean_longitude) / (2 * jnp.pi)
 
     def derived_eccentricity(self, nonlinear_values: dict[str, Any]) -> Any:
         """Recover ``eccentricity`` for priors that expect the standard names.
@@ -282,7 +296,7 @@ class EcoswEsinwRV(AbstractParameterization):
         - ``period``: log-uniform on ``[period_min, period_max]``.
         - ``ecosw``, ``esinw``: ``joint(("ecosw", "esinw"), UnitDisk())``, uniform
           on the unit disk, so every draw is a bound orbit (``e < 1``).
-        - ``phase_peri``: ``Uniform(0, 1)``.
+        - ``mean_longitude``: ``Uniform(0, 2*pi)`` in ``rad``.
 
         Linear priors are the same as :meth:`StandardRV.default_prior`.
 
@@ -309,6 +323,13 @@ class EcoswEsinwRV(AbstractParameterization):
         >>> bool(jnp.all(s["ecosw"] ** 2 + s["esinw"] ** 2 < 1))
         True
         """
+        if "phase_peri" in kwargs:
+            # Would otherwise land in extension_priors and be silently ignored.
+            msg = (
+                "EcoswEsinwRV has no phase_peri: it samples mean_longitude "
+                "(omega - 2*pi*phase_peri). Override mean_longitude instead."
+            )
+            raise TypeError(msg)
         nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
@@ -316,7 +337,9 @@ class EcoswEsinwRV(AbstractParameterization):
                 period=kwargs.pop("period", None),
             ),
             **joint(("ecosw", "esinw"), UnitDisk()),
-            "phase_peri": dist.Uniform(0.0, 1.0),
+            "mean_longitude": QuantityDistribution(
+                dist.Uniform(0.0, 2.0 * jnp.pi), "rad"
+            ),
         }
         linear_priors: dict[str, LinearPriorDist] = {
             "rv_semiamp": _make_rv_semiamp_prior(

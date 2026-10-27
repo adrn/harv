@@ -26,6 +26,7 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
+from harv.models.parameterizations.rv import EcoswEsinwRV
 from harv.samplers.conversion import convert_parameterization
 
 __all__ = ("SampleColumns", "Samples", "pad_and_stack_samples")
@@ -570,8 +571,8 @@ class Samples(eqx.Module):
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
         derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
-        # periastron phase, so time_peri is only derivable when phase_peri exists.
-        if "phase_peri" in self.nonlinear:
+        # periastron phase, so time_peri is only derivable when one exists.
+        if "phase_peri" in self.nonlinear or "mean_longitude" in self.nonlinear:
             derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
@@ -759,7 +760,11 @@ class Samples(eqx.Module):
                 time_ref_val = float(ustrip(time_unit, time_ref))
             else:
                 time_ref_val = float(time_ref)
-            phase_peri = ustrip("", self.nonlinear["phase_peri"])
+            nl = self.nonlinear
+            if "phase_peri" in nl:
+                phase_peri = ustrip("", nl["phase_peri"])
+            else:  # EcoswEsinwRV carries the mean longitude instead
+                phase_peri = EcoswEsinwRV().phase_peri(nl) % 1.0
             period_val = ustrip(time_unit, period)
             return Q(time_ref_val + phase_peri * period_val, time_unit)
 

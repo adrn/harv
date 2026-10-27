@@ -13,6 +13,9 @@ unchanged.  See ``docs/spec.md`` ("Parameterization conversion").
 
 __all__ = ("convert_parameterization",)
 
+from typing import cast
+
+import quaxed.numpy as jnp
 from unxt import Q
 
 from harv.kepler.orbits import (
@@ -114,35 +117,40 @@ def _convert_rv(
     source: AbstractParameterization,
     target: AbstractParameterization,
 ) -> tuple[dict[str, Q], dict[str, Q]]:
-    """Convert between RV parameterizations via the canonical ``(e, omega)`` pair.
+    """Convert between RV parameterizations via canonical ``(e, omega, phase_peri)``.
 
-    ``period`` and ``phase_peri`` (nonlinear) and the linear parameters
-    (``rv_semiamp``, ``v_sys``) are shared by both parameterizations.
+    ``period`` and the linear parameters (``rv_semiamp``, ``v_sys``) are shared by
+    both parameterizations. ``EcoswEsinwRV`` carries the mean longitude
+    ``omega - 2*pi*phase_peri`` instead of ``phase_peri``.
     """
-    # source -> canonical (eccentricity, arg_peri)
+    # source -> canonical (eccentricity, arg_peri, phase_peri)
     if isinstance(source, StandardRV):
         eccentricity = nonlinear["eccentricity"]
         arg_peri = nonlinear["arg_peri"]
+        phase_peri = nonlinear["phase_peri"]
     else:
         eccentricity, arg_peri = ecc_omega_from_ecosw_esinw(
             nonlinear["ecosw"], nonlinear["esinw"]
         )
+        lon_offset = arg_peri - nonlinear["mean_longitude"]
+        phase_peri = cast("Q", jnp.mod(lon_offset / Q(2 * jnp.pi, "rad"), Q(1.0, "")))
 
     # canonical -> target, built in the target's declared parameter order
     if isinstance(target, StandardRV):
         new_nonlinear = {
             "period": nonlinear["period"],
             "eccentricity": eccentricity,
-            "phase_peri": nonlinear["phase_peri"],
+            "phase_peri": phase_peri,
             "arg_peri": arg_peri,
         }
     else:
         ecosw, esinw = ecosw_esinw_from_ecc_omega(eccentricity, arg_peri)
+        mean_longitude = arg_peri - Q(2 * jnp.pi, "rad") * phase_peri
         new_nonlinear = {
             "period": nonlinear["period"],
             "ecosw": ecosw,
             "esinw": esinw,
-            "phase_peri": nonlinear["phase_peri"],
+            "mean_longitude": cast("Q", jnp.mod(mean_longitude, Q(2 * jnp.pi, "rad"))),
         }
 
     new_linear = {"rv_semiamp": linear["rv_semiamp"], "v_sys": linear["v_sys"]}

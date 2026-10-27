@@ -82,6 +82,13 @@ QD = QuantityDistribution
 # Shorthand alias for :class:`QuantityDistribution`.
 
 
+def _names_tuple(names: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(names, str):  # a bare string would split into characters
+        msg = f"JointPrior names must be a sequence of names, got the string {names!r}."
+        raise TypeError(msg)
+    return tuple(names)
+
+
 @final
 class JointPrior(eqx.Module):
     """One distribution shared by several nonlinear parameters.
@@ -99,22 +106,43 @@ class JointPrior(eqx.Module):
     >>> jp = JointPrior(("ecosw", "esinw"), UnitDisk())
     >>> jp.distribution.sample(jax.random.key(0), (5,)).shape
     (5, 2)
+
+    Dimensioned names take a ``QD`` with one unit per name:
+
+    >>> import jax.numpy as jnp
+    >>> import numpyro.distributions as dist
+    >>> from harv.distributions import QD
+    >>> d = dist.Uniform(jnp.array([1.0, 0.0]), jnp.array([100.0, 1.0])).to_event(1)
+    >>> JointPrior(("period", "eccentricity"), QD(d, ("day", ""))).names
+    ('period', 'eccentricity')
     """
 
-    names: tuple[str, ...] = eqx.field(static=True, converter=tuple)
-    distribution: dist.Distribution
+    names: tuple[str, ...] = eqx.field(static=True, converter=_names_tuple)
+    distribution: dist.Distribution | QuantityDistribution
 
     def __check_init__(self) -> None:
         if len(self.names) < 2 or len(set(self.names)) != len(self.names):
             msg = f"JointPrior needs at least two distinct names, got {self.names}."
             raise ValueError(msg)
-        if not isinstance(self.distribution, dist.Distribution):
+        d = self.distribution
+        if isinstance(d, QuantityDistribution):
+            if not (
+                isinstance(d.unit, tuple)
+                and len(d.unit) == len(self.names)
+                and all(isinstance(u, str) for u in d.unit)
+            ):
+                msg = (
+                    f"A QD in a JointPrior over {self.names} needs a tuple of "
+                    f"{len(self.names)} unit strings, one per name; got {d.unit!r}."
+                )
+                raise TypeError(msg)
+            d = d.distribution
+        if not isinstance(d, dist.Distribution):
             msg = (
-                "JointPrior needs a bare, dimensionless numpyro distribution, got "
-                f"{type(self.distribution).__name__}."
+                "JointPrior needs a numpyro distribution (optionally in a QD), got "
+                f"{type(d).__name__}."
             )
             raise TypeError(msg)
-        d = self.distribution
         if tuple(d.batch_shape) != () or tuple(d.event_shape) != (len(self.names),):
             msg = (
                 f"JointPrior over {self.names} needs batch_shape () and event_shape "
@@ -124,7 +152,7 @@ class JointPrior(eqx.Module):
 
 
 def joint(
-    names: Sequence[str], distribution: dist.Distribution
+    names: Sequence[str], distribution: dist.Distribution | QuantityDistribution
 ) -> dict[str, JointPrior]:
     """Return ``nonlinear_priors`` entries for a prior shared by ``names``.
 

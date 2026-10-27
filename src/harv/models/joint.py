@@ -12,7 +12,7 @@ component).
 __all__ = ("JointModel",)
 
 from collections.abc import Callable
-from typing import Any, cast, final
+from typing import Any, final
 
 import equinox as eqx
 import jax
@@ -23,12 +23,12 @@ from unxt import Q, unit
 from unxt.quantity import AllowValue, ustrip
 
 from harv.data.containers import AbstractDatasetContainer
-from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearRole,
     NonlinearPriorDist,
     _is_callable_prior,
     _needs_explicit_sampling,
+    _nonlinear_unit,
     _sample_explicit_linear_prior,
     _with_derived_eccentricity,
     classify_linear_prior,
@@ -85,29 +85,6 @@ def _split_nl_values(
                 comp_vals[param_name] = nonlinear_values[param_name]
         result[comp_name] = comp_vals
     return result
-
-
-def _priors_equal(a: Any, b: Any) -> bool:
-    """Return True if two prior specs are structurally equal.
-
-    Defers to :func:`equinox.tree_equal`, which compares pytree treedef
-    (capturing static metadata such as :attr:`QuantityDistribution.unit`)
-    *and* per-leaf array values together.  This is more robust than a
-    ``__dict__``-based comparison for callable prior factories: many of those
-    are :class:`equinox.Module` subclasses whose field values are exposed via
-    pytree leaves rather than ``__dict__`` (which can be empty under
-    ``__slots__``), and array-shaped fields would also break a raw ``==``
-    on ``__dict__``.
-
-    Numpyro distributions, :class:`QuantityDistribution`, and callable
-    eqx.Module priors are all proper pytrees, so a single call covers every
-    prior shape that flows through ``shared_linear_params`` validation.
-    """
-    if a is b:
-        return True
-    if type(a) is not type(b):
-        return False
-    return bool(eqx.tree_equal(a, b))
 
 
 @final
@@ -1380,8 +1357,9 @@ class JointModel(eqx.Module):
             # consume them (downstream resolvers expect Q-wrapped values).
             nonlinear_values = dict(values)
             for name, d in nonlinear_priors.items():
-                if isinstance(d, QuantityDistribution) and name in shared:
-                    nonlinear_values[name] = Q(values[name], cast("str", d.unit))
+                unit = _nonlinear_unit(d, name)
+                if unit is not None and name in shared:
+                    nonlinear_values[name] = Q(values[name], unit)
 
             # 2. Sample shared explicit-linear priors ONCE.  Direct priors first
             #    so callable shared priors that depend on them can read the
@@ -1544,8 +1522,9 @@ class JointModel(eqx.Module):
             # Wrap shared QD priors in Quantity
             nonlinear_values: dict[str, Any] = dict(values)
             for name, d in nonlinear_priors.items():
-                if isinstance(d, QuantityDistribution) and name in shared:
-                    nonlinear_values[name] = Q(values[name], cast("str", d.unit))
+                unit = _nonlinear_unit(d, name)
+                if unit is not None and name in shared:
+                    nonlinear_values[name] = Q(values[name], unit)
 
             # Split per component
             comp_nl = _split_nl_values(

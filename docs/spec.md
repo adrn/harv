@@ -709,15 +709,31 @@ Any nonlinear or linear prior can be overridden by name via `**kwargs`.
 
 Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
 
-- Nonlinear: `period`, `ecosw`, `esinw`, `phase_peri`.
+- Nonlinear: `period`, `ecosw`, `esinw`, `mean_longitude`.
 - Linear: `rv_semiamp`, `v_sys`.
 - Design matrix shape: `(n_obs, 2)` -- same columns, different internal derivation.
 
-This parameterization has better sampling geometry for low eccentricities.
+`mean_longitude` is the mean longitude at the data's `time_ref`,
+`λ = ω + M(time_ref) = ω − 2π·phase_peri` (an angle, in `rad`). The model recovers
+`phase_peri = (ω − λ) / 2π` with `ω = atan2(esinw, ecosw)` and then solves Kepler's
+equation as for `StandardRV`.
+
+This parameterization has better sampling geometry for low eccentricities. Near
+`e = 0`, `ω` and `phase_peri` are individually unconstrained, but the data pin the
+combination `λ`, since `ω + f ≈ λ + 2π(t − time_ref)/P`. Sampling
+`(ecosw, esinw, λ)` therefore removes both the polar singularity at `e = 0` and the
+`ω`–`phase_peri` ridge; replacing only `(e, ω)` with `(ecosw, esinw)` while keeping
+`phase_peri` leaves the ridge, and NUTS mixes no better than with `StandardRV`.
 
 `default_prior(*, period_min, period_max, sigma_K0, sigma_v0, period_ref=Q(1, "yr"), **kwargs)`
-returns a `HarvPrior` with the same period / `phase_peri` / linear (`rv_semiamp`,
-`v_sys`) priors as `StandardRV.default_prior`, plus:
+returns a `HarvPrior` with the same period / linear (`rv_semiamp`, `v_sys`) priors as
+`StandardRV.default_prior`, plus:
+
+- `mean_longitude`: `QD(Uniform(0, 2π), "rad")`, like `arg_peri` in `StandardRV`
+
+Passing `phase_peri=` raises `TypeError`, since `EcoswEsinwRV` has no such parameter
+and the override would otherwise be silently ignored as an extension prior. A `mean_longitude=` override must carry an angle unit (e.g.
+`QD(dist.Uniform(0, 2π), "rad")`), as for `arg_peri`.
 
 - `ecosw`, `esinw`: `joint(("ecosw", "esinw"), UnitDisk())`, a joint prior uniform on
   the unit disk (see §Joint nonlinear priors)
@@ -887,7 +903,7 @@ usual. They exist primarily to drive the periodogram through the standard
 model/likelihood machinery (see "Periodogram and interim period priors").
 Being Kepler-free they carry no orbital elements, so orbital-element-specific
 analysis raises cleanly: `Samples` from these parameterizations do not
-advertise the derived `time_peri` key (it requires `phase_peri`), and
+advertise the derived `time_peri` key (it requires a periastron phase), and
 `binary_mass_function` / `companion_mass` / `convert_parameterization` /
 Gaia sky-orbit plotting are not applicable.
 
@@ -902,6 +918,7 @@ only when the abbreviation is itself a recognized domain term.** Examples:
 | `eccentricity`    | Full word -- unambiguous                                                          |
 | `phase_peri`      | Descriptive compound                                                              |
 | `arg_peri`        | `arg` is the standard abbreviation for *argument* in orbital mechanics            |
+| `mean_longitude`  | Full descriptive name (`λ`, at `time_ref`; `EcoswEsinwRV`)                        |
 | `rv_semiamp`      | `rv` is universally recognized; avoids ambiguity with astrometric semi-major axis |
 | `v_sys`           | $v\_\\text{sys}$ is the standard notation for systemic velocity                   |
 | `pmra`, `pmdec`   | `pm` is the standard abbreviation for *proper motion*                             |
@@ -1001,7 +1018,9 @@ Models use `phase_peri = time_peri / period` (dimensionless, range 0-1) rather t
 absolute `time_peri`. This decouples the phase from the period scale, simplifies the
 prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
 prior. `Samples` exposes a derived `"time_peri"` key that reconstructs the absolute time
-as `phase_peri * period + time_ref`.
+as `phase_peri * period + time_ref`. For `EcoswEsinwRV` samples, which carry
+`mean_longitude` instead, `phase_peri` is first recovered as
+`(atan2(esinw, ecosw) − mean_longitude) / 2π`.
 
 ### Parameterization conversion
 
@@ -1019,7 +1038,9 @@ returns a new `Samples`, preserving `metadata`, `model_type`, and
 
 The first implementation supports **single-component** parameterizations only:
 
-- RV: `StandardRV <-> EcoswEsinwRV`
+- RV: `StandardRV <-> EcoswEsinwRV`, via `(e, ω)` and
+  `mean_longitude = (ω − 2π·phase_peri)` wrapped to `[0, 2π)`, and back with
+  `phase_peri = ((ω − mean_longitude) / 2π) mod 1`
 - Gaia astrometry: `StandardGaiaAstrometry <-> ThieleInnesGaiaAstrometry`
 
 Any extra parameters not declared by the source parameterization (for example,
@@ -1663,9 +1684,17 @@ from harv.stats import UnitDisk
 nonlinear_priors = {
     "period": harv.QD(dist.LogUniform(2.0, 1000.0), "day"),
     **harv.joint(("ecosw", "esinw"), UnitDisk()),
-    "phase_peri": dist.Uniform(0.0, 1.0),
+    "mean_longitude": harv.QD(dist.Uniform(0.0, 6.283185307179586), "rad"),
 }
 # {"ecosw": JointPrior(...), "esinw": JointPrior(...)} inside the dict
+```
+
+A joint prior may span dimensioned parameters. Wrap the distribution in a `QD` whose
+`unit` is a tuple with one unit per name (`""` for a dimensionless one). The inner
+distribution samples in those units, and each name gets its own unit back:
+
+```python
+harv.joint(("period", "eccentricity"), harv.QD(period_ecc_dist, ("day", "")))
 ```
 
 The keys stay one bare string per parameter. This is required, not a style choice: JAX
@@ -1677,16 +1706,17 @@ case.
 Validation:
 
 - `JointPrior.__check_init__`: at least two distinct names, `batch_shape == ()` and
-  `event_shape == (len(names),)` (`ValueError`); `distribution` is a bare `numpyro`
-  `Distribution`, so not a `QuantityDistribution`, since joint priors are
-  dimensionless for now (`TypeError`). `names` may be any sequence and is stored as a
-  tuple.
+  `event_shape == (len(names),)` on the (unwrapped) distribution (`ValueError`);
+  `distribution` is a bare `numpyro` `Distribution`, or a `QuantityDistribution` whose
+  `unit` is a tuple of `len(names)` strings (otherwise `TypeError`). `names` may be any
+  sequence of strings (a bare string is a `TypeError`) and is stored as a tuple.
 - `HarvPrior.__check_init__`: every name of a `JointPrior` maps to the same `names`
-  and the same `distribution` object (what `joint` builds), and a `JointPrior` sits
-  only under one of its own names (`ValueError`). `extension_priors` holds no
+  and an equal `distribution` (`eqx.tree_equal`; `joint` shares one object), and a
+  `JointPrior` sits only under one of its own names (`ValueError`). A partial override, such as
+  replacing only `ecosw` through `default_prior(..., ecosw=...)`, therefore raises;
+  override all of its names together. `linear_priors` and `extension_priors` hold no
   `JointPrior` (`TypeError`); a `default_prior` override for names the
-  parameterization does not have lands there. A partial override, such as replacing only `ecosw` through
-  `default_prior(..., ecosw=...)`, therefore raises; override all of its names together.
+  parameterization does not have lands in `extension_priors`.
 
 Semantics:
 
@@ -1701,8 +1731,8 @@ Semantics:
   are therefore keyed by the plain names, and warm-start values given per name are
   stacked into the joint site before being unconstrained with
   `biject_to(distribution.support)`. A warm-start point on the support's edge (a MAP on
-  the disk rim) would unconstrain to `±inf`, so infinite unconstrained values are
-  clamped to `±30`. A warm start must carry all of a joint's names or none of them
+  the disk rim) would unconstrain to `±inf` or `NaN`, so for a finite init point these
+  are clamped (`±inf` to `±30`, `NaN` to `0`); a non-finite init is passed through. A warm start must carry all of a joint's names or none of them
   (`ValueError`). A joint distribution used with NUTS needs a
   support with a registered bijector (`UnitDisk` has one).
 - **`JointModel`** sees ordinary per-name keys, so shared and qualified-name
@@ -1711,7 +1741,7 @@ Semantics:
 Joint priors are the single mechanism for dependent nonlinear priors. A conditional
 prior such as `p(P) · p(e | P)` is a joint distribution whose `sample`/`log_prob`
 implement that factorization; there is no separate conditional-prior concept. See
-§Planned features › Dimensioned joint priors.
+§Planned features › Chain-distribution helper for joint priors.
 
 ### Constructing a prior
 
@@ -2509,7 +2539,8 @@ to construct a new `Samples` with the same metadata).
 - Linear params (`"rv_semiamp"`, `"v_sys"`, `"ra0"`, etc.) → `Q` with units
 - Derived keys:
   - `"log10_period"` → dimensionless array (`log10(period in data time units)`)
-  - `"time_peri"` → `Q` (derived from `phase_peri * period + time_ref`)
+  - `"time_peri"` → `Q` (derived from `phase_peri * period + time_ref`; see
+    §`phase_peri` vs `time_peri` for `EcoswEsinwRV` samples)
   - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
   - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
   - `"semi_major_axis_AU"` → `Q` in `AU` (present only for astrometry samples
@@ -3665,19 +3696,22 @@ ______________________________________________________________________
 
 ## Planned features and known gaps
 
-### Dimensioned joint priors
+### Wrap-around angle priors
 
-Joint nonlinear priors (§Joint nonlinear priors) are dimensionless only. A
-period–eccentricity prior (e.g. favoring low `e` at short `P`) needs two additions,
-neither built yet:
+`arg_peri` (`StandardRV`) and `mean_longitude` (`EcoswEsinwRV`) get hard-edged
+`Uniform(0, 2π)` priors, so NUTS cannot cross `0 = 2π`: a posterior pinned near
+`λ ≈ 0` splits into two modes at the edges. The vendored
+`harv.stats.numpyro_ext.Angle` (sampled through `(sin, cos)`, no discontinuity) is
+the likely fix; it needs a decision on its normalization and how rejection sampling
+and warm starts handle its 2-D unconstrained space.
 
-- **Per-name units.** Accept `joint(("period", "eccentricity"), QD(d, ("day", "")))`.
-  `QuantityDistribution` already allows a tuple `unit`; what remains is the per-name
-  unit lookup in the sampler paths that restore units.
-- **A chain-distribution helper**, only if writing 2-D distributions by hand proves
-  painful: a distribution built from a marginal and a conditional callable, implementing
-  `sample`/`log_prob` as `p(P) · p(e | P)` with a composed bijector for NUTS. It would
-  plug into `joint(...)` as is, so the prior plumbing does not change.
+### Chain-distribution helper for joint priors
+
+A conditional joint prior such as `p(P) · p(e | P)` is written today as a hand-made 2-D
+`numpyro` distribution (see the period–eccentricity case study). If that proves painful,
+add a distribution built from a marginal and a conditional callable, implementing
+`sample`/`log_prob` as the product, with a composed bijector for NUTS. It would plug
+into `joint(...)` as is, so the prior plumbing does not change.
 
 ### JointModel non-marginalized MCMC
 

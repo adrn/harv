@@ -51,7 +51,7 @@ def _make_period_prior(
     period: Any | None = None,
     period_min: ScalarQTime | None = None,
     period_max: ScalarQTime | None = None,
-) -> PriorDist:
+) -> NonlinearPriorDist:
     """Return a period prior from an explicit distribution or from bounds."""
     if period is not None:
         if period_min is not None or period_max is not None:

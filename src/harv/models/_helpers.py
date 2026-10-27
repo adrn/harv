@@ -69,10 +69,47 @@ def _nonlinear_groups(
     groups: dict[tuple[str, ...], Any] = {}
     for name, d in priors.items():
         if isinstance(d, JointPrior):
-            groups.setdefault(d.names, d.distribution)
+            groups.setdefault(d.names, _unwrap_dist(d.distribution))
         else:
             groups[(name,)] = _unwrap_dist(d)
     return groups
+
+
+def _nonlinear_unit(d: Any, name: str) -> str | None:
+    """Unit of nonlinear parameter ``name`` under prior ``d``; ``None`` if it has none.
+
+    A bare distribution and a ``QD`` unit of ``""`` both mean dimensionless; such
+    values stay bare arrays.
+    """
+    if isinstance(d, JointPrior):
+        d, i = d.distribution, d.names.index(name)
+        if not isinstance(d, QuantityDistribution):
+            return None
+        return d.unit[i] or None
+    return (str(d.unit) or None) if isinstance(d, QuantityDistribution) else None
+
+
+def _priors_equal(a: Any, b: Any) -> bool:
+    """Return True if two prior specs are structurally equal.
+
+    Defers to :func:`equinox.tree_equal`, which compares pytree treedef
+    (capturing static metadata such as :attr:`QuantityDistribution.unit`)
+    *and* per-leaf array values together.  This is more robust than a
+    ``__dict__``-based comparison for callable prior factories: many of those
+    are :class:`equinox.Module` subclasses whose field values are exposed via
+    pytree leaves rather than ``__dict__`` (which can be empty under
+    ``__slots__``), and array-shaped fields would also break a raw ``==``
+    on ``__dict__``.
+
+    Numpyro distributions, :class:`QuantityDistribution`, and callable
+    eqx.Module priors are all proper pytrees, so a single call covers every
+    prior shape that flows through ``shared_linear_params`` validation.
+    """
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+    return bool(eqx.tree_equal(a, b))
 
 
 def _joint_site_name(names: tuple[str, ...]) -> str:
