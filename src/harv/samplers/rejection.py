@@ -123,12 +123,33 @@ def _prior_monte_carlo_evidence_stats(
     dict[str, Any]
         A dictionary containing the estimated log-evidence and related statistics.
     """
-    n_prior = int(ln_likelihoods.shape[0])
+    return _evidence_stats_from_sums(
+        logsumexp(ln_likelihoods),
+        logsumexp(2.0 * ln_likelihoods),
+        jnp.max(ln_likelihoods),
+        int(ln_likelihoods.shape[0]),
+    )
 
-    ln_s1 = logsumexp(ln_likelihoods)
-    ln_s2 = logsumexp(2.0 * ln_likelihoods)
-    max_ln_likelihood = jnp.max(ln_likelihoods)
 
+def _evidence_stats_from_sums(
+    ln_s1: jax.Array, ln_s2: jax.Array, max_ln_likelihood: jax.Array, n_prior: int
+) -> dict[str, Any]:
+    """Evidence statistics from ``logsumexp(L)``, ``logsumexp(2L)`` and ``max L``.
+
+    Split out of :func:`_prior_monte_carlo_evidence_stats` so the disk-streaming
+    path can accumulate the three sums batch by batch, without holding every
+    log-likelihood at once.
+
+    Examples
+    --------
+    >>> import jax.numpy as jnp
+    >>> from harv.samplers.rejection import _evidence_stats_from_sums
+    >>> stats = _evidence_stats_from_sums(
+    ...     jnp.log(4.0), jnp.log(4.0), jnp.asarray(0.0), 4
+    ... )
+    >>> float(stats["ln_Z_int"]), float(stats["ln_Z_int_ess"])
+    (0.0, 4.0)
+    """
     ln_z = ln_s1 - jnp.log(n_prior)
 
     # Evidence effective sample size:
@@ -147,6 +168,25 @@ def _prior_monte_carlo_evidence_stats(
         "max_ln_likelihood": max_ln_likelihood,
         "n_prior_samples": n_prior,
     }
+
+
+def _read_padded(dataset: Any, start: int, stop: int, size: int) -> jax.Array:
+    """Read ``dataset[start:stop]``, padded to ``size`` rows by repeating the last.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from harv.samplers.rejection import _read_padded
+    >>> _read_padded(np.arange(5.0), 3, 5, 4).tolist()
+    [3.0, 4.0, 4.0, 4.0]
+    >>> _read_padded(np.arange(6.0).reshape(3, 2), 2, 3, 2).tolist()
+    [[4.0, 5.0], [4.0, 5.0]]
+    """
+    arr = np.asarray(dataset[start:stop])
+    if arr.shape[0] < size:
+        pad = np.repeat(arr[-1:], size - arr.shape[0], axis=0)
+        arr = np.concatenate([arr, pad])
+    return jnp.asarray(arr)
 
 
 def _top_k_indices_impl(ln_likelihoods: jax.Array, k: int) -> jax.Array:
@@ -519,8 +559,12 @@ class RejectionSampler(AbstractSampler):
             If ``True``, any ``NaN`` or infinite log-likelihood values are
             treated as rejected samples by replacing them with ``-inf`` before
             the rejection step. If ``False`` (default), non-finite values are
-            left unchanged. On the ``top_k`` path this is a no-op: non-finite
-            log-likelihoods always sort last and carry zero weight.
+            left unchanged. On the ``top_k`` path non-finite log-likelihoods
+            always sort last, so the selected rows are the same either way,
+            but without this flag a ``NaN`` makes the evidence statistics
+            (``ln_Z_int``, and with it ``Samples["weight"]``) ``NaN``, and in
+            :meth:`run_with_samples` it makes the running ESS ``NaN``, so
+            ``stop_at_ess`` never stops the run early.
         return_logprobs
             If ``True``, store per-sample log-probabilities on the returned
             :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
@@ -600,6 +644,7 @@ class RejectionSampler(AbstractSampler):
         top_k: int | None,
         return_logprobs: bool,
         return_evidence_stats: bool,
+        evidence_stats: dict[str, Any] | None = None,
     ) -> Samples:
         """Shared downstream: select -> linear -> Samples assembly.
 
@@ -616,6 +661,10 @@ class RejectionSampler(AbstractSampler):
         the ``Samples["weight"]`` derived key is reconstructed from
         ``ln_likelihood`` plus the ``ln_Z_int`` / ``n_prior_samples``
         metadata.
+
+        ``evidence_stats`` replaces the statistics computed from
+        ``ln_likelihoods``.  The disk-streaming path passes them because by then
+        ``ln_likelihoods`` holds only the rows it kept, not the whole library.
         """
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors
@@ -679,9 +728,10 @@ class RejectionSampler(AbstractSampler):
         # already in memory) so the under-resolution warning fires even when the
         # caller did not ask to keep the full evidence statistics.
         # n_prior_samples is already a Python int; the rest are JAX scalars.
+        if evidence_stats is None:
+            evidence_stats = _prior_monte_carlo_evidence_stats(ln_likelihoods)
         evidence_meta = {
-            k: v if isinstance(v, int) else float(v)
-            for k, v in _prior_monte_carlo_evidence_stats(ln_likelihoods).items()
+            k: v if isinstance(v, int) else float(v) for k, v in evidence_stats.items()
         }
         n_accepted = int(next(iter(accepted_nonlinear.values())).shape[0])
         well_resolved, resolution_msg = _assess_resolution(
@@ -848,6 +898,7 @@ class RejectionSampler(AbstractSampler):
         return_logprobs: bool = False,
         return_evidence_stats: bool = False,
         randomize_prior_order: bool = True,
+        stop_at_ess: float | None = None,
     ) -> Samples:
         """Run rejection (or top-K selection) against pre-computed prior samples.
 
@@ -873,9 +924,12 @@ class RejectionSampler(AbstractSampler):
             See :meth:`run`. This is the intended entry point for
             population-scale loops: one shared prior library, one call per
             system, exactly ``top_k`` rows out of every call regardless of how
-            constraining that system's data are. Selection depends only on the
-            log-likelihoods, so it is unaffected by
-            ``randomize_prior_order``.
+            constraining that system's data are. Without ``stop_at_ess``,
+            selection depends only on the log-likelihoods, so it is unaffected
+            by ``randomize_prior_order`` (up to ties, which keep read order).
+            With ``stop_at_ess``, the read order decides where the run stops,
+            so the selection and every output depend on
+            ``randomize_prior_order`` and ``key``.
         key
             See :meth:`run`.
         ignore_non_finite
@@ -890,6 +944,23 @@ class RejectionSampler(AbstractSampler):
             Each batch is still a single contiguous h5py slice, so disk I/O
             is unchanged. Set to ``False`` for strictly sequential reads
             (reproducibility / debugging). Ignored for the in-memory branch.
+        stop_at_ess
+            Disk-streaming branch only: stop reading the library once the
+            running evidence ESS (``ln_Z_int_ess``) reaches this value, and at
+            least ``top_k`` rows have been read. Must be at least the sampler's
+            ``min_evidence_ess``. ``None`` (default) reads the
+            whole library. The rows read so far are a smaller library of
+            i.i.d. prior draws, so every output, ``n_prior_samples`` included,
+            describes that library. This is a heuristic: the ESS and
+            ``ln_Z_int_mcse`` are estimated from the draws read so far, so they
+            cannot account for a high-likelihood region of small prior mass
+            that no draw has hit yet, and a run can stop with a large ESS and
+            a small reported MCSE while ``ln_Z_int`` is still well off.
+            Stopping on a data-dependent quantity also biases ``ln_Z_int``.
+            Sources whose draws show them to be constrained never reach the
+            threshold and read the whole library, as does any run with a
+            non-finite log-likelihood unless ``ignore_non_finite`` is set.
+            See ``docs/sharp-bits.md``.
 
         Returns
         -------
@@ -901,10 +972,52 @@ class RejectionSampler(AbstractSampler):
         ------
         ValueError
             If both ``max_posterior_samples`` and ``top_k`` are set, if
-            ``top_k`` is not positive, or if ``prior_samples`` is empty.
+            ``top_k`` is not positive, if ``prior_samples`` is empty, or if
+            ``stop_at_ess`` is below ``min_evidence_ess`` or is passed with an
+            in-memory ``prior_samples``.
+
+        Examples
+        --------
+        Stop once 200 effective draws are in, instead of reading all 20,000:
+
+        >>> import jax
+        >>> import jax.numpy as jnp
+        >>> from unxt import Q
+        >>> import harv.models as hm
+        >>> from harv.data import RVData
+        >>> from harv.samplers import RejectionSampler, make_prior_cache
+        >>> prior = hm.StandardRV().default_prior(
+        ...     period_min=Q(2, "day"), period_max=Q(1000, "day"),
+        ...     sigma_K0=Q(30, "km/s"), sigma_v0=Q(50, "km/s"),
+        ... )
+        >>> make_prior_cache(prior, hm.RVModel(), 20_000, "library.h5",
+        ...                  key=jax.random.key(0), batch_size=1000)  # doctest: +SKIP
+        >>> data = RVData(time=Q(jnp.linspace(0, 100, 3), "day"),
+        ...               rv=Q(jnp.zeros(3), "km/s"), rv_err=Q(jnp.ones(3), "km/s"))
+        >>> sampler = RejectionSampler(prior, hm.RVModel(), batch_size=1000)
+        >>> samples = sampler.run_with_samples(  # doctest: +SKIP
+        ...     data, "library.h5", key=jax.random.key(1), top_k=64, stop_at_ess=200
+        ... )
+        >>> samples.metadata["n_prior_samples"] < 20_000  # doctest: +SKIP
+        True
         """
         _validate_data(data, self.model)
         _validate_selection_policy(max_posterior_samples, top_k)
+        if stop_at_ess is not None and not stop_at_ess >= self.min_evidence_ess:
+            # Stopping there would leave a run the resolution check flags as
+            # under-resolved, after reading only part of the library. Written
+            # as `not >=` so NaN is rejected too.
+            msg = (
+                f"stop_at_ess ({stop_at_ess}) must be at least this sampler's "
+                f"min_evidence_ess ({self.min_evidence_ess})."
+            )
+            raise ValueError(msg)
+        if stop_at_ess is not None and isinstance(prior_samples, Samples):
+            msg = (
+                "stop_at_ess applies to a prior cache read from disk; for an "
+                "in-memory library, pass fewer samples instead."
+            )
+            raise ValueError(msg)
 
         prepared = _prepare_sampler_model(
             self.prior,
@@ -915,6 +1028,7 @@ class RejectionSampler(AbstractSampler):
 
         rej_key = jr.fold_in(key, 1)
 
+        evidence_stats = None
         if isinstance(prior_samples, Samples):
             if prior_samples.n_samples <= 0:
                 raise ValueError("prior_samples must contain at least one sample.")
@@ -922,12 +1036,15 @@ class RejectionSampler(AbstractSampler):
                 prepared, prior_samples, data
             )
         else:
-            flat_samples, ln_likelihoods = self._evaluate_from_hdf5(
+            flat_samples, ln_likelihoods, evidence_stats = self._evaluate_from_hdf5(
                 prepared,
                 Path(os.fspath(prior_samples)),
                 data,
                 key=jr.fold_in(key, 2),
                 randomize_prior_order=randomize_prior_order,
+                top_k=top_k,
+                stop_at_ess=stop_at_ess,
+                ignore_non_finite=ignore_non_finite,
             )
 
         return self._finalize_posterior(
@@ -942,6 +1059,7 @@ class RejectionSampler(AbstractSampler):
             top_k=top_k,
             return_logprobs=return_logprobs,
             return_evidence_stats=return_evidence_stats,
+            evidence_stats=evidence_stats,
         )
 
     def _expected_prior_keys(
@@ -1057,7 +1175,10 @@ class RejectionSampler(AbstractSampler):
         *,
         key: jax.Array,
         randomize_prior_order: bool,
-    ) -> tuple[dict[str, jax.Array], jax.Array]:
+        top_k: int | None,
+        stop_at_ess: float | None,
+        ignore_non_finite: bool,
+    ) -> tuple[dict[str, jax.Array], jax.Array, dict[str, Any]]:
         """Disk-streaming branch of :meth:`run_with_samples`.
 
         Reads the prior cache in ``batch_size``-row contiguous slices and
@@ -1065,6 +1186,14 @@ class RejectionSampler(AbstractSampler):
         :meth:`_evaluate_log_likelihoods_one_batch`.  When
         ``randomize_prior_order`` is true, the batch order is permuted so the
         accumulated samples are not biased toward the start of the file.
+
+        The evidence statistics are accumulated per batch and returned
+        alongside the rows.  With ``top_k``, only the running best ``top_k``
+        rows are kept, so memory does not grow with the library; the merge
+        keeps earlier-read rows first on ties, so it selects exactly what one
+        :func:`_top_k_indices` over the rows, in the order read, would.  Without it,
+        every row is kept for the rejection step.  ``stop_at_ess`` ends the
+        loop early (see :meth:`run_with_samples`).
         """
         expected_nl, expected_lin = self._expected_prior_keys(prepared)
         expected_keys = tuple(dict.fromkeys([*expected_nl, *expected_lin]))
@@ -1102,22 +1231,25 @@ class RejectionSampler(AbstractSampler):
 
             ln_lik_chunks: list[jax.Array] = []
             sample_chunks: dict[str, list[jax.Array]] = {k: [] for k in expected_keys}
+            ln_s1 = ln_s2 = max_ll = jnp.asarray(-jnp.inf)
+            n_read = 0
 
             for i in batch_order:
                 start = int(i) * self.batch_size
                 stop = min(start + self.batch_size, n_prior_samples)
                 actual = stop - start
 
-                batch: dict[str, jax.Array] = {}
-                for k in expected_keys:
-                    grp = nonlinear_group if k in available_nl else linear_group
-                    arr = np.asarray(grp[k][start:stop])
-                    # Pad the final batch to ``batch_size`` so the JIT cache
-                    # is reused (single static shape).
-                    if actual < self.batch_size:
-                        pad = self.batch_size - actual
-                        arr = np.concatenate([arr, np.repeat(arr[-1:], pad)])
-                    batch[k] = jnp.asarray(arr)
+                # Pad the final batch to ``batch_size`` so the JIT cache is
+                # reused (single static shape).
+                batch = {
+                    k: _read_padded(
+                        (nonlinear_group if k in available_nl else linear_group)[k],
+                        start,
+                        stop,
+                        self.batch_size,
+                    )
+                    for k in expected_keys
+                }
 
                 ln_lik = self._evaluate_log_likelihoods_one_batch(
                     prepared.model,
@@ -1125,15 +1257,43 @@ class RejectionSampler(AbstractSampler):
                     prepared.effective_linear_prior or {},
                     prepared.effective_marginalized_names,
                     data,
-                )
-                # Drop padding before accumulating.
-                ln_lik_chunks.append(ln_lik[:actual])
+                )[:actual]  # drop the padding
+                if ignore_non_finite:
+                    ln_lik = jnp.where(jnp.isfinite(ln_lik), ln_lik, -jnp.inf)
+                ln_s1 = jnp.logaddexp(ln_s1, logsumexp(ln_lik))
+                ln_s2 = jnp.logaddexp(ln_s2, logsumexp(2.0 * ln_lik))
+                max_ll = jnp.maximum(max_ll, jnp.max(ln_lik))
+                n_read += actual
+
+                ln_lik_chunks.append(ln_lik)
                 for k in expected_keys:
                     sample_chunks[k].append(batch[k][:actual])
+                if top_k is not None and n_read > top_k:
+                    # Merge into the running top-k, earlier rows first. Until more
+                    # than top_k rows are in, nothing can be dropped, so the chunks
+                    # just accumulate and _finalize_posterior does the selection.
+                    ll = jnp.concatenate(ln_lik_chunks)
+                    idx = _top_k_indices(ll, top_k)
+                    ln_lik_chunks = [ll[idx]]
+                    sample_chunks = {
+                        k: [jnp.concatenate(v)[idx]] for k, v in sample_chunks.items()
+                    }
+
+                # NaN (non-finite likelihoods kept) compares False: no stop.
+                if (
+                    stop_at_ess is not None
+                    and n_read >= (top_k or 0)
+                    and float(jnp.exp(2.0 * ln_s1 - ln_s2)) >= stop_at_ess
+                ):
+                    break
 
         ln_likelihoods = jnp.concatenate(ln_lik_chunks)
         flat = {k: jnp.concatenate(v) for k, v in sample_chunks.items()}
-        return flat, ln_likelihoods
+        return (
+            flat,
+            ln_likelihoods,
+            _evidence_stats_from_sums(ln_s1, ln_s2, max_ll, n_read),
+        )
 
     @eqx.filter_jit
     def _sample_prior_and_evaluate_batched(
