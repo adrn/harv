@@ -21,9 +21,9 @@ from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
 from harv.custom_types import ScalarQSpeed, ScalarQTime
-from harv.distributions import QuantityDistribution
+from harv.distributions import QuantityDistribution, joint
 from harv.kepler.orbits import rv_shape
-from harv.models._helpers import LinearPriorDist, PriorDist
+from harv.models._helpers import LinearPriorDist, NonlinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
@@ -34,6 +34,7 @@ from harv.models.priors._helpers import (
     _make_vsys_prior,
     kipping_2013_ecc_prior,
 )
+from harv.stats import UnitDisk
 
 
 @final
@@ -141,7 +142,7 @@ class StandardRV(AbstractParameterization):
         **kwargs
             Per-parameter prior overrides or extension priors.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
@@ -272,33 +273,49 @@ class EcoswEsinwRV(AbstractParameterization):
         sigma_K0: ScalarQSpeed | None = None,
         sigma_v0: ScalarQSpeed | None = None,
         period_ref: ScalarQTime = Q(1.0, "yr"),
-        **kwargs: PriorDist | LinearPriorDist,
+        **kwargs: NonlinearPriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
 
         Nonlinear priors:
 
         - ``period``: log-uniform on ``[period_min, period_max]``.
-        - ``ecosw``: ``Uniform(-1, 1)``.
-        - ``esinw``: ``Uniform(-1, 1)``.
+        - ``ecosw``, ``esinw``: ``joint(("ecosw", "esinw"), UnitDisk())``, uniform
+          on the unit disk, so every draw is a bound orbit (``e < 1``).
         - ``phase_peri``: ``Uniform(0, 1)``.
 
         Linear priors are the same as :meth:`StandardRV.default_prior`.
 
-        Independent ``Uniform(-1, 1)`` priors on ``ecosw`` and ``esinw`` do *not*
-        match the implicit prior under ``e ~ Beta(0.867, 3.03)`` with
+        Uniform on the disk implies ``p(e) = 2e``, which does *not* match the
+        implicit prior under ``e ~ Beta(0.867, 3.03)`` with
         ``omega ~ Uniform(0, 2*pi)``.  This is the simplest sensible default
         for this parameterization; for a matched prior, sample with
-        ``StandardRV`` and convert.
+        ``StandardRV`` and convert.  Override ``ecosw`` and ``esinw`` together:
+        replacing only one raises ``ValueError``.
+
+        Examples
+        --------
+        >>> import jax
+        >>> import quaxed.numpy as jnp
+        >>> from unxt import Q
+        >>> from harv import EcoswEsinwRV
+        >>> prior = EcoswEsinwRV().default_prior(
+        ...     period_min=Q(2.0, "day"),
+        ...     period_max=Q(1000.0, "day"),
+        ...     sigma_K0=Q(30.0, "km/s"),
+        ...     sigma_v0=Q(50.0, "km/s"),
+        ... )
+        >>> s = prior.sample_nonlinear(1000, key=jax.random.key(0))
+        >>> bool(jnp.all(s["ecosw"] ** 2 + s["esinw"] ** 2 < 1))
+        True
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
                 period=kwargs.pop("period", None),
             ),
-            "ecosw": dist.Uniform(-1.0, 1.0),
-            "esinw": dist.Uniform(-1.0, 1.0),
+            **joint(("ecosw", "esinw"), UnitDisk()),
             "phase_peri": dist.Uniform(0.0, 1.0),
         }
         linear_priors: dict[str, LinearPriorDist] = {

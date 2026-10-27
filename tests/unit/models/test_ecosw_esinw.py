@@ -17,6 +17,7 @@ import harv.models as hm
 from harv.data import RVData
 from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
 from harv.models.rv import RVModel
+from harv.samplers.numpyro import NumpyroSampler, _unconstrain_init_params
 from harv.samplers.rejection import RejectionSampler
 from harv.simulate.rv import simulate_rv_sb1_data
 
@@ -307,13 +308,14 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
     """
 
     @staticmethod
-    def _prior_and_model() -> tuple[Any, RVModel]:
+    def _prior_and_model(**overrides: Any) -> tuple[Any, RVModel]:
         param = hm.EcoswEsinwRV()
         prior = param.default_prior(
             period_min=Q(10.0, "day"),
             period_max=Q(3000.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(50.0, "km/s"),
+            **overrides,
         )
         return prior, RVModel(parameterization=param)
 
@@ -334,29 +336,33 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
         prior, model = self._prior_and_model()
         sampler = RejectionSampler(prior, model, batch_size=2000)
-        # ignore_non_finite: independent Uniform(-1, 1) priors on ecosw/esinw put
-        # ~21% of draws outside the unit disk (e >= 1, an unbound orbit), where the
-        # K prior's (1 - e^2)^(-1/2) is NaN. Those draws must be rejected.
         samples = sampler.run_with_samples(
             data,
             prior.sample(2000, key=jr.key(0), model=model),
             top_k=8,
             key=jax.random.key(0),
-            ignore_non_finite=True,
         )
         assert samples.n_samples == 8
         assert jnp.isfinite(samples.metadata["max_ln_likelihood"])
 
-    @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
-    def test_unit_disk_violation_is_rejected_not_propagated(self):
-        """e >= 1 draws must not poison max_ln_likelihood.
+    def test_default_prior_stays_in_unit_disk(self):
+        """The joint UnitDisk default never draws an unbound orbit."""
+        prior, model = self._prior_and_model()
+        cache = prior.sample(4000, key=jr.key(0), model=model)
+        ecc = qnp.sqrt(cache["ecosw"] ** 2 + cache["esinw"] ** 2)
+        assert qnp.all(ecc < 1.0)
 
-        Without ignore_non_finite a single NaN propagates through the max
-        reduction, leaving every evidence statistic NaN. This pins the sharp edge
-        documented in docs/sharp-bits.md so a change in either direction is visible.
+    @pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
+    def test_square_override_propagates_nan(self):
+        """Independent Uniform(-1, 1) overrides escape the disk and poison the max.
+
+        Pins the sharp edge documented in docs/sharp-bits.md so a change in either
+        direction is visible.
         """
         data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
-        prior, model = self._prior_and_model()
+        prior, model = self._prior_and_model(
+            ecosw=dist.Uniform(-1.0, 1.0), esinw=dist.Uniform(-1.0, 1.0)
+        )
         cache = prior.sample(2000, key=jr.key(0), model=model)
         ecc = qnp.sqrt(cache["ecosw"] ** 2 + cache["esinw"] ** 2)
         assert qnp.any(ecc >= 1.0), "expected the square prior to escape the unit disk"
@@ -364,3 +370,64 @@ class TestEcoswEsinwDefaultPriorIsEvaluable:
         sampler = RejectionSampler(prior, model, batch_size=2000)
         without = sampler.run_with_samples(data, cache, top_k=8, key=jax.random.key(0))
         assert not jnp.isfinite(without.metadata["max_ln_likelihood"])
+
+
+@pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
+class TestEcoswEsinwNumpyro:
+    """The joint (ecosw, esinw) prior on the numpyro path: one site, named values."""
+
+    @pytest.fixture(scope="class")
+    def setup(self):
+        data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
+        param = hm.EcoswEsinwRV()
+        prior = param.default_prior(
+            period_min=Q(10.0, "day"),
+            period_max=Q(3000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+        )
+        model = RVModel(parameterization=param)
+        init = RejectionSampler(prior, model).run(
+            data, key=jr.key(0), n_prior_samples=4000, top_k=2
+        )
+        return data, prior, model, init
+
+    @staticmethod
+    def _check(samples: Any) -> None:
+        # Closed disk: a constrained optimizer can saturate the bijector onto
+        # the boundary, but never past it.
+        ecosw, esinw = samples["ecosw"], samples["esinw"]
+        assert "ecosw,esinw" not in samples.nonlinear
+        assert bool(qnp.all(ecosw**2 + esinw**2 <= 1))
+        assert bool(jnp.all(jnp.isfinite(samples.ln_prior)))
+
+    def test_nuts_warm_start(self, setup):
+        data, prior, model, init = setup
+        post = NumpyroSampler(prior, model).run(
+            data,
+            init_samples=init,
+            key=jr.key(1),
+            num_chains=1,
+            num_warmup=200,
+            num_samples=100,
+            return_logprobs=True,
+        )
+        assert post["ecosw"].shape == (100,)
+        self._check(post)
+        # Warm-started at the right mode: recovers the injected e ~ 0.05.
+        ecc = qnp.sqrt(post["ecosw"] ** 2 + post["esinw"] ** 2)
+        assert float(qnp.median(ecc)) < 0.2
+
+    def test_optimize(self, setup):
+        data, prior, model, init = setup
+        refined = NumpyroSampler(prior, model).optimize(init, data, key=jr.key(2))
+        assert refined["ecosw"].shape == (init.n_samples,)
+        self._check(refined)
+
+
+def test_warm_start_on_disk_edge_is_finite():
+    # A MAP on the rim (e = 1) unconstrains to inf; it must be pulled finite.
+    prior, _ = TestEcoswEsinwDefaultPriorIsEvaluable._prior_and_model()
+    init = {"ecosw,esinw": jnp.array([0.6, 0.8])}
+    out = _unconstrain_init_params(init, prior)
+    assert bool(jnp.all(jnp.isfinite(out["ecosw,esinw"])))

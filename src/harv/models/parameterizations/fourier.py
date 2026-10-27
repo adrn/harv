@@ -60,7 +60,7 @@ from harv.custom_types import (
     ScalarQTime,
 )
 from harv.distributions import QuantityDistribution
-from harv.models._helpers import LinearPriorDist, PriorDist
+from harv.models._helpers import LinearPriorDist, NonlinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
@@ -268,7 +268,7 @@ class FourierRV(AbstractParameterization):
         **kwargs
             Per-parameter prior overrides or extension priors.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
@@ -471,7 +471,7 @@ class FourierGaiaAstrometry(AbstractParameterization):
         **kwargs
             Per-parameter prior overrides or extension priors.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,

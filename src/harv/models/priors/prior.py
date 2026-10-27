@@ -14,12 +14,14 @@ import jax
 import jax.random as jr
 from unxt import Q
 
-from harv.distributions import QuantityDistribution
+from harv.distributions import JointPrior, QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDict,
     LinearPriorDist,
+    NonlinearPriorDist,
     PriorDist,
     _evaluate_nonlinear_log_prior,
+    _sample_nonlinear,
     _unwrap_dist,
 )
 
@@ -69,7 +71,8 @@ class HarvPrior(eqx.Module):
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
         :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
-        physical units).
+        physical units). Several parameters can share one distribution through
+        :func:`harv.joint`, e.g. ``**joint(("ecosw", "esinw"), UnitDisk())``.
     linear_priors
         Per-parameter priors for linear parameters. Each entry is classified:
 
@@ -87,7 +90,7 @@ class HarvPrior(eqx.Module):
 
     """
 
-    nonlinear_priors: dict[str, PriorDist]
+    nonlinear_priors: dict[str, NonlinearPriorDist]
     linear_priors: LinearPriorDict
 
     # Priors for extension parameters (jitter, offsets, GP hyperparams, etc.).
@@ -96,6 +99,21 @@ class HarvPrior(eqx.Module):
     # validated here -- the sampler checks at run-time that every extension
     # parameter has a matching entry.
     extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
+
+    def __check_init__(self) -> None:
+        # A JointPrior must sit under every one of its names; a partial override
+        # (e.g. ``default_prior(..., ecosw=...)`` alone) leaves it incomplete.
+        for d in self.nonlinear_priors.values():
+            if not isinstance(d, JointPrior):
+                continue
+            for name in d.names:
+                other = self.nonlinear_priors.get(name)
+                if not (isinstance(other, JointPrior) and other.names == d.names):
+                    msg = (
+                        f"Joint prior over {d.names} is missing or replaced for "
+                        f"{name!r}. Override all of {d.names} together."
+                    )
+                    raise ValueError(msg)
 
     def sample_nonlinear(self, n_samples: int, *, key: jax.Array) -> dict[str, Any]:
         """Sample nonlinear parameters from priors.
@@ -135,11 +153,7 @@ class HarvPrior(eqx.Module):
         ... ).sample_nonlinear(jax.random.key(0), 10)["period"].shape
         (10,)
         """
-        keys = jr.split(key, len(self.nonlinear_priors))
-        return {
-            name: _unwrap_dist(d).sample(k, (n_samples,))
-            for (name, d), k in zip(self.nonlinear_priors.items(), keys, strict=True)
-        }
+        return _sample_nonlinear(self.nonlinear_priors, n_samples, key=key)
 
     def sample(
         self,
@@ -271,7 +285,7 @@ class HarvPrior(eqx.Module):
             explicit_linear[name] = _unwrap_dist(d).sample(k, (n_samples,))
 
         # Restore units onto nonlinear (base + extension) entries.
-        all_nonlinear_priors: dict[str, PriorDist] = {
+        all_nonlinear_priors: dict[str, NonlinearPriorDist] = {
             **self.nonlinear_priors,
             **nonlinear_extension_priors,
         }

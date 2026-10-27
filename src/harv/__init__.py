@@ -13,7 +13,9 @@ __all__ = (
     "SourceData",
     # Distributions
     "QD",
+    "JointPrior",
     "QuantityDistribution",
+    "joint",
     # Models API
     "AbstractComponentModel",
     "GaiaAstrometryModel",
@@ -68,7 +70,7 @@ if not jax.config.read("jax_enable_x64") and "JAX_ENABLE_X64" not in os.environ:
     )
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
-from harv.distributions import QD, QuantityDistribution
+from harv.distributions import QD, JointPrior, QuantityDistribution, joint
 from harv.models.extensions import (
     AbstractExtension,
     GP,

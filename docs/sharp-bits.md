@@ -131,18 +131,20 @@ Both conditions point the same way as the advice in `frequency_grid`: use one sh
 grid across a population so the results are directly comparable and the sampler compiles
 once.
 
-## `EcoswEsinwRV`'s default prior admits unbound orbits
+## Priors that reach unbound orbits give `NaN`, not rejections
 
-`EcoswEsinwRV().default_prior(...)` puts independent `Uniform(-1, 1)` priors on `ecosw`
-and `esinw`. That support is a square, but a bound orbit needs the unit disk:
+`EcoswEsinwRV().default_prior(...)` puts a joint `UnitDisk()` prior on
+`(ecosw, esinw)`, so every draw is a bound orbit. If you override it with independent
+priors, for example `ecosw=dist.Uniform(-1, 1), esinw=dist.Uniform(-1, 1)`, the support
+becomes a square, but a bound orbit needs the unit disk:
 
 ```
 e = sqrt(ecosw**2 + esinw**2) < 1
 ```
 
-Roughly 21% of draws (`1 - pi/4`) fall outside it with `e >= 1`, which is not an orbit.
-The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns `NaN`
-there.
+Roughly 21% of draws (`1 - pi/4`) then fall outside it with `e >= 1`, which is not an
+orbit. The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns
+`NaN` there.
 
 `NaN` does not behave like a rejected sample. It propagates through the `max` reduction
 the rejection step normalizes by, so `max_ln_likelihood`, `ln_Z_int`, and
@@ -155,6 +157,5 @@ samples = sampler.run(
 )
 ```
 
-This is not specific to `EcoswEsinwRV` -- any prior that can produce a non-finite
-likelihood needs the same flag -- but that parameterization's default prior guarantees
-it on about a fifth of all draws.
+This is not specific to `EcoswEsinwRV`: any prior that can produce a non-finite
+likelihood needs the same flag.

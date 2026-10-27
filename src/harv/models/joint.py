@@ -26,7 +26,7 @@ from harv.data.containers import AbstractDatasetContainer
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearRole,
-    PriorDist,
+    NonlinearPriorDist,
     _is_callable_prior,
     _needs_explicit_sampling,
     _sample_explicit_linear_prior,
@@ -1249,7 +1249,7 @@ class JointModel(eqx.Module):
 
     def numpyro_model(
         self,
-        nonlinear_priors: dict[str, PriorDist],
+        nonlinear_priors: dict[str, NonlinearPriorDist],
         data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
         *,
@@ -1301,7 +1301,7 @@ class JointModel(eqx.Module):
 
     def _build_marginalized_numpyro(  # noqa: C901
         self,
-        nonlinear_priors: dict[str, PriorDist],
+        nonlinear_priors: dict[str, NonlinearPriorDist],
         data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
         *,
@@ -1462,7 +1462,7 @@ class JointModel(eqx.Module):
 
     def _build_full_numpyro(  # noqa: C901
         self,
-        nonlinear_priors: dict[str, PriorDist],
+        nonlinear_priors: dict[str, NonlinearPriorDist],
         data: AbstractDatasetContainer,
         linear_priors: dict[str, Any] | None,
     ) -> Callable[[], None]:

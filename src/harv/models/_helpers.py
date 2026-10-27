@@ -9,6 +9,7 @@ from typing import Any, NamedTuple, cast
 
 import equinox as eqx
 import jax
+import jax.random as jr
 import numpyro
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
@@ -20,7 +21,7 @@ from numpyro.distributions.truncated import (
 from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
-from harv.distributions import QuantityDistribution
+from harv.distributions import JointPrior, QuantityDistribution
 from harv.models.ties import TiedPrior
 from harv.stats.marginalized import ResolvedLinearPrior
 
@@ -46,6 +47,10 @@ LinearPriorDict = dict[str, LinearPriorDist]
 # Per-parameter linear prior dictionary.
 
 
+NonlinearPriorDist = PriorDist | JointPrior
+# A nonlinear prior entry: per-name, or one shared by several names (``joint``).
+
+
 def _unwrap_dist(v: PriorDist) -> Any:
     """Extract the underlying numpyro distribution from a PriorDist."""
     if isinstance(v, QuantityDistribution):
@@ -53,20 +58,66 @@ def _unwrap_dist(v: PriorDist) -> Any:
     return v
 
 
+def _nonlinear_groups(
+    priors: dict[str, NonlinearPriorDist],
+) -> dict[tuple[str, ...], Any]:
+    """One entry per independent prior: its names -> its bare numpyro distribution.
+
+    A ``JointPrior`` appears under each of its names in ``priors`` but is one
+    group here, so it is sampled and its ``log_prob`` counted once.
+    """
+    groups: dict[tuple[str, ...], Any] = {}
+    for name, d in priors.items():
+        if isinstance(d, JointPrior):
+            groups.setdefault(d.names, d.distribution)
+        else:
+            groups[(name,)] = _unwrap_dist(d)
+    return groups
+
+
+def _joint_site_name(names: tuple[str, ...]) -> str:
+    """Numpyro site name for a group (``"ecosw,esinw"``; a bare name if alone)."""
+    return ",".join(names)
+
+
+def _split_group(names: tuple[str, ...], value: Any) -> dict[str, Any]:
+    """Split a group's draw into per-name values (trailing axis for a joint)."""
+    if len(names) == 1:
+        return {names[0]: value}
+    return {n: value[..., i] for i, n in enumerate(names)}
+
+
+def _sample_nonlinear(
+    priors: dict[str, NonlinearPriorDist], n_samples: int, *, key: jax.Array
+) -> dict[str, jax.Array]:
+    """Draw ``n_samples`` of every nonlinear parameter, one key per group."""
+    groups = _nonlinear_groups(priors)
+    out: dict[str, jax.Array] = {}
+    for (names, d), k in zip(groups.items(), jr.split(key, len(groups)), strict=True):
+        out.update(_split_group(names, d.sample(k, (n_samples,))))
+    return out
+
+
 def _evaluate_nonlinear_log_prior(
-    priors: dict[str, PriorDist], samples: dict[str, jax.Array]
+    priors: dict[str, NonlinearPriorDist], samples: dict[str, jax.Array]
 ) -> jax.Array:
     """Sum nonlinear-prior log-densities over all sampled parameters.
 
     ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
     space the prior distributions sample in (see ``HarvPrior``). Used by
     the samplers' ``return_logprobs`` path to record per-sample ``ln_prior``.
+    A joint prior is evaluated once on its names' stacked values.
     """
     total: jax.Array | None = None
-    for name, prior in priors.items():
-        if name not in samples:
+    for names, prior in _nonlinear_groups(priors).items():
+        if not all(n in samples for n in names):
             continue
-        lp = _unwrap_dist(prior).log_prob(samples[name])
+        value = (
+            samples[names[0]]
+            if len(names) == 1
+            else jnp.stack([samples[n] for n in names], axis=-1)
+        )
+        lp = prior.log_prob(value)
         total = lp if total is None else total + lp
     if total is None:
         n = len(next(iter(samples.values()))) if samples else 0

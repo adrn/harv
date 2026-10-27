@@ -9,6 +9,7 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDict,
     LinearPriorDist,
+    NonlinearPriorDist,
     PriorDist,
 )
 from harv.models.priors._helpers import (
@@ -130,7 +131,7 @@ def default_sb2_prior(
     ... )
     ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
     """
-    nonlinear: dict[str, PriorDist] = {
+    nonlinear: dict[str, NonlinearPriorDist] = {
         "period": _make_period_prior(
             period_min=period_min,
             period_max=period_max,

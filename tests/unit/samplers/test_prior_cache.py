@@ -159,6 +159,32 @@ class TestMakePriorCache:
         assert str(loaded.nonlinear["period"].unit) == "d"
         assert loaded.model_type == "RVModel"
 
+    def test_joint_prior_round_trip(self, tmp_path: Path):
+        """A joint (ecosw, esinw) prior is cached per name and reused by the sampler."""
+        path = tmp_path / "cache.h5"
+        param = hm.EcoswEsinwRV()
+        prior = param.default_prior(
+            period_min=Q(2.0, "day"),
+            period_max=Q(100.0, "day"),
+            sigma_K0=Q(5.0, "km/s"),
+            sigma_v0=Q(5.0, "km/s"),
+        )
+        model = RVModel(parameterization=param)
+        make_prior_cache(
+            prior, model, n_samples=256, filename=path, key=jr.key(0), batch_size=128
+        )
+
+        loaded = Samples.from_hdf5(path)
+        assert set(loaded.nonlinear) == {"period", "ecosw", "esinw", "phase_peri"}
+        ecosw = np.asarray(loaded.nonlinear["ecosw"].value)
+        esinw = np.asarray(loaded.nonlinear["esinw"].value)
+        assert np.all(ecosw**2 + esinw**2 < 1)
+
+        samples = RejectionSampler(prior, model).run_with_samples(
+            _rv_data(), path, top_k=4, key=jr.key(1)
+        )
+        assert np.isfinite(samples.metadata["max_ln_likelihood"])
+
     def test_writes_ln_prior_when_requested(self, tmp_path: Path):
         path = tmp_path / "cache.h5"
         make_prior_cache(

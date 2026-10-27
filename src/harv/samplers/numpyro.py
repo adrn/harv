@@ -26,10 +26,13 @@ from unxt.quantity import ustrip
 from harv.data.containers import InputData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
-    PriorDist,
+    NonlinearPriorDist,
     _evaluate_nonlinear_log_prior,
     _explicit_scalar_dist,
     _is_callable_prior,
+    _joint_site_name,
+    _nonlinear_groups,
+    _split_group,
     _unwrap_dist,
 )
 from harv.models.component import (
@@ -53,12 +56,12 @@ __all__ = ("NumpyroSampler",)
 def _build_all_priors(
     prior: HarvPrior,
     nonlinear_extension_priors: dict[str, Any],
-) -> dict[str, PriorDist]:
+) -> dict[str, NonlinearPriorDist]:
     """Merge base nonlinear_priors and extension nonlinear priors.
 
     Extension nonlinear priors are already normalized to model-key convention.
     """
-    all_priors: dict[str, PriorDist] = dict(prior.nonlinear_priors)
+    all_priors: dict[str, NonlinearPriorDist] = dict(prior.nonlinear_priors)
     all_priors.update(nonlinear_extension_priors)
     return all_priors
 
@@ -78,8 +81,8 @@ def _unconstrain_init_params(
     passing them to the MCMC kernel.
     """
     site_supports: dict[str, Any] = {}
-    for name, d in prior.nonlinear_priors.items():
-        site_supports[name] = _unwrap_dist(d).support
+    for names, d in _nonlinear_groups(prior.nonlinear_priors).items():
+        site_supports[_joint_site_name(names)] = d.support
     if isinstance(effective_linear_prior, dict):
         for name, d in effective_linear_prior.items():
             if isinstance(d, dist.Distribution | QuantityDistribution):
@@ -103,7 +106,14 @@ def _unconstrain_init_params(
     for name, val in init_params.items():
         support = site_supports.get(name)
         if support is not None:
-            out[name] = biject_to(support).inv(jnp.asarray(val))
+            # A point on the support's edge (e.g. a MAP on the UnitDisk rim)
+            # unconstrains to +-inf; pull it to a large finite value instead.
+            out[name] = jnp.nan_to_num(
+                biject_to(support).inv(jnp.asarray(val)),
+                nan=jnp.nan,
+                posinf=30.0,
+                neginf=-30.0,
+            )
         else:
             out[name] = val
     return out
@@ -111,7 +121,7 @@ def _unconstrain_init_params(
 
 def _build_extra_numpyro_model(
     model: AbstractComponentModel | JointModel,
-    all_priors: dict[str, PriorDist],
+    all_priors: dict[str, NonlinearPriorDist],
     extra_model_fn: Callable[[dict[str, Any]], dict[str, Any]],
     marginalized: bool,
     marginalized_names: tuple[str, ...] | None,
@@ -741,6 +751,14 @@ class NumpyroSampler(AbstractSampler):
         if extra_model is not None:
             init_params.update(extra_init_params)  # ty: ignore[no-matching-overload]
 
+        # A joint prior is one site; its per-name values are deterministic, so
+        # they move onto the stacked site rather than being initialized directly.
+        for names in _nonlinear_groups(self.prior.nonlinear_priors):
+            if len(names) > 1 and all(n in init_params for n in names):
+                init_params[_joint_site_name(names)] = jnp.stack(
+                    [init_params.pop(n) for n in names], axis=-1
+                )
+
         return init_params
 
     def _posterior_to_samples(
@@ -761,6 +779,14 @@ class NumpyroSampler(AbstractSampler):
     ) -> Samples:
         """Convert a numpyro posterior dict into a :class:`Samples` container."""
         prior = self.prior
+
+        # A MAP (``guide.median``) holds only latent sites, so a joint prior's
+        # per-name values must be split out of its stacked site here.
+        posterior = dict(posterior)
+        for names in _nonlinear_groups(prior.nonlinear_priors):
+            site = _joint_site_name(names)
+            if len(names) > 1 and site in posterior:
+                posterior.update(_split_group(names, posterior[site]))
 
         # Build nonlinear dict with units from the prior.
         _all_nl_priors: dict[str, Any] = dict(prior.nonlinear_priors)

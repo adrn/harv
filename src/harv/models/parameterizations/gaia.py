@@ -28,7 +28,7 @@ from harv.kepler.orbits import (
     thiele_innes_unit,
     true_anomaly_from_mean,
 )
-from harv.models._helpers import LinearPriorDist, PriorDist
+from harv.models._helpers import LinearPriorDist, NonlinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
@@ -271,7 +271,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
             linear prior by name (e.g. ``parallax=QD(...)``) means its scale
             argument must be omitted.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
@@ -644,7 +644,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         ``apply_jacobian_correction=True``) restores the correct posterior
         under a flat-Campbell-elements prior.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,

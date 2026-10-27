@@ -719,23 +719,20 @@ This parameterization has better sampling geometry for low eccentricities.
 returns a `HarvPrior` with the same period / `phase_peri` / linear (`rv_semiamp`,
 `v_sys`) priors as `StandardRV.default_prior`, plus:
 
-- `ecosw`: `Uniform(-1, 1)`
-- `esinw`: `Uniform(-1, 1)`
+- `ecosw`, `esinw`: `joint(("ecosw", "esinw"), UnitDisk())`, a joint prior uniform on
+  the unit disk (see §Joint nonlinear priors)
 
-Independent `Uniform(-1, 1)` priors on `ecosw` and `esinw` do **not** match the
-implicit prior under `e ~ Kipping(0.867, 3.03)` × `omega ~ Uniform(0, 2π)`.
-This is the simplest sensible default for this parameterization; users wanting a
-matched prior should sample with `StandardRV` and convert (or override via
-`**kwargs`).
+The disk is exactly the bound-orbit region, `e = sqrt(ecosw² + esinw²) < 1`, so every
+draw is an orbit. Uniform on the disk implies `p(e) = 2e` with
+`omega ~ Uniform(0, 2π)`, which does **not** match the implicit prior under
+`e ~ Kipping(0.867, 3.03)`. This is the simplest sensible default for this
+parameterization; users wanting a matched prior should sample with `StandardRV` and
+convert.
 
-**The default prior admits unbound orbits.** `default_prior` puts independent
-`Uniform(-1, 1)` priors on `ecosw` and `esinw`, whose support is a *square*, while a
-bound orbit requires the *unit disk* (`e = sqrt(ecosw² + esinw²) < 1`). About 21% of
-draws (`1 - π/4`) land outside it with `e >= 1`, where the default `rv_semiamp` prior's
-`(1 - e²)^(-1/2)` is `NaN`. Those draws must be rejected: pass
-`ignore_non_finite=True`, or a single `NaN` propagates through the `max` reduction and
-leaves `max_ln_likelihood` and every evidence statistic `NaN`. See
-`docs/sharp-bits.md`.
+Override both names together, `default_prior(..., ecosw=d1, esinw=d2)`; replacing
+only one leaves the other's `JointPrior` incomplete and `HarvPrior` raises
+`ValueError`. Independent scalar priors whose support extends past the disk (e.g.
+`Uniform(-1, 1)` on each) admit unbound orbits; see `docs/sharp-bits.md`.
 
 ### `StandardGaiaAstrometry`
 
@@ -1647,9 +1644,70 @@ per-parameter linear prior. It is an `eqx.Module`.
 
 | Field               | Type                                           | Description                                                |
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| `nonlinear_priors`  | `dict[str, PriorDist]`                         | Nonlinear parameter priors                                 |
+| `nonlinear_priors`  | `dict[str, PriorDist \| JointPrior]`           | Nonlinear parameter priors (see §Joint nonlinear priors)   |
 | `linear_priors`      | `LinearPriorDist`                              | Per-parameter linear priors                                |
 | `extension_priors`  | `dict[str, PriorDist]` (KW_ONLY, default `{}`) | Priors for extension params (jitter, GP hyperparams, etc.) |
+
+### Joint nonlinear priors
+
+A single distribution can span several nonlinear parameters. Build the entries with
+`harv.joint(names, distribution)`, which returns one dict entry per name, each holding
+the same `JointPrior(names, distribution)` (in `harv.distributions`):
+
+```python
+import numpyro.distributions as dist
+
+import harv
+from harv.stats import UnitDisk
+
+nonlinear_priors = {
+    "period": harv.QD(dist.LogUniform(2.0, 1000.0), "day"),
+    **harv.joint(("ecosw", "esinw"), UnitDisk()),
+    "phase_peri": dist.Uniform(0.0, 1.0),
+}
+# {"ecosw": JointPrior(...), "esinw": JointPrior(...)} inside the dict
+```
+
+The keys stay one bare string per parameter. This is required, not a style choice: JAX
+sorts dict keys when it flattens a pytree, so a dict mixing `str` and `tuple` keys
+cannot be flattened, and samplers flatten the prior under `eqx.filter_jit`. It also
+means code that only lists nonlinear names or looks up their units needs no special
+case.
+
+Validation:
+
+- `JointPrior.__check_init__`: at least two distinct names, `batch_shape == ()` and
+  `event_shape == (len(names),)` (`ValueError`); `distribution` is a bare `numpyro`
+  `Distribution`, so not a `QuantityDistribution`, since joint priors are
+  dimensionless for now (`TypeError`). `names` may be any sequence and is stored as a
+  tuple.
+- `HarvPrior.__check_init__`: every name of a `JointPrior` maps to a `JointPrior` with
+  the same `names` (`ValueError`). A partial override, such as replacing only `ecosw` through
+  `default_prior(..., ecosw=...)`, therefore raises; override all of its names together.
+
+Semantics:
+
+- **Sampling** draws once per `JointPrior`, with shape `(n_samples, k)`, and splits
+  the trailing axis across `names` in order. Everything downstream (`Samples`, prior
+  caches, warm starts, `convert_parameterization`) sees ordinary per-name scalars, so
+  the prior-cache layout is unchanged.
+- **`ln_prior`** evaluates the joint `log_prob` once on the stacked values: the pair
+  above contributes a single `-log(π)`.
+- **numpyro** samples one site, named by joining the names with `","` (here
+  `"ecosw,esinw"`), and records each name as a `numpyro.deterministic` site. Posteriors
+  are therefore keyed by the plain names, and warm-start values given per name are
+  stacked into the joint site before being unconstrained with
+  `biject_to(distribution.support)`. A warm-start point on the support's edge (a MAP on
+  the disk rim) would unconstrain to `±inf`, so infinite unconstrained values are
+  clamped to `±30`. A joint distribution used with NUTS needs a
+  support with a registered bijector (`UnitDisk` has one).
+- **`JointModel`** sees ordinary per-name keys, so shared and qualified-name
+  resolution is unchanged.
+
+Joint priors are the single mechanism for dependent nonlinear priors. A conditional
+prior such as `p(P) · p(e | P)` is a joint distribution whose `sample`/`log_prob`
+implement that factorization; there is no separate conditional-prior concept. See
+§Planned features › Dimensioned joint priors.
 
 ### Constructing a prior
 
@@ -2743,6 +2801,14 @@ period prior**: pass it via the `period=` override of any `default_prior(...)`
 or set `nonlinear_priors["period"]` directly. **No sampler changes are
 involved anywhere in this feature.**
 
+### `UnitDisk`
+
+`harv.stats.UnitDisk` re-exports the vendored `numpyro_ext.UnitDisk`: uniform on the
+unit disk, `event_shape=(2,)`, `log_prob = -log(π)` inside the closed disk and `-inf`
+outside it (so stale samples from a wider prior get `ln_prior = -inf`), with a registered
+`biject_to(unit_disk)` so NUTS can sample it. It is the joint prior on
+`("ecosw", "esinw")` in `EcoswEsinwRV.default_prior` (see §Joint nonlinear priors).
+
 
 ### Support-constrained and mixture linear priors (`harv.stats.marginalized`)
 
@@ -3589,80 +3655,25 @@ Defects in current behavior, recorded with enough analysis that picking one up d
 not require re-deriving it. Fixing a bug removes its entry. Features that are absent
 rather than wrong belong in "Planned features and known gaps" below.
 
-### `EcoswEsinwRV.default_prior` admits unbound orbits
-
-Status: open, mitigated but not fixed. Affects `EcoswEsinwRV.default_prior` and any
-caller relying on it.
-
-`default_prior` puts independent `Uniform(-1, 1)` priors on `ecosw` and `esinw`. That
-support is a square, while a bound orbit requires the unit disk,
-`e = sqrt(ecosw**2 + esinw**2) < 1`. About 21% of draws (`1 - pi/4`) fall outside it.
-Measured over 4000 draws, `e` ranged from 0.015 to 1.404, with 21.3% at `e >= 1`.
-
-There are two consequences:
-
-1. A fifth of every prior library is unphysical and can never be accepted. At
-   `M = 1e7` that is roughly 2.1M dead draws.
-1. The default `rv_semiamp` prior (`PeriodDependentKPrior`) scales as
-   `(1 - e**2)**(-1/2)`, which is `NaN` for `e >= 1`. That `NaN` propagates through
-   the `max` reduction the rejection step normalizes by, so `max_ln_likelihood`,
-   `ln_Z_int`, and `ln_Z_int_ess` all return `NaN` and no samples are accepted, with
-   no error raised.
-
-`ignore_non_finite=True` converts those draws into ordinary rejections and restores
-finite evidence statistics: measured, `max_ln_likelihood` is `nan` without the flag
-and `-1709.60` with it. See §`EcoswEsinwRV` and `docs/sharp-bits.md`. The flag removes
-the silent-`NaN` behavior, not the wasted 21%.
-
-#### Why the fix requires a spec decision first
-
-`harv.stats.numpyro_ext.UnitDisk` is the correct distribution (uniform on the disk,
-`log_prob = -log(pi)`), but it is two-dimensional: `event_shape=(2,)`, and `sample`
-returns shape `(*sample_shape, 2)`. `HarvPrior.nonlinear_priors` is
-`dict[str, PriorDist]`, exactly one scalar prior per parameter name, and
-`HarvPrior.sample_nonlinear` draws each independently at shape `(n_samples,)`. A
-single distribution spanning both `ecosw` and `esinw` therefore cannot be dropped in.
-
-Supporting it means adding a **joint (multi-name) nonlinear prior** to the public API:
-for example a tuple-keyed entry `{("ecosw", "esinw"): UnitDisk()}`, whose sample's
-trailing axis is split across the named parameters and whose `log_prob` is counted
-once for the pair. This section must specify the tuple-key form, how
-`sample_nonlinear` splits the event axis, how `ln_prior` accumulates it, and how
-prior caches key it on disk, before any implementation.
-
-Sites that assume one scalar prior per name and would need to handle the joint case:
-
-- `HarvPrior.nonlinear_priors` type and its `__check_init__` validation
-- `HarvPrior.sample_nonlinear` -- the per-name zip over `nonlinear_priors`
-- `HarvPrior.sample` -- the `all_nonlinear_priors[name]` lookup in the nonlinear
-  unit-restoration loop
-- `_sample_nonlinear_params` in `harv/models/component.py` -- the numpyro path, one
-  `numpyro.sample(name, ...)` per key
-- `_expected_prior_keys` in `harv/samplers/rejection.py` -- prior-cache key validation
-- `ln_prior` accumulation, so the pair contributes one `-log(pi)` rather than two terms
-- `EcoswEsinwRV.default_prior` itself
-
-`nonlinear_priors` has roughly 70 references across 12 files; most are annotations or
-docstrings, but the seven above are load-bearing.
-
-#### Alternatives considered
-
-- **Conditional scalar priors.** Draw `ecosw` from a semicircle density, then
-  `esinw | ecosw ~ Uniform(+/- sqrt(1 - ecosw**2))`. Exact, and it keeps one prior per
-  name, but the nonlinear prior machinery has no equivalent of `LinearPriorCallable`,
-  so a nonlinear prior cannot depend on another nonlinear parameter. This needs its
-  own new concept.
-- **One 2-vector parameter.** Declare a single nonlinear parameter of shape `(2,)`.
-  This avoids the joint-prior concept but changes the parameterization's public
-  parameter names, breaking `Samples["ecosw"]`, `convert_parameterization`, and the
-  design-matrix contract.
-- **`UnitDiskTransform`.** Not applicable. It is the `biject_to` transform for
-  unconstrained MCMC; pushing `Uniform(-1, 1)**2` through it gives a density
-  proportional to `1 / sqrt(1 - y0**2)`, which is not uniform on the disk.
+None currently open.
 
 ______________________________________________________________________
 
 ## Planned features and known gaps
+
+### Dimensioned joint priors
+
+Joint nonlinear priors (§Joint nonlinear priors) are dimensionless only. A
+period–eccentricity prior (e.g. favoring low `e` at short `P`) needs two additions,
+neither built yet:
+
+- **Per-name units.** Accept `joint(("period", "eccentricity"), QD(d, ("day", "")))`.
+  `QuantityDistribution` already allows a tuple `unit`; what remains is the per-name
+  unit lookup in the sampler paths that restore units.
+- **A chain-distribution helper**, only if writing 2-D distributions by hand proves
+  painful: a distribution built from a marginal and a conditional callable, implementing
+  `sample`/`log_prob` as `p(P) · p(e | P)` with a composed bijector for NUTS. It would
+  plug into `joint(...)` as is, so the prior plumbing does not change.
 
 ### JointModel non-marginalized MCMC
 

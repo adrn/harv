@@ -16,7 +16,7 @@ from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
 from harv.data.containers import InputData
-from harv.distributions import QuantityDistribution
+from harv.distributions import JointPrior, QuantityDistribution
 from harv.models._helpers import (
     LinearRole,
     _evaluate_nonlinear_log_prior,
@@ -233,6 +233,8 @@ def _describe_prior(d: Any) -> tuple[str, str]:
     """
     if isinstance(d, QuantityDistribution):
         return type(d.distribution).__name__, (str(d.unit) or "-")
+    if isinstance(d, JointPrior):
+        return f"{type(d.distribution).__name__}{d.names}", "-"
     # Bare numpyro distribution or a LinearPriorCallable: the class name is the
     # most useful label, and the unit (if any) is only resolved at call time.
     return type(d).__name__, "-"
