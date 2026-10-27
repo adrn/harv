@@ -87,6 +87,13 @@ def _split_group(names: tuple[str, ...], value: Any) -> dict[str, Any]:
     return {n: value[..., i] for i, n in enumerate(names)}
 
 
+def _stack_group(names: tuple[str, ...], values: dict[str, Any]) -> Any:
+    """Inverse of :func:`_split_group`: per-name values -> the group's value."""
+    if len(names) == 1:
+        return values[names[0]]
+    return jnp.stack([values[n] for n in names], axis=-1)
+
+
 def _sample_nonlinear(
     priors: dict[str, NonlinearPriorDist], n_samples: int, *, key: jax.Array
 ) -> dict[str, jax.Array]:
@@ -112,12 +119,7 @@ def _evaluate_nonlinear_log_prior(
     for names, prior in _nonlinear_groups(priors).items():
         if not all(n in samples for n in names):
             continue
-        value = (
-            samples[names[0]]
-            if len(names) == 1
-            else jnp.stack([samples[n] for n in names], axis=-1)
-        )
-        lp = prior.log_prob(value)
+        lp = prior.log_prob(_stack_group(names, samples))
         total = lp if total is None else total + lp
     if total is None:
         n = len(next(iter(samples.values()))) if samples else 0

@@ -33,6 +33,7 @@ from harv.models._helpers import (
     _joint_site_name,
     _nonlinear_groups,
     _split_group,
+    _stack_group,
     _unwrap_dist,
 )
 from harv.models.component import (
@@ -754,10 +755,16 @@ class NumpyroSampler(AbstractSampler):
         # A joint prior is one site; its per-name values are deterministic, so
         # they move onto the stacked site rather than being initialized directly.
         for names in _nonlinear_groups(self.prior.nonlinear_priors):
-            if len(names) > 1 and all(n in init_params for n in names):
-                init_params[_joint_site_name(names)] = jnp.stack(
-                    [init_params.pop(n) for n in names], axis=-1
-                )
+            present = [n for n in names if n in init_params]
+            if len(names) == 1 or not present:
+                continue
+            if len(present) < len(names):
+                missing = sorted(set(names) - set(present))
+                msg = f"Warm start for joint prior over {names} is missing {missing}."
+                raise ValueError(msg)
+            init_params[_joint_site_name(names)] = _stack_group(names, init_params)
+            for n in names:
+                del init_params[n]
 
         return init_params
 

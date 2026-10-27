@@ -502,7 +502,7 @@ class TestParameterizationDefaultPriors:
         assert prior.nonlinear_priors["esinw"] is custom
 
     def test_ecosw_override_alone_raises(self):
-        with pytest.raises(ValueError, match="Override all of"):
+        with pytest.raises(ValueError, match="override all of"):
             hm.EcoswEsinwRV().default_prior(
                 **_DEFAULT_RV_KWARGS, ecosw=dist.Uniform(-0.5, 0.5)
             )
@@ -786,11 +786,40 @@ class TestJointPrior:
         assert bool(jnp.all(jnp.isfinite(lp)))
 
     def test_partial_joint_raises(self):
-        with pytest.raises(ValueError, match="Override all of"):
+        with pytest.raises(ValueError, match="override all of"):
             HarvPrior(
                 nonlinear_priors={"ecosw": JointPrior(("ecosw", "esinw"), UnitDisk())},
                 linear_priors={},
             )
+
+    @pytest.mark.parametrize(
+        "nonlinear",
+        [
+            # Same names, different distributions (no single object to sample).
+            {
+                "ecosw": JointPrior(("ecosw", "esinw"), UnitDisk()),
+                "esinw": JointPrior(("ecosw", "esinw"), UnitDisk()),
+            },
+            # A joint stored under a key that is not one of its names.
+            {"foo": joint(("ecosw", "esinw"), UnitDisk())["ecosw"]}
+            | joint(("ecosw", "esinw"), UnitDisk()),
+        ],
+    )
+    def test_joint_must_be_one_shared_object(self, nonlinear):
+        with pytest.raises(ValueError, match="Joint prior over"):
+            HarvPrior(nonlinear_priors=nonlinear, linear_priors={})
+
+    def test_joint_for_unknown_names_raises(self):
+        # e.g. StandardRV().default_prior(..., **joint(("ecosw", "esinw"), ...)):
+        # the names are not StandardRV's, so the override lands in
+        # extension_priors and would be silently dropped. The test-suite beartype
+        # hook rejects that at the annotation, so bypass it to reach the check.
+        prior = HarvPrior(nonlinear_priors={}, linear_priors={})
+        object.__setattr__(
+            prior, "extension_priors", joint(("ecosw", "esinw"), UnitDisk())
+        )
+        with pytest.raises(TypeError, match="not a nonlinear parameter"):
+            prior.__check_init__()
 
     def test_sample_nonlinear_splits_inside_disk(self):
         samples = self._prior().sample_nonlinear(500, key=jr.key(1))

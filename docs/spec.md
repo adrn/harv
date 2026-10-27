@@ -1681,8 +1681,11 @@ Validation:
   `Distribution`, so not a `QuantityDistribution`, since joint priors are
   dimensionless for now (`TypeError`). `names` may be any sequence and is stored as a
   tuple.
-- `HarvPrior.__check_init__`: every name of a `JointPrior` maps to a `JointPrior` with
-  the same `names` (`ValueError`). A partial override, such as replacing only `ecosw` through
+- `HarvPrior.__check_init__`: every name of a `JointPrior` maps to the same `names`
+  and the same `distribution` object (what `joint` builds), and a `JointPrior` sits
+  only under one of its own names (`ValueError`). `extension_priors` holds no
+  `JointPrior` (`TypeError`); a `default_prior` override for names the
+  parameterization does not have lands there. A partial override, such as replacing only `ecosw` through
   `default_prior(..., ecosw=...)`, therefore raises; override all of its names together.
 
 Semantics:
@@ -1699,7 +1702,8 @@ Semantics:
   stacked into the joint site before being unconstrained with
   `biject_to(distribution.support)`. A warm-start point on the support's edge (a MAP on
   the disk rim) would unconstrain to `±inf`, so infinite unconstrained values are
-  clamped to `±30`. A joint distribution used with NUTS needs a
+  clamped to `±30`. A warm start must carry all of a joint's names or none of them
+  (`ValueError`). A joint distribution used with NUTS needs a
   support with a registered bijector (`UnitDisk` has one).
 - **`JointModel`** sees ordinary per-name keys, so shared and qualified-name
   resolution is unchanged.

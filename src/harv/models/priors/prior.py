@@ -101,19 +101,34 @@ class HarvPrior(eqx.Module):
     extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
 
     def __check_init__(self) -> None:
-        # A JointPrior must sit under every one of its names; a partial override
-        # (e.g. ``default_prior(..., ecosw=...)`` alone) leaves it incomplete.
-        for d in self.nonlinear_priors.values():
+        # A JointPrior must sit, as one shared object, under exactly its names; a
+        # partial override (e.g. ``default_prior(..., ecosw=...)`` alone) breaks it.
+        for key, d in self.nonlinear_priors.items():
             if not isinstance(d, JointPrior):
                 continue
+            if key not in d.names:
+                msg = f"Joint prior over {d.names} is stored under {key!r}."
+                raise ValueError(msg)
             for name in d.names:
                 other = self.nonlinear_priors.get(name)
-                if not (isinstance(other, JointPrior) and other.names == d.names):
+                if not (
+                    isinstance(other, JointPrior)
+                    and other.names == d.names
+                    and other.distribution is d.distribution
+                ):
                     msg = (
-                        f"Joint prior over {d.names} is missing or replaced for "
-                        f"{name!r}. Override all of {d.names} together."
+                        f"Joint prior over {d.names} is missing, replaced or not "
+                        f"shared for {name!r}. Build it with harv.joint and "
+                        f"override all of {d.names} together."
                     )
                     raise ValueError(msg)
+        for name, d in self.extension_priors.items():
+            if isinstance(d, JointPrior):
+                msg = (
+                    f"Joint prior over {d.names} given for {name!r}, which is not a "
+                    "nonlinear parameter of this parameterization."
+                )
+                raise TypeError(msg)
 
     def sample_nonlinear(self, n_samples: int, *, key: jax.Array) -> dict[str, Any]:
         """Sample nonlinear parameters from priors.

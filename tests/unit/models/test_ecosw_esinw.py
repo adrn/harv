@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -400,6 +401,15 @@ class TestEcoswEsinwNumpyro:
         assert "ecosw,esinw" not in samples.nonlinear
         assert bool(qnp.all(ecosw**2 + esinw**2 <= 1))
         assert bool(jnp.all(jnp.isfinite(samples.ln_prior)))
+
+    def test_partial_warm_start_raises(self, setup):
+        data, prior, model, init = setup
+        nonlinear = {k: v for k, v in init.nonlinear.items() if k != "esinw"}
+        partial = eqx.tree_at(lambda s: s.nonlinear, init, nonlinear)
+        with pytest.raises(ValueError, match=r"missing \['esinw'\]"):
+            NumpyroSampler(prior, model).run(
+                data, init_samples=partial, key=jr.key(1), num_chains=1
+            )
 
     def test_nuts_warm_start(self, setup):
         data, prior, model, init = setup
