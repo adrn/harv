@@ -41,7 +41,7 @@ jobs:
       # `twine check --strict`, lists the contents, and uploads a "Packages"
       # artifact. Building the wheel from the sdist is what catches a sdist that
       # is missing files.
-      - uses: hynek/build-and-inspect-python-package@2abe76da66d0a6a4a227101f9348ee855797cfa5 # v3.0.1
+      - uses: hynek/build-and-inspect-python-package@67230f7b8410ae0052b39c1efc89d89fff43ff10 # v3.0.2
 
   publish:
     needs: [dist]
@@ -60,7 +60,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: Packages
           path: dist
@@ -73,4 +73,4 @@ jobs:
       # Publishes via Trusted Publishing: the project must exist on PyPI with a
       # publisher configured for this repo, this workflow file, and the pypi
       # environment.
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
