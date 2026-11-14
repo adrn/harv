@@ -1720,7 +1720,9 @@ Validation:
   sequence of strings (a bare string, or a non-string name, is a `TypeError`: prior dict
   keys must sort together under `jit`) and is stored as a tuple.
 - `HarvPrior.__check_init__`: every name of a `JointPrior` maps to the same `names`
-  and an equal `distribution` (`eqx.tree_equal`; `joint` shares one object), and a
+  and an equal `distribution` (`eqx.tree_equal`; `joint` shares one object; when the
+  leaves are traced, e.g. a `HarvPrior` rebuilt inside `filter_jit`, only the pytree
+  structure is compared, since a traced value cannot be checked in Python), and a
   `JointPrior` sits only under one of its own names (`ValueError`). A partial override, such as
   replacing only `sqrte_cosw` through `default_prior(..., sqrte_cosw=...)`, therefore raises;
   override all of its names together. `linear_priors` and `extension_priors` hold no

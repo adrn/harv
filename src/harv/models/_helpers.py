@@ -115,13 +115,20 @@ def _priors_equal(a: Any, b: Any) -> bool:
 
     Numpyro distributions, :class:`QuantityDistribution`, and callable
     eqx.Module priors are all proper pytrees, so a single call covers every
-    prior shape that flows through ``shared_linear_params`` validation.
+    prior shape a ``JointPrior`` can hold. Traced leaves (under ``jit``) cannot be
+    compared by value, so then only the structure is checked.
     """
     if a is b:
         return True
     if type(a) is not type(b):
         return False
-    return bool(eqx.tree_equal(a, b))
+    equal = eqx.tree_equal(a, b)
+    try:
+        return bool(equal)
+    except jax.errors.TracerBoolConversionError:
+        # Under jit the leaves are traced (e.g. a HarvPrior rebuilt inside
+        # filter_jit): only the structure, matched by tree_equal, can be checked.
+        return True
 
 
 def _joint_site_name(names: tuple[str, ...]) -> str:

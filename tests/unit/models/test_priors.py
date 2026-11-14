@@ -767,6 +767,16 @@ class TestJointPrior:
         with pytest.raises(ValueError, match="exactly one"):
             _nonlinear_groups(bad.nonlinear_priors)
 
+    def test_harvprior_with_joint_rebuilds_under_jit(self):
+        d = dist.MultivariateNormal(jnp.zeros(2), 0.01 * jnp.eye(2))
+        prior = HarvPrior(nonlinear_priors=joint(("a", "b"), d), linear_priors={})
+        rebuilt = eqx.filter_jit(
+            lambda p: HarvPrior(
+                nonlinear_priors=dict(p.nonlinear_priors), linear_priors={}
+            )
+        )(prior)
+        assert rebuilt.nonlinear_priors["a"].names == ("a", "b")
+
     def test_partial_joint_raises(self):
         with pytest.raises(ValueError, match="override all of"):
             HarvPrior(
