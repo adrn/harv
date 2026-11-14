@@ -495,6 +495,17 @@ def test_out_of_support_scalar_init_raises():
         _unconstrain_init_params({"arg_peri": jnp.array([1.0, -0.5])}, prior)
 
 
+@pytest.mark.filterwarnings("ignore:Under-resolved rejection run:UserWarning")
+def test_undeclared_override_raises_at_sampling():
+    # StandardRV names are not SqrtEccRV's; they must not be silently ignored.
+    prior, model = TestSqrtEccDefaultPriorIsEvaluable._prior_and_model(
+        eccentricity=dist.Beta(2.0, 5.0)
+    )
+    data, _ = simulate_rv_sb1_data(seed=42, n_obs=16)
+    with pytest.raises(ValueError, match="'eccentricity'"):
+        RejectionSampler(prior, model).run(data, key=jr.key(0), n_prior_samples=1000)
+
+
 def test_phase_peri_override_raises():
     # SqrtEccRV samples mean_longitude; a stale phase_peri= must not be dropped.
     with pytest.raises(TypeError, match="mean_longitude"):

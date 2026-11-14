@@ -1810,7 +1810,11 @@ Direct `__init__` construction is always supported for fully custom configuratio
 Per-parameter overrides flow through `**kwargs` (e.g.
 `hm.StandardRV().default_prior(..., eccentricity=dist.Uniform(0, 0.5))`).  Names not
 declared by the parameterization land in `extension_priors` for resolution at
-sampling time against the model's declared extension parameters.
+sampling time against the model's declared extension parameters. An
+`extension_priors` entry that no extension of the model declares (by qualified or bare
+name) raises `ValueError` at that point, rather than being silently ignored: e.g.
+`SqrtEccRV().default_prior(..., eccentricity=...)` names a parameter `SqrtEccRV` does
+not have.
 
 Parallax is classified as explicit automatically -- not because `HalfNormal`
 cannot be marginalized (it can; see §Support-constrained and mixture linear
@@ -1928,7 +1932,8 @@ Jitter requires **two** things:
    directly in `extension_priors` when constructing `HarvPrior` manually.
 1. A `Jitter` extension — passed as `extensions=(Jitter(obs_unit=...), ...)` to the
    sampler. The sampler validates at run time that every declared extension parameter
-   has a matching entry in `prior.extension_priors`.
+   has a matching entry in `prior.extension_priors`, and that every entry there is
+   declared by some extension.
 
 ```python
 from harv.models.extensions import Jitter
