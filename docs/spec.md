@@ -2801,13 +2801,12 @@ ______________________________________________________________________
 ## Statistical utilities (`harv.stats`)
 
 Distributions and linear-algebra helpers that are not specific to any one
-model. `harv.stats.numpyro_ext` and `harv.stats.linear_op` are **vendored**
-from `numpyro-ext` (see "Why `MarginalizedLinear` from numpyro-ext?") and are
-exempt from linting and type checking as third-party code; harv's own
-statistical code lives in its own modules alongside them and is checked
-normally. `harv.stats.marginalized` is harv-owned and checked normally: it
-widens the vendored `MarginalizedLinear` by *composition*, so the vendored files
-stay byte-for-byte upstream and remain re-syncable.
+model. `harv.stats.numpyro_ext` and `harv.stats.linear_op` were **vendored**
+from `numpyro-ext` (see "Why `MarginalizedLinear` from numpyro-ext?"). Upstream is
+no longer maintained, so harv owns these copies and edits them as needed (e.g. the
+support-aware `UnitDisk`); there is nothing to re-sync. They remain exempt from
+linting and type checking, as inherited code. `harv.stats.marginalized` is
+harv-owned and checked normally: it widens `MarginalizedLinear` by *composition*.
 
 ### `LogGridDensity`
 
@@ -2846,7 +2845,7 @@ involved anywhere in this feature.**
 
 ### `UnitDisk`
 
-`harv.stats.UnitDisk` re-exports the vendored `numpyro_ext.UnitDisk`: uniform on the
+`harv.stats.UnitDisk` re-exports `numpyro_ext.UnitDisk`: uniform on the
 unit disk, `event_shape=(2,)`, `log_prob = -log(π)` inside the closed disk and `-inf`
 outside it (so stale samples from a wider prior get `ln_prior = -inf`), with a registered
 `biject_to(unit_disk)` so NUTS can sample it. On `(sqrte_cosw, sqrte_sinw)` it
@@ -3688,11 +3687,10 @@ also gives us `.conditional()` to draw from the posterior conditional — which 
 exactly what the rejection sampler needs for the linear parameter sampling step.
 
 Truncated and mixture priors are added *around* it, in the harv-owned
-`harv.stats.marginalized`, rather than by editing the vendored file (see
-§Support-constrained and mixture linear priors). The wrapper duck-types the only
-two methods harv calls — `log_prob(y)` and `conditional(y)` — so every call site
-is unchanged, the vendored code stays re-syncable with upstream, and the new code
-is linted and type-checked normally.
+`harv.stats.marginalized` (see §Support-constrained and mixture linear priors).
+The wrapper duck-types the only two methods harv calls — `log_prob(y)` and
+`conditional(y)` — so every call site is unchanged and the new code is linted and
+type-checked normally.
 
 ### Why `eqx.field(static=True)` for metadata fields?
 
