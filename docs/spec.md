@@ -1717,7 +1717,8 @@ Validation:
   `event_shape == (len(names),)` on the (unwrapped) distribution (`ValueError`);
   `distribution` is a bare `numpyro` `Distribution`, or a `QuantityDistribution` whose
   `unit` is a tuple of `len(names)` strings (otherwise `TypeError`). `names` may be any
-  sequence of strings (a bare string is a `TypeError`) and is stored as a tuple.
+  sequence of strings (a bare string, or a non-string name, is a `TypeError`: prior dict
+  keys must sort together under `jit`) and is stored as a tuple.
 - `HarvPrior.__check_init__`: every name of a `JointPrior` maps to the same `names`
   and an equal `distribution` (`eqx.tree_equal`; `joint` shares one object), and a
   `JointPrior` sits only under one of its own names (`ValueError`). A partial override, such as

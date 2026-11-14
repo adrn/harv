@@ -86,7 +86,11 @@ def _names_tuple(names: Sequence[str]) -> tuple[str, ...]:
     if isinstance(names, str):  # a bare string would split into characters
         msg = f"JointPrior names must be a sequence of names, got the string {names!r}."
         raise TypeError(msg)
-    return tuple(names)
+    names = tuple(names)
+    if not all(isinstance(n, str) for n in names):  # dict keys must sort together
+        msg = f"JointPrior names must all be strings, got {names!r}."
+        raise TypeError(msg)
+    return names
 
 
 @final

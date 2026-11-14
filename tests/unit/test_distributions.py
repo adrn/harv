@@ -50,6 +50,10 @@ class TestJointPrior:
         with pytest.raises(TypeError, match="sequence of names"):
             joint("pe", UnitDisk())
 
+    def test_non_string_names_raise(self):
+        with pytest.raises(TypeError, match="all be strings"):
+            joint((1, 2), UnitDisk())
+
     def test_unit_tuple_must_hold_strings(self):
         with pytest.raises(TypeError, match="unit strings"):
             JointPrior(("a", "b"), QD(UnitDisk(), ("day", None)))
