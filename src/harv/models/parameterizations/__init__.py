@@ -9,11 +9,11 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 
 __all__ = (
     "AbstractParameterization",
-    "EcoswEsinwRV",
+    "SqrtEccRV",
     "FourierGaiaAstrometry",
     "FourierRV",
     "StandardGaiaAstrometry",

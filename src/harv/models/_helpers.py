@@ -113,7 +113,7 @@ def _priors_equal(a: Any, b: Any) -> bool:
 
 
 def _joint_site_name(names: tuple[str, ...]) -> str:
-    """Numpyro site name for a group (``"ecosw,esinw"``; a bare name if alone)."""
+    """Numpyro site name for a group (``"a,b"`` for a joint; a bare name if alone)."""
     return ",".join(names)
 
 
@@ -363,9 +363,9 @@ def _with_derived_eccentricity(
     """Add ``eccentricity`` when the parameterization implies one but does not carry it.
 
     ``LinearPriorCallable`` implementations are written against the standard parameter
-    names, so ``EcoswEsinwRV`` -- which carries ``(ecosw, esinw)`` instead -- would
-    otherwise raise ``KeyError: 'eccentricity'`` for the default ``rv_semiamp`` prior.
-    The parameterization already owns the conversion; this only applies it.
+    names, so ``SqrtEccRV`` -- which carries ``(sqrte_cosw, sqrte_sinw)`` instead --
+    would otherwise raise ``KeyError: 'eccentricity'`` for the default ``rv_semiamp``
+    prior. The parameterization already owns the conversion; this only applies it.
 
     Parameters
     ----------

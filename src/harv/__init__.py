@@ -23,7 +23,7 @@ __all__ = (
     "RVModel",
     # Parameterizations
     "AbstractParameterization",
-    "EcoswEsinwRV",
+    "SqrtEccRV",
     "StandardGaiaAstrometry",
     "StandardRV",
     # Extensions
@@ -82,7 +82,7 @@ from harv.models.extensions import (
 from harv.models import (
     AbstractComponentModel,
     AbstractParameterization,
-    EcoswEsinwRV,
+    SqrtEccRV,
     GaiaAstrometryModel,
     JointModel,
     RVModel,

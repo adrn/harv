@@ -18,8 +18,6 @@ from harv.models.priors.callables import (
     PeriodDependentSemiMajorAxisPrior,
 )
 
-kipping_2013_ecc_prior = dist.Beta(0.867, 3.03)  # Kipping 2013 eccentricity prior
-
 
 def _apply_overrides(
     kwargs: dict[str, Any],

@@ -84,7 +84,7 @@ class AbstractParameterization(eqx.Module):
         ``eccentricity`` directly as a nonlinear parameter (nothing to derive) and the
         Kepler-free Fourier bases (no eccentricity exists). Override when the value is
         derivable but absent -- see
-        :class:`~harv.models.parameterizations.rv.EcoswEsinwRV`.
+        :class:`~harv.models.parameterizations.rv.SqrtEccRV`.
 
         Parameters
         ----------

@@ -22,10 +22,10 @@ from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.models.parameterizations.fourier import FourierRV
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 
 # Type alias for any RV parameterization
-RVParameterizationType = StandardRV | EcoswEsinwRV | FourierRV
+RVParameterizationType = StandardRV | SqrtEccRV | FourierRV
 
 
 @final
@@ -51,7 +51,7 @@ class RVModel(AbstractComponentModel):
     ['arg_peri', 'eccentricity', 'period', 'phase_peri']
     """
 
-    parameterization: StandardRV | EcoswEsinwRV | FourierRV = StandardRV()
+    parameterization: StandardRV | SqrtEccRV | FourierRV = StandardRV()
     extensions: tuple[AbstractExtension, ...] = ()
 
     def _param_infos(self) -> tuple[ParamInfo, ...]:

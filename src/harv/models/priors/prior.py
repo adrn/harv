@@ -74,7 +74,7 @@ class HarvPrior(eqx.Module):
         ``dist.Distribution`` for dimensionless parameters, or a
         :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
         physical units). Several parameters can share one distribution through
-        :func:`harv.joint`, e.g. ``**joint(("ecosw", "esinw"), UnitDisk())``.
+        :func:`harv.joint`, e.g. ``**joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())``.
     linear_priors
         Per-parameter priors for linear parameters. Each entry is classified:
 
@@ -104,7 +104,8 @@ class HarvPrior(eqx.Module):
 
     def __check_init__(self) -> None:
         # A JointPrior must sit, as one shared object, under exactly its names; a
-        # partial override (e.g. ``default_prior(..., ecosw=...)`` alone) breaks it.
+        # partial override (e.g. ``default_prior(..., sqrte_cosw=...)`` alone)
+        # breaks it.
         for key, d in self.nonlinear_priors.items():
             if not isinstance(d, JointPrior):
                 continue
@@ -152,7 +153,7 @@ class HarvPrior(eqx.Module):
         --------
         >>> import jax
         >>> from unxt import Q
-        >>> from harv.samplers import HarvPrior
+        >>> from harv.models.priors import HarvPrior
         >>> sorted(
         ...     HarvPrior.default_rv(
         ...         period_min=Q(2.0, "day"),
@@ -355,7 +356,7 @@ class HarvPrior(eqx.Module):
         ----------
         parameterization
             A concrete parameterization (e.g. :class:`StandardRV`,
-            :class:`EcoswEsinwRV`, :class:`StandardGaiaAstrometry`,
+            :class:`SqrtEccRV`, :class:`StandardGaiaAstrometry`,
             :class:`ThieleInnesGaiaAstrometry`).
         **kwargs
             Forwarded to the parameterization's ``default_prior`` method.
@@ -367,16 +368,16 @@ class HarvPrior(eqx.Module):
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.models.parameterizations.rv import EcoswEsinwRV
-        >>> from harv.samplers import HarvPrior
+        >>> from harv.models.parameterizations.rv import SqrtEccRV
+        >>> from harv.models.priors import HarvPrior
         >>> prior = HarvPrior.from_parameterization(
-        ...     EcoswEsinwRV(),
+        ...     SqrtEccRV(),
         ...     period_min=Q(2.0, "day"),
         ...     period_max=Q(1000.0, "day"),
         ...     sigma_K0=Q(30.0, "km/s"),
         ...     sigma_v0=Q(50.0, "km/s"),
         ... )
         >>> sorted(prior.nonlinear_priors.keys())
-        ['ecosw', 'esinw', 'mean_longitude', 'period']
+        ['mean_longitude', 'period', 'sqrte_cosw', 'sqrte_sinw']
         """
         return parameterization.default_prior(**kwargs)

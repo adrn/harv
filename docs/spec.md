@@ -230,7 +230,7 @@ src/harv/
 ├── models/                  # Component models (likelihood + parameterization)
 │   ├── parameterizations/   # Parameter declarations and design matrices
 │   │   ├── base.py          # AbstractParameterization base class
-│   │   ├── rv.py            # StandardRV, EcoswEsinwRV
+│   │   ├── rv.py            # StandardRV, SqrtEccRV
 │   │   ├── gaia.py          # StandardGaiaAstrometry, ThieleInnesGaiaAstrometry
 │   │   └── fourier.py       # FourierRV, FourierGaiaAstrometry (Kepler-free)
 │   ├── priors/              # HarvPrior and the prior-building machinery
@@ -533,8 +533,8 @@ and return `Q` objects, and back the parameterization-conversion machinery (see
   `cos_i ≥ 0` convention and wraps angles into `[0, 2π)`.
 - `thiele_innes_from_campbell(semi_major_axis, arg_peri, lon_asc_node, cos_i)` — the
   forward direction, returning physical Thiele-Innes constants `(A, B, F, G)`.
-- `ecc_omega_from_ecosw_esinw(ecosw, esinw)` — `(e, ω) = (√(ecosw²+esinw²), atan2(esinw, ecosw))`.
-- `ecosw_esinw_from_ecc_omega(eccentricity, arg_peri)` — `(e·cos ω, e·sin ω)`.
+- `ecc_omega_from_sqrte_cosw_sinw(sqrte_cosw, sqrte_sinw)` — `(e, ω) = (sqrte_cosw² + sqrte_sinw², atan2(sqrte_sinw, sqrte_cosw))`.
+- `sqrte_cosw_sinw_from_ecc_omega(eccentricity, arg_peri)` — `(√e·cos ω, √e·sin ω)`.
 
 Higher-level convenience functions compose these building blocks:
 
@@ -705,25 +705,32 @@ returns a `HarvPrior` with:
 
 Any nonlinear or linear prior can be overridden by name via `**kwargs`.
 
-### `EcoswEsinwRV`
+### `SqrtEccRV`
 
-Alternative RV parameterization using `e*cos(omega)` and `e*sin(omega)`:
+Alternative RV parameterization using `√e·cos(omega)` and `√e·sin(omega)`:
 
-- Nonlinear: `period`, `ecosw`, `esinw`, `mean_longitude`.
+- Nonlinear: `period`, `sqrte_cosw`, `sqrte_sinw`, `mean_longitude`.
 - Linear: `rv_semiamp`, `v_sys`.
 - Design matrix shape: `(n_obs, 2)` -- same columns, different internal derivation.
 
+`e = sqrte_cosw² + sqrte_sinw²` and `ω = atan2(sqrte_sinw, sqrte_cosw)`.
 `mean_longitude` is the mean longitude at the data's `time_ref`,
 `λ = ω + M(time_ref) = ω − 2π·phase_peri` (an angle, in `rad`). The model recovers
-`phase_peri = (ω − λ) / 2π` with `ω = atan2(esinw, ecosw)` and then solves Kepler's
-equation as for `StandardRV`.
+`phase_peri = (ω − λ) / 2π` and then solves Kepler's equation as for `StandardRV`.
 
 This parameterization has better sampling geometry for low eccentricities. Near
 `e = 0`, `ω` and `phase_peri` are individually unconstrained, but the data pin the
 combination `λ`, since `ω + f ≈ λ + 2π(t − time_ref)/P`. Sampling
-`(ecosw, esinw, λ)` therefore removes both the polar singularity at `e = 0` and the
-`ω`–`phase_peri` ridge; replacing only `(e, ω)` with `(ecosw, esinw)` while keeping
-`phase_peri` leaves the ridge, and NUTS mixes no better than with `StandardRV`.
+`(√e cos ω, √e sin ω, λ)` therefore removes both the polar singularity at `e = 0` and
+the `ω`–`phase_peri` ridge; replacing only `(e, ω)` while keeping `phase_peri` leaves
+the ridge, and NUTS mixes no better than with `StandardRV`.
+
+The coordinates use `√e` rather than `e` because of the prior. The area element on the
+disk is `e^{1/2} d(e^{1/2}) dω = de dω / 2`, so a prior `p(e)` with uniform `ω` has
+density `p(e) / π` in these coordinates: flat for uniform `e`, and only a mild cusp
+(`∝ e^{-0.133}`) for the Kipping prior. In `(e cos ω, e sin ω)` the same prior is
+`p(e) / (2π e)`, whose spike at the origin NUTS under-samples (measured: the 1% quantile
+of `e` came out ~10× too large). `e = x² + y²` also has a finite gradient at the origin.
 
 `default_prior(*, period_min, period_max, sigma_K0, sigma_v0, period_ref=Q(1, "yr"), **kwargs)`
 returns a `HarvPrior` with the same period / linear (`rv_semiamp`, `v_sys`) priors as
@@ -731,21 +738,21 @@ returns a `HarvPrior` with the same period / linear (`rv_semiamp`, `v_sys`) prio
 
 - `mean_longitude`: `QD(Uniform(0, 2π), "rad")`, like `arg_peri` in `StandardRV`
 
-Passing `phase_peri=` raises `TypeError`, since `EcoswEsinwRV` has no such parameter
+Passing `phase_peri=` raises `TypeError`, since `SqrtEccRV` has no such parameter
 and the override would otherwise be silently ignored as an extension prior. A `mean_longitude=` override must carry an angle unit (e.g.
 `QD(dist.Uniform(0, 2π), "rad")`), as for `arg_peri`.
 
-- `ecosw`, `esinw`: `joint(("ecosw", "esinw"), UnitDisk())`, a joint prior uniform on
-  the unit disk (see §Joint nonlinear priors)
+- `sqrte_cosw`, `sqrte_sinw`: `joint(("sqrte_cosw", "sqrte_sinw"), KippingDisk())`,
+  the Kipping (2013) eccentricity prior with uniform `omega`, written as a density on
+  the unit disk (see §Joint nonlinear priors and §`KippingDisk`)
 
-The disk is exactly the bound-orbit region, `e = sqrt(ecosw² + esinw²) < 1`, so every
-draw is an orbit. Uniform on the disk implies `p(e) = 2e` with
-`omega ~ Uniform(0, 2π)`, which does **not** match the implicit prior under
-`e ~ Kipping(0.867, 3.03)`. This is the simplest sensible default for this
-parameterization; users wanting a matched prior should sample with `StandardRV` and
-convert.
+This is the same prior `StandardRV` puts on `(eccentricity, arg_peri)`, so the two
+parameterizations target the same posterior and converting samples between them changes
+nothing but sampling efficiency. Every draw is a bound orbit (`e < 1`). Pass
+`**joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())` for a prior uniform on the disk,
+which in these coordinates is uniform in `e`.
 
-Override both names together, `default_prior(..., ecosw=d1, esinw=d2)`; replacing
+Override both names together, `default_prior(..., sqrte_cosw=d1, sqrte_sinw=d2)`; replacing
 only one leaves the other's `JointPrior` incomplete and `HarvPrior` raises
 `ValueError`. Independent scalar priors whose support extends past the disk (e.g.
 `Uniform(-1, 1)` on each) admit unbound orbits; see `docs/sharp-bits.md`.
@@ -918,7 +925,7 @@ only when the abbreviation is itself a recognized domain term.** Examples:
 | `eccentricity`    | Full word -- unambiguous                                                          |
 | `phase_peri`      | Descriptive compound                                                              |
 | `arg_peri`        | `arg` is the standard abbreviation for *argument* in orbital mechanics            |
-| `mean_longitude`  | Full descriptive name (`λ`, at `time_ref`; `EcoswEsinwRV`)                        |
+| `mean_longitude`  | Full descriptive name (`λ`, at `time_ref`; `SqrtEccRV`)                        |
 | `rv_semiamp`      | `rv` is universally recognized; avoids ambiguity with astrometric semi-major axis |
 | `v_sys`           | $v\_\\text{sys}$ is the standard notation for systemic velocity                   |
 | `pmra`, `pmdec`   | `pm` is the standard abbreviation for *proper motion*                             |
@@ -1018,9 +1025,9 @@ Models use `phase_peri = time_peri / period` (dimensionless, range 0-1) rather t
 absolute `time_peri`. This decouples the phase from the period scale, simplifies the
 prior (uniform on [0, 1]), and avoids the need to specify a reference epoch in the
 prior. `Samples` exposes a derived `"time_peri"` key that reconstructs the absolute time
-as `phase_peri * period + time_ref`. For `EcoswEsinwRV` samples, which carry
+as `phase_peri * period + time_ref`. For `SqrtEccRV` samples, which carry
 `mean_longitude` instead, `phase_peri` is first recovered as
-`(atan2(esinw, ecosw) − mean_longitude) / 2π`.
+`(atan2(sqrte_sinw, sqrte_cosw) − mean_longitude) / 2π`.
 
 ### Parameterization conversion
 
@@ -1038,9 +1045,10 @@ returns a new `Samples`, preserving `metadata`, `model_type`, and
 
 The first implementation supports **single-component** parameterizations only:
 
-- RV: `StandardRV <-> EcoswEsinwRV`, via `(e, ω)` and
+- RV: `StandardRV <-> SqrtEccRV`, via `(e, ω)` and
   `mean_longitude = (ω − 2π·phase_peri)` wrapped to `[0, 2π)`, and back with
-  `phase_peri = ((ω − mean_longitude) / 2π) mod 1`
+  `phase_peri = ((ω − mean_longitude) / 2π) mod 1` and `arg_peri` wrapped to
+  `[0, 2π)` (the range of `StandardRV`'s default prior)
 - Gaia astrometry: `StandardGaiaAstrometry <-> ThieleInnesGaiaAstrometry`
 
 Any extra parameters not declared by the source parameterization (for example,
@@ -1263,12 +1271,12 @@ identically to one supplied directly. The dict contains:
   parameter, when the parameterization can derive one.
 
 The third bullet exists because callables like `PeriodDependentKPrior` are written
-against the standard parameter names. `EcoswEsinwRV` carries `(ecosw, esinw)` instead,
+against the standard parameter names. `SqrtEccRV` carries `(sqrte_cosw, sqrte_sinw)` instead,
 so without this the default `rv_semiamp` prior could not be evaluated at all. The value
 comes from `AbstractParameterization.derived_eccentricity(nonlinear_values)`, which returns
 `None` by default -- covering both parameterizations that already carry `eccentricity`
 (nothing to derive) and the Kepler-free Fourier bases (no eccentricity exists) -- and is
-overridden by `EcoswEsinwRV`. Shared priors in a `JointModel` are the one exception:
+overridden by `SqrtEccRV`. Shared priors in a `JointModel` are the one exception:
 components need not agree on a parameterization, so no derivation is attempted there.
 
 The second bullet is why `parallax` is readable by callable priors: it is sampled
@@ -1350,7 +1358,7 @@ no data or linear prior are stored as fields. Both are passed at call time.
 
 | Field              | Type                         | Default        |
 | ------------------ | ---------------------------- | -------------- |
-| `parameterization` | `StandardRV \| EcoswEsinwRV` | `StandardRV()` |
+| `parameterization` | `StandardRV \| SqrtEccRV` | `StandardRV()` |
 | `extensions`       | `tuple`                      | `()`           |
 
 ### `GaiaAstrometryModel`
@@ -1683,10 +1691,10 @@ from harv.stats import UnitDisk
 
 nonlinear_priors = {
     "period": harv.QD(dist.LogUniform(2.0, 1000.0), "day"),
-    **harv.joint(("ecosw", "esinw"), UnitDisk()),
+    **harv.joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
     "mean_longitude": harv.QD(dist.Uniform(0.0, 6.283185307179586), "rad"),
 }
-# {"ecosw": JointPrior(...), "esinw": JointPrior(...)} inside the dict
+# {"sqrte_cosw": JointPrior(...), "sqrte_sinw": JointPrior(...)} inside the dict
 ```
 
 A joint prior may span dimensioned parameters. Wrap the distribution in a `QD` whose
@@ -1713,7 +1721,7 @@ Validation:
 - `HarvPrior.__check_init__`: every name of a `JointPrior` maps to the same `names`
   and an equal `distribution` (`eqx.tree_equal`; `joint` shares one object), and a
   `JointPrior` sits only under one of its own names (`ValueError`). A partial override, such as
-  replacing only `ecosw` through `default_prior(..., ecosw=...)`, therefore raises;
+  replacing only `sqrte_cosw` through `default_prior(..., sqrte_cosw=...)`, therefore raises;
   override all of its names together. `linear_priors` and `extension_priors` hold no
   `JointPrior` (`TypeError`); a `default_prior` override for names the
   parameterization does not have lands in `extension_priors`.
@@ -1727,7 +1735,7 @@ Semantics:
 - **`ln_prior`** evaluates the joint `log_prob` once on the stacked values: the pair
   above contributes a single `-log(π)`.
 - **numpyro** samples one site, named by joining the names with `","` (here
-  `"ecosw,esinw"`), and records each name as a `numpyro.deterministic` site. Posteriors
+  `"sqrte_cosw,sqrte_sinw"`), and records each name as a `numpyro.deterministic` site. Posteriors
   are therefore keyed by the plain names, and warm-start values given per name are
   stacked into the joint site before being unconstrained with
   `biject_to(distribution.support)`. A warm-start point on the support's edge (a MAP on
@@ -1762,7 +1770,7 @@ prior = hm.StandardRV().default_prior(
 )
 
 # Alternative RV parameterization
-prior = hm.EcoswEsinwRV().default_prior(
+prior = hm.SqrtEccRV().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(1000, "day"),
     sigma_K0=Q(30, "km/s"),
@@ -2540,7 +2548,7 @@ to construct a new `Samples` with the same metadata).
 - Derived keys:
   - `"log10_period"` → dimensionless array (`log10(period in data time units)`)
   - `"time_peri"` → `Q` (derived from `phase_peri * period + time_ref`; see
-    §`phase_peri` vs `time_peri` for `EcoswEsinwRV` samples)
+    §`phase_peri` vs `time_peri` for `SqrtEccRV` samples)
   - `"inclination"` → `Q` in radians (derived from `arccos(cos_i)`)
   - `"binary_mass_function"` → `Q` in `Msun` (present only for RV samples)
   - `"semi_major_axis_AU"` → `Q` in `AU` (present only for astrometry samples
@@ -2841,9 +2849,21 @@ involved anywhere in this feature.**
 `harv.stats.UnitDisk` re-exports the vendored `numpyro_ext.UnitDisk`: uniform on the
 unit disk, `event_shape=(2,)`, `log_prob = -log(π)` inside the closed disk and `-inf`
 outside it (so stale samples from a wider prior get `ln_prior = -inf`), with a registered
-`biject_to(unit_disk)` so NUTS can sample it. It is the joint prior on
-`("ecosw", "esinw")` in `EcoswEsinwRV.default_prior` (see §Joint nonlinear priors).
+`biject_to(unit_disk)` so NUTS can sample it. On `(sqrte_cosw, sqrte_sinw)` it
+implies a uniform `e`.
 
+### `KippingDisk`
+
+`harv.stats.KippingDisk` is the Kipping (2013) eccentricity prior,
+`e ~ Beta(0.867, 3.03)`, with `omega ~ Uniform(-π, π)`, as a distribution over
+`(√e cos ω, √e sin ω)`. `event_shape=(2,)`, no parameters, and `support = unit_disk`,
+so it reuses `UnitDisk`'s bijector under NUTS. The density is
+`log_prob = Beta.log_prob(e) - log(π)` with `e = x² + y²`, for `e < 1`, and `-inf`
+outside the open disk. `e` is clamped to `[tiny, 1 − eps]` of its dtype so the origin
+gives a finite value and gradient. The Beta parameters live in
+`harv.stats.kipping_disk.KIPPING_2013_ECC` and are shared with `StandardRV`'s
+`eccentricity` prior. It is the default joint prior on `("sqrte_cosw", "sqrte_sinw")`
+in `SqrtEccRV.default_prior`.
 
 ### Support-constrained and mixture linear priors (`harv.stats.marginalized`)
 
@@ -3698,7 +3718,7 @@ ______________________________________________________________________
 
 ### Wrap-around angle priors
 
-`arg_peri` (`StandardRV`) and `mean_longitude` (`EcoswEsinwRV`) get hard-edged
+`arg_peri` (`StandardRV`) and `mean_longitude` (`SqrtEccRV`) get hard-edged
 `Uniform(0, 2π)` priors, so NUTS cannot cross `0 = 2π`: a posterior pinned near
 `λ ≈ 0` splits into two modes at the edges. The vendored
 `harv.stats.numpyro_ext.Angle` (sampled through `(sin, cos)`, no discontinuity) is
@@ -3844,10 +3864,10 @@ samples = sampler.run(
 )
 
 # --- RV with custom extensions and parameterization ---
-from harv.models.parameterizations.rv import EcoswEsinwRV
+from harv.models.parameterizations.rv import SqrtEccRV
 sampler = RejectionSampler(
     prior,
-    RVModel(parameterization=EcoswEsinwRV(), extensions=(Jitter(obs_unit="km/s"),)),
+    RVModel(parameterization=SqrtEccRV(), extensions=(Jitter(obs_unit="km/s"),)),
 )
 samples = sampler.run(data, key=jax.random.key(0), n_prior_samples=500_000)
 

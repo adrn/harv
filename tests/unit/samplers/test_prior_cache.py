@@ -160,9 +160,9 @@ class TestMakePriorCache:
         assert loaded.model_type == "RVModel"
 
     def test_joint_prior_round_trip(self, tmp_path: Path):
-        """A joint (ecosw, esinw) prior is cached per name and reused by the sampler."""
+        """A joint ``(sqrte_cosw, sqrte_sinw)`` prior is cached per name and reused."""
         path = tmp_path / "cache.h5"
-        param = hm.EcoswEsinwRV()
+        param = hm.SqrtEccRV()
         prior = param.default_prior(
             period_min=Q(2.0, "day"),
             period_max=Q(100.0, "day"),
@@ -175,10 +175,15 @@ class TestMakePriorCache:
         )
 
         loaded = Samples.from_hdf5(path)
-        assert set(loaded.nonlinear) == {"period", "ecosw", "esinw", "mean_longitude"}
-        ecosw = np.asarray(loaded.nonlinear["ecosw"].value)
-        esinw = np.asarray(loaded.nonlinear["esinw"].value)
-        assert np.all(ecosw**2 + esinw**2 < 1)
+        assert set(loaded.nonlinear) == {
+            "period",
+            "sqrte_cosw",
+            "sqrte_sinw",
+            "mean_longitude",
+        }
+        sqrte_cosw = np.asarray(loaded.nonlinear["sqrte_cosw"].value)
+        sqrte_sinw = np.asarray(loaded.nonlinear["sqrte_sinw"].value)
+        assert np.all(sqrte_cosw**2 + sqrte_sinw**2 < 1)
 
         samples = RejectionSampler(prior, model).run_with_samples(
             _rv_data(), path, top_k=4, key=jr.key(1)

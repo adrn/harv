@@ -133,13 +133,14 @@ once.
 
 ## Priors that reach unbound orbits give `NaN`, not rejections
 
-`EcoswEsinwRV().default_prior(...)` puts a joint `UnitDisk()` prior on
-`(ecosw, esinw)`, so every draw is a bound orbit. If you override it with independent
-priors, for example `ecosw=dist.Uniform(-1, 1), esinw=dist.Uniform(-1, 1)`, the support
-becomes a square, but a bound orbit needs the unit disk:
+`SqrtEccRV().default_prior(...)` puts a joint `KippingDisk()` prior on
+`(sqrte_cosw, sqrte_sinw)`, so every draw is a bound orbit. If you override it with
+independent priors, for example `sqrte_cosw=dist.Uniform(-1, 1)` and
+`sqrte_sinw=dist.Uniform(-1, 1)`, the support becomes a square, but a bound orbit needs
+the unit disk:
 
 ```
-e = sqrt(ecosw**2 + esinw**2) < 1
+e = sqrte_cosw**2 + sqrte_sinw**2 < 1
 ```
 
 Roughly 21% of draws (`1 - pi/4`) then fall outside it with `e >= 1`, which is not an
@@ -157,5 +158,5 @@ samples = sampler.run(
 )
 ```
 
-This is not specific to `EcoswEsinwRV`: any prior that can produce a non-finite
+This is not specific to `SqrtEccRV`: any prior that can produce a non-finite
 likelihood needs the same flag.

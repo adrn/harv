@@ -3,7 +3,7 @@
 This first implementation supports single-component RV and Gaia astrometry
 parameterizations only:
 
-- RV: ``StandardRV <-> EcoswEsinwRV``
+- RV: ``StandardRV <-> SqrtEccRV``
 - Gaia astrometry: ``StandardGaiaAstrometry <-> ThieleInnesGaiaAstrometry``
 
 Parameters not declared by the source parameterization (for example, extension
@@ -20,8 +20,8 @@ from unxt import Q
 
 from harv.kepler.orbits import (
     campbell_from_thiele_innes,
-    ecc_omega_from_ecosw_esinw,
-    ecosw_esinw_from_ecc_omega,
+    ecc_omega_from_sqrte_cosw_sinw,
+    sqrte_cosw_sinw_from_ecc_omega,
     thiele_innes_from_campbell,
 )
 from harv.models.parameterizations.base import AbstractParameterization
@@ -29,9 +29,9 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 
-_RV = (StandardRV, EcoswEsinwRV)
+_RV = (StandardRV, SqrtEccRV)
 _GAIA = (StandardGaiaAstrometry, ThieleInnesGaiaAstrometry)
 
 
@@ -120,20 +120,22 @@ def _convert_rv(
     """Convert between RV parameterizations via canonical ``(e, omega, phase_peri)``.
 
     ``period`` and the linear parameters (``rv_semiamp``, ``v_sys``) are shared by
-    both parameterizations. ``EcoswEsinwRV`` carries the mean longitude
-    ``omega - 2*pi*phase_peri`` instead of ``phase_peri``.
+    both parameterizations. ``SqrtEccRV`` carries the mean longitude
+    ``omega - 2*pi*phase_peri`` instead of ``phase_peri``. Angles come out wrapped
+    into ``[0, 2*pi)`` and ``phase_peri`` into ``[0, 1)``, matching the default priors.
     """
+    two_pi = Q(2 * jnp.pi, "rad")
     # source -> canonical (eccentricity, arg_peri, phase_peri)
     if isinstance(source, StandardRV):
         eccentricity = nonlinear["eccentricity"]
         arg_peri = nonlinear["arg_peri"]
         phase_peri = nonlinear["phase_peri"]
     else:
-        eccentricity, arg_peri = ecc_omega_from_ecosw_esinw(
-            nonlinear["ecosw"], nonlinear["esinw"]
+        eccentricity, arg_peri = ecc_omega_from_sqrte_cosw_sinw(
+            nonlinear["sqrte_cosw"], nonlinear["sqrte_sinw"]
         )
-        lon_offset = arg_peri - nonlinear["mean_longitude"]
-        phase_peri = cast("Q", jnp.mod(lon_offset / Q(2 * jnp.pi, "rad"), Q(1.0, "")))
+        arg_peri = cast("Q", jnp.mod(arg_peri, two_pi))
+        phase_peri = Q(jnp.mod(SqrtEccRV().phase_peri(nonlinear), 1.0), "")
 
     # canonical -> target, built in the target's declared parameter order
     if isinstance(target, StandardRV):
@@ -144,13 +146,13 @@ def _convert_rv(
             "arg_peri": arg_peri,
         }
     else:
-        ecosw, esinw = ecosw_esinw_from_ecc_omega(eccentricity, arg_peri)
-        mean_longitude = arg_peri - Q(2 * jnp.pi, "rad") * phase_peri
+        sqrte_cosw, sqrte_sinw = sqrte_cosw_sinw_from_ecc_omega(eccentricity, arg_peri)
+        mean_longitude = arg_peri - two_pi * phase_peri
         new_nonlinear = {
             "period": nonlinear["period"],
-            "ecosw": ecosw,
-            "esinw": esinw,
-            "mean_longitude": cast("Q", jnp.mod(mean_longitude, Q(2 * jnp.pi, "rad"))),
+            "sqrte_cosw": sqrte_cosw,
+            "sqrte_sinw": sqrte_sinw,
+            "mean_longitude": cast("Q", jnp.mod(mean_longitude, two_pi)),
         }
 
     new_linear = {"rv_semiamp": linear["rv_semiamp"], "v_sys": linear["v_sys"]}

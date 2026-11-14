@@ -475,36 +475,36 @@ class TestParameterizationDefaultPriors:
         ]
         assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
-    def test_ecosw_esinw_rv_keys(self):
-        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
+    def test_sqrt_ecc_rv_keys(self):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
         assert sorted(prior.nonlinear_priors.keys()) == [
-            "ecosw",
-            "esinw",
             "mean_longitude",
             "period",
+            "sqrte_cosw",
+            "sqrte_sinw",
         ]
         assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
-    def test_ecosw_esinw_sampling_ranges(self):
-        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
+    def test_sqrt_ecc_sampling_ranges(self):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
         samples = prior.sample_nonlinear(key=jr.key(0), n_samples=200)
-        for key in ("ecosw", "esinw"):
+        for key in ("sqrte_cosw", "sqrte_sinw"):
             assert samples[key].shape == (200,)
             assert (samples[key] >= -1.0).all()
             assert (samples[key] <= 1.0).all()
 
-    def test_ecosw_esinw_override_together(self):
+    def test_sqrt_ecc_override_together(self):
         custom = dist.Uniform(-0.5, 0.5)
-        prior = hm.EcoswEsinwRV().default_prior(
-            **_DEFAULT_RV_KWARGS, ecosw=custom, esinw=custom
+        prior = hm.SqrtEccRV().default_prior(
+            **_DEFAULT_RV_KWARGS, sqrte_cosw=custom, sqrte_sinw=custom
         )
-        assert prior.nonlinear_priors["ecosw"] is custom
-        assert prior.nonlinear_priors["esinw"] is custom
+        assert prior.nonlinear_priors["sqrte_cosw"] is custom
+        assert prior.nonlinear_priors["sqrte_sinw"] is custom
 
-    def test_ecosw_override_alone_raises(self):
+    def test_sqrte_cosw_override_alone_raises(self):
         with pytest.raises(ValueError, match="override all of"):
-            hm.EcoswEsinwRV().default_prior(
-                **_DEFAULT_RV_KWARGS, ecosw=dist.Uniform(-0.5, 0.5)
+            hm.SqrtEccRV().default_prior(
+                **_DEFAULT_RV_KWARGS, sqrte_cosw=dist.Uniform(-0.5, 0.5)
             )
 
     def test_standard_gaia_keys(self):
@@ -718,7 +718,7 @@ class TestJointPrior:
         return HarvPrior(
             nonlinear_priors={
                 "period": QD(dist.LogUniform(2.0, 1000.0), "day"),
-                **joint(("ecosw", "esinw"), UnitDisk()),
+                **joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
             },
             linear_priors={},
         )
@@ -726,18 +726,19 @@ class TestJointPrior:
     def test_default_prior_joint_override(self):
         # The documented override path: replace the pair through ``**joint``.
         mvn = dist.MultivariateNormal(jnp.zeros(2), 0.01 * jnp.eye(2))
-        prior = hm.EcoswEsinwRV().default_prior(
+        prior = hm.SqrtEccRV().default_prior(
             period_min=Q(2.0, "day"),
             period_max=Q(1000.0, "day"),
             sigma_K0=Q(30.0, "km/s"),
             sigma_v0=Q(50.0, "km/s"),
-            **joint(("ecosw", "esinw"), mvn),
+            **joint(("sqrte_cosw", "sqrte_sinw"), mvn),
         )
-        assert prior.nonlinear_priors["ecosw"].distribution is mvn
+        assert prior.nonlinear_priors["sqrte_cosw"].distribution is mvn
 
     def test_ln_prior_shape_with_only_the_joint(self):
         prior = HarvPrior(
-            nonlinear_priors=joint(("ecosw", "esinw"), UnitDisk()), linear_priors={}
+            nonlinear_priors=joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+            linear_priors={},
         )
         s = prior.sample_nonlinear(7, key=jr.key(0))
         assert _evaluate_nonlinear_log_prior(prior.nonlinear_priors, s).shape == (7,)
@@ -745,15 +746,22 @@ class TestJointPrior:
     def test_ln_prior_with_numpyro_validation(self):
         prior = self._prior()
         s = prior.sample_nonlinear(5, key=jr.key(0))
-        with numpyro.validation_enabled():
+        # Not numpyro.validation_enabled(): it restores a stale module flag and
+        # leaves validation on for every later test (numpyro 0.20).
+        numpyro.enable_validation(is_validate=True)
+        try:
             lp = _evaluate_nonlinear_log_prior(prior.nonlinear_priors, s)
+        finally:
+            numpyro.enable_validation(is_validate=False)
         assert lp.shape == (5,)
         assert bool(jnp.all(jnp.isfinite(lp)))
 
     def test_partial_joint_raises(self):
         with pytest.raises(ValueError, match="override all of"):
             HarvPrior(
-                nonlinear_priors={"ecosw": JointPrior(("ecosw", "esinw"), UnitDisk())},
+                nonlinear_priors={
+                    "sqrte_cosw": JointPrior(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
+                },
                 linear_priors={},
             )
 
@@ -762,15 +770,15 @@ class TestJointPrior:
         [
             # Same names, different distributions (no single one to sample).
             {
-                "ecosw": JointPrior(("ecosw", "esinw"), UnitDisk()),
-                "esinw": JointPrior(
-                    ("ecosw", "esinw"),
+                "sqrte_cosw": JointPrior(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+                "sqrte_sinw": JointPrior(
+                    ("sqrte_cosw", "sqrte_sinw"),
                     dist.MultivariateNormal(jnp.zeros(2), jnp.eye(2)),
                 ),
             },
             # A joint stored under a key that is not one of its names.
-            {"foo": joint(("ecosw", "esinw"), UnitDisk())["ecosw"]}
-            | joint(("ecosw", "esinw"), UnitDisk()),
+            {"foo": joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())["sqrte_cosw"]}
+            | joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
         ],
     )
     def test_joint_must_be_one_shared_object(self, nonlinear):
@@ -778,13 +786,13 @@ class TestJointPrior:
             HarvPrior(nonlinear_priors=nonlinear, linear_priors={})
 
     def test_joint_for_unknown_names_raises(self):
-        # e.g. StandardRV().default_prior(..., **joint(("ecosw", "esinw"), ...)):
+        # e.g. StandardRV().default_prior(..., **joint(("sqrte_cosw", "sqrte_sinw"), d))
         # the names are not StandardRV's, so the override lands in
         # extension_priors and would be silently dropped. The test-suite beartype
         # hook rejects that at the annotation, so bypass it to reach the check.
         prior = HarvPrior(nonlinear_priors={}, linear_priors={})
         object.__setattr__(
-            prior, "extension_priors", joint(("ecosw", "esinw"), UnitDisk())
+            prior, "extension_priors", joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
         )
         with pytest.raises(TypeError, match="not a nonlinear parameter"):
             prior.__check_init__()
@@ -805,16 +813,18 @@ class TestJointPrior:
         rebuilt = HarvPrior(
             nonlinear_priors=dict(prior.nonlinear_priors), linear_priors={}
         )
-        assert set(rebuilt.nonlinear_priors) == {"period", "ecosw", "esinw"}
+        assert set(rebuilt.nonlinear_priors) == {"period", "sqrte_cosw", "sqrte_sinw"}
 
     def test_sample_nonlinear_splits_inside_disk(self):
         samples = self._prior().sample_nonlinear(500, key=jr.key(1))
-        assert samples["ecosw"].shape == samples["esinw"].shape == (500,)
-        assert bool(jnp.all(samples["ecosw"] ** 2 + samples["esinw"] ** 2 < 1))
+        assert samples["sqrte_cosw"].shape == samples["sqrte_sinw"].shape == (500,)
+        assert bool(
+            jnp.all(samples["sqrte_cosw"] ** 2 + samples["sqrte_sinw"] ** 2 < 1)
+        )
 
     def test_ln_prior_counts_joint_once(self):
         prior = self._prior()
-        model = hm.RVModel(parameterization=hm.EcoswEsinwRV())
+        model = hm.RVModel(parameterization=hm.SqrtEccRV())
         samples = prior.sample(100, key=jr.key(2), model=model, return_logprobs=True)
         period = ustrip("day", samples["period"])
         expected = dist.LogUniform(2.0, 1000.0).log_prob(period) - jnp.log(jnp.pi)
@@ -826,5 +836,5 @@ class TestJointPrior:
         prior = self._prior()
         draw = eqx.filter_jit(lambda p, k: p.sample_nonlinear(10, key=k))
         out = jax.vmap(lambda k: draw(prior, k))(jr.split(jr.key(3), 4))
-        assert out["ecosw"].shape == out["esinw"].shape == (4, 10)
-        assert bool(jnp.all(out["ecosw"] ** 2 + out["esinw"] ** 2 < 1))
+        assert out["sqrte_cosw"].shape == out["sqrte_sinw"].shape == (4, 10)
+        assert bool(jnp.all(out["sqrte_cosw"] ** 2 + out["sqrte_sinw"] ** 2 < 1))

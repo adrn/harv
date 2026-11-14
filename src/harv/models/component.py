@@ -896,7 +896,7 @@ def _sample_nonlinear_params(
 
     Returns a dict of sampled values. QuantityDistribution values are
     sampled from the underlying distribution; the unit is stored in the
-    prior for later conversion. A joint prior is one site (``"ecosw,esinw"``)
+    prior for later conversion. A joint prior is one site (``"sqrte_cosw,sqrte_sinw"``)
     with a deterministic site per name, so posteriors are keyed by name.
     """
     values: dict[str, Any] = {}

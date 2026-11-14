@@ -18,9 +18,9 @@ from harv import GaiaAstrometryData, GaiaAstrometryModel, JointModel, RVData, RV
 from harv.data import SourceData
 from harv.distributions import QD
 from harv.models import (
-    EcoswEsinwRV,
     HarvPrior,
     Jitter,
+    SqrtEccRV,
     rv_semiamp_per_semi_major_axis,
     tied,
 )
@@ -333,7 +333,7 @@ def test_rejects_tie_in_single_component_model():
             ),
         },
         {
-            "rv": RVModel(parameterization=EcoswEsinwRV()),
+            "rv": RVModel(parameterization=SqrtEccRV()),
             "astro": GaiaAstrometryModel(),
         },
     ],

@@ -26,7 +26,7 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
-from harv.models.parameterizations.rv import EcoswEsinwRV
+from harv.models.parameterizations.rv import SqrtEccRV
 from harv.samplers.conversion import convert_parameterization
 
 __all__ = ("SampleColumns", "Samples", "pad_and_stack_samples")
@@ -763,8 +763,8 @@ class Samples(eqx.Module):
             nl = self.nonlinear
             if "phase_peri" in nl:
                 phase_peri = ustrip("", nl["phase_peri"])
-            else:  # EcoswEsinwRV carries the mean longitude instead
-                phase_peri = EcoswEsinwRV().phase_peri(nl) % 1.0
+            else:  # SqrtEccRV carries the mean longitude instead
+                phase_peri = SqrtEccRV().phase_peri(nl) % 1.0
             period_val = ustrip(time_unit, period)
             return Q(time_ref_val + phase_peri * period_val, time_unit)
 

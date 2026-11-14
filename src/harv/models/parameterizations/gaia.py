@@ -39,8 +39,8 @@ from harv.models.priors._helpers import (
     _make_pm_prior,
     _make_pos_prior,
     _make_semi_major_axis_prior,
-    kipping_2013_ecc_prior,
 )
+from harv.stats.kipping_disk import KIPPING_2013_ECC
 
 if TYPE_CHECKING:
     from harv.data.datasets import GaiaAstrometryData
@@ -277,7 +277,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
                 period_max=period_max,
                 period=kwargs.pop("period", None),
             ),
-            "eccentricity": kipping_2013_ecc_prior,
+            "eccentricity": KIPPING_2013_ECC,
             "phase_peri": dist.Uniform(0.0, 1.0),
             "cos_i": dist.Uniform(-1.0, 1.0),
             "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
@@ -650,7 +650,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 period_max=period_max,
                 period=kwargs.pop("period", None),
             ),
-            "eccentricity": kipping_2013_ecc_prior,
+            "eccentricity": KIPPING_2013_ECC,
             "phase_peri": dist.Uniform(0.0, 1.0),
         }
         linear_priors: dict[str, LinearPriorDist] = {

@@ -103,7 +103,7 @@ class JointPrior(eqx.Module):
     >>> import jax
     >>> from harv.distributions import JointPrior
     >>> from harv.stats import UnitDisk
-    >>> jp = JointPrior(("ecosw", "esinw"), UnitDisk())
+    >>> jp = JointPrior(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
     >>> jp.distribution.sample(jax.random.key(0), (5,)).shape
     (5, 2)
 
@@ -160,8 +160,8 @@ def joint(
     --------
     >>> import harv
     >>> from harv.stats import UnitDisk
-    >>> sorted(harv.joint(("ecosw", "esinw"), UnitDisk()))
-    ['ecosw', 'esinw']
+    >>> sorted(harv.joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()))
+    ['sqrte_cosw', 'sqrte_sinw']
     """
     jp = JointPrior(names, distribution)
     return dict.fromkeys(jp.names, jp)

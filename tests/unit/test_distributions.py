@@ -12,15 +12,15 @@ from harv.stats import UnitDisk
 
 class TestJointPrior:
     def test_joint_expands_to_one_entry_per_name(self):
-        entries = joint(("ecosw", "esinw"), UnitDisk())
-        assert list(entries) == ["ecosw", "esinw"]
-        assert entries["ecosw"] is entries["esinw"]
+        entries = joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
+        assert list(entries) == ["sqrte_cosw", "sqrte_sinw"]
+        assert entries["sqrte_cosw"] is entries["sqrte_sinw"]
 
     @pytest.mark.parametrize(
         ("names", "distribution", "match"),
         [
-            (("ecosw",), UnitDisk(), "at least two distinct"),
-            (("ecosw", "ecosw"), UnitDisk(), "at least two distinct"),
+            (("sqrte_cosw",), UnitDisk(), "at least two distinct"),
+            (("sqrte_cosw", "sqrte_cosw"), UnitDisk(), "at least two distinct"),
             (("a", "b", "c"), UnitDisk(), "event_shape"),
             (("a", "b"), dist.Normal(0.0, 1.0), "event_shape"),
             (("a", "b"), dist.Normal(jnp.zeros((3, 2)), 1.0).to_event(1), "batch"),
@@ -37,10 +37,14 @@ class TestJointPrior:
 
     def test_list_names_become_tuple(self):
         prior = HarvPrior(
-            nonlinear_priors=joint(["ecosw", "esinw"], UnitDisk()), linear_priors={}
+            nonlinear_priors=joint(["sqrte_cosw", "sqrte_sinw"], UnitDisk()),
+            linear_priors={},
         )
-        assert prior.nonlinear_priors["ecosw"].names == ("ecosw", "esinw")
-        assert prior.sample_nonlinear(3, key=jr.key(0))["esinw"].shape == (3,)
+        assert prior.nonlinear_priors["sqrte_cosw"].names == (
+            "sqrte_cosw",
+            "sqrte_sinw",
+        )
+        assert prior.sample_nonlinear(3, key=jr.key(0))["sqrte_sinw"].shape == (3,)
 
     def test_bare_string_names_raise(self):
         with pytest.raises(TypeError, match="sequence of names"):

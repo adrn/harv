@@ -9,10 +9,10 @@ from harv.kepler import KeplerianOrientation
 from harv.kepler.orbits import (
     campbell_from_thiele_innes,
     compute_true_anomaly_components,
-    ecc_omega_from_ecosw_esinw,
-    ecosw_esinw_from_ecc_omega,
+    ecc_omega_from_sqrte_cosw_sinw,
     mean_anomaly,
     rv_shape,
+    sqrte_cosw_sinw_from_ecc_omega,
     thiele_innes_from_campbell,
     thiele_innes_unit,
     true_anomaly_from_mean,
@@ -315,39 +315,54 @@ class TestThieleInnesFromCampbell:
         assert A.shape == (2,)
 
 
-class TestEcoswEsinwConversions:
-    """Tests for ecc_omega_from_ecosw_esinw and ecosw_esinw_from_ecc_omega."""
+class TestSqrtEccConversions:
+    """Tests for ecc_omega_from_sqrte_cosw_sinw and sqrte_cosw_sinw_from_ecc_omega."""
 
     def test_known_values(self) -> None:
-        # omega = 0  ->  ecosw = e, esinw = 0
-        ecosw, esinw = ecosw_esinw_from_ecc_omega(Q(0.4, ""), Q(0.0, "rad"))
-        assert jnp.allclose(ustrip("", ecosw), 0.4)
-        assert jnp.allclose(ustrip("", esinw), 0.0)
-        ecc, omega = ecc_omega_from_ecosw_esinw(Q(0.4, ""), Q(0.0, ""))
-        assert jnp.allclose(ustrip("", ecc), 0.4)
+        # omega = 0  ->  sqrte_cosw = sqrt(e), sqrte_sinw = 0
+        sqrte_cosw, sqrte_sinw = sqrte_cosw_sinw_from_ecc_omega(
+            Q(0.16, ""), Q(0.0, "rad")
+        )
+        assert jnp.allclose(ustrip("", sqrte_cosw), 0.4)
+        assert jnp.allclose(ustrip("", sqrte_sinw), 0.0)
+        ecc, omega = ecc_omega_from_sqrte_cosw_sinw(Q(0.4, ""), Q(0.0, ""))
+        assert jnp.allclose(ustrip("", ecc), 0.16)
         assert jnp.allclose(ustrip("rad", omega), 0.0)
 
-    def test_eccentricity_is_norm(self) -> None:
-        ecc, _ = ecc_omega_from_ecosw_esinw(Q(0.3, ""), Q(0.4, ""))
-        assert jnp.allclose(ustrip("", ecc), 0.5, atol=1e-6)
+    def test_eccentricity_is_squared_norm(self) -> None:
+        ecc, _ = ecc_omega_from_sqrte_cosw_sinw(Q(0.3, ""), Q(0.4, ""))
+        assert jnp.allclose(ustrip("", ecc), 0.25, atol=1e-6)
 
     def test_round_trip(self) -> None:
         # arg_peri in (-pi, pi] so atan2 recovers it exactly
         ecc_in = Q(jnp.array([0.1, 0.3, 0.5]), "")
         omega_in = Q(jnp.array([-1.0, 0.4, 2.5]), "rad")
-        ecosw, esinw = ecosw_esinw_from_ecc_omega(ecc_in, omega_in)
-        ecc, omega = ecc_omega_from_ecosw_esinw(ecosw, esinw)
+        sqrte_cosw, sqrte_sinw = sqrte_cosw_sinw_from_ecc_omega(ecc_in, omega_in)
+        ecc, omega = ecc_omega_from_sqrte_cosw_sinw(sqrte_cosw, sqrte_sinw)
         assert jnp.allclose(ustrip("", ecc), ustrip("", ecc_in), atol=1e-6)
         assert jnp.allclose(ustrip("rad", omega), ustrip("rad", omega_in), atol=1e-6)
 
     def test_jit(self) -> None:
-        ecc, _omega = jax.jit(ecc_omega_from_ecosw_esinw)(Q(0.3, ""), Q(0.4, ""))
-        assert jnp.allclose(ustrip("", ecc), 0.5, atol=1e-6)
-        ecosw, _esinw = jax.jit(ecosw_esinw_from_ecc_omega)(Q(0.5, ""), Q(0.7, "rad"))
-        assert bool(jnp.isfinite(ustrip("", ecosw)))
+        ecc, _omega = jax.jit(ecc_omega_from_sqrte_cosw_sinw)(Q(0.3, ""), Q(0.4, ""))
+        assert jnp.allclose(ustrip("", ecc), 0.25, atol=1e-6)
+        sqrte_cosw, _ = jax.jit(sqrte_cosw_sinw_from_ecc_omega)(
+            Q(0.5, ""), Q(0.7, "rad")
+        )
+        assert bool(jnp.isfinite(ustrip("", sqrte_cosw)))
+
+    def test_grad_finite_at_origin(self) -> None:
+        # omega is undefined at e = 0; atan2's NaN gradient must not leak out.
+        def omega(x):
+            _, w = ecc_omega_from_sqrte_cosw_sinw(Q(x[0], ""), Q(x[1], ""))
+            return ustrip("rad", w)
+
+        assert jnp.all(jnp.isfinite(jax.grad(omega)(jnp.zeros(2))))
+        assert jnp.allclose(
+            jax.grad(omega)(jnp.array([0.0, 0.5])), jnp.array([-2.0, 0.0])
+        )
 
     def test_vmap(self) -> None:
-        ecc, omega = jax.vmap(ecc_omega_from_ecosw_esinw)(
+        ecc, omega = jax.vmap(ecc_omega_from_sqrte_cosw_sinw)(
             Q(jnp.array([0.2, 0.0]), ""),
             Q(jnp.array([0.0, 0.3]), ""),
         )
