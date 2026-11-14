@@ -104,20 +104,38 @@ def _unconstrain_init_params(
         for model_key, d in nonlinear_extension_priors.items():
             site_supports[model_key] = _unwrap_dist(d).support
 
-    out: dict[str, Any] = {}
-    for name, val in init_params.items():
-        support = site_supports.get(name)
-        if support is not None:
-            # A finite point on the support's edge (e.g. a MAP on the UnitDisk rim)
-            # unconstrains to +-inf or NaN; pull it to a finite value instead. A
-            # non-finite init is left alone, so it still fails loudly.
-            x = jnp.asarray(val)
-            u = biject_to(support).inv(x)
-            clamped = jnp.nan_to_num(u, nan=0.0, posinf=30.0, neginf=-30.0)
-            out[name] = jnp.where(jnp.all(jnp.isfinite(x)), clamped, u)
-        else:
-            out[name] = val
-    return out
+    return {
+        name: val
+        if (support := site_supports.get(name)) is None
+        else _unconstrain_site(name, jnp.asarray(val), support)
+        for name, val in init_params.items()
+    }
+
+
+def _unconstrain_site(name: str, x: jax.Array, support: Any) -> jax.Array:
+    """Unconstrain one warm-start site, clamping finite rim points per chain.
+
+    A finite point on the support's edge (e.g. a MAP on the UnitDisk rim)
+    unconstrains to +-inf or NaN and is pulled to a finite value. A non-finite
+    init is left alone so it still fails loudly, and a finite init outside the
+    support raises rather than being moved silently.
+    """
+    u = biject_to(support).inv(x)
+    # Per chain (per event): reduce over the support's event dims only.
+    event_axes = tuple(range(x.ndim - support.event_dim, x.ndim))
+    finite = jnp.all(jnp.isfinite(x), axis=event_axes)
+    outside = np.asarray(finite & ~support(x))
+    if outside.any():
+        msg = (
+            f"Warm start for {name!r} is outside its prior support in "
+            f"{int(outside.sum())} of {outside.size} chain(s): "
+            f"{np.asarray(x)[outside]!r}. Wrap angles or pick in-support "
+            "init samples."
+        )
+        raise ValueError(msg)
+    clamped = jnp.nan_to_num(u, nan=0.0, posinf=30.0, neginf=-30.0)
+    keep = jnp.reshape(finite, finite.shape + (1,) * (u.ndim - finite.ndim))
+    return jnp.where(keep, clamped, u)
 
 
 def _build_extra_numpyro_model(

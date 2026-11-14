@@ -1739,8 +1739,12 @@ Semantics:
   are therefore keyed by the plain names, and warm-start values given per name are
   stacked into the joint site before being unconstrained with
   `biject_to(distribution.support)`. A warm-start point on the support's edge (a MAP on
-  the disk rim) would unconstrain to `±inf` or `NaN`, so for a finite init point these
-  are clamped (`±inf` to `±30`, `NaN` to `0`); a non-finite init is passed through. A warm start must carry all of a joint's names or none of them
+  the disk rim) would unconstrain to `±inf` or `NaN`, so for a finite init point inside
+  the (closed) support these are clamped (`±inf` to `±30`, `NaN` to `0`). The check is
+  per chain. A non-finite init is passed through, so it still fails loudly, and a
+  finite init *outside* the support raises `ValueError` naming the site (rather than
+  being silently moved to the clamped value). This applies to every site NUTS
+  warm-starts, not only joint ones. A warm start must carry all of a joint's names or none of them
   (`ValueError`). A joint distribution used with NUTS needs a
   support with a registered bijector (`UnitDisk` has one).
 - **`JointModel`** sees ordinary per-name keys, so shared and qualified-name

@@ -466,6 +466,35 @@ def test_non_finite_init_is_not_hidden():
     assert not bool(jnp.all(jnp.isfinite(out["sqrte_cosw,sqrte_sinw"])))
 
 
+def test_clamp_is_per_chain():
+    # One non-finite chain must not switch the rim clamp off for the others.
+    prior, _ = TestSqrtEccDefaultPriorIsEvaluable._prior_and_model()
+    init = {"sqrte_cosw,sqrte_sinw": jnp.array([[jnp.nan, 0.0], [0.6, 0.8]])}
+    out = _unconstrain_init_params(init, prior)["sqrte_cosw,sqrte_sinw"]
+    assert not bool(jnp.all(jnp.isfinite(out[0])))
+    assert bool(jnp.all(jnp.isfinite(out[1])))
+
+
+def test_out_of_support_init_raises():
+    # Outside the disk is not an edge case to clamp: it must not be moved silently.
+    prior, _ = TestSqrtEccDefaultPriorIsEvaluable._prior_and_model()
+    init = {"sqrte_cosw,sqrte_sinw": jnp.array([[0.1, 0.1], [0.9, 0.9]])}
+    with pytest.raises(ValueError, match=r"'sqrte_cosw,sqrte_sinw'.*1 of 2"):
+        _unconstrain_init_params(init, prior)
+
+
+def test_out_of_support_scalar_init_raises():
+    # arg_peri = -0.5 rad under Uniform(0, 2pi) used to start silently at pi.
+    prior = hm.StandardRV().default_prior(
+        period_min=Q(10.0, "day"),
+        period_max=Q(3000.0, "day"),
+        sigma_K0=Q(30.0, "km/s"),
+        sigma_v0=Q(50.0, "km/s"),
+    )
+    with pytest.raises(ValueError, match="'arg_peri'"):
+        _unconstrain_init_params({"arg_peri": jnp.array([1.0, -0.5])}, prior)
+
+
 def test_phase_peri_override_raises():
     # SqrtEccRV samples mean_longitude; a stale phase_peri= must not be dropped.
     with pytest.raises(TypeError, match="mean_longitude"):
