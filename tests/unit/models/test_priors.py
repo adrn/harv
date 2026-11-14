@@ -13,7 +13,7 @@ from unxt.quantity import ustrip
 
 import harv.models as hm
 from harv.distributions import QD, JointPrior, joint
-from harv.models._helpers import _evaluate_nonlinear_log_prior
+from harv.models._helpers import _evaluate_nonlinear_log_prior, _nonlinear_groups
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 from harv.models.priors import (
@@ -755,6 +755,17 @@ class TestJointPrior:
             numpyro.enable_validation(is_validate=False)
         assert lp.shape == (5,)
         assert bool(jnp.all(jnp.isfinite(lp)))
+
+    def test_tree_at_partial_override_raises_downstream(self):
+        # eqx.tree_at skips __check_init__; the grouping helper must still catch it.
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
+        bad = eqx.tree_at(
+            lambda p: p.nonlinear_priors["sqrte_cosw"], prior, dist.Uniform(-1, 1)
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            bad.sample_nonlinear(3, key=jr.key(0))
+        with pytest.raises(ValueError, match="exactly one"):
+            _nonlinear_groups(bad.nonlinear_priors)
 
     def test_partial_joint_raises(self):
         with pytest.raises(ValueError, match="override all of"):

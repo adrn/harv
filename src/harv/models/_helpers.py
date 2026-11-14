@@ -65,6 +65,10 @@ def _nonlinear_groups(
 
     A ``JointPrior`` appears under each of its names in ``priors`` but is one
     group here, so it is sampled and its ``log_prob`` counted once.
+
+    Raises ``ValueError`` if a name belongs to two groups or a joint names a key
+    that ``priors`` lacks. ``HarvPrior.__check_init__`` already rejects both, but
+    ``eqx.tree_at`` and pytree unflattening skip it, and every consumer comes here.
     """
     groups: dict[tuple[str, ...], Any] = {}
     for name, d in priors.items():
@@ -72,6 +76,14 @@ def _nonlinear_groups(
             groups.setdefault(d.names, _unwrap_dist(d.distribution))
         else:
             groups[(name,)] = _unwrap_dist(d)
+    claimed = [n for names in groups for n in names]
+    if len(claimed) != len(set(claimed)) or set(claimed) != set(priors):
+        msg = (
+            "Inconsistent nonlinear priors: each name must belong to exactly one "
+            f"prior, got groups {list(groups)} for keys {sorted(priors)}. Override "
+            "all names of a joint prior together."
+        )
+        raise ValueError(msg)
     return groups
 
 
