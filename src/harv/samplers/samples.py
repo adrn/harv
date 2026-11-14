@@ -52,6 +52,16 @@ MIN_EVIDENCE_ESS = 3.0
 
 _EVIDENCE_KEYS = ("ln_Z_int", "ln_Z_int_ess", "max_ln_likelihood", "n_prior_samples")
 
+# What SqrtEccRV.phase_peri reads; time_peri is derivable from these or phase_peri.
+_SQRT_ECC_PHASE_KEYS = ("sqrte_cosw", "sqrte_sinw", "mean_longitude")
+
+
+def _has_phase_peri(nonlinear: dict[str, Any]) -> bool:
+    """Whether ``phase_peri`` (hence ``time_peri``) can be derived from samples."""
+    return "phase_peri" in nonlinear or all(
+        k in nonlinear for k in _SQRT_ECC_PHASE_KEYS
+    )
+
 
 def _assess_resolution(
     *,
@@ -572,7 +582,7 @@ class Samples(eqx.Module):
         derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
         # periastron phase, so time_peri is only derivable when one exists.
-        if "phase_peri" in self.nonlinear or "mean_longitude" in self.nonlinear:
+        if _has_phase_peri(self.nonlinear):
             derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
@@ -761,6 +771,12 @@ class Samples(eqx.Module):
             else:
                 time_ref_val = float(time_ref)
             nl = self.nonlinear
+            if not _has_phase_peri(nl):
+                msg = (
+                    "time_peri needs phase_peri, or all of "
+                    f"{_SQRT_ECC_PHASE_KEYS} (SqrtEccRV), in the nonlinear samples."
+                )
+                raise KeyError(msg)
             if "phase_peri" in nl:
                 phase_peri = ustrip("", nl["phase_peri"])
             else:  # SqrtEccRV carries the mean longitude instead

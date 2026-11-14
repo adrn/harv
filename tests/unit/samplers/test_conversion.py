@@ -416,6 +416,21 @@ class TestConvertErrors:
 
 
 class TestSamplesWrapper:
+    def test_time_peri_needs_all_phase_inputs(self):
+        # mean_longitude alone (e.g. a user subset) cannot give phase_peri.
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.array([100.0]), "day"),
+                "mean_longitude": Q(jnp.array([1.0]), "rad"),
+            },
+            linear={},
+            model_type="RVModel",
+        )
+        derivable = samples.keys()
+        assert "time_peri" not in derivable
+        with pytest.raises(KeyError, match="time_peri needs"):
+            samples["time_peri"]
+
     def test_rv_wrapper_preserves_metadata_and_extensions(self):
         samples = Samples(
             nonlinear=_rv_nonlinear(),
