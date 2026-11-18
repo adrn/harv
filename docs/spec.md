@@ -1733,8 +1733,8 @@ Validation:
   parameterization does not have lands in `extension_priors`.
 - Every consumer of the nonlinear priors (sampling, `ln_prior`, numpyro, warm starts)
   groups them through one helper, which re-checks the grouping: each name belongs to
-  exactly one prior, and every name of a `JointPrior` is a key of the dict
-  (`ValueError`). This catches inconsistent dicts built without `__check_init__`,
+  exactly one prior, every name of a `JointPrior` is a key of the dict, and every
+  copy of a `JointPrior` holds an equal distribution, units included (`ValueError`). This catches inconsistent dicts built without `__check_init__`,
   e.g. through `eqx.tree_at` or pytree unflattening.
 
 Semantics:

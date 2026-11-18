@@ -23,7 +23,7 @@ from harv.models.priors import (
     default_sb2_prior,
 )
 from harv.models.priors.callables import PeriodDependentKPrior
-from harv.stats import UnitDisk
+from harv.stats import KippingDisk, UnitDisk
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = {
@@ -765,6 +765,25 @@ class TestJointPrior:
         with pytest.raises(ValueError, match="exactly one"):
             bad.sample_nonlinear(3, key=jr.key(0))
         with pytest.raises(ValueError, match="exactly one"):
+            _nonlinear_groups(bad.nonlinear_priors)
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            UnitDisk(),  # a different distribution
+            QD(KippingDisk(), ("", "deg")),  # same distribution, different units
+        ],
+    )
+    def test_tree_at_conflicting_joint_copy_raises_downstream(self, other):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
+        bad = eqx.tree_at(
+            lambda p: p.nonlinear_priors["sqrte_sinw"],
+            prior,
+            joint(("sqrte_cosw", "sqrte_sinw"), other)["sqrte_sinw"],
+        )
+        with pytest.raises(ValueError, match="different distribution"):
+            bad.sample_nonlinear(3, key=jr.key(0))
+        with pytest.raises(ValueError, match="different distribution"):
             _nonlinear_groups(bad.nonlinear_priors)
 
     def test_harvprior_with_joint_rebuilds_under_jit(self):

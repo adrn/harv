@@ -66,14 +66,23 @@ def _nonlinear_groups(
     A ``JointPrior`` appears under each of its names in ``priors`` but is one
     group here, so it is sampled and its ``log_prob`` counted once.
 
-    Raises ``ValueError`` if a name belongs to two groups or a joint names a key
-    that ``priors`` lacks. ``HarvPrior.__check_init__`` already rejects both, but
-    ``eqx.tree_at`` and pytree unflattening skip it, and every consumer comes here.
+    Raises ``ValueError`` if a name belongs to two groups, a joint names a key
+    that ``priors`` lacks, or two copies of a joint hold different distributions.
+    ``HarvPrior.__check_init__`` already rejects these, but ``eqx.tree_at`` and
+    pytree unflattening skip it, and every consumer comes here.
     """
     groups: dict[tuple[str, ...], Any] = {}
+    joints: dict[tuple[str, ...], JointPrior] = {}
     for name, d in priors.items():
         if isinstance(d, JointPrior):
-            groups.setdefault(d.names, _unwrap_dist(d.distribution))
+            first = joints.setdefault(d.names, d)
+            if not _priors_equal(first.distribution, d.distribution):
+                msg = (
+                    f"Joint prior over {d.names} holds a different distribution "
+                    f"under {name!r}. Override all of {d.names} together."
+                )
+                raise ValueError(msg)
+            groups[d.names] = _unwrap_dist(d.distribution)
         else:
             groups[(name,)] = _unwrap_dist(d)
     claimed = [n for names in groups for n in names]
