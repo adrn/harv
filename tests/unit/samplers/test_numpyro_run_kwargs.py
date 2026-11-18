@@ -1,9 +1,10 @@
-"""NumpyroSampler.run forwards progress_bar and mcmc_kwargs."""
+"""NumpyroSampler.run forwards progress_bar, kernel_kwargs and mcmc_kwargs."""
 
 import jax
 import jax.numpy as jnp
 import numpyro.infer
 import pytest
+from numpyro.infer import NUTS
 from unxt import Q
 
 import harv
@@ -32,9 +33,13 @@ def setup():
     return harv.NumpyroSampler(prior, harv.RVModel()), data, init
 
 
-def test_kwargs_reach_mcmc(setup, monkeypatch):
+def test_kwargs_reach_kernel_and_mcmc(setup, monkeypatch):
     sampler, data, init = setup
     seen = {}
+
+    def kernel_spy(model, **kw: float):
+        seen["kernel"] = kw
+        return NUTS(model, **kw)
 
     real_mcmc = numpyro.infer.MCMC
 
@@ -47,10 +52,13 @@ def test_kwargs_reach_mcmc(setup, monkeypatch):
         data,
         init_samples=init,
         key=jax.random.key(1),
+        kernel=kernel_spy,
+        kernel_kwargs={"target_accept_prob": 0.9},
         mcmc_kwargs={"thinning": 2},
         progress_bar=False,
         **TINY,
     )
+    assert seen["kernel"] == {"target_accept_prob": 0.9}
     assert seen["mcmc"]["progress_bar"] is False
     assert seen["mcmc"]["thinning"] == 2
     assert post.n_samples == 5  # thinning took effect

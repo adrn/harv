@@ -324,6 +324,7 @@ class NumpyroSampler(AbstractSampler):
         num_samples: int = 1000,
         chain_method: str = "parallel",
         progress_bar: bool = True,
+        kernel_kwargs: dict[str, Any] | None = None,
         mcmc_kwargs: dict[str, Any] | None = None,
         return_logprobs: bool = False,
     ) -> "Samples":
@@ -363,6 +364,10 @@ class NumpyroSampler(AbstractSampler):
             ``"vectorized"``. Default: ``"parallel"``.
         progress_bar
             Show numpyro's progress bar. Default: ``True``.
+        kernel_kwargs
+            Extra keyword arguments for the kernel constructor, called as
+            ``kernel(numpyro_model, **kernel_kwargs)``, e.g.
+            ``{"target_accept_prob": 0.9}``.
         mcmc_kwargs
             Extra keyword arguments for :class:`numpyro.infer.MCMC`, e.g.
             ``{"thinning": 2}``. A key that duplicates an argument of this
@@ -470,7 +475,7 @@ class NumpyroSampler(AbstractSampler):
         # Create and run MCMC
         rng_key = key
 
-        kernel_instance = kernel(numpyro_model)
+        kernel_instance = kernel(numpyro_model, **(kernel_kwargs or {}))
         mcmc = _numpyro_infer.MCMC(
             kernel_instance,
             num_chains=num_chains,

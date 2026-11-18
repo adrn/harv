@@ -2464,9 +2464,11 @@ log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
 `marginalized=True` and no `extra_model`; other configurations raise
 `NotImplementedError`.
 
-`run` passes two things through to numpyro:
+`run` passes three things through to numpyro:
 
 - `progress_bar` (default `True`) goes to `numpyro.infer.MCMC`.
+- `kernel_kwargs` goes to the kernel constructor:
+  `kernel(numpyro_model, **kernel_kwargs)` (e.g. `{"target_accept_prob": 0.9}`).
 - `mcmc_kwargs` goes to `numpyro.infer.MCMC` (e.g. `thinning`, `progress_rate`). A
   key that duplicates a `run` argument (`num_chains`, `progress_bar`, ...) raises
   `TypeError`. `postprocess_fn` is passed on as-is, but harv's conversion assumes
