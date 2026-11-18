@@ -34,6 +34,11 @@ class TestKippingDisk:
         assert jnp.isfinite(KippingDisk().log_prob(jnp.zeros(2)))
         assert jnp.all(jnp.isfinite(jax.grad(KippingDisk().log_prob)(jnp.zeros(2))))
 
+    def test_integer_input_is_promoted(self):
+        lp = KippingDisk().log_prob(jnp.array([[0, 0], [1, 0]]))
+        np.testing.assert_allclose(lp[0], KippingDisk().log_prob(jnp.zeros(2)))
+        assert jnp.isneginf(lp[1])
+
     def test_log_prob_under_vmap(self):
         value = jnp.array([[0.3, 0.4], [-0.1, 0.2]])
         np.testing.assert_allclose(

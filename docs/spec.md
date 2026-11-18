@@ -2878,8 +2878,8 @@ implies a uniform `e`.
 `(√e cos ω, √e sin ω)`. `event_shape=(2,)`, no parameters, and `support = unit_disk`,
 so it reuses `UnitDisk`'s bijector under NUTS. The density is
 `log_prob = Beta.log_prob(e) - log(π)` with `e = x² + y²`, for `e < 1`, and `-inf`
-outside the open disk. `e` is clamped to `[tiny, 1 − eps]` of its dtype so the origin
-gives a finite value and gradient. The Beta parameters live in
+outside the open disk. Integer inputs are promoted to float. `e` is clamped to
+`[tiny, 1 − eps]` of its dtype so the origin gives a finite value and gradient. The Beta parameters live in
 `harv.stats.kipping_disk.KIPPING_2013_ECC` and are shared with `StandardRV`'s
 `eccentricity` prior. It is the default joint prior on `("sqrte_cosw", "sqrte_sinw")`
 in `SqrtEccRV.default_prior`.

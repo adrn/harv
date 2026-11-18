@@ -60,7 +60,9 @@ class KippingDisk(dist.Distribution):
     @validate_sample
     def log_prob(self, value: ArrayLike) -> jax.Array:
         """``Beta.log_prob(x**2 + y**2) - log(pi)`` inside the disk, else ``-inf``."""
-        ecc = jnp.sum(jnp.asarray(value) ** 2, axis=-1)
+        # Promote integers: finfo below needs an inexact dtype.
+        value = jnp.asarray(value, dtype=jnp.result_type(value, float))
+        ecc = jnp.sum(value**2, axis=-1)
         # Clamp so the origin gives a finite value (and gradient) instead of +inf.
         eps = jnp.finfo(ecc.dtype)
         ecc_c = jnp.clip(ecc, eps.tiny, 1.0 - eps.eps)
