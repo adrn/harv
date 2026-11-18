@@ -2464,6 +2464,17 @@ log-likelihood, re-evaluated via `model.log_prob` over the posterior draws) and
 `marginalized=True` and no `extra_model`; other configurations raise
 `NotImplementedError`.
 
+`run` passes two things through to numpyro:
+
+- `progress_bar` (default `True`) goes to `numpyro.infer.MCMC`.
+- `mcmc_kwargs` goes to `numpyro.infer.MCMC` (e.g. `thinning`, `progress_rate`). A
+  key that duplicates a `run` argument (`num_chains`, `progress_bar`, ...) raises
+  `TypeError`. `postprocess_fn` is passed on as-is, but harv's conversion assumes
+  `get_samples()` returns the model's own sites.
+
+Nothing is passed to `MCMC.run`: harv sets `init_params` itself, and
+`extra_fields` would be dropped, because only `get_samples()` is read.
+
 Two model variants are supported via `marginalized`:
 
 - `marginalized=True` (default): MCMC explores nonlinear subspace only; Gaussian

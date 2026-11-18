@@ -323,6 +323,8 @@ class NumpyroSampler(AbstractSampler):
         num_warmup: int = 500,
         num_samples: int = 1000,
         chain_method: str = "parallel",
+        progress_bar: bool = True,
+        mcmc_kwargs: dict[str, Any] | None = None,
         return_logprobs: bool = False,
     ) -> "Samples":
         """Run MCMC warm-started from rejection-sampler output.
@@ -359,6 +361,12 @@ class NumpyroSampler(AbstractSampler):
         chain_method
             How to run chains: ``"parallel"``, ``"sequential"``, or
             ``"vectorized"``. Default: ``"parallel"``.
+        progress_bar
+            Show numpyro's progress bar. Default: ``True``.
+        mcmc_kwargs
+            Extra keyword arguments for :class:`numpyro.infer.MCMC`, e.g.
+            ``{"thinning": 2}``. A key that duplicates an argument of this
+            method (``num_chains``, ``progress_bar``, ...) raises ``TypeError``.
         return_logprobs
             If ``True``, store per-sample log-probabilities on the returned
             :class:`~harv.samplers.samples.Samples`: ``ln_likelihood`` (the
@@ -469,6 +477,8 @@ class NumpyroSampler(AbstractSampler):
             num_warmup=num_warmup,
             num_samples=num_samples,
             chain_method=chain_method,
+            progress_bar=progress_bar,
+            **(mcmc_kwargs or {}),
         )
         mcmc.run(rng_key, init_params=init_params)
         # Parallel chains come back sharded across devices. Gather onto the default
