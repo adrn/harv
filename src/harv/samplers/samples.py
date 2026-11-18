@@ -56,10 +56,10 @@ _EVIDENCE_KEYS = ("ln_Z_int", "ln_Z_int_ess", "max_ln_likelihood", "n_prior_samp
 _SQRT_ECC_PHASE_KEYS = ("sqrte_cosw", "sqrte_sinw", "mean_longitude")
 
 
-def _has_phase_peri(nonlinear: dict[str, Any]) -> bool:
-    """Whether ``phase_peri`` (hence ``time_peri``) can be derived from samples."""
-    return "phase_peri" in nonlinear or all(
-        k in nonlinear for k in _SQRT_ECC_PHASE_KEYS
+def _has_time_peri_inputs(nonlinear: dict[str, Any]) -> bool:
+    """Whether ``time_peri`` can be derived: ``period`` plus a periastron phase."""
+    return "period" in nonlinear and (
+        "phase_peri" in nonlinear or all(k in nonlinear for k in _SQRT_ECC_PHASE_KEYS)
     )
 
 
@@ -582,7 +582,7 @@ class Samples(eqx.Module):
         derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
         # periastron phase, so time_peri is only derivable when one exists.
-        if _has_phase_peri(self.nonlinear):
+        if _has_time_peri_inputs(self.nonlinear):
             derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
@@ -761,7 +761,14 @@ class Samples(eqx.Module):
             # phase_peri encodes the fractional orbital phase at t=0, so
             # phase_peri * period is the periastron time relative to t=0, and
             # adding time_ref converts it to the same absolute coordinate as data.time.
-            period = self.nonlinear["period"]
+            nl = self.nonlinear
+            if not _has_time_peri_inputs(nl):
+                msg = (
+                    "time_peri needs period and phase_peri (or all of "
+                    f"{_SQRT_ECC_PHASE_KEYS} for SqrtEccRV) in the nonlinear samples."
+                )
+                raise KeyError(msg)
+            period = nl["period"]
             time_unit = str(period.unit)
             time_ref = self.meta.get("time_ref")
             if time_ref is None:
@@ -770,13 +777,6 @@ class Samples(eqx.Module):
                 time_ref_val = float(ustrip(time_unit, time_ref))
             else:
                 time_ref_val = float(time_ref)
-            nl = self.nonlinear
-            if not _has_phase_peri(nl):
-                msg = (
-                    "time_peri needs phase_peri, or all of "
-                    f"{_SQRT_ECC_PHASE_KEYS} (SqrtEccRV), in the nonlinear samples."
-                )
-                raise KeyError(msg)
             if "phase_peri" in nl:
                 phase_peri = ustrip("", nl["phase_peri"])
             else:  # SqrtEccRV carries the mean longitude instead

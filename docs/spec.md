@@ -1028,8 +1028,9 @@ prior. `Samples` exposes a derived `"time_peri"` key that reconstructs the absol
 as `phase_peri * period + time_ref`. For `SqrtEccRV` samples, which carry
 `mean_longitude` instead, `phase_peri` is first recovered as
 `(atan2(sqrte_sinw, sqrte_cosw) − mean_longitude) / 2π`. `time_peri` is listed in
-`keys()` only when `phase_peri`, or all of `sqrte_cosw`, `sqrte_sinw` and
-`mean_longitude`, are present; otherwise asking for it raises `KeyError`.
+`keys()` only when `period` and either `phase_peri` or all of `sqrte_cosw`,
+`sqrte_sinw` and `mean_longitude` are present; otherwise asking for it raises
+`KeyError`.
 
 ### Parameterization conversion
 

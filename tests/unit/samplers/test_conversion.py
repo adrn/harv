@@ -416,16 +416,24 @@ class TestConvertErrors:
 
 
 class TestSamplesWrapper:
-    def test_time_peri_needs_all_phase_inputs(self):
-        # mean_longitude alone (e.g. a user subset) cannot give phase_peri.
-        samples = Samples(
-            nonlinear={
+    @pytest.mark.parametrize(
+        "nonlinear",
+        [
+            # mean_longitude alone (e.g. a user subset) cannot give phase_peri.
+            {
                 "period": Q(jnp.array([100.0]), "day"),
                 "mean_longitude": Q(jnp.array([1.0]), "rad"),
             },
-            linear={},
-            model_type="RVModel",
-        )
+            # A full periastron phase but no period.
+            {
+                "sqrte_cosw": jnp.array([0.3]),
+                "sqrte_sinw": jnp.array([0.4]),
+                "mean_longitude": Q(jnp.array([1.0]), "rad"),
+            },
+        ],
+    )
+    def test_time_peri_needs_all_inputs(self, nonlinear):
+        samples = Samples(nonlinear=nonlinear, linear={}, model_type="RVModel")
         derivable = samples.keys()
         assert "time_peri" not in derivable
         with pytest.raises(KeyError, match="time_peri needs"):
