@@ -1,16 +1,19 @@
 """Unit tests for rejection sampling priors."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import numpyro
 import numpyro.distributions as dist
 import pytest
 from unxt import Q
 from unxt.quantity import ustrip
 
 import harv.models as hm
-from harv.distributions import QD
+from harv.distributions import QD, JointPrior, joint
+from harv.models._helpers import _evaluate_nonlinear_log_prior, _nonlinear_groups
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 from harv.models.priors import (
@@ -20,6 +23,7 @@ from harv.models.priors import (
     default_sb2_prior,
 )
 from harv.models.priors.callables import PeriodDependentKPrior
+from harv.stats import KippingDisk, UnitDisk
 
 # Common default_rv kwargs used throughout tests
 _DEFAULT_RV_KWARGS = {
@@ -471,28 +475,37 @@ class TestParameterizationDefaultPriors:
         ]
         assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
-    def test_ecosw_esinw_rv_keys(self):
-        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
+    def test_sqrt_ecc_rv_keys(self):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
         assert sorted(prior.nonlinear_priors.keys()) == [
-            "ecosw",
-            "esinw",
+            "mean_longitude",
             "period",
-            "phase_peri",
+            "sqrte_cosw",
+            "sqrte_sinw",
         ]
         assert sorted(prior.linear_priors.keys()) == ["rv_semiamp", "v_sys"]
 
-    def test_ecosw_esinw_sampling_ranges(self):
-        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS)
+    def test_sqrt_ecc_sampling_ranges(self):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
         samples = prior.sample_nonlinear(key=jr.key(0), n_samples=200)
-        for key in ("ecosw", "esinw"):
+        for key in ("sqrte_cosw", "sqrte_sinw"):
             assert samples[key].shape == (200,)
             assert (samples[key] >= -1.0).all()
             assert (samples[key] <= 1.0).all()
 
-    def test_ecosw_override(self):
+    def test_sqrt_ecc_override_together(self):
         custom = dist.Uniform(-0.5, 0.5)
-        prior = hm.EcoswEsinwRV().default_prior(**_DEFAULT_RV_KWARGS, ecosw=custom)
-        assert prior.nonlinear_priors["ecosw"] is custom
+        prior = hm.SqrtEccRV().default_prior(
+            **_DEFAULT_RV_KWARGS, sqrte_cosw=custom, sqrte_sinw=custom
+        )
+        assert prior.nonlinear_priors["sqrte_cosw"] is custom
+        assert prior.nonlinear_priors["sqrte_sinw"] is custom
+
+    def test_sqrte_cosw_override_alone_raises(self):
+        with pytest.raises(ValueError, match="override all of"):
+            hm.SqrtEccRV().default_prior(
+                **_DEFAULT_RV_KWARGS, sqrte_cosw=dist.Uniform(-0.5, 0.5)
+            )
 
     def test_standard_gaia_keys(self):
         prior = hm.StandardGaiaAstrometry().default_prior(**_DEFAULT_ASTRO_KWARGS)
@@ -695,3 +708,173 @@ class TestParallaxDependentProperMotionPrior:
     def test_missing_parallax_raises(self):
         with pytest.raises(KeyError, match="requires 'parallax'"):
             self.prior({"period": Q(400.0, "day")})
+
+
+class TestJointPrior:
+    """``joint(...)`` entries: one distribution shared by several names."""
+
+    @staticmethod
+    def _prior() -> HarvPrior:
+        return HarvPrior(
+            nonlinear_priors={
+                "period": QD(dist.LogUniform(2.0, 1000.0), "day"),
+                **joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+            },
+            linear_priors={},
+        )
+
+    def test_default_prior_joint_override(self):
+        # The documented override path: replace the pair through ``**joint``.
+        mvn = dist.MultivariateNormal(jnp.zeros(2), 0.01 * jnp.eye(2))
+        prior = hm.SqrtEccRV().default_prior(
+            period_min=Q(2.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_K0=Q(30.0, "km/s"),
+            sigma_v0=Q(50.0, "km/s"),
+            **joint(("sqrte_cosw", "sqrte_sinw"), mvn),
+        )
+        assert prior.nonlinear_priors["sqrte_cosw"].distribution is mvn
+
+    def test_ln_prior_shape_with_only_the_joint(self):
+        prior = HarvPrior(
+            nonlinear_priors=joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+            linear_priors={},
+        )
+        s = prior.sample_nonlinear(7, key=jr.key(0))
+        assert _evaluate_nonlinear_log_prior(prior.nonlinear_priors, s).shape == (7,)
+
+    def test_ln_prior_with_numpyro_validation(self):
+        prior = self._prior()
+        s = prior.sample_nonlinear(5, key=jr.key(0))
+        # Not numpyro.validation_enabled(): it restores a stale module flag and
+        # leaves validation on for every later test (numpyro 0.20).
+        numpyro.enable_validation(is_validate=True)
+        try:
+            lp = _evaluate_nonlinear_log_prior(prior.nonlinear_priors, s)
+        finally:
+            numpyro.enable_validation(is_validate=False)
+        assert lp.shape == (5,)
+        assert bool(jnp.all(jnp.isfinite(lp)))
+
+    def test_tree_at_partial_override_raises_downstream(self):
+        # eqx.tree_at skips __check_init__; the grouping helper must still catch it.
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
+        bad = eqx.tree_at(
+            lambda p: p.nonlinear_priors["sqrte_cosw"], prior, dist.Uniform(-1, 1)
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            bad.sample_nonlinear(3, key=jr.key(0))
+        with pytest.raises(ValueError, match="exactly one"):
+            _nonlinear_groups(bad.nonlinear_priors)
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            UnitDisk(),  # a different distribution
+            QD(KippingDisk(), ("", "deg")),  # same distribution, different units
+        ],
+    )
+    def test_tree_at_conflicting_joint_copy_raises_downstream(self, other):
+        prior = hm.SqrtEccRV().default_prior(**_DEFAULT_RV_KWARGS)
+        bad = eqx.tree_at(
+            lambda p: p.nonlinear_priors["sqrte_sinw"],
+            prior,
+            joint(("sqrte_cosw", "sqrte_sinw"), other)["sqrte_sinw"],
+        )
+        with pytest.raises(ValueError, match="different distribution"):
+            bad.sample_nonlinear(3, key=jr.key(0))
+        with pytest.raises(ValueError, match="different distribution"):
+            _nonlinear_groups(bad.nonlinear_priors)
+
+    def test_harvprior_with_joint_rebuilds_under_jit(self):
+        d = dist.MultivariateNormal(jnp.zeros(2), 0.01 * jnp.eye(2))
+        prior = HarvPrior(nonlinear_priors=joint(("a", "b"), d), linear_priors={})
+        rebuilt = eqx.filter_jit(
+            lambda p: HarvPrior(
+                nonlinear_priors=dict(p.nonlinear_priors), linear_priors={}
+            )
+        )(prior)
+        assert rebuilt.nonlinear_priors["a"].names == ("a", "b")
+
+    def test_partial_joint_raises(self):
+        with pytest.raises(ValueError, match="override all of"):
+            HarvPrior(
+                nonlinear_priors={
+                    "sqrte_cosw": JointPrior(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
+                },
+                linear_priors={},
+            )
+
+    @pytest.mark.parametrize(
+        "nonlinear",
+        [
+            # Same names, different distributions (no single one to sample).
+            {
+                "sqrte_cosw": JointPrior(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+                "sqrte_sinw": JointPrior(
+                    ("sqrte_cosw", "sqrte_sinw"),
+                    dist.MultivariateNormal(jnp.zeros(2), jnp.eye(2)),
+                ),
+            },
+            # A joint stored under a key that is not one of its names.
+            {"foo": joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())["sqrte_cosw"]}
+            | joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk()),
+        ],
+    )
+    def test_joint_must_be_one_shared_object(self, nonlinear):
+        with pytest.raises(ValueError, match="Joint prior over"):
+            HarvPrior(nonlinear_priors=nonlinear, linear_priors={})
+
+    def test_joint_for_unknown_names_raises(self):
+        # e.g. StandardRV().default_prior(..., **joint(("sqrte_cosw", "sqrte_sinw"), d))
+        # the names are not StandardRV's, so the override lands in
+        # extension_priors and would be silently dropped. The test-suite beartype
+        # hook rejects that at the annotation, so bypass it to reach the check.
+        prior = HarvPrior(nonlinear_priors={}, linear_priors={})
+        object.__setattr__(
+            prior, "extension_priors", joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())
+        )
+        with pytest.raises(TypeError, match="not a nonlinear parameter"):
+            prior.__check_init__()
+
+    def test_joint_in_linear_priors_raises(self):
+        # e.g. StandardRV().default_prior(..., **joint(("rv_semiamp", "v_sys"), ...)).
+        # The beartype hook rejects that at the annotation; bypass it to reach the
+        # check that production code (without the hook) relies on.
+        mvn = QD(dist.MultivariateNormal(jnp.zeros(2), jnp.eye(2)), ("km/s", "km/s"))
+        prior = HarvPrior(nonlinear_priors={}, linear_priors={})
+        object.__setattr__(prior, "linear_priors", joint(("rv_semiamp", "v_sys"), mvn))
+        with pytest.raises(TypeError, match="not a nonlinear parameter"):
+            prior.__check_init__()
+
+    def test_rebuild_after_tree_round_trip(self):
+        # A tree op gives each name its own (equal) copy; rebuilding must still pass.
+        prior = jax.tree.map(lambda x: x, self._prior())
+        rebuilt = HarvPrior(
+            nonlinear_priors=dict(prior.nonlinear_priors), linear_priors={}
+        )
+        assert set(rebuilt.nonlinear_priors) == {"period", "sqrte_cosw", "sqrte_sinw"}
+
+    def test_sample_nonlinear_splits_inside_disk(self):
+        samples = self._prior().sample_nonlinear(500, key=jr.key(1))
+        assert samples["sqrte_cosw"].shape == samples["sqrte_sinw"].shape == (500,)
+        assert bool(
+            jnp.all(samples["sqrte_cosw"] ** 2 + samples["sqrte_sinw"] ** 2 < 1)
+        )
+
+    def test_ln_prior_counts_joint_once(self):
+        prior = self._prior()
+        model = hm.RVModel(parameterization=hm.SqrtEccRV())
+        samples = prior.sample(100, key=jr.key(2), model=model, return_logprobs=True)
+        period = ustrip("day", samples["period"])
+        expected = dist.LogUniform(2.0, 1000.0).log_prob(period) - jnp.log(jnp.pi)
+        np.testing.assert_allclose(samples.ln_prior, expected)
+
+    def test_jit_and_vmap(self):
+        # The prior is a jit *argument*, so it must flatten as a pytree (a dict
+        # mixing str and tuple keys could not -- the reason for ``joint``).
+        prior = self._prior()
+        draw = eqx.filter_jit(lambda p, k: p.sample_nonlinear(10, key=k))
+        out = jax.vmap(lambda k: draw(prior, k))(jr.split(jr.key(3), 4))
+        assert out["sqrte_cosw"].shape == out["sqrte_sinw"].shape == (4, 10)
+        assert bool(jnp.all(out["sqrte_cosw"] ** 2 + out["sqrte_sinw"] ** 2 < 1))

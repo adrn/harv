@@ -9,6 +9,7 @@ from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDict,
     LinearPriorDist,
+    NonlinearPriorDist,
     PriorDist,
 )
 from harv.models.priors._helpers import (
@@ -16,9 +17,9 @@ from harv.models.priors._helpers import (
     _make_period_prior,
     _make_rv_semiamp_prior,
     _make_vsys_prior,
-    kipping_2013_ecc_prior,
 )
 from harv.models.priors.prior import HarvPrior
+from harv.stats.kipping_disk import KIPPING_2013_ECC
 
 __all__ = ("default_sb2_prior",)
 
@@ -130,13 +131,13 @@ def default_sb2_prior(
     ... )
     ['primary.rv_semiamp', 'secondary.rv_semiamp', 'v_sys']
     """
-    nonlinear: dict[str, PriorDist] = {
+    nonlinear: dict[str, NonlinearPriorDist] = {
         "period": _make_period_prior(
             period_min=period_min,
             period_max=period_max,
             period=kwargs.pop("period", None),
         ),
-        "eccentricity": kipping_2013_ecc_prior,
+        "eccentricity": KIPPING_2013_ECC,
         "phase_peri": dist.Uniform(0.0, 1.0),
         "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
     }

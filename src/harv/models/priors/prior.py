@@ -14,12 +14,16 @@ import jax
 import jax.random as jr
 from unxt import Q
 
-from harv.distributions import QuantityDistribution
+from harv.distributions import JointPrior, QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDict,
     LinearPriorDist,
+    NonlinearPriorDist,
     PriorDist,
     _evaluate_nonlinear_log_prior,
+    _nonlinear_unit,
+    _priors_equal,
+    _sample_nonlinear,
     _unwrap_dist,
 )
 
@@ -69,7 +73,8 @@ class HarvPrior(eqx.Module):
         Mapping from parameter name to its prior distribution (a bare
         ``dist.Distribution`` for dimensionless parameters, or a
         :class:`harv.distributions.QuantityDistribution` wrapper for parameters with
-        physical units).
+        physical units). Several parameters can share one distribution through
+        :func:`harv.joint`, e.g. ``**joint(("sqrte_cosw", "sqrte_sinw"), UnitDisk())``.
     linear_priors
         Per-parameter priors for linear parameters. Each entry is classified:
 
@@ -87,7 +92,7 @@ class HarvPrior(eqx.Module):
 
     """
 
-    nonlinear_priors: dict[str, PriorDist]
+    nonlinear_priors: dict[str, NonlinearPriorDist]
     linear_priors: LinearPriorDict
 
     # Priors for extension parameters (jitter, offsets, GP hyperparams, etc.).
@@ -96,6 +101,37 @@ class HarvPrior(eqx.Module):
     # validated here -- the sampler checks at run-time that every extension
     # parameter has a matching entry.
     extension_priors: dict[str, PriorDist] = eqx.field(default_factory=dict)
+
+    def __check_init__(self) -> None:
+        # A JointPrior must sit, as one shared object, under exactly its names; a
+        # partial override (e.g. ``default_prior(..., sqrte_cosw=...)`` alone)
+        # breaks it.
+        for key, d in self.nonlinear_priors.items():
+            if not isinstance(d, JointPrior):
+                continue
+            if key not in d.names:
+                msg = f"Joint prior over {d.names} is stored under {key!r}."
+                raise ValueError(msg)
+            for name in d.names:
+                other = self.nonlinear_priors.get(name)
+                if not (
+                    isinstance(other, JointPrior)
+                    and other.names == d.names
+                    and _priors_equal(other.distribution, d.distribution)
+                ):
+                    msg = (
+                        f"Joint prior over {d.names} is missing, replaced or not "
+                        f"shared for {name!r}. Build it with harv.joint and "
+                        f"override all of {d.names} together."
+                    )
+                    raise ValueError(msg)
+        for name, d in {**self.linear_priors, **self.extension_priors}.items():
+            if isinstance(d, JointPrior):
+                msg = (
+                    f"Joint prior over {d.names} given for {name!r}, which is not a "
+                    "nonlinear parameter of this parameterization."
+                )
+                raise TypeError(msg)
 
     def sample_nonlinear(self, n_samples: int, *, key: jax.Array) -> dict[str, Any]:
         """Sample nonlinear parameters from priors.
@@ -117,7 +153,7 @@ class HarvPrior(eqx.Module):
         --------
         >>> import jax
         >>> from unxt import Q
-        >>> from harv.samplers import HarvPrior
+        >>> from harv.models.priors import HarvPrior
         >>> sorted(
         ...     HarvPrior.default_rv(
         ...         period_min=Q(2.0, "day"),
@@ -135,11 +171,7 @@ class HarvPrior(eqx.Module):
         ... ).sample_nonlinear(jax.random.key(0), 10)["period"].shape
         (10,)
         """
-        keys = jr.split(key, len(self.nonlinear_priors))
-        return {
-            name: _unwrap_dist(d).sample(k, (n_samples,))
-            for (name, d), k in zip(self.nonlinear_priors.items(), keys, strict=True)
-        }
+        return _sample_nonlinear(self.nonlinear_priors, n_samples, key=key)
 
     def sample(
         self,
@@ -271,15 +303,15 @@ class HarvPrior(eqx.Module):
             explicit_linear[name] = _unwrap_dist(d).sample(k, (n_samples,))
 
         # Restore units onto nonlinear (base + extension) entries.
-        all_nonlinear_priors: dict[str, PriorDist] = {
+        all_nonlinear_priors: dict[str, NonlinearPriorDist] = {
             **self.nonlinear_priors,
             **nonlinear_extension_priors,
         }
         nonlinear_q: dict[str, Q] = {}
         for name, value in {**base_nonlinear, **extension_nonlinear}.items():
-            d = all_nonlinear_priors[name]
-            unit = str(d.unit) if isinstance(d, QuantityDistribution) else ""
-            nonlinear_q[name] = Q(value, unit)
+            nonlinear_q[name] = Q(
+                value, _nonlinear_unit(all_nonlinear_priors[name], name) or ""
+            )
 
         # Restore units onto explicit linear entries.
         linear_q: dict[str, Q] = {}
@@ -324,7 +356,7 @@ class HarvPrior(eqx.Module):
         ----------
         parameterization
             A concrete parameterization (e.g. :class:`StandardRV`,
-            :class:`EcoswEsinwRV`, :class:`StandardGaiaAstrometry`,
+            :class:`SqrtEccRV`, :class:`StandardGaiaAstrometry`,
             :class:`ThieleInnesGaiaAstrometry`).
         **kwargs
             Forwarded to the parameterization's ``default_prior`` method.
@@ -336,16 +368,16 @@ class HarvPrior(eqx.Module):
         Examples
         --------
         >>> from unxt import Q
-        >>> from harv.models.parameterizations.rv import EcoswEsinwRV
-        >>> from harv.samplers import HarvPrior
+        >>> from harv.models.parameterizations.rv import SqrtEccRV
+        >>> from harv.models.priors import HarvPrior
         >>> prior = HarvPrior.from_parameterization(
-        ...     EcoswEsinwRV(),
+        ...     SqrtEccRV(),
         ...     period_min=Q(2.0, "day"),
         ...     period_max=Q(1000.0, "day"),
         ...     sigma_K0=Q(30.0, "km/s"),
         ...     sigma_v0=Q(50.0, "km/s"),
         ... )
         >>> sorted(prior.nonlinear_priors.keys())
-        ['ecosw', 'esinw', 'period', 'phase_peri']
+        ['mean_longitude', 'period', 'sqrte_cosw', 'sqrte_sinw']
         """
         return parameterization.default_prior(**kwargs)

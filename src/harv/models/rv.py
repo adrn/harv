@@ -22,10 +22,10 @@ from harv.models.component import AbstractComponentModel
 from harv.models.extensions.base import AbstractExtension, ParamInfo
 from harv.models.extensions.multi_survey import MultiSurveyOffset
 from harv.models.parameterizations.fourier import FourierRV
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 
 # Type alias for any RV parameterization
-RVParameterizationType = StandardRV | EcoswEsinwRV | FourierRV
+RVParameterizationType = StandardRV | SqrtEccRV | FourierRV
 
 
 @final
@@ -51,7 +51,7 @@ class RVModel(AbstractComponentModel):
     ['arg_peri', 'eccentricity', 'period', 'phase_peri']
     """
 
-    parameterization: StandardRV | EcoswEsinwRV | FourierRV = StandardRV()
+    parameterization: StandardRV | SqrtEccRV | FourierRV = StandardRV()
     extensions: tuple[AbstractExtension, ...] = ()
 
     def _param_infos(self) -> tuple[ParamInfo, ...]:
@@ -78,9 +78,11 @@ class RVModel(AbstractComponentModel):
         Returns (sin_f, cos_f) as unit-stripped arrays.
         """
         period = nonlinear_values["period"]
-        phase_peri = nonlinear_values["phase_peri"]
         # Fourier parameterizations never reach here (dispatched in
-        # _base_design_matrix), so they need no eccentricity():
+        # _base_design_matrix), so they need no eccentricity() / phase_peri():
+        phase_peri = self.parameterization.phase_peri(  # ty: ignore[unresolved-attribute]
+            nonlinear_values
+        )
         eccentricity = self.parameterization.eccentricity(  # ty: ignore[unresolved-attribute]
             nonlinear_values
         )

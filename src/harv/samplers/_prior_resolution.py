@@ -256,10 +256,12 @@ def validate_extension_priors(
         else set()
     )
     missing: list[str] = []
+    consumed: set[str] = set()
 
     for comp_name, ext in iter_component_extensions(model):
         for p in ext.extra_params():
             model_key = extension_model_key(comp_name, p.name)
+            consumed.update({model_key, p.name})
             if p.linear:
                 if model_key not in linear_names:
                     missing.append(model_key)
@@ -278,6 +280,17 @@ def validate_extension_priors(
             "Missing required prior(s) for extension parameter(s): "
             f"{tuple(missing)}. Add priors for every parameter declared by "
             "model.extensions."
+        )
+        raise ValueError(msg)
+
+    unused = sorted(set(prior.extension_priors) - consumed)
+    if unused:
+        # Nothing reads these, so a typo or a stale name (e.g. phase_peri for
+        # SqrtEccRV) would otherwise be silently ignored.
+        msg = (
+            f"Prior(s) given for {tuple(unused)}, which neither the "
+            "parameterization nor any model extension declares, so they would "
+            "be ignored. Check the names, or add the extension that declares them."
         )
         raise ValueError(msg)
 

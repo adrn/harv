@@ -159,6 +159,37 @@ class TestMakePriorCache:
         assert str(loaded.nonlinear["period"].unit) == "d"
         assert loaded.model_type == "RVModel"
 
+    def test_joint_prior_round_trip(self, tmp_path: Path):
+        """A joint ``(sqrte_cosw, sqrte_sinw)`` prior is cached per name and reused."""
+        path = tmp_path / "cache.h5"
+        param = hm.SqrtEccRV()
+        prior = param.default_prior(
+            period_min=Q(2.0, "day"),
+            period_max=Q(100.0, "day"),
+            sigma_K0=Q(5.0, "km/s"),
+            sigma_v0=Q(5.0, "km/s"),
+        )
+        model = RVModel(parameterization=param)
+        make_prior_cache(
+            prior, model, n_samples=256, filename=path, key=jr.key(0), batch_size=128
+        )
+
+        loaded = Samples.from_hdf5(path)
+        assert set(loaded.nonlinear) == {
+            "period",
+            "sqrte_cosw",
+            "sqrte_sinw",
+            "mean_longitude",
+        }
+        sqrte_cosw = np.asarray(loaded.nonlinear["sqrte_cosw"].value)
+        sqrte_sinw = np.asarray(loaded.nonlinear["sqrte_sinw"].value)
+        assert np.all(sqrte_cosw**2 + sqrte_sinw**2 < 1)
+
+        samples = RejectionSampler(prior, model).run_with_samples(
+            _rv_data(), path, top_k=4, key=jr.key(1)
+        )
+        assert np.isfinite(samples.metadata["max_ln_likelihood"])
+
     def test_writes_ln_prior_when_requested(self, tmp_path: Path):
         path = tmp_path / "cache.h5"
         make_prior_cache(

@@ -14,8 +14,8 @@ __all__ = (
     "true_anomaly_from_mean",
     "campbell_from_thiele_innes",
     "thiele_innes_from_campbell",
-    "ecc_omega_from_ecosw_esinw",
-    "ecosw_esinw_from_ecc_omega",
+    "ecc_omega_from_sqrte_cosw_sinw",
+    "sqrte_cosw_sinw_from_ecc_omega",
     "compute_true_anomaly_components",
     "rv_at_times",
     "astrometric_orbit_at_times",
@@ -263,18 +263,18 @@ def thiele_innes_from_campbell(
     )
 
 
-def ecc_omega_from_ecosw_esinw(
-    ecosw: BatchQDimless,
-    esinw: BatchQDimless,
+def ecc_omega_from_sqrte_cosw_sinw(
+    sqrte_cosw: BatchQDimless,
+    sqrte_sinw: BatchQDimless,
 ) -> tuple[BatchQDimless, BatchQAngle]:
-    r"""Convert ``(e cos omega, e sin omega)`` to eccentricity and arg. of periastron.
+    r"""Convert ``(sqrt(e) cos omega, sqrt(e) sin omega)`` to ``(e, omega)``.
 
-    The inverse of :func:`ecosw_esinw_from_ecc_omega`:
+    The inverse of :func:`sqrte_cosw_sinw_from_ecc_omega`:
 
     .. math::
 
-        e &= \sqrt{\mathrm{ecosw}^2 + \mathrm{esinw}^2} \\
-        \omega &= \mathrm{atan2}(\mathrm{esinw}, \mathrm{ecosw})
+        e &= \mathrm{sqrte\_cosw}^2 + \mathrm{sqrte\_sinw}^2 \\
+        \omega &= \mathrm{atan2}(\mathrm{sqrte\_sinw}, \mathrm{sqrte\_cosw})
 
     The returned ``arg_peri`` lies in ``(-pi, pi]`` (the range of ``atan2``); use
     :meth:`harv.samplers.Samples.wrap_angles` to wrap it into ``[0, 2*pi)`` if a
@@ -283,48 +283,57 @@ def ecc_omega_from_ecosw_esinw(
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.kepler.orbits import ecc_omega_from_ecosw_esinw
-    >>> ecc, arg_peri = ecc_omega_from_ecosw_esinw(Q(0.6, ""), Q(0.8, ""))
-    >>> float(ecc.value)
-    1.0
+    >>> from harv.kepler.orbits import ecc_omega_from_sqrte_cosw_sinw
+    >>> ecc, arg_peri = ecc_omega_from_sqrte_cosw_sinw(Q(0.3, ""), Q(0.4, ""))
+    >>> round(float(ecc.value), 12)
+    0.25
     >>> arg_peri.unit
     Unit("rad")
     """
-    eccentricity = jnp.sqrt(ecosw**2 + esinw**2)
-    arg_peri = jnp.arctan2(esinw, ecosw)
+    eccentricity = sqrte_cosw**2 + sqrte_sinw**2
+    # atan2 has a NaN gradient at the origin; omega is arbitrary there, so pin it
+    # to 0 (double-where keeps the gradient finite).
+    x = ustrip(AllowValue, "", sqrte_cosw)
+    y = ustrip(AllowValue, "", sqrte_sinw)
+    at_origin = (x == 0) & (y == 0)
+    safe_x = jnp.where(at_origin, 1.0, x)
+    arg_peri = Q(jnp.where(at_origin, 0.0, jnp.arctan2(y, safe_x)), "rad")
     # cast: jnp ops on Quantity inputs return AbstractQuantity via quax dispatch,
     # which ty cannot verify is a subtype of the declared return types.
     return cast("tuple[BatchQDimless, BatchQAngle]", (eccentricity, arg_peri))
 
 
-def ecosw_esinw_from_ecc_omega(
+def sqrte_cosw_sinw_from_ecc_omega(
     eccentricity: BatchQDimless,
     arg_peri: BatchQAngle,
 ) -> tuple[BatchQDimless, BatchQDimless]:
-    r"""Convert eccentricity and arg. of periastron to ``(e cos omega, e sin omega)``.
+    r"""Convert ``(e, omega)`` to ``(sqrt(e) cos omega, sqrt(e) sin omega)``.
 
-    The inverse of :func:`ecc_omega_from_ecosw_esinw`:
+    The inverse of :func:`ecc_omega_from_sqrte_cosw_sinw`:
 
     .. math::
 
-        \mathrm{ecosw} &= e \cos\omega \\
-        \mathrm{esinw} &= e \sin\omega
+        \mathrm{sqrte\_cosw} &= \sqrt{e} \cos\omega \\
+        \mathrm{sqrte\_sinw} &= \sqrt{e} \sin\omega
 
     Examples
     --------
     >>> from unxt import Q
-    >>> from harv.kepler.orbits import ecosw_esinw_from_ecc_omega
-    >>> ecosw, esinw = ecosw_esinw_from_ecc_omega(Q(0.5, ""), Q(0.0, "rad"))
-    >>> float(ecosw.value)
+    >>> from harv.kepler.orbits import sqrte_cosw_sinw_from_ecc_omega
+    >>> sqrte_cosw, sqrte_sinw = sqrte_cosw_sinw_from_ecc_omega(
+    ...     Q(0.25, ""), Q(0.0, "rad")
+    ... )
+    >>> float(sqrte_cosw.value)
     0.5
-    >>> float(esinw.value)
+    >>> float(sqrte_sinw.value)
     0.0
     """
-    ecosw = eccentricity * jnp.cos(arg_peri)
-    esinw = eccentricity * jnp.sin(arg_peri)
+    sqrt_ecc = jnp.sqrt(eccentricity)
+    sqrte_cosw = sqrt_ecc * jnp.cos(arg_peri)
+    sqrte_sinw = sqrt_ecc * jnp.sin(arg_peri)
     # cast: arithmetic on Quantity inputs returns AbstractQuantity via quax
     # dispatch, which ty cannot verify is a subtype of BatchQDimless.
-    return cast("tuple[BatchQDimless, BatchQDimless]", (ecosw, esinw))
+    return cast("tuple[BatchQDimless, BatchQDimless]", (sqrte_cosw, sqrte_sinw))
 
 
 def compute_true_anomaly_components(

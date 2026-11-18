@@ -28,7 +28,7 @@ from harv.kepler.orbits import (
     thiele_innes_unit,
     true_anomaly_from_mean,
 )
-from harv.models._helpers import LinearPriorDist, PriorDist
+from harv.models._helpers import LinearPriorDist, NonlinearPriorDist, PriorDist
 from harv.models.extensions.base import ParamInfo
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.priors import HarvPrior
@@ -39,8 +39,8 @@ from harv.models.priors._helpers import (
     _make_pm_prior,
     _make_pos_prior,
     _make_semi_major_axis_prior,
-    kipping_2013_ecc_prior,
 )
+from harv.stats.kipping_disk import KIPPING_2013_ECC
 
 if TYPE_CHECKING:
     from harv.data.datasets import GaiaAstrometryData
@@ -271,13 +271,13 @@ class StandardGaiaAstrometry(AbstractParameterization):
             linear prior by name (e.g. ``parallax=QD(...)``) means its scale
             argument must be omitted.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
                 period=kwargs.pop("period", None),
             ),
-            "eccentricity": kipping_2013_ecc_prior,
+            "eccentricity": KIPPING_2013_ECC,
             "phase_peri": dist.Uniform(0.0, 1.0),
             "cos_i": dist.Uniform(-1.0, 1.0),
             "arg_peri": QuantityDistribution(dist.Uniform(0.0, 2.0 * jnp.pi), "rad"),
@@ -644,13 +644,13 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         ``apply_jacobian_correction=True``) restores the correct posterior
         under a flat-Campbell-elements prior.
         """
-        nonlinear: dict[str, PriorDist] = {
+        nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
                 period_min=period_min,
                 period_max=period_max,
                 period=kwargs.pop("period", None),
             ),
-            "eccentricity": kipping_2013_ecc_prior,
+            "eccentricity": KIPPING_2013_ECC,
             "phase_peri": dist.Uniform(0.0, 1.0),
         }
         linear_priors: dict[str, LinearPriorDist] = {

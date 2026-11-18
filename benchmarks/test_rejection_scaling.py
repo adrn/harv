@@ -50,10 +50,10 @@ def test_run_with_samples(
                 top_k=TOP_K,
                 key=jax.random.key(0),
                 randomize_prior_order=False,
-                # Uniform across cells, so they stay comparable. Required for
-                # EcoswEsinwRV, whose default prior puts ~21% of draws outside the
-                # unit disk (e >= 1) where the K prior is NaN; without it the
-                # recorded evidence metadata is NaN. See docs/sharp-bits.md.
+                # Uniform across cells, so they stay comparable. The committed
+                # "EcoswEsinwRV" rows predate SqrtEccRV and its bounded-disk default
+                # prior, when ~21% of draws had e >= 1 and a NaN K prior. See
+                # docs/sharp-bits.md.
                 ignore_non_finite=True,
             )
         )

@@ -29,8 +29,8 @@ class _UnitDiskConstraint(constraints.Constraint):
         return (), ((), dict())
 
     def __call__(self, x):
-        assert jnp.shape(x) == (2,)
-        return x[0] ** 2 + x[1] ** 2 <= 1.0
+        assert jnp.shape(x)[-1] == 2
+        return x[..., 0] ** 2 + x[..., 1] ** 2 <= 1.0
 
     def feasible_like(self, prototype):
         assert jnp.shape(prototype)[-1] == 2
@@ -166,8 +166,8 @@ class UnitDisk(dist.Distribution):
 
     @validate_sample
     def log_prob(self, value):
-        del value
-        return -jnp.log(jnp.pi)
+        inside = value[..., 0] ** 2 + value[..., 1] ** 2 <= 1.0
+        return jnp.where(inside, -jnp.log(jnp.pi), -jnp.inf)
 
     @property
     def mean(self):

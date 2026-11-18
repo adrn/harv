@@ -9,6 +9,7 @@ from harv.custom_types import ScalarQAngle, ScalarQLength, ScalarQSpeed, ScalarQ
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorDist,
+    NonlinearPriorDist,
     PriorDist,
 )
 from harv.models.priors.callables import (
@@ -17,12 +18,10 @@ from harv.models.priors.callables import (
     PeriodDependentSemiMajorAxisPrior,
 )
 
-kipping_2013_ecc_prior = dist.Beta(0.867, 3.03)  # Kipping 2013 eccentricity prior
-
 
 def _apply_overrides(
     kwargs: dict[str, Any],
-    nonlinear: dict[str, PriorDist],
+    nonlinear: dict[str, NonlinearPriorDist],
     linear: dict[str, Any],
     extension_priors: dict[str, PriorDist],
 ) -> None:
@@ -50,7 +49,7 @@ def _make_period_prior(
     period: Any | None = None,
     period_min: ScalarQTime | None = None,
     period_max: ScalarQTime | None = None,
-) -> PriorDist:
+) -> NonlinearPriorDist:
     """Return a period prior from an explicit distribution or from bounds."""
     if period is not None:
         if period_min is not None or period_max is not None:

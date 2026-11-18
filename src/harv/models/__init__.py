@@ -13,7 +13,7 @@ from harv.models.component import AbstractComponentModel
 from harv.models.joint import JointModel
 from harv.models.parameterizations import (
     AbstractParameterization,
-    EcoswEsinwRV,
+    SqrtEccRV,
     FourierGaiaAstrometry,
     FourierRV,
     StandardGaiaAstrometry,
@@ -27,7 +27,7 @@ from harv.models.ties import rv_semiamp_per_semi_major_axis, tied
 __all__ = (
     "AbstractComponentModel",
     "AbstractParameterization",
-    "EcoswEsinwRV",
+    "SqrtEccRV",
     "FourierGaiaAstrometry",
     "FourierRV",
     "GaiaAstrometryModel",

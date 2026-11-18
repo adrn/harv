@@ -9,6 +9,7 @@ from typing import Any, NamedTuple, cast
 
 import equinox as eqx
 import jax
+import jax.random as jr
 import numpyro
 import numpyro.distributions as dist
 import quaxed.numpy as jnp
@@ -20,7 +21,7 @@ from numpyro.distributions.truncated import (
 from unxt import Q
 from unxt.quantity import AllowValue, ustrip
 
-from harv.distributions import QuantityDistribution
+from harv.distributions import JointPrior, QuantityDistribution
 from harv.models.ties import TiedPrior
 from harv.stats.marginalized import ResolvedLinearPrior
 
@@ -46,6 +47,10 @@ LinearPriorDict = dict[str, LinearPriorDist]
 # Per-parameter linear prior dictionary.
 
 
+NonlinearPriorDist = PriorDist | JointPrior
+# A nonlinear prior entry: per-name, or one shared by several names (``joint``).
+
+
 def _unwrap_dist(v: PriorDist) -> Any:
     """Extract the underlying numpyro distribution from a PriorDist."""
     if isinstance(v, QuantityDistribution):
@@ -53,20 +58,133 @@ def _unwrap_dist(v: PriorDist) -> Any:
     return v
 
 
+def _nonlinear_groups(
+    priors: dict[str, NonlinearPriorDist],
+) -> dict[tuple[str, ...], Any]:
+    """One entry per independent prior: its names -> its bare numpyro distribution.
+
+    A ``JointPrior`` appears under each of its names in ``priors`` but is one
+    group here, so it is sampled and its ``log_prob`` counted once.
+
+    Raises ``ValueError`` if a name belongs to two groups, a joint names a key
+    that ``priors`` lacks, or two copies of a joint hold different distributions.
+    ``HarvPrior.__check_init__`` already rejects these, but ``eqx.tree_at`` and
+    pytree unflattening skip it, and every consumer comes here.
+    """
+    groups: dict[tuple[str, ...], Any] = {}
+    joints: dict[tuple[str, ...], JointPrior] = {}
+    for name, d in priors.items():
+        if isinstance(d, JointPrior):
+            first = joints.setdefault(d.names, d)
+            if not _priors_equal(first.distribution, d.distribution):
+                msg = (
+                    f"Joint prior over {d.names} holds a different distribution "
+                    f"under {name!r}. Override all of {d.names} together."
+                )
+                raise ValueError(msg)
+            groups[d.names] = _unwrap_dist(d.distribution)
+        else:
+            groups[(name,)] = _unwrap_dist(d)
+    claimed = [n for names in groups for n in names]
+    if len(claimed) != len(set(claimed)) or set(claimed) != set(priors):
+        msg = (
+            "Inconsistent nonlinear priors: each name must belong to exactly one "
+            f"prior, got groups {list(groups)} for keys {sorted(priors)}. Override "
+            "all names of a joint prior together."
+        )
+        raise ValueError(msg)
+    return groups
+
+
+def _nonlinear_unit(d: Any, name: str) -> str | None:
+    """Unit of nonlinear parameter ``name`` under prior ``d``; ``None`` if it has none.
+
+    A bare distribution and a ``QD`` unit of ``""`` both mean dimensionless; such
+    values stay bare arrays.
+    """
+    if isinstance(d, JointPrior):
+        d, i = d.distribution, d.names.index(name)
+        if not isinstance(d, QuantityDistribution):
+            return None
+        return d.unit[i] or None
+    return (str(d.unit) or None) if isinstance(d, QuantityDistribution) else None
+
+
+def _priors_equal(a: Any, b: Any) -> bool:
+    """Return True if two prior specs are structurally equal.
+
+    Defers to :func:`equinox.tree_equal`, which compares pytree treedef
+    (capturing static metadata such as :attr:`QuantityDistribution.unit`)
+    *and* per-leaf array values together.  This is more robust than a
+    ``__dict__``-based comparison for callable prior factories: many of those
+    are :class:`equinox.Module` subclasses whose field values are exposed via
+    pytree leaves rather than ``__dict__`` (which can be empty under
+    ``__slots__``), and array-shaped fields would also break a raw ``==``
+    on ``__dict__``.
+
+    Numpyro distributions, :class:`QuantityDistribution`, and callable
+    eqx.Module priors are all proper pytrees, so a single call covers every
+    prior shape a ``JointPrior`` can hold. Traced leaves (under ``jit``) cannot be
+    compared by value, so then only the structure is checked.
+    """
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+    equal = eqx.tree_equal(a, b)
+    try:
+        return bool(equal)
+    except jax.errors.TracerBoolConversionError:
+        # Under jit the leaves are traced (e.g. a HarvPrior rebuilt inside
+        # filter_jit): only the structure, matched by tree_equal, can be checked.
+        return True
+
+
+def _joint_site_name(names: tuple[str, ...]) -> str:
+    """Numpyro site name for a group (``"a,b"`` for a joint; a bare name if alone)."""
+    return ",".join(names)
+
+
+def _split_group(names: tuple[str, ...], value: Any) -> dict[str, Any]:
+    """Split a group's draw into per-name values (trailing axis for a joint)."""
+    if len(names) == 1:
+        return {names[0]: value}
+    return {n: value[..., i] for i, n in enumerate(names)}
+
+
+def _stack_group(names: tuple[str, ...], values: dict[str, Any]) -> Any:
+    """Inverse of :func:`_split_group`: per-name values -> the group's value."""
+    if len(names) == 1:
+        return values[names[0]]
+    return jnp.stack([values[n] for n in names], axis=-1)
+
+
+def _sample_nonlinear(
+    priors: dict[str, NonlinearPriorDist], n_samples: int, *, key: jax.Array
+) -> dict[str, jax.Array]:
+    """Draw ``n_samples`` of every nonlinear parameter, one key per group."""
+    groups = _nonlinear_groups(priors)
+    out: dict[str, jax.Array] = {}
+    for (names, d), k in zip(groups.items(), jr.split(key, len(groups)), strict=True):
+        out.update(_split_group(names, d.sample(k, (n_samples,))))
+    return out
+
+
 def _evaluate_nonlinear_log_prior(
-    priors: dict[str, PriorDist], samples: dict[str, jax.Array]
+    priors: dict[str, NonlinearPriorDist], samples: dict[str, jax.Array]
 ) -> jax.Array:
     """Sum nonlinear-prior log-densities over all sampled parameters.
 
     ``samples`` holds the bare (unit-stripped) sampled arrays, matching the
     space the prior distributions sample in (see ``HarvPrior``). Used by
     the samplers' ``return_logprobs`` path to record per-sample ``ln_prior``.
+    A joint prior is evaluated once on its names' stacked values.
     """
     total: jax.Array | None = None
-    for name, prior in priors.items():
-        if name not in samples:
+    for names, prior in _nonlinear_groups(priors).items():
+        if not all(n in samples for n in names):
             continue
-        lp = _unwrap_dist(prior).log_prob(samples[name])
+        lp = prior.log_prob(_stack_group(names, samples))
         total = lp if total is None else total + lp
     if total is None:
         n = len(next(iter(samples.values()))) if samples else 0
@@ -273,9 +391,9 @@ def _with_derived_eccentricity(
     """Add ``eccentricity`` when the parameterization implies one but does not carry it.
 
     ``LinearPriorCallable`` implementations are written against the standard parameter
-    names, so ``EcoswEsinwRV`` -- which carries ``(ecosw, esinw)`` instead -- would
-    otherwise raise ``KeyError: 'eccentricity'`` for the default ``rv_semiamp`` prior.
-    The parameterization already owns the conversion; this only applies it.
+    names, so ``SqrtEccRV`` -- which carries ``(sqrte_cosw, sqrte_sinw)`` instead --
+    would otherwise raise ``KeyError: 'eccentricity'`` for the default ``rv_semiamp``
+    prior. The parameterization already owns the conversion; this only applies it.
 
     Parameters
     ----------

@@ -13,7 +13,9 @@ __all__ = (
     "SourceData",
     # Distributions
     "QD",
+    "JointPrior",
     "QuantityDistribution",
+    "joint",
     # Models API
     "AbstractComponentModel",
     "GaiaAstrometryModel",
@@ -21,7 +23,7 @@ __all__ = (
     "RVModel",
     # Parameterizations
     "AbstractParameterization",
-    "EcoswEsinwRV",
+    "SqrtEccRV",
     "StandardGaiaAstrometry",
     "StandardRV",
     # Extensions
@@ -68,7 +70,7 @@ if not jax.config.read("jax_enable_x64") and "JAX_ENABLE_X64" not in os.environ:
     )
 
 from harv.data import GaiaAstrometryData, RVData, SourceData
-from harv.distributions import QD, QuantityDistribution
+from harv.distributions import QD, JointPrior, QuantityDistribution, joint
 from harv.models.extensions import (
     AbstractExtension,
     GP,
@@ -80,7 +82,7 @@ from harv.models.extensions import (
 from harv.models import (
     AbstractComponentModel,
     AbstractParameterization,
-    EcoswEsinwRV,
+    SqrtEccRV,
     GaiaAstrometryModel,
     JointModel,
     RVModel,

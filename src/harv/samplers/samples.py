@@ -26,6 +26,7 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
+from harv.models.parameterizations.rv import SqrtEccRV
 from harv.samplers.conversion import convert_parameterization
 
 __all__ = ("SampleColumns", "Samples", "pad_and_stack_samples")
@@ -50,6 +51,16 @@ _LOGPROB_COLUMNS = ("ln_likelihood", "ln_prior")
 MIN_EVIDENCE_ESS = 3.0
 
 _EVIDENCE_KEYS = ("ln_Z_int", "ln_Z_int_ess", "max_ln_likelihood", "n_prior_samples")
+
+# What SqrtEccRV.phase_peri reads; time_peri is derivable from these or phase_peri.
+_SQRT_ECC_PHASE_KEYS = ("sqrte_cosw", "sqrte_sinw", "mean_longitude")
+
+
+def _has_time_peri_inputs(nonlinear: dict[str, Any]) -> bool:
+    """Whether ``time_peri`` can be derived: ``period`` plus a periastron phase."""
+    return "period" in nonlinear and (
+        "phase_peri" in nonlinear or all(k in nonlinear for k in _SQRT_ECC_PHASE_KEYS)
+    )
 
 
 def _assess_resolution(
@@ -570,8 +581,8 @@ class Samples(eqx.Module):
         base_keys = list(self.nonlinear.keys()) + list(self.linear.keys())
         derived_keys = ["log10_period"]
         # Kepler-free samples (e.g. Fourier parameterizations) have no
-        # periastron phase, so time_peri is only derivable when phase_peri exists.
-        if "phase_peri" in self.nonlinear:
+        # periastron phase, so time_peri is only derivable when one exists.
+        if _has_time_peri_inputs(self.nonlinear):
             derived_keys.append("time_peri")
         if "cos_i" in self.nonlinear:
             derived_keys.append("inclination")
@@ -750,7 +761,14 @@ class Samples(eqx.Module):
             # phase_peri encodes the fractional orbital phase at t=0, so
             # phase_peri * period is the periastron time relative to t=0, and
             # adding time_ref converts it to the same absolute coordinate as data.time.
-            period = self.nonlinear["period"]
+            nl = self.nonlinear
+            if not _has_time_peri_inputs(nl):
+                msg = (
+                    "time_peri needs period and phase_peri (or all of "
+                    f"{_SQRT_ECC_PHASE_KEYS} for SqrtEccRV) in the nonlinear samples."
+                )
+                raise KeyError(msg)
+            period = nl["period"]
             time_unit = str(period.unit)
             time_ref = self.meta.get("time_ref")
             if time_ref is None:
@@ -759,7 +777,10 @@ class Samples(eqx.Module):
                 time_ref_val = float(ustrip(time_unit, time_ref))
             else:
                 time_ref_val = float(time_ref)
-            phase_peri = ustrip("", self.nonlinear["phase_peri"])
+            if "phase_peri" in nl:
+                phase_peri = ustrip("", nl["phase_peri"])
+            else:  # SqrtEccRV carries the mean longitude instead
+                phase_peri = SqrtEccRV().phase_peri(nl) % 1.0
             period_val = ustrip(time_unit, period)
             return Q(time_ref_val + phase_peri * period_val, time_unit)
 

@@ -23,12 +23,17 @@ from harv.data.datasets import AbstractData
 from harv.distributions import QuantityDistribution
 from harv.models._helpers import (
     LinearPriorCallable,
+    NonlinearPriorDist,
     PriorDist,
     _explicit_scalar_dist,
     _is_callable_prior,
+    _joint_site_name,
     _needs_explicit_sampling,
+    _nonlinear_groups,
+    _nonlinear_unit,
     _resolve_linear_priors,
     _sample_explicit_linear_prior,
+    _split_group,
     _unwrap_dist,
     pinned_linear_names,
 )
@@ -831,7 +836,7 @@ class AbstractComponentModel(eqx.Module):
 
     def numpyro_model(
         self,
-        nonlinear_priors: dict[str, PriorDist],
+        nonlinear_priors: dict[str, NonlinearPriorDist],
         data: AbstractData,
         linear_priors: dict[str, Any] | None,
         *,
@@ -885,26 +890,29 @@ class AbstractComponentModel(eqx.Module):
 
 
 def _sample_nonlinear_params(
-    nonlinear_priors: dict[str, PriorDist],
+    nonlinear_priors: dict[str, NonlinearPriorDist],
 ) -> dict[str, Any]:
     """Sample nonlinear parameters inside a numpyro model context.
 
     Returns a dict of sampled values. QuantityDistribution values are
     sampled from the underlying distribution; the unit is stored in the
-    prior for later conversion.
+    prior for later conversion. A joint prior is one site (``"sqrte_cosw,sqrte_sinw"``)
+    with a deterministic site per name, so posteriors are keyed by name.
     """
     values: dict[str, Any] = {}
-    for name, d in nonlinear_priors.items():
-        values[name] = numpyro.sample(
-            name,
-            _unwrap_dist(d),
-        )
+    for names, d in _nonlinear_groups(nonlinear_priors).items():
+        if len(names) == 1:
+            values[names[0]] = numpyro.sample(names[0], d)
+            continue
+        draw = numpyro.sample(_joint_site_name(names), d)
+        for name, v in _split_group(names, draw).items():
+            values[name] = numpyro.deterministic(name, v)
     return values
 
 
 def _apply_unit_conversions(
     values: dict[str, Any],
-    nonlinear_priors: dict[str, PriorDist],
+    nonlinear_priors: dict[str, NonlinearPriorDist],
     component: AbstractComponentModel,
 ) -> dict[str, Any]:
     """Convert sampled values from prior units to model units where needed.
@@ -919,15 +927,15 @@ def _apply_unit_conversions(
     base_params = component._base_nonlinear_names()
     result = dict(values)
     for name, d in nonlinear_priors.items():
-        if isinstance(d, QuantityDistribution) and name in base_params:
-            prior_unit = cast("str", d.unit)
-            result[name] = Q(result[name], prior_unit)
+        unit = _nonlinear_unit(d, name)
+        if unit is not None and name in base_params:
+            result[name] = Q(result[name], unit)
     return result
 
 
 def _build_marginalized_component_model(
     component: AbstractComponentModel,
-    nonlinear_priors: dict[str, PriorDist],
+    nonlinear_priors: dict[str, NonlinearPriorDist],
     data: AbstractData,
     linear_priors: dict[str, Any] | None,
     *,
@@ -1007,7 +1015,7 @@ def _build_marginalized_component_model(
 
 def _build_full_component_model(
     component: AbstractComponentModel,
-    nonlinear_priors: dict[str, PriorDist],
+    nonlinear_priors: dict[str, NonlinearPriorDist],
     data: AbstractData,
     linear_priors: dict[str, Any] | None,
 ) -> Callable[[], None]:

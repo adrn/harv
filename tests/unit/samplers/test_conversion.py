@@ -12,8 +12,8 @@ from unxt import Q
 
 from harv.kepler.orbits import (
     campbell_from_thiele_innes,
-    ecc_omega_from_ecosw_esinw,
-    ecosw_esinw_from_ecc_omega,
+    ecc_omega_from_sqrte_cosw_sinw,
+    sqrte_cosw_sinw_from_ecc_omega,
     thiele_innes_from_campbell,
     thiele_innes_unit,
 )
@@ -21,7 +21,7 @@ from harv.models.parameterizations.gaia import (
     StandardGaiaAstrometry,
     ThieleInnesGaiaAstrometry,
 )
-from harv.models.parameterizations.rv import EcoswEsinwRV, StandardRV
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 from harv.samplers import convert_parameterization
 from harv.samplers.samples import Samples
 
@@ -65,59 +65,83 @@ def _gaia_linear() -> dict[str, Q]:
 
 
 class TestConvertRV:
-    def test_standard_to_ecosw_esinw(self):
+    def test_standard_to_sqrt_ecc(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
         out_nl, out_lin = convert_parameterization(
-            nl, lin, source=StandardRV(), target=EcoswEsinwRV()
+            nl, lin, source=StandardRV(), target=SqrtEccRV()
         )
 
-        assert list(out_nl) == ["period", "ecosw", "esinw", "phase_peri"]
+        assert list(out_nl) == ["period", "sqrte_cosw", "sqrte_sinw", "mean_longitude"]
         assert list(out_lin) == ["rv_semiamp", "v_sys"]
 
-        exp_ecosw, exp_esinw = ecosw_esinw_from_ecc_omega(
+        exp_x, exp_y = sqrte_cosw_sinw_from_ecc_omega(
             nl["eccentricity"], nl["arg_peri"]
         )
-        assert jnp.allclose(out_nl["ecosw"].value, exp_ecosw.value)
-        assert jnp.allclose(out_nl["esinw"].value, exp_esinw.value)
+        assert jnp.allclose(out_nl["sqrte_cosw"].value, exp_x.value)
+        assert jnp.allclose(out_nl["sqrte_sinw"].value, exp_y.value)
+        # mean longitude at time_ref: omega - 2*pi*phase_peri, wrapped to [0, 2pi)
+        exp_lon = jnp.mod(
+            nl["arg_peri"].value - 2 * jnp.pi * nl["phase_peri"].value, 2 * jnp.pi
+        )
+        assert jnp.allclose(out_nl["mean_longitude"].value, exp_lon)
+        assert out_nl["mean_longitude"].unit == "rad"
         # shared params and units pass through unchanged
         assert jnp.allclose(out_nl["period"].value, nl["period"].value)
         assert out_lin["rv_semiamp"].unit == lin["rv_semiamp"].unit
 
-    def test_ecosw_esinw_to_standard(self):
+    def test_sqrt_ecc_to_standard(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
-        ecosw_nl, _ = convert_parameterization(
-            nl, lin, source=StandardRV(), target=EcoswEsinwRV()
+        sqe_nl, _ = convert_parameterization(
+            nl, lin, source=StandardRV(), target=SqrtEccRV()
         )
         out_nl, _ = convert_parameterization(
-            ecosw_nl, lin, source=EcoswEsinwRV(), target=StandardRV()
+            sqe_nl, lin, source=SqrtEccRV(), target=StandardRV()
         )
 
         assert list(out_nl) == ["period", "eccentricity", "phase_peri", "arg_peri"]
-        exp_ecc, exp_omega = ecc_omega_from_ecosw_esinw(
-            ecosw_nl["ecosw"], ecosw_nl["esinw"]
+        exp_ecc, exp_omega = ecc_omega_from_sqrte_cosw_sinw(
+            sqe_nl["sqrte_cosw"], sqe_nl["sqrte_sinw"]
         )
         assert jnp.allclose(out_nl["eccentricity"].value, exp_ecc.value)
         assert jnp.allclose(out_nl["arg_peri"].value, exp_omega.value)
 
+    def test_arg_peri_wrapped_into_standard_prior_range(self):
+        # atan2 gives (-pi, pi]; StandardRV's default arg_peri prior is [0, 2pi).
+        nl = {
+            "period": Q(jnp.array([100.0]), "day"),
+            "sqrte_cosw": Q(jnp.array([0.3]), ""),
+            "sqrte_sinw": Q(jnp.array([-0.4]), ""),
+            "mean_longitude": Q(jnp.array([1.0]), "rad"),
+        }
+        out_nl, _ = convert_parameterization(
+            nl, _rv_linear(), source=SqrtEccRV(), target=StandardRV()
+        )
+        arg_peri = out_nl["arg_peri"].value
+        assert jnp.all((arg_peri >= 0) & (arg_peri < 2 * jnp.pi))
+        assert jnp.allclose(arg_peri, 2 * jnp.pi + jnp.arctan2(-0.4, 0.3))
+
     def test_round_trip_recovers_inputs(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
-        ecosw_nl, ecosw_lin = convert_parameterization(
-            nl, lin, source=StandardRV(), target=EcoswEsinwRV()
+        sqe_nl, sqe_lin = convert_parameterization(
+            nl, lin, source=StandardRV(), target=SqrtEccRV()
         )
         back_nl, back_lin = convert_parameterization(
-            ecosw_nl, ecosw_lin, source=EcoswEsinwRV(), target=StandardRV()
+            sqe_nl, sqe_lin, source=SqrtEccRV(), target=StandardRV()
         )
         assert jnp.allclose(
             back_nl["eccentricity"].value, nl["eccentricity"].value, atol=1e-6
         )
         assert jnp.allclose(back_nl["arg_peri"].value, nl["arg_peri"].value, atol=1e-6)
+        # Phases are circular: 1 - eps and 0 are the same point.
+        dphase = back_nl["phase_peri"].value - nl["phase_peri"].value
+        assert jnp.allclose((dphase + 0.5) % 1.0 - 0.5, 0.0, atol=1e-6)
         assert jnp.allclose(back_lin["v_sys"].value, lin["v_sys"].value)
 
     def test_extra_params_preserved(self):
         nl = _rv_nonlinear()
         lin = {**_rv_linear(), "jitter": Q(jnp.array([0.2, 0.3]), "km/s")}
         _out_nl, out_lin = convert_parameterization(
-            nl, lin, source=StandardRV(), target=EcoswEsinwRV()
+            nl, lin, source=StandardRV(), target=SqrtEccRV()
         )
         assert "jitter" in out_lin
         assert jnp.allclose(out_lin["jitter"].value, lin["jitter"].value)
@@ -136,31 +160,29 @@ class TestConvertRV:
         nl = _rv_nonlinear()
         lin = {"rv_semiamp": Q(jnp.array([5.0, 6.0]), "km/s")}  # missing v_sys
         with pytest.raises(ValueError, match="Missing required source parameters"):
-            convert_parameterization(
-                nl, lin, source=StandardRV(), target=EcoswEsinwRV()
-            )
+            convert_parameterization(nl, lin, source=StandardRV(), target=SqrtEccRV())
 
     def test_under_jit(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
         fn = jax.jit(
             lambda n, ln: convert_parameterization(
-                n, ln, source=StandardRV(), target=EcoswEsinwRV()
+                n, ln, source=StandardRV(), target=SqrtEccRV()
             )
         )
         out_nl, _out_lin = fn(nl, lin)
-        exp_ecosw, _ = ecosw_esinw_from_ecc_omega(nl["eccentricity"], nl["arg_peri"])
-        assert jnp.allclose(out_nl["ecosw"].value, exp_ecosw.value)
+        exp_x, _ = sqrte_cosw_sinw_from_ecc_omega(nl["eccentricity"], nl["arg_peri"])
+        assert jnp.allclose(out_nl["sqrte_cosw"].value, exp_x.value)
 
     def test_under_vmap(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
 
         def fn(n, ln):
             return convert_parameterization(
-                n, ln, source=StandardRV(), target=EcoswEsinwRV()
+                n, ln, source=StandardRV(), target=SqrtEccRV()
             )
 
         out_nl, out_lin = jax.vmap(fn)(nl, lin)
-        assert out_nl["ecosw"].shape == (2,)
+        assert out_nl["sqrte_cosw"].shape == (2,)
         assert out_lin["v_sys"].shape == (2,)
 
 
@@ -383,9 +405,7 @@ class TestConvertErrors:
             "v_sys": Q(jnp.array([0.0, 1.0]), "km/s"),
         }
         with pytest.raises(NotImplementedError, match="single-component"):
-            convert_parameterization(
-                nl, lin, source=StandardRV(), target=EcoswEsinwRV()
-            )
+            convert_parameterization(nl, lin, source=StandardRV(), target=SqrtEccRV())
 
     def test_mixed_family_raises(self):
         nl, lin = _rv_nonlinear(), _rv_linear()
@@ -396,6 +416,29 @@ class TestConvertErrors:
 
 
 class TestSamplesWrapper:
+    @pytest.mark.parametrize(
+        "nonlinear",
+        [
+            # mean_longitude alone (e.g. a user subset) cannot give phase_peri.
+            {
+                "period": Q(jnp.array([100.0]), "day"),
+                "mean_longitude": Q(jnp.array([1.0]), "rad"),
+            },
+            # A full periastron phase but no period.
+            {
+                "sqrte_cosw": jnp.array([0.3]),
+                "sqrte_sinw": jnp.array([0.4]),
+                "mean_longitude": Q(jnp.array([1.0]), "rad"),
+            },
+        ],
+    )
+    def test_time_peri_needs_all_inputs(self, nonlinear):
+        samples = Samples(nonlinear=nonlinear, linear={}, model_type="RVModel")
+        derivable = samples.keys()
+        assert "time_peri" not in derivable
+        with pytest.raises(KeyError, match="time_peri needs"):
+            samples["time_peri"]
+
     def test_rv_wrapper_preserves_metadata_and_extensions(self):
         samples = Samples(
             nonlinear=_rv_nonlinear(),
@@ -405,17 +448,27 @@ class TestSamplesWrapper:
             linear_extension_names=("jitter",),
         )
         converted = samples.convert_parameterization(
-            source=StandardRV(), target=EcoswEsinwRV()
+            source=StandardRV(), target=SqrtEccRV()
         )
         assert isinstance(converted, Samples)
-        assert set(converted.nonlinear) == {"period", "ecosw", "esinw", "phase_peri"}
+        assert set(converted.nonlinear) == {
+            "period",
+            "sqrte_cosw",
+            "sqrte_sinw",
+            "mean_longitude",
+        }
+        # time_peri is derivable from the mean longitude and matches the source,
+        # modulo one period.
+        period = samples["period"].value
+        dt = converted["time_peri"].value - samples["time_peri"].value
+        assert jnp.allclose((dt / period + 0.5) % 1.0 - 0.5, 0.0, atol=1e-9)
         assert "jitter" in converted.linear
         assert converted.model_type == "RVModel"
         assert converted.metadata == samples.metadata
         assert converted.linear_extension_names == ("jitter",)
 
         round_tripped = converted.convert_parameterization(
-            source=EcoswEsinwRV(), target=StandardRV()
+            source=SqrtEccRV(), target=StandardRV()
         )
         assert jnp.allclose(
             round_tripped["eccentricity"].value,
@@ -475,4 +528,4 @@ class TestSamplesWrapper:
             metadata={},
         )
         with pytest.raises(NotImplementedError, match="single-component"):
-            samples.convert_parameterization(source=StandardRV(), target=EcoswEsinwRV())
+            samples.convert_parameterization(source=StandardRV(), target=SqrtEccRV())

@@ -71,7 +71,7 @@ BATCH_SIZE_VALUES: tuple[int, ...] = (10_000, 100_000, 1_000_000)
 
 PARAMETERIZATIONS: tuple[str, ...] = (
     "StandardRV",
-    "EcoswEsinwRV",
+    "SqrtEccRV",
     "FourierRV",
     "StandardGaiaAstrometry",
     "ThieleInnesGaiaAstrometry",
@@ -292,7 +292,7 @@ def build_prior_and_model(parameterization: str) -> tuple[Any, Any]:
     }
 
     match parameterization:
-        case "StandardRV" | "EcoswEsinwRV":
+        case "StandardRV" | "SqrtEccRV":
             param = getattr(hm, parameterization)()
             prior = param.default_prior(
                 **rv_period_bounds,
