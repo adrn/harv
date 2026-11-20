@@ -548,6 +548,31 @@ class TestNumpyroSamplerRunExtraModel:
         )
         assert isinstance(result, Samples)
 
+    def test_extra_model_runs_without_numpyro_validation(
+        self, rv_samples, rv_sampler_and_data
+    ):
+        """The extra_model builder is wrapped too (spec §Numpyro model generation)."""
+        sampler, data = rv_sampler_and_data
+        seen = []
+
+        def extra_model(pars):
+            seen.append(numpyro.distributions.distribution._VALIDATION_ENABLED)
+            return {"rv_semiamp": numpyro.sample("K_scale", ndist.HalfNormal(10.0))}
+
+        sampler.run(
+            data,
+            init_samples=rv_samples,
+            key=jax.random.key(23),
+            extra_model=extra_model,
+            extra_init_params={"K_scale": jnp.full(2, 5.0)},
+            num_chains=2,
+            num_warmup=5,
+            num_samples=5,
+            chain_method="sequential",
+        )
+        assert seen
+        assert not any(seen)
+
     def test_run_extra_model_marginalized(self, rv_samples, rv_sampler_and_data):
         """extra_model + marginalized=True runs and returns Samples."""
         sampler, data = rv_sampler_and_data

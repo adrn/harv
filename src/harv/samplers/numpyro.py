@@ -36,6 +36,7 @@ from harv.models._helpers import (
     _split_group,
     _stack_group,
     _unwrap_dist,
+    _without_validation,
 )
 from harv.models.component import (
     AbstractComponentModel,
@@ -267,7 +268,7 @@ def _build_extra_numpyro_model(
                 ),
             )
 
-    return model_fn
+    return _without_validation(model_fn)
 
 
 @final

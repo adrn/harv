@@ -31,6 +31,7 @@ from harv.models._helpers import (
     _nonlinear_unit,
     _sample_explicit_linear_prior,
     _with_derived_eccentricity,
+    _without_validation,
     classify_linear_prior,
     pinned_linear_names,
 )
@@ -1268,13 +1269,17 @@ class JointModel(eqx.Module):
             )
             raise NotImplementedError(msg)
         if marginalized:
-            return self._build_marginalized_numpyro(
-                nonlinear_priors,
-                data,
-                linear_priors,
-                marginalized_names=marginalized_names,
+            return _without_validation(
+                self._build_marginalized_numpyro(
+                    nonlinear_priors,
+                    data,
+                    linear_priors,
+                    marginalized_names=marginalized_names,
+                )
             )
-        return self._build_full_numpyro(nonlinear_priors, data, linear_priors)
+        return _without_validation(
+            self._build_full_numpyro(nonlinear_priors, data, linear_priors)
+        )
 
     def _build_marginalized_numpyro(  # noqa: C901
         self,

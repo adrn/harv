@@ -723,3 +723,23 @@ def _sample_explicit_linear_prior(
     if isinstance(prior_dist, QuantityDistribution) and target_unit:
         raw = jnp.asarray(ustrip(target_unit, Q(raw, cast("str", prior_dist.unit))))
     return raw
+
+
+def _without_validation(model_fn: Callable[[], None]) -> Callable[[], None]:
+    """Build a numpyro model's distributions without argument validation.
+
+    numpyro >= 0.22 validates by default, and NUTS traces the model eagerly at
+    init-strategy placeholders (e.g. parallax in (-2, 2) mas, whatever its prior),
+    so a derived prior scale such as ``sigma_v0 * parallax`` can be invalid and
+    raise at construction. Only construction is covered: numpyro's support check
+    on sample values runs later, in ``log_density``, which NUTS evaluates under
+    ``jit`` where validation never fires (spec §Numpyro model generation).
+    """
+
+    def wrapped() -> None:
+        # ponytail: flips numpyro's process-wide flag, so not thread-safe; pass
+        # validate_args=False per distribution if models are ever traced concurrently.
+        with numpyro.validation_enabled(is_validate=False):
+            model_fn()
+
+    return wrapped

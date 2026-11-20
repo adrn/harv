@@ -35,6 +35,7 @@ from harv.models._helpers import (
     _sample_explicit_linear_prior,
     _split_group,
     _unwrap_dist,
+    _without_validation,
     pinned_linear_names,
 )
 from harv.models.extensions.base import AbstractExtension, ParamInfo
@@ -876,14 +877,18 @@ class AbstractComponentModel(eqx.Module):
             msg = "marginalized_names cannot be set when marginalized=False"
             raise ValueError(msg)
         if marginalized:
-            return _build_marginalized_component_model(
-                self,
-                nonlinear_priors,
-                data,
-                linear_priors,
-                marginalized_names=marginalized_names,
+            return _without_validation(
+                _build_marginalized_component_model(
+                    self,
+                    nonlinear_priors,
+                    data,
+                    linear_priors,
+                    marginalized_names=marginalized_names,
+                )
             )
-        return _build_full_component_model(self, nonlinear_priors, data, linear_priors)
+        return _without_validation(
+            _build_full_component_model(self, nonlinear_priors, data, linear_priors)
+        )
 
 
 # Numpyro model builder helpers (module-level for pickling)

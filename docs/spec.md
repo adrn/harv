@@ -1562,6 +1562,17 @@ method that returns a no-argument callable suitable for `numpyro.infer.MCMC`:
 `JointModel.numpyro_model` composes per-component log-probs with shared
 nonlinear sampling.
 
+Every model function harv returns, including `NumpyroSampler`'s `extra_model`
+variant, runs inside `numpyro.validation_enabled(False)`. numpyro ≥ 0.22 validates
+distribution arguments by default, and NUTS traces the model eagerly at
+init-strategy placeholders that ignore the priors (e.g. a parallax in (-2, 2) mas).
+At such a point a derived scale such as `ParallaxDependentProperMotionPrior`'s
+`σ_{v,0} · ϖ` can be non-positive and would raise when the distribution is built.
+Only that construction-time argument check is disabled. numpyro's support check on
+sample values runs afterwards, in `log_density`, and NUTS evaluates that under `jit`,
+where validation never fires. As before numpyro 0.22, such a point has a NaN
+log-density and gets no prior mass.
+
 ### `QuantityDistribution` / `QD`
 
 `QuantityDistribution` (alias `QD`, in `harv.distributions`) pairs a numpyro
