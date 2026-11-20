@@ -65,7 +65,9 @@ class TestDensity:
         lo = float(d.low)
         hi = float(d.high)
         vals = jnp.array([-1.0, 0.0, lo * 0.5, hi * 2.0])
-        assert bool(jnp.all(jnp.isneginf(d.log_prob(vals))))
+        with pytest.warns(UserWarning, match="Out-of-support"):  # numpyro >= 0.22
+            lp = d.log_prob(vals)
+        assert bool(jnp.all(jnp.isneginf(lp)))
         assert bool(jnp.all(jnp.isneginf(d.ln_prob_ln(vals))))
         assert jnp.allclose(d.cdf(jnp.array([0.0, lo * 0.5])), 0.0)
         assert jnp.allclose(d.cdf(jnp.array([hi * 2.0])), 1.0)
@@ -271,4 +273,5 @@ class TestEdgeTolerance:
         d = self._density()
         for x in (jnp.asarray(137.0), jnp.asarray(2012.0)):
             assert not bool(d.support(x))
-            assert d.log_prob(x) == -jnp.inf
+            with pytest.warns(UserWarning, match="Out-of-support"):  # numpyro >= 0.22
+                assert d.log_prob(x) == -jnp.inf

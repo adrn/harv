@@ -122,7 +122,8 @@ class TestTempered:
         assert np.isclose(float(prior.distribution.high), 200.0, rtol=1e-6)
         assert _mass_between(prior, 50.0, 200.0) == pytest.approx(1.0, abs=1e-6)
         # The 100 d peak survives; the 300 d peak is outside the domain.
-        assert np.isneginf(float(prior.distribution.log_prob(300.0)))
+        with pytest.warns(UserWarning, match="Out-of-support"):  # numpyro >= 0.22
+            assert np.isneginf(float(prior.distribution.log_prob(300.0)))
 
     @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
     def test_non_finite_delta_is_refused(self, bad):

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro
 import numpyro.distributions as dist
+import pytest
 from numpyro.distributions.transforms import biject_to
 from numpyro.infer import MCMC, NUTS
 from scipy import stats
@@ -24,7 +25,8 @@ class TestKippingDisk:
 
     def test_log_prob_is_beta_over_pi(self):
         value = jnp.array([[0.3, 0.4], [0.0, 0.1], [0.8, 0.8], [1.0, 0.0]])
-        lp = KippingDisk().log_prob(value)
+        with pytest.warns(UserWarning, match="Out-of-support"):  # numpyro >= 0.22
+            lp = KippingDisk().log_prob(value)
         ecc = jnp.array([0.25, 0.01])
         expected = dist.Beta(0.867, 3.03).log_prob(ecc) - jnp.log(jnp.pi)
         np.testing.assert_allclose(lp[:2], expected, rtol=1e-12)
