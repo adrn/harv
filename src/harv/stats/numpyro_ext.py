@@ -445,7 +445,9 @@ class MarginalizedLinear(dist.Distribution):
         a = self.prior_linear_op.loc()[..., None]
         a = self.prior_linear_op.solve_tril(a, False)
         a = self.prior_linear_op.solve_tril(a, True)
-        a = cho_solve((self.conditional_inv_tril, True), (a + alpha)[..., 0])
+        # Solve against the (..., k, 1) column and drop the axis after: jax >= 0.11
+        # deprecates batched 1-D right-hand sides in cho_solve.
+        a = cho_solve((self.conditional_inv_tril, True), a + alpha)[..., 0]
 
         return dist.MultivariateNormal(
             loc=a, precision_matrix=self.conditional_precision_matrix

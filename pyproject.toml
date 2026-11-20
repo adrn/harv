@@ -34,11 +34,11 @@ keywords = []
 dependencies = [
     "equinox>=0.13.2",
     "h5py>=3.15.1",
-    "jax>=0.8.1",
+    "jax>=0.11,<0.12",  # 0.12 XLA:CPU slowdowns, see openxla/xla#52122
     "jaxtyping>=0.3.3",
     # Imported directly across the package; np.trapezoid is 2.0+ (1.x: trapz).
     "numpy>=2.0",
-    "numpyro>=0.15.0",
+    "numpyro>=0.22",
     "quaxed>=0.10.4",
     "unxt>=1.7.2",
 ]
@@ -49,8 +49,8 @@ dependencies = [
 # is `pip install harv jax[cuda13]`. Plain `harv` is the CPU build.
 # The linux marker is load-bearing: without it `uv lock` fails on macOS, where the
 # nvidia / jax-cuda*-plugin wheels do not exist.
-cuda12 = ["jax[cuda12]>=0.8.1; sys_platform == 'linux'"]
-cuda13 = ["jax[cuda13]>=0.8.1; sys_platform == 'linux'"]
+cuda12 = ["jax[cuda12]>=0.11,<0.12; sys_platform == 'linux'"]
+cuda13 = ["jax[cuda13]>=0.11,<0.12; sys_platform == 'linux'"]
 extra = [
     "gaiaunlimited>=0.3.2",
     "setuptools",  # needed for gaiaunlimited for pkg_resources...
@@ -149,7 +149,7 @@ nox = [
 bench-cuda = [
     # CUDA-enabled jaxlib for the GPU benchmark run. Marked linux-only: the CUDA
     # plugin wheels are only published for Linux:
-    "jax[cuda13]>=0.8.1; sys_platform == 'linux'",
+    "jax[cuda13]>=0.11,<0.12; sys_platform == 'linux'",
 ]
 bench = [
     # Deliberately NOT included in `dev`, and CI installs only the `test` group
@@ -229,6 +229,8 @@ filterwarnings = [
     "ignore:Under-resolved rejection run:UserWarning",    # samplers/rejection.py
     # -- third-party chatter ----------------------------------------------------
     "ignore:The figure layout has changed to tight:UserWarning",  # matplotlib
+    # tinygp.gp._default_diag calls jnp.finfo(array); unfixed in tinygp 0.3.1 and main.
+    "ignore:Implicit conversion of an array to a dtype is deprecated:DeprecationWarning",
 ]
 
 [tool.coverage.paths]

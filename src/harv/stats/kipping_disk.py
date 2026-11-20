@@ -39,7 +39,7 @@ class KippingDisk(dist.Distribution):
     (1000, 2)
     >>> bool(jnp.all(jnp.sum(x**2, axis=-1) < 1))
     True
-    >>> bool(jnp.isneginf(KippingDisk().log_prob(jnp.array([0.8, 0.8]))))
+    >>> bool(jnp.isneginf(jax.jit(KippingDisk().log_prob)(jnp.array([0.8, 0.8]))))
     True
     """
 

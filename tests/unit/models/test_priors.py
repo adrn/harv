@@ -746,13 +746,10 @@ class TestJointPrior:
     def test_ln_prior_with_numpyro_validation(self):
         prior = self._prior()
         s = prior.sample_nonlinear(5, key=jr.key(0))
-        # Not numpyro.validation_enabled(): it restores a stale module flag and
-        # leaves validation on for every later test (numpyro 0.20).
-        numpyro.enable_validation(is_validate=True)
-        try:
+        # numpyro >= 0.22 validates by default; enable it explicitly anyway so the
+        # test doesn't depend on global state (the context manager restores it).
+        with numpyro.validation_enabled(is_validate=True):
             lp = _evaluate_nonlinear_log_prior(prior.nonlinear_priors, s)
-        finally:
-            numpyro.enable_validation(is_validate=False)
         assert lp.shape == (5,)
         assert bool(jnp.all(jnp.isfinite(lp)))
 

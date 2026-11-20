@@ -316,6 +316,27 @@ class TestFullNumpyroModelWithTheGaiaDefaults:
         expected = float(ustrip("AU/yr", Q(50.0, "km/s")) * parallax)
         assert sigma_pm == pytest.approx(expected, rel=1e-10)
 
+    @pytest.mark.parametrize("marginalized", [True, False])
+    def test_eager_trace_at_a_negative_parallax_does_not_raise(self, marginalized):
+        """NUTS's init trace runs eagerly at placeholders that ignore the prior.
+
+        A real-support parallax prior can hand it parallax < 0, so the derived
+        proper-motion scale is negative; numpyro >= 0.22 validates eagerly and
+        would raise (spec §Numpyro model generation).
+        """
+        data = _make_astro_data()
+        prior = self._default_prior()
+        model_fn = GaiaAstrometryModel().numpyro_model(
+            prior.nonlinear_priors,
+            data,
+            prior.linear_priors,
+            marginalized=marginalized,
+        )
+        placeholder = handlers.substitute(model_fn, data={"parallax": -1.0})
+        with handlers.seed(rng_seed=0):
+            trace = handlers.trace(placeholder).get_trace()
+        assert float(trace["parallax"]["value"]) == -1.0
+
 
 class TestMarginalizedLikelihoodMatchesDenseOracle:
     """Gaia + jitter marginal likelihood against a dense n x n Gaussian.
