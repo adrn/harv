@@ -16,7 +16,7 @@ on:
       - published
   # harv tracks fast-moving upstreams (jax, unxt, numpyro, jaxoplanet). The weekly
   # run is how we find out a new release of one of them broke us, rather than
-  # discovering it on the next PR.
+  # discovering it on the next PR: the latest-deps job ignores uv.lock.
   schedule:
     - cron: "0 23 * * Sun"
 
@@ -125,6 +125,39 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
           files: ./coverage.xml
+
+  # Every other job installs from uv.lock, so on its own CI never sees what
+  # `pip install harv` resolves today. This job re-resolves every dependency to
+  # the newest version pyproject.toml allows (the rewritten lock stays in the
+  # runner). It is report-only: "CI Pass" does not need it, so an upstream release
+  # cannot block unrelated PRs, but a failure still fails the run (and the weekly
+  # cron emails). One gap: [tool.uv] override-dependencies still pins unxt to the
+  # git fork, so unxt here is not what pip users get; jax and numpyro are.
+  latest-deps:
+    name: Latest deps (unlocked)
+    runs-on: ubuntu-latest
+    needs: [pre-commit, check_skip_flags]
+    if: >-
+      github.event_name != 'pull_request' ||
+      (!contains(github.event.pull_request.labels.*.name, 'skip tests') &&
+      !contains(needs.check_skip_flags.outputs.head-commit-message, '[skip tests]'))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: latest
+
+      # On a fresh runner uv lists every package it installs (`+ jax==...`), so
+      # the log records which versions a failure ran against.
+      - name: Install the project at the newest allowed versions
+        run: uv sync --no-default-groups --group test --upgrade
+
+      - name: Run test suite
+        run: uv run --no-sync pytest -n auto --dist loadfile --durations=20 --color=yes
 
   # Notebooks are *not* executed here -- that is the separate, label-gated
   # Tutorials workflow. This only checks that the docs build, which is otherwise
