@@ -1,5 +1,6 @@
 """Rejection sampler for orbital parameter inference."""
 
+import functools
 import os
 import warnings
 from pathlib import Path
@@ -12,6 +13,8 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 from jax.scipy.special import logsumexp
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from unxt import AbstractQuantity, Q
 from unxt.quantity import ustrip
 
@@ -108,6 +111,31 @@ def _wrap_unit_values(
         if unit is not None and name in base_names:
             result[name] = Q(result[name], unit)
     return result
+
+
+@functools.cache
+def _device_mesh(batch_size: int) -> Mesh | None:
+    """1-D mesh over the local devices that each likelihood batch is split across.
+
+    Uses the largest device count that divides ``batch_size``, so shapes never
+    depend on the device count (and a sharding constraint on a length that does
+    not divide evenly would be silently dropped). ``None`` means one device: no
+    sharding. Cached, so the warning fires once per process per ``batch_size``
+    (spec §``batch_size`` and GPU support).
+    """
+    n_dev = jax.local_device_count()
+    n = max(d for d in range(1, n_dev + 1) if batch_size % d == 0)
+    if n < n_dev:
+        warnings.warn(
+            f"batch_size={batch_size} does not divide evenly over the {n_dev} local "
+            f"devices, so the rejection sampler uses {n} of them. Choose a "
+            f"batch_size divisible by {n_dev} to use them all.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if n == 1:
+        return None
+    return Mesh(np.array(jax.local_devices()[:n]), ("d",))
 
 
 def _prior_monte_carlo_evidence_stats(
@@ -622,6 +650,17 @@ class RejectionSampler(AbstractSampler):
         ``ln_likelihood`` plus the ``ln_Z_int`` / ``n_prior_samples``
         metadata.
         """
+        if jax.local_device_count() > 1:
+            # Sharded evaluation leaves these split across devices. Gather onto one
+            # device, uncommitted, for the same reasons as NumpyroSampler.run: the
+            # eager ops below would each be a multi-device dispatch, and committed
+            # outputs could not seed a later multi-device run. Per value, not
+            # jax.tree.map: tree utilities sort dict keys, and the key order is the
+            # parameters' declaration order in the returned Samples.
+            prior_samples = {
+                k: jnp.asarray(jax.device_get(v)) for k, v in prior_samples.items()
+            }
+            ln_likelihoods = jnp.asarray(jax.device_get(ln_likelihoods))
         model = prepared.model
         nonlinear_extension_priors = prepared.nonlinear_extension_priors
         effective_linear_prior = prepared.effective_linear_prior or {}
@@ -1203,14 +1242,23 @@ class RejectionSampler(AbstractSampler):
 
         Reshapes the flat ``prior_samples`` dict (each value of length
         ``n_total = n_batches * batch_size``) into batches of size ``batch_size``,
-        evaluates ``model.log_prob`` for each batch under ``jax.lax.fori_loop``,
-        and returns the flattened length-``n_total`` log-likelihood array.
+        evaluates each batch with :meth:`_evaluate_log_likelihoods_one_batch`
+        under ``jax.lax.fori_loop``, and returns the flattened length-``n_total``
+        log-likelihood array.
 
         Used by both :meth:`_sample_prior_and_evaluate_batched` (fresh-draw path)
         and :meth:`run_with_samples` (in-memory cached path).
         """
-        prior = self.prior
-        base_names = model._base_nonlinear_names()
+        mesh = _device_mesh(self.batch_size)
+        if mesh is not None:
+            # Split the samples across devices. In ``run`` the draws come from this
+            # same jit, so this splits the drawing too; without it every device
+            # redraws the whole library. This puts whole batches on each device,
+            # while the evaluator splits within a batch: XLA reshards the library
+            # once, before the loop, not per iteration (checked in the compiled HLO).
+            prior_samples = jax.lax.with_sharding_constraint(
+                prior_samples, NamedSharding(mesh, P("d"))
+            )
         model_keys = tuple(prior_samples.keys())
 
         n_total = prior_samples[model_keys[0]].shape[0]
@@ -1221,28 +1269,13 @@ class RejectionSampler(AbstractSampler):
         }
 
         def body_fn(i: int, acc: jax.Array) -> jax.Array:
-            raw = {k: batched[k][i] for k in model_keys}
-            wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
-            if marginalize_names is None:
-                return acc.at[i].set(
-                    jax.vmap(
-                        lambda s: model.log_prob(
-                            s, data, linear_priors=eff_linear or None
-                        )
-                    )(wrapped)
-                )
+            batch = {k: batched[k][i] for k in model_keys}
             return acc.at[i].set(
-                jax.vmap(
-                    lambda sample: model.log_prob(
-                        sample,
-                        data,
-                        linear_priors=eff_linear or None,
-                        marginalized_names=marginalize_names,
-                    )
-                )(wrapped)
+                self._evaluate_log_likelihoods_one_batch(
+                    model, batch, eff_linear, marginalize_names, data
+                )
             )
 
-        # TODO: investigate parallelizing this over device - using shard_map instead?
         ln_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
@@ -1259,25 +1292,39 @@ class RejectionSampler(AbstractSampler):
     ) -> jax.Array:
         """Evaluate ``model.log_prob`` over a single batch of prior samples.
 
-        Used by the HDF5-streaming branch of :meth:`run_with_samples`, where
-        a Python-level loop reads one chunk at a time from disk and feeds it
-        through this jit-compiled vmap.
+        The one place the rejection sampler calls ``model.log_prob``: once per
+        ``fori_loop`` iteration of :meth:`_evaluate_log_likelihoods_batched`
+        (``run`` and in-memory ``run_with_samples``), and once per chunk read
+        from disk by the HDF5-streaming branch of :meth:`run_with_samples`.
+        ``marginalize_names=None`` is ``log_prob``'s auto mode. With more than
+        one local device the batch is split across them (:func:`_device_mesh`).
         """
         prior = self.prior
         base_names = model._base_nonlinear_names()
-        wrapped = _wrap_unit_values(batch, prior.nonlinear_priors, base_names)
-        if marginalize_names is None:
+
+        def evaluate(batch: dict[str, jax.Array], data: Any) -> jax.Array:
+            wrapped = _wrap_unit_values(batch, prior.nonlinear_priors, base_names)
             return jax.vmap(
-                lambda s: model.log_prob(s, data, linear_priors=eff_linear or None)
+                lambda s: model.log_prob(
+                    s,
+                    data,
+                    linear_priors=eff_linear or None,
+                    marginalized_names=marginalize_names,
+                )
             )(wrapped)
-        return jax.vmap(
-            lambda s: model.log_prob(
-                s,
-                data,
-                linear_priors=eff_linear or None,
-                marginalized_names=marginalize_names,
-            )
-        )(wrapped)
+
+        mesh = _device_mesh(self.batch_size)
+        if mesh is None:
+            return evaluate(batch, data)
+        # data is a replicated argument, not a closure: shard_map cannot close over
+        # unxt Quantities. check_vma=False: Quantity has no rule for jax's pvary.
+        return jax.shard_map(
+            evaluate,
+            mesh=mesh,
+            in_specs=(P("d"), P()),
+            out_specs=P("d"),
+            check_vma=False,
+        )(batch, data)
 
     @staticmethod
     @jax.jit

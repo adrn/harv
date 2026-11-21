@@ -2308,10 +2308,35 @@ can starve a full node of memory bandwidth. The default of 100,000 remains a
 reasonable starting point on CPU; tune it under the contention you will actually
 run. See `docs/at-scale.md`.
 
-`batch_size` is currently the *only* device-related knob -- harv contains no
-device-placement or sharding code (see the `shard_map` TODO in
-`harv/samplers/rejection.py`), so the benchmark numbers are the single-device
-baseline any future multi-device work is measured against.
+**Multiple devices.** `RejectionSampler` uses every local device
+(`jax.local_devices()`) with no option to set. Each likelihood batch is split across
+them with `jax.shard_map`, and `run`'s prior draws are split across them too.
+
+- **Device count:** it uses the largest number of devices that divides `batch_size`.
+  If that is fewer than all of them, it emits a `UserWarning`, once per process per
+  `batch_size`, saying how many it used and asking for a `batch_size` divisible by
+  the device count.
+- **Results:** the device count doesn't change them (§RNG). The same key gives
+  identical prior draws, and ln-likelihoods equal to floating-point rounding.
+- **Outputs:** they come back on one device, uncommitted, as for `NumpyroSampler`.
+- **CPUs:** by default a CPU is one device, however many cores it has. Set
+  `jax.config.update("jax_num_cpu_devices", N)` or `JAX_NUM_CPU_DEVICES=N` before
+  jax runs its first operation; a later setting is silently ignored.
+  `numpyro.set_host_device_count(N)` also works.
+- **GPUs:** each one is already a device.
+
+Measured with `benchmarks/test_gaia_likelihood.py::test_gaia4_rejection[standard]`
+(`run_with_samples` over a 10⁶-draw library, default `batch_size`), jax 0.11.2, on an
+Apple M4 Max (12 performance + 4 efficiency cores), as the minimum of 5 rounds:
+
+| `JAX_NUM_CPU_DEVICES` | time | speed-up |
+| --- | --- | --- |
+| 1 | 1.57 s | 1.0x |
+| 4 | 0.66 s | 2.4x |
+| 8 | 0.58 s | 2.7x |
+
+The likelihood stops scaling at about 6 devices on that machine, so more devices
+than performance cores buy little.
 
 ### `summary` method
 
@@ -3803,7 +3828,8 @@ The planned design separates prior sampling from likelihood evaluation:
   linear-parameter sampling internally.
 - The implementation should support **chunked/batched execution** over datasets to
   control memory usage, and be designed with **multi-device and GPU parallelism** in
-  mind (e.g. `jax.pmap` or `jax.experimental.shard_map` over devices).
+  mind (e.g. `jax.shard_map` over devices, as `RejectionSampler` already does
+  for each likelihood batch).
 
 ### Iterative rejection sampling
 

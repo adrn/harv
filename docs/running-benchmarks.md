@@ -126,9 +126,11 @@ dropping half the data, but it only finds out after the run. Check the device fi
 
 `JAX_PLATFORMS=cpu`
 : Forces the CPU run even when CUDA-enabled jaxlib is installed. Without it JAX picks
-the GPU when one is visible, so the GPU run simply omits it. harv has no
-device-placement code of its own, so this variable plus `batch_size` is the entire
-device story. See "Running both CPU and GPU from one install".
+the GPU when one is visible, so the GPU run simply omits it. The rejection sampler
+splits each batch over every local device, so the benchmarks measure one device only
+while exactly one is visible. On CPU, leave `JAX_NUM_CPU_DEVICES` unset (JAX's
+default is one CPU device). On a multi-GPU machine, expose one GPU, e.g. with
+`CUDA_VISIBLE_DEVICES=0`. See "Running both CPU and GPU from one install".
 
 `HARV_NO_TYPECHECK=1`
 : Skips the beartype/jaxtyping import hooks in the root `conftest.py`. Those hooks
