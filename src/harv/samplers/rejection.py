@@ -1203,14 +1203,13 @@ class RejectionSampler(AbstractSampler):
 
         Reshapes the flat ``prior_samples`` dict (each value of length
         ``n_total = n_batches * batch_size``) into batches of size ``batch_size``,
-        evaluates ``model.log_prob`` for each batch under ``jax.lax.fori_loop``,
-        and returns the flattened length-``n_total`` log-likelihood array.
+        evaluates each batch with :meth:`_evaluate_log_likelihoods_one_batch`
+        under ``jax.lax.fori_loop``, and returns the flattened length-``n_total``
+        log-likelihood array.
 
         Used by both :meth:`_sample_prior_and_evaluate_batched` (fresh-draw path)
         and :meth:`run_with_samples` (in-memory cached path).
         """
-        prior = self.prior
-        base_names = model._base_nonlinear_names()
         model_keys = tuple(prior_samples.keys())
 
         n_total = prior_samples[model_keys[0]].shape[0]
@@ -1221,28 +1220,13 @@ class RejectionSampler(AbstractSampler):
         }
 
         def body_fn(i: int, acc: jax.Array) -> jax.Array:
-            raw = {k: batched[k][i] for k in model_keys}
-            wrapped = _wrap_unit_values(raw, prior.nonlinear_priors, base_names)
-            if marginalize_names is None:
-                return acc.at[i].set(
-                    jax.vmap(
-                        lambda s: model.log_prob(
-                            s, data, linear_priors=eff_linear or None
-                        )
-                    )(wrapped)
-                )
+            batch = {k: batched[k][i] for k in model_keys}
             return acc.at[i].set(
-                jax.vmap(
-                    lambda sample: model.log_prob(
-                        sample,
-                        data,
-                        linear_priors=eff_linear or None,
-                        marginalized_names=marginalize_names,
-                    )
-                )(wrapped)
+                self._evaluate_log_likelihoods_one_batch(
+                    model, batch, eff_linear, marginalize_names, data
+                )
             )
 
-        # TODO: investigate parallelizing this over device - using shard_map instead?
         ln_liks_batched = jax.lax.fori_loop(
             0, n_batches, body_fn, jnp.zeros((n_batches, self.batch_size))
         )
@@ -1259,17 +1243,15 @@ class RejectionSampler(AbstractSampler):
     ) -> jax.Array:
         """Evaluate ``model.log_prob`` over a single batch of prior samples.
 
-        Used by the HDF5-streaming branch of :meth:`run_with_samples`, where
-        a Python-level loop reads one chunk at a time from disk and feeds it
-        through this jit-compiled vmap.
+        The one place the rejection sampler calls ``model.log_prob``: once per
+        ``fori_loop`` iteration of :meth:`_evaluate_log_likelihoods_batched`
+        (``run`` and in-memory ``run_with_samples``), and once per chunk read
+        from disk by the HDF5-streaming branch of :meth:`run_with_samples`.
+        ``marginalize_names=None`` is ``log_prob``'s auto mode.
         """
         prior = self.prior
         base_names = model._base_nonlinear_names()
         wrapped = _wrap_unit_values(batch, prior.nonlinear_priors, base_names)
-        if marginalize_names is None:
-            return jax.vmap(
-                lambda s: model.log_prob(s, data, linear_priors=eff_linear or None)
-            )(wrapped)
         return jax.vmap(
             lambda s: model.log_prob(
                 s,
