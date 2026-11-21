@@ -30,14 +30,29 @@ span the range of epoch counts.
 
 ### Choosing a hardware path
 
-`harv` does not have built-in support for distributed computing, beyond what is
-available at a low level in JAX.
-The `harv` internals do not handle device placement, sharding, `pmap`, or multi-device
-execution.
-So, currently, scaling out to multiple devices means running one process per
-(user-defined) shard of sources.
+Within one process, `RejectionSampler` splits each likelihood batch over every local
+JAX device.
+GPUs are separate devices already.
+A CPU is a single device by default, however many cores it has, so to split work
+across cores, set the device count before JAX runs anything:
+
+```python
+import jax
+
+jax.config.update("jax_num_cpu_devices", 8)  # or JAX_NUM_CPU_DEVICES=8
+```
+
+On a 16-core M4 Max, 8 devices made a 10<sup>6</sup>-sample Gaia-4 run 2.7x faster than
+one device.
+Pick a `batch_size` divisible by the device count; otherwise harv uses fewer devices
+and warns.
+See the spec's `batch_size` section for details.
+
+Beyond one process, `harv` has no built-in distributed computing, so scaling out to
+many sources means running one process per (user-defined) shard of sources.
 This is embarrassingly parallel, so you can use whatever you have available.
 We have tested using MPI/slurm and found that it works well.
+The two combine: each process can itself use several devices.
 
 This is not imperative, but we have found the following from our own experience:
 

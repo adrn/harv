@@ -2325,6 +2325,19 @@ them with `jax.shard_map`, and `run`'s prior draws are split across them too.
   `numpyro.set_host_device_count(N)` also works.
 - **GPUs:** each one is already a device.
 
+Measured with `benchmarks/test_gaia_likelihood.py::test_gaia4_rejection[standard]`
+(`run_with_samples` over a 10⁶-draw library, default `batch_size`), jax 0.11.2, on an
+Apple M4 Max (12 performance + 4 efficiency cores), as the minimum of 5 rounds:
+
+| `JAX_NUM_CPU_DEVICES` | time | speed-up |
+| --- | --- | --- |
+| 1 | 1.57 s | 1.0x |
+| 4 | 0.66 s | 2.4x |
+| 8 | 0.58 s | 2.7x |
+
+The likelihood stops scaling at about 6 devices on that machine, so more devices
+than performance cores buy little.
+
 ### `summary` method
 
 `summary() -> str` returns a plain-ASCII, sectioned-table description of how the
