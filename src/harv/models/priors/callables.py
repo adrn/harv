@@ -148,7 +148,7 @@ def _width_parallax(prior: Any, params: dict[str, Any]) -> Any:
         # dropped); `~(x > 0)` also catches NaN, e.g. a 2-parameter Gaia solution.
         return eqx.error_if(
             plx,
-            ~(ustrip("mas", plx) > 0),
+            ~((ustrip("mas", plx) > 0) & (ustrip("mas", plx) < float("inf"))),
             "scale_parallax must be positive and finite. For a parallax that is "
             "not measured to about 10% or better, leave scale_parallax unset and "
             "sample the parallax.",
