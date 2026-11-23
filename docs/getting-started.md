@@ -83,7 +83,7 @@ astro_data = harv.GaiaAstrometryData(
     parallax_factor=jnp.array([0.70828, -0.46657, -0.45946, 0.19659, -0.21379])
 )
 
-prior = hm.StandardGaiaAstrometry().default_prior(
+astro_prior = hm.StandardGaiaAstrometry().default_prior(
     period_min=Q(50, "day"),
     period_max=Q(3000, "day"),
     sigma_a0=Q(1, "au"),   # astrometric semi-major axis prior scale
@@ -92,8 +92,10 @@ prior = hm.StandardGaiaAstrometry().default_prior(
     sigma_vtan=Q(30, "km/s"),  # tangential velocity prior width
 )
 
-sampler = harv.RejectionSampler(prior, harv.GaiaAstrometryModel())
-samples = sampler.run(astro_data, n_prior_samples=1_000_000, key=jax.random.key(42))
+astro_sampler = harv.RejectionSampler(astro_prior, harv.GaiaAstrometryModel())
+astro_samples = astro_sampler.run(
+    astro_data, n_prior_samples=1_000_000, key=jax.random.key(42)
+)
 ```
 
 ### MCMC continuation
@@ -111,5 +113,10 @@ samples = sampler.run(
     max_posterior_samples=128,
 )
 mcmc_sampler = NumpyroSampler(prior, harv.RVModel())
-mcmc_samples = mcmc_sampler.run(data, key=jax.random.key(0), init_samples=samples)
+# wrap_angles() starts every chain on the same side of the K -> -K degeneracy
+mcmc_samples = mcmc_sampler.run(
+    data, key=jax.random.key(0), init_samples=samples.wrap_angles()
+)
 ```
+
+See the sign-degeneracy section of the [sharp bits](sharp-bits.md) for why.

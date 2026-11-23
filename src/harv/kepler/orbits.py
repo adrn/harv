@@ -276,9 +276,9 @@ def ecc_omega_from_sqrte_cosw_sinw(
         e &= \mathrm{sqrte\_cosw}^2 + \mathrm{sqrte\_sinw}^2 \\
         \omega &= \mathrm{atan2}(\mathrm{sqrte\_sinw}, \mathrm{sqrte\_cosw})
 
-    The returned ``arg_peri`` lies in ``(-pi, pi]`` (the range of ``atan2``); use
-    :meth:`harv.samplers.Samples.wrap_angles` to wrap it into ``[0, 2*pi)`` if a
-    prior requires that range.
+    The returned ``arg_peri`` lies in ``(-pi, pi]`` (the range of ``atan2``); take
+    it modulo ``2*pi`` if a prior requires ``[0, 2*pi)``.
+    :meth:`harv.samplers.Samples.wrap_angles` only wraps the angles it shifts.
 
     Examples
     --------

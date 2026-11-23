@@ -1,5 +1,6 @@
 """Unit tests for Samples container."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -11,6 +12,7 @@ from harv.kepler.orbits import (
     rv_at_times,
     thiele_innes_unit,
 )
+from harv.models.parameterizations.rv import SqrtEccRV, StandardRV
 from harv.samplers.samples import Samples, _MetadataView, pad_and_stack_samples
 
 
@@ -768,6 +770,103 @@ class TestSamplesWrapAngles:
         )
         with pytest.raises(NotImplementedError, match="multiple per-component"):
             samples.wrap_angles()
+
+    def test_angles_in_degrees_shift_by_half_a_turn(self):
+        """arg_peri / lon_asc_node stored in deg shift by 180 deg, not by 3.14."""
+        rad = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        angles = ("arg_peri", "lon_asc_node")
+        deg = Samples(
+            nonlinear={
+                k: v.uconvert("deg") if k in angles else v
+                for k, v in rad.nonlinear.items()
+            },
+            linear=rad.linear,
+            model_type=rad.model_type,
+            metadata=rad.metadata,
+        )
+        wrapped_rad, wrapped_deg = rad.wrap_angles(), deg.wrap_angles()
+        for k in angles:
+            assert wrapped_deg[k].unit == deg[k].unit
+            assert jnp.allclose(
+                ustrip("rad", wrapped_deg[k]), ustrip("rad", wrapped_rad[k])
+            )
+
+    def test_dimensionless_angles_are_read_as_radians(self):
+        """A bare angle prior stores arg_peri with unit ''; it wraps as radians."""
+        rad = _make_rv_samples_with_signs([-10.0, 12.0, -8.0])
+        bare = Samples(
+            nonlinear={**rad.nonlinear, "arg_peri": Q(rad["arg_peri"].value, "")},
+            linear=rad.linear,
+            model_type=rad.model_type,
+            metadata=rad.metadata,
+        )
+        wrapped = bare.wrap_angles()
+        assert wrapped["arg_peri"].unit == bare["arg_peri"].unit
+        assert jnp.allclose(
+            wrapped["arg_peri"].value, rad.wrap_angles()["arg_peri"].value
+        )
+
+    @pytest.mark.parametrize("lam_unit", ["rad", "deg"])
+    def test_sqrt_ecc_flips_negative_K(self, lam_unit):
+        """SqrtEccRV twin: negate K and both sqrte_*, shift mean_longitude by pi."""
+        lam_rad = jnp.array([0.4, 5.9, 2.0])
+        samples = Samples(
+            nonlinear={
+                "period": Q(jnp.full(3, 100.0), "day"),
+                "sqrte_cosw": Q(jnp.array([0.3, -0.2, 0.1]), ""),
+                "sqrte_sinw": Q(jnp.array([0.4, 0.5, -0.6]), ""),
+                "mean_longitude": Q(lam_rad, "rad").uconvert(lam_unit),
+            },
+            linear={
+                "rv_semiamp": Q(jnp.array([-10.0, -8.0, 5.0]), "km/s"),
+                "v_sys": Q(jnp.zeros(3), "km/s"),
+            },
+            model_type="RVModel",
+            metadata={},
+        )
+        wrapped = samples.wrap_angles()
+
+        flip = jnp.array([True, True, False])
+        sign = jnp.where(flip, -1.0, 1.0)
+        assert jnp.allclose(wrapped["rv_semiamp"].value, jnp.array([10.0, 8.0, 5.0]))
+        for k in ("sqrte_cosw", "sqrte_sinw"):
+            assert jnp.allclose(wrapped[k].value, sign * samples[k].value)
+        assert wrapped["mean_longitude"].unit == samples["mean_longitude"].unit
+        expected = jnp.where(flip, jnp.mod(lam_rad + jnp.pi, 2 * jnp.pi), lam_rad)
+        assert jnp.allclose(ustrip("rad", wrapped["mean_longitude"]), expected)
+
+    def test_sqrt_ecc_matches_standard_rv_wrap(self):
+        """Wrapping in SqrtEccRV coordinates is the StandardRV wrap, converted."""
+        std = _make_rv_samples_with_signs([-10.0, 12.0, -8.0, 5.0])
+        via_sqe = (
+            std.convert_parameterization(source=StandardRV(), target=SqrtEccRV())
+            .wrap_angles()
+            .convert_parameterization(source=SqrtEccRV(), target=StandardRV())
+        )
+        direct = std.wrap_angles()
+
+        assert jnp.allclose(via_sqe["rv_semiamp"].value, direct["rv_semiamp"].value)
+        assert jnp.allclose(
+            jnp.mod(ustrip("rad", via_sqe["arg_peri"]), 2 * jnp.pi),
+            ustrip("rad", direct["arg_peri"]),
+        )
+        assert jnp.allclose(
+            jnp.mod(ustrip("", via_sqe["phase_peri"]), 1.0),
+            jnp.mod(ustrip("", direct["phase_peri"]), 1.0),
+        )
+
+    def test_sqrt_ecc_wrap_traces_under_jit(self):
+        """The SqrtEccRV wrap branches on keys and units only, so it jits."""
+        sqe = _make_rv_samples_with_signs([-10.0, 12.0, -8.0]).convert_parameterization(
+            source=StandardRV(), target=SqrtEccRV()
+        )
+        eager = sqe.wrap_angles()
+        jitted = eqx.filter_jit(lambda s: s.wrap_angles())(sqe)
+        for k in ("rv_semiamp", "sqrte_cosw", "sqrte_sinw", "mean_longitude"):
+            assert jnp.allclose(jitted[k].value, eager[k].value)
 
 
 def _make_ti_samples(n: int = 4) -> Samples:

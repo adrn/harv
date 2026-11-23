@@ -48,10 +48,11 @@ from harv.models.joint import JointModel
 from harv.models.priors import HarvPrior
 from harv.samplers.base import AbstractSampler, _validate_data
 from harv.samplers.rejection import (
+    _CALLER_FRAME_SKIP,
     _prepare_sampler_model,
     _wrap_unit_values,
 )
-from harv.samplers.samples import Samples
+from harv.samplers.samples import Samples, _find_namespaced_keys
 
 __all__ = ("NumpyroSampler",)
 
@@ -67,6 +68,34 @@ def _build_all_priors(
     all_priors: dict[str, NonlinearPriorDist] = dict(prior.nonlinear_priors)
     all_priors.update(nonlinear_extension_priors)
     return all_priors
+
+
+def _warn_mixed_sign_inits(samples: Samples, indices: list[int]) -> None:
+    """Warn when the chain init points straddle an amplitude-sign twin.
+
+    Under a sign-free amplitude prior every orbit has an exact twin with the
+    amplitude negated and the orbit turned by half a turn (``arg_peri + pi``
+    flips ``K`` and ``a``; ``lon_asc_node + pi`` flips ``a`` alone). Chains
+    started on both sides can sit in modes NUTS rarely crosses. The inits are
+    left as given; ``init_samples=samples.wrap_angles()`` is the caller's call.
+    """
+    for name in ("rv_semiamp", "semi_major_axis"):
+        keys = _find_namespaced_keys(samples.linear, name)
+        if not keys:
+            continue
+        amp = samples.linear[keys[0]]
+        chosen = np.asarray(ustrip(str(amp.unit), amp))[indices]
+        if (chosen > 0).any() and (chosen < 0).any():
+            warnings.warn(
+                f"The MCMC chains start with both signs of {keys[0]!r}, i.e. in "
+                "mirror modes of the orbit that NUTS may not cross, which shows "
+                "up as poor r_hat and ESS on the angles. Pass "
+                "init_samples=samples.wrap_angles() to start every chain with "
+                "non-negative amplitudes.",
+                UserWarning,
+                skip_file_prefixes=_CALLER_FRAME_SKIP,
+            )
+            return
 
 
 def _unconstrain_init_params(
@@ -339,7 +368,10 @@ class NumpyroSampler(AbstractSampler):
             :class:`~harv.data.SystemData` for joint models).
         init_samples
             Posterior samples produced by rejection sampling, used to set the
-            initial positions for each MCMC chain.
+            initial positions for each MCMC chain. A ``UserWarning`` is raised
+            when the chains would start with both signs of ``rv_semiamp`` (or
+            ``semi_major_axis``), i.e. in mirror modes; pass
+            ``init_samples.wrap_angles()`` to start them in one.
         key
             PRNG key, e.g. ``jax.random.key(0)``.  Required: harv never draws
             entropy of its own, so a run is reproducible from its key alone.
@@ -459,6 +491,7 @@ class NumpyroSampler(AbstractSampler):
         init_params = self._build_init_params(
             model,
             samples,
+            all_priors=all_priors,
             effective_linear_prior=effective_linear_prior,
             effective_marginalized_names=effective_marginalized_names,
             marginalized=marginalized,
@@ -601,6 +634,7 @@ class NumpyroSampler(AbstractSampler):
             init = self._build_init_params(
                 model_obj,
                 samples[i],
+                all_priors=all_priors,
                 effective_linear_prior=effective_linear_prior,
                 effective_marginalized_names=effective_marginalized_names,
                 marginalized=True,
@@ -670,6 +704,7 @@ class NumpyroSampler(AbstractSampler):
         _model: AbstractComponentModel | JointModel,
         samples: "Samples",
         *,
+        all_priors: dict[str, NonlinearPriorDist],
         effective_linear_prior: dict[str, Any] | None,
         effective_marginalized_names: tuple[str, ...] | None,
         marginalized: bool,
@@ -677,7 +712,11 @@ class NumpyroSampler(AbstractSampler):
         extra_model: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         extra_init_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build init_params dict from rejection-sampler posterior."""
+        """Build init_params dict from rejection-sampler posterior.
+
+        ``all_priors`` holds the nonlinear sites' priors, extensions included
+        (see ``_build_all_priors``); their units are the units the sites draw in.
+        """
         _scalar_init = num_chains == 1
         sample_linear_keys = set(samples.linear)
         joint_linear_name_counts: dict[str, int] = {}
@@ -707,17 +746,10 @@ class NumpyroSampler(AbstractSampler):
         # accepted) the available samples are repeated so that every chain has
         # a valid starting point.
         indices = [i % samples.n_samples for i in range(num_chains)]
+        _warn_mixed_sign_inits(samples, indices)
 
-        if _scalar_init:
-            init_params: dict[str, Any] = {
-                key_name: jnp.asarray(ustrip(str(qty.unit), qty)[0])
-                for key_name, qty in samples.nonlinear.items()
-            }
-        else:
-            init_params = {
-                key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
-                for key_name, qty in samples.nonlinear.items()
-            }
+        pick = 0 if _scalar_init else np.asarray(indices)
+        init_q = {name: qty[pick] for name, qty in samples.nonlinear.items()}
 
         # A fit of one component (e.g. the astrometry alone) warm-starts a joint
         # model: its own nonlinear names move onto whichever joint site exists,
@@ -740,8 +772,17 @@ class NumpyroSampler(AbstractSampler):
                 }
                 for name in _model._per_component_nonlinear_names()[source]:
                     qualified = f"{source}.{name}"
-                    if name in init_params and name not in sites and qualified in sites:
-                        init_params[qualified] = init_params.pop(name)
+                    if name in init_q and name not in sites and qualified in sites:
+                        init_q[qualified] = init_q.pop(name)
+
+        # A site draws its value in its prior's unit, so a sample stored in
+        # another (deg against a rad prior) is converted. A value with no unit on
+        # either side is taken as it is.
+        init_params: dict[str, Any] = {}
+        for name, qty in init_q.items():
+            own = str(qty.unit)
+            unit = own and (_nonlinear_unit(all_priors.get(name), name) or own)
+            init_params[name] = jnp.asarray(ustrip(unit, qty))
 
         # Include init values for explicit (non-marginalized) linear params.
         # For both the marginalized and non-marginalized cases, any linear param

@@ -1621,6 +1621,36 @@ Fields:
 
 Declares `requires = ("period", "eccentricity")`.
 
+#### Why the default amplitude priors are sign-free
+
+The single-component defaults (`rv_semiamp` here, `semi_major_axis` under
+`PeriodDependentSemiMajorAxisPrior`) are symmetric about zero, so posteriors contain
+negative amplitudes. The sign is not physical: `K → −K` with `arg_peri → arg_peri + π`
+predicts the same RVs, and for astrometry `a → −a` pairs with a `π` shift of `arg_peri`
+or `lon_asc_node`. With uniform angle priors the sign-free posterior is the
+`K ≥ 0` posterior plus its exact mirror. `Samples.wrap_angles()` maps one onto the
+other, and the evidence is the same under either prior.
+
+Truncating at zero would cost rejection-sampling efficiency and buy nothing in the
+posterior. The acceptance rate is `Z / max L`. Truncation leaves `Z` unchanged and
+roughly doubles `max L`, because each angle then carries the whole marginal likelihood
+rather than half of it. Mirror-branch draws are valid posterior samples once wrapped.
+Measured with `StandardRV` and 10⁶ prior draws, `support="positive"` accepted 36–55
+samples where the sign-free prior accepted 88–109 (six epochs at 1 km/s), and about
+12,000 where it accepted about 23,500 (four epochs at 3 km/s). Each run was also about
+30% slower, because a truncated prior leaves the plain-Gaussian fast path of
+§Support-constrained and mixture linear priors.
+
+Two further reasons:
+- A truncated default would use one of that section's two exact constrained-parameter
+  slots in every model.
+- `ThieleInnesGaiaAstrometry` gives each of its genuinely signed Thiele-Innes
+  constants the same `PeriodDependentSemiMajorAxisPrior`.
+
+The cost of the mirror shows up instead when NUTS is warm-started from rejection
+output; §MCMC sampling covers that. A sign prior remains available as
+`PeriodDependentKPrior(..., support="positive")` or any truncated prior passed by name.
+
 ### `PeriodDependentSemiMajorAxisPrior`
 
 `PeriodDependentSemiMajorAxisPrior` (in `harv.models.priors.callables`) implements
@@ -1898,12 +1928,15 @@ that requires `Z_post` to be exact for *two* constrained parameters.
 
 `Samples.wrap_angles()` also repairs the sign pattern after the fact: the shared
 `arg_peri` shift flips both semi-amplitudes together, mapping
-`(K_1 < 0, K_2 > 0, omega)` onto `(K_1 > 0, K_2 < 0, omega + pi)`. The sign prior
-is therefore not the only route to a canonical answer — it is the route that does
-not spend prior volume and acceptance on the mirror branch first, and it
-additionally excludes the same-sign region, which the `arg_peri` symmetry cannot
-fix because it flips both semi-amplitudes at once. Under the signed prior
-`wrap_angles` is a no-op.
+`(K_1 < 0, K_2 > 0, omega)` onto `(K_1 > 0, K_2 < 0, omega + pi)`. So the mirror
+branch alone does not justify the sign prior. Excluding it costs rejection
+acceptance, for the reason given in §Why the default amplitude priors are
+sign-free. Measured with 5×10⁵ prior draws, the signed prior accepted about 545
+samples where the sign-free prior accepted about 1040 (8 epochs over 60 days at
+5 km/s), and 181,000 where it accepted 362,000 (the 4-epoch weakly constrained
+fixture). What justifies the signed default is the same-sign region. The
+`arg_peri` symmetry cannot remove it because it flips both semi-amplitudes at once,
+so only the prior excludes it. Under the signed prior `wrap_angles` is a no-op.
 
 **This changed the default.** `signed_semiamp=False` restores the older sign-free
 priors.
@@ -2468,7 +2501,7 @@ seed another parallel run.
 mcmc_sampler = NumpyroSampler(prior, model)
 mcmc_samples = mcmc_sampler.run(
     data,
-    init_samples=rej_samples,
+    init_samples=rej_samples.wrap_angles(),
     key=jax.random.key(42),
     num_warmup=500,
     num_samples=1000,
@@ -2484,6 +2517,27 @@ exists, bare or component-qualified (`jitter` -> `astrom.jitter`, and `cos_i` ->
 already are (`parallax` -> `astrom.parallax`). Shared orbital names need no mapping. `run` needs a
 value for every sampled site; `optimize` falls back to numpyro's default
 initialization for missing ones.
+
+A nonlinear site draws its value in its prior's unit, so each warm-start value is
+converted to that unit first: an `arg_peri` stored in `deg` starts a chain at the same
+angle under a prior in `rad`. A value without a unit, or one whose prior has none, is
+used as it is. Explicit linear values are converted when their prior is a `QD`;
+otherwise they are read in the sample's own unit, which must be the data's unit, as it
+is in rejection output.
+
+Under the sign-free default amplitude priors (§Why the default amplitude priors are
+sign-free), rejection output holds each orbit together with its `K → −K` twin. NUTS
+cannot cross between the twins. Chains started in different twins therefore report bad
+r_hat and ESS on the angles, even when each chain mixes well on its own. When the chain
+starting points carry both signs of the first `rv_semiamp` key, or of the first
+`semi_major_axis` key (which also catches the `lon_asc_node + π` twin of an untied joint
+fit), `run` raises a `UserWarning`. It leaves the starting points as given.
+`init_samples=rej_samples.wrap_angles()` starts every chain with non-negative amplitudes.
+`wrap_angles` puts the angles it shifts in `[0, 2π)`, the range of the default angle
+priors, so a prior on another interval needs its own wrap. A single chain never triggers the warning, and neither does a
+sign-constrained prior (e.g. signed SB2). Astrometry-only fits keep the separate
+`(ω + π, Ω + π)` mirror, which no amplitude sign identifies (see
+`with_astrometric_mirror`).
 
 Both sampler classes own marginalization policy. Set
 `marginalized_names=(...)` on `RejectionSampler` or `NumpyroSampler` to request
@@ -2702,8 +2756,15 @@ the first entry.
   alone (`lon_asc_node` does not enter the RV model). Both shifted angles are
   wrapped to `[0, 2*pi)`. A single `arg_peri` shift cannot make both `K` and `a`
   positive when their signs disagree, so the `lon_asc_node` shift is required.
-  The orbit predicted by the wrapped sample is identical to the original. No-op
-  when `arg_peri` is missing or no entries are negative.
+  The orbit predicted by the wrapped sample is identical to the original.
+
+  `SqrtEccRV` samples have no `arg_peri`. There the same `ω → ω + π` twin is applied
+  where `rv_semiamp < 0`: negate `rv_semiamp`, `sqrte_cosw` and `sqrte_sinw`, and
+  shift `mean_longitude` by `π` (in its stored angular unit, wrapped to one turn).
+  `phase_peri` is unchanged.
+
+  No-op when neither `arg_peri` nor all three `SqrtEccRV` angles are present, or when
+  no entries are negative.
 
   For SB2 samples the `rv_semiamp` keys are component-namespaced and *all* of
   them flip together with the single shared `arg_peri` shift, which is the
@@ -3996,8 +4057,8 @@ samples = sampler.run(
 # --- MCMC continuation ---
 mcmc_sampler = NumpyroSampler(prior, RVModel())
 mcmc_samples = mcmc_sampler.run(
-    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000,
-    key=jax.random.key(42),
+    data, init_samples=samples.wrap_angles(), num_chains=4, num_warmup=500,
+    num_samples=2000, key=jax.random.key(42),
 )
 
 # --- Post-sampling analysis ---

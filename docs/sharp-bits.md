@@ -105,9 +105,21 @@ This rewrites the samples into the equivalent convention
 
 - `rv_semiamp >= 0`
 - `semi_major_axis >= 0`
-- `arg_peri` wrapped into $\[0, 2\\pi)$
+- every angle it shifts wrapped into $\[0, 2\\pi)$
 
-without changing the physical orbit.
+without changing the physical orbit. For `SqrtEccRV` samples it negates `sqrte_cosw` and
+`sqrte_sinw` and shifts `mean_longitude` by $\pi$ instead.
+
+The degeneracy matters most when you start MCMC from rejection samples. Those contain
+both signs, so with several chains some start in one mirror mode and some in the other.
+NUTS cannot move between them, and r_hat and ESS on the angles look terrible even though
+each chain is fine. `NumpyroSampler.run` warns when this happens. Start from
+`init_samples=rej_samples.wrap_angles()` so that every chain begins with non-negative
+amplitudes (astrometry-only fits still keep the separate mirror with both `arg_peri` and
+`lon_asc_node` shifted by $\pi$). The shifted angles land in $\[0, 2\\pi)$, the range of the
+default angle priors; with a prior on another interval, wrap them into it yourself. We keep the
+default amplitude priors sign-free rather than truncating them at zero because the
+truncated prior halves the rejection sampler's acceptance rate (see `docs/spec.md`).
 
 ## Periodograms batch over sources only with a fixed frequency grid
 
