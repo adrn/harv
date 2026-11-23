@@ -491,6 +491,7 @@ class NumpyroSampler(AbstractSampler):
         init_params = self._build_init_params(
             model,
             samples,
+            all_priors=all_priors,
             effective_linear_prior=effective_linear_prior,
             effective_marginalized_names=effective_marginalized_names,
             marginalized=marginalized,
@@ -633,6 +634,7 @@ class NumpyroSampler(AbstractSampler):
             init = self._build_init_params(
                 model_obj,
                 samples[i],
+                all_priors=all_priors,
                 effective_linear_prior=effective_linear_prior,
                 effective_marginalized_names=effective_marginalized_names,
                 marginalized=True,
@@ -702,6 +704,7 @@ class NumpyroSampler(AbstractSampler):
         _model: AbstractComponentModel | JointModel,
         samples: "Samples",
         *,
+        all_priors: dict[str, NonlinearPriorDist],
         effective_linear_prior: dict[str, Any] | None,
         effective_marginalized_names: tuple[str, ...] | None,
         marginalized: bool,
@@ -709,7 +712,11 @@ class NumpyroSampler(AbstractSampler):
         extra_model: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         extra_init_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build init_params dict from rejection-sampler posterior."""
+        """Build init_params dict from rejection-sampler posterior.
+
+        ``all_priors`` holds the nonlinear sites' priors, extensions included
+        (see ``_build_all_priors``); their units are the units the sites draw in.
+        """
         _scalar_init = num_chains == 1
         sample_linear_keys = set(samples.linear)
         joint_linear_name_counts: dict[str, int] = {}
@@ -741,16 +748,8 @@ class NumpyroSampler(AbstractSampler):
         indices = [i % samples.n_samples for i in range(num_chains)]
         _warn_mixed_sign_inits(samples, indices)
 
-        if _scalar_init:
-            init_params: dict[str, Any] = {
-                key_name: jnp.asarray(ustrip(str(qty.unit), qty)[0])
-                for key_name, qty in samples.nonlinear.items()
-            }
-        else:
-            init_params = {
-                key_name: jnp.stack([ustrip(str(qty.unit), qty)[i] for i in indices])
-                for key_name, qty in samples.nonlinear.items()
-            }
+        pick = 0 if _scalar_init else np.asarray(indices)
+        init_q = {name: qty[pick] for name, qty in samples.nonlinear.items()}
 
         # A fit of one component (e.g. the astrometry alone) warm-starts a joint
         # model: its own nonlinear names move onto whichever joint site exists,
@@ -773,8 +772,17 @@ class NumpyroSampler(AbstractSampler):
                 }
                 for name in _model._per_component_nonlinear_names()[source]:
                     qualified = f"{source}.{name}"
-                    if name in init_params and name not in sites and qualified in sites:
-                        init_params[qualified] = init_params.pop(name)
+                    if name in init_q and name not in sites and qualified in sites:
+                        init_q[qualified] = init_q.pop(name)
+
+        # A site draws its value in its prior's unit, so a sample stored in
+        # another (deg against a rad prior) is converted. A value with no unit on
+        # either side is taken as it is.
+        init_params: dict[str, Any] = {}
+        for name, qty in init_q.items():
+            own = str(qty.unit)
+            unit = own and (_nonlinear_unit(all_priors.get(name), name) or own)
+            init_params[name] = jnp.asarray(ustrip(unit, qty))
 
         # Include init values for explicit (non-marginalized) linear params.
         # For both the marginalized and non-marginalized cases, any linear param

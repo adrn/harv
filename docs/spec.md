@@ -2518,6 +2518,13 @@ already are (`parallax` -> `astrom.parallax`). Shared orbital names need no mapp
 value for every sampled site; `optimize` falls back to numpyro's default
 initialization for missing ones.
 
+A nonlinear site draws its value in its prior's unit, so each warm-start value is
+converted to that unit first: an `arg_peri` stored in `deg` starts a chain at the same
+angle under a prior in `rad`. A value without a unit, or one whose prior has none, is
+used as it is. Explicit linear values are converted when their prior is a `QD`;
+otherwise they are read in the sample's own unit, which must be the data's unit, as it
+is in rejection output.
+
 Under the sign-free default amplitude priors (§Why the default amplitude priors are
 sign-free), rejection output holds each orbit together with its `K → −K` twin. NUTS
 cannot cross between the twins. Chains started in different twins therefore report bad

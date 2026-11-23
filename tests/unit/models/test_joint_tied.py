@@ -584,6 +584,7 @@ def test_component_fit_warm_starts_joint_extension_sites():
     init = NumpyroSampler(prior, joint)._build_init_params(
         joint,
         astro_fit,
+        all_priors={**prior.nonlinear_priors, **prior.extension_priors},
         effective_linear_prior=None,
         effective_marginalized_names=None,
         marginalized=True,
@@ -650,6 +651,7 @@ def test_component_fit_warm_starts_qualified_base_sites():
     init = NumpyroSampler(prior, joint)._build_init_params(
         joint,
         astro_fit,
+        all_priors={**prior.nonlinear_priors, **prior.extension_priors},
         effective_linear_prior=None,
         effective_marginalized_names=None,
         marginalized=True,
