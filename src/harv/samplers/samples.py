@@ -119,6 +119,21 @@ def _find_namespaced_keys(d: dict[str, Any], param_name: str) -> list[str]:
     return [k for k in d if k == param_name or k.endswith(f".{param_name}")]
 
 
+def _shift_half_turn(q: Q, where: Any = True) -> Q:
+    """Shift angles by ``pi`` where ``where`` holds, wrapping those to one turn.
+
+    Works through radians and returns ``q``'s own unit, so an angle stored in
+    ``deg`` moves by 180, not by 3.14. A dimensionless angle (from a bare angle
+    prior) is read as radians.
+    """
+    unit = str(q.unit)
+    val = ustrip(unit, q)
+    shifted = jnp.mod((val if unit == "" else ustrip("rad", q)) + jnp.pi, 2 * jnp.pi)
+    if unit != "":
+        shifted = ustrip(unit, Q(shifted, "rad"))
+    return Q(jnp.where(where, shifted, val), unit)
+
+
 def _overlay_corner_truths(  # noqa: C901
     plot_matrix: Any,
     var_names: list[str],
@@ -955,12 +970,7 @@ class Samples(eqx.Module):
             v_val = ustrip(str(v.unit), v)
             new_lin[k] = Q(jnp.where(omega_flip, -v_val, v_val), v.unit)
 
-        arg_peri = self.nonlinear[omega_key]
-        arg_val = ustrip(str(arg_peri.unit), arg_peri)
-        new_nl[omega_key] = Q(
-            jnp.where(omega_flip, jnp.mod(arg_val + jnp.pi, 2.0 * jnp.pi), arg_val),
-            arg_peri.unit,
-        )
+        new_nl[omega_key] = _shift_half_turn(self.nonlinear[omega_key], omega_flip)
 
         # Apply step 2: flip every still-negative a, and shift `lon_asc_node`.
         if node_flip is not None and node_key is not None:
@@ -969,14 +979,7 @@ class Samples(eqx.Module):
                 v_val = ustrip(str(v.unit), v)
                 new_lin[k] = Q(jnp.where(node_flip, -v_val, v_val), v.unit)
 
-            node = self.nonlinear[node_key]
-            node_val = ustrip(str(node.unit), node)
-            new_nl[node_key] = Q(
-                jnp.where(
-                    node_flip, jnp.mod(node_val + jnp.pi, 2.0 * jnp.pi), node_val
-                ),
-                node.unit,
-            )
+            new_nl[node_key] = _shift_half_turn(self.nonlinear[node_key], node_flip)
 
         return Samples(
             nonlinear=new_nl,
@@ -1045,9 +1048,8 @@ class Samples(eqx.Module):
             for key, q in values.items():
                 unit = str(q.unit)
                 v = ustrip(unit, q)
-                if key in flip:  # shift by pi in radians, whatever the stored unit
-                    shifted = jnp.mod(ustrip("rad", q) + jnp.pi, 2.0 * jnp.pi)
-                    m = ustrip(unit, Q(shifted, "rad"))
+                if key in flip:
+                    m = ustrip(unit, _shift_half_turn(q))
                 elif key in negate:
                     m = -v
                 else:

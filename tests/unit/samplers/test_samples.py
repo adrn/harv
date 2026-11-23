@@ -769,6 +769,44 @@ class TestSamplesWrapAngles:
         with pytest.raises(NotImplementedError, match="multiple per-component"):
             samples.wrap_angles()
 
+    def test_angles_in_degrees_shift_by_half_a_turn(self):
+        """arg_peri / lon_asc_node stored in deg shift by 180 deg, not by 3.14."""
+        rad = _make_joint_samples_with_signs(
+            K_values=[10.0, -10.0, 9.0, -8.0],
+            a_values=[2.0, 2.5, -1.5, -2.0],
+        )
+        angles = ("arg_peri", "lon_asc_node")
+        deg = Samples(
+            nonlinear={
+                k: v.uconvert("deg") if k in angles else v
+                for k, v in rad.nonlinear.items()
+            },
+            linear=rad.linear,
+            model_type=rad.model_type,
+            metadata=rad.metadata,
+        )
+        wrapped_rad, wrapped_deg = rad.wrap_angles(), deg.wrap_angles()
+        for k in angles:
+            assert wrapped_deg[k].unit == deg[k].unit
+            assert jnp.allclose(
+                ustrip("rad", wrapped_deg[k]), ustrip("rad", wrapped_rad[k])
+            )
+
+    def test_dimensionless_angles_are_read_as_radians(self):
+        """A bare angle prior stores arg_peri with unit ''; it wraps as radians."""
+        rad = _make_rv_samples_with_signs([-10.0, 12.0, -8.0])
+        bare = Samples(
+            nonlinear={**rad.nonlinear, "arg_peri": Q(rad["arg_peri"].value, "")},
+            linear=rad.linear,
+            model_type=rad.model_type,
+            metadata=rad.metadata,
+        )
+        wrapped = bare.wrap_angles()
+        assert wrapped["arg_peri"].unit == bare["arg_peri"].unit
+        assert jnp.allclose(
+            wrapped["arg_peri"].value, rad.wrap_angles()["arg_peri"].value
+        )
+
 
 def _make_ti_samples(n: int = 4) -> Samples:
     """Helper: Thiele-Innes Samples with known Campbell elements."""
