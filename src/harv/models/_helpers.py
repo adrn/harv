@@ -295,7 +295,9 @@ def classify_linear_prior(
 
     Passing no ``name``/``pinned_names`` answers the question "*can* the math
     integrate this out", ignoring the pinning policy -- which is what an explicit
-    ``marginalized_names`` request is gated on.
+    ``marginalized_names`` request is gated on, except that the samplers reject a
+    pinned name whose role here is ``MARGINALIZED`` (its reader would lose its
+    value; see ``resolve_effective_marginalized_names``).
     """
     if isinstance(d, TiedPrior):
         return LinearRole.TIED
@@ -378,7 +380,8 @@ def _needs_explicit_sampling(
     ``EXPLICIT`` and ``PINNED``. ``FIXED`` answers ``False`` because it is
     reclassified later with its value extracted; see
     :func:`classify_linear_prior`. A user may override this per sampler via
-    ``marginalized_names``, which is gated on the role alone.
+    ``marginalized_names``, which is gated on the role, except that a pinned name
+    that would be marginalized raises ``ValueError``.
     """
     role = classify_linear_prior(d, name=name, pinned_names=pinned_names)
     return role in (LinearRole.EXPLICIT, LinearRole.PINNED)

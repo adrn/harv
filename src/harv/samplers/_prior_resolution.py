@@ -107,12 +107,11 @@ def resolve_effective_marginalized_names(
 ) -> tuple[str, ...] | None:
     """Resolve and validate the effective marginalized linear parameter subset.
 
-    A name the user asked to marginalize is honoured whenever the math allows it
-    (the role alone, ignoring pinning), which is a weaker test than
-    the auto-mode default: a truncated ``parallax`` pinned by a callable stays
-    explicit *by default*, but an explicit ``marginalized_names=("parallax",)``
-    is respected -- and then the dependent callable raises its own ``KeyError``,
-    which is the documented behaviour.
+    A name the user asked to marginalize is honoured whenever the math allows it,
+    except a name another prior reads (pinned, see ``pinned_linear_names``) whose
+    own prior would be integrated out: that raises ``ValueError`` here rather than
+    a ``KeyError`` from inside the reading callable mid-trace. A pinned ``Delta``
+    is still fixed and a pinned unmarginalizable prior still sampled.
 
     Dropping genuinely non-marginalizable priors from the set is silent unless
     ``verbose=True``: it is expected behaviour, not a defect, and
@@ -149,6 +148,23 @@ def resolve_effective_marginalized_names(
     )
 
     pinned = pinned_linear_names(dict(effective_linear_prior))
+    # Only a name that would really be integrated out loses its value; a Delta is
+    # still fixed and an unmarginalizable prior still sampled, as before.
+    read_but_marginalized = sorted(
+        n
+        for n in set(marginalized_names or ()) & pinned
+        if classify_linear_prior(effective_linear_prior[n]) is LinearRole.MARGINALIZED
+    )
+    if read_but_marginalized:
+        msg = (
+            f"marginalized_names includes {read_but_marginalized}, but another "
+            "prior reads its sampled value (see that prior's `requires`), so it "
+            "must be sampled explicitly; remove it from marginalized_names. If the "
+            "readers are the Gaia proper-motion and semi-major-axis widths, "
+            "scale_parallax= in default_prior removes the dependency (the "
+            "RV/astrometry tie always reads the sampled parallax)."
+        )
+        raise ValueError(msg)
     explicit = {
         name
         for name in names_to_check

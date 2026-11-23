@@ -1263,8 +1263,15 @@ auto mode.
 
 Marginalization is always *possible* for a wider set than auto mode chooses: a
 name listed in `marginalized_names` is honoured whenever the math supports it,
-including a pinned one — and then the dependent callable raises its documented
-`KeyError`.
+except a pinned one whose prior would be integrated out. The samplers (and
+`HarvPrior.sample`) reject such a name in `marginalized_names` with a `ValueError`
+when they resolve the marginalized set, naming the parameter and the fixes (drop it
+from `marginalized_names`, or remove the dependency, e.g. `scale_parallax` for the
+Gaia widths). Without that check the reading callable would raise `KeyError`
+mid-trace. A pinned `Delta` is still fixed and a pinned non-Gaussian prior still
+sampled explicitly, as for any other name. A model's own
+`log_prob(marginalized_names=...)` still gets the callable's `KeyError`, or the tie's
+`ValueError` (§Tied linear parameters).
 
 ### The `LinearPriorCallable` contract
 

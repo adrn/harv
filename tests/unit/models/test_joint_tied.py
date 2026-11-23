@@ -393,6 +393,11 @@ def test_sampler_resolution_keeps_tied_target_marginalized():
     assert "rv.rv_semiamp" not in explicit_linear_names(effective, resolved)
     # Auto mode: the tie's scale reads parallax, so it stays explicit.
     assert explicit_linear_names(effective, None) == ("astro.parallax",)
+    # ...and asking to marginalize it anyway fails before any trace.
+    with pytest.raises(ValueError, match=r"\['astro.parallax'\]"):
+        resolve_effective_marginalized_names(
+            effective, (*MARGINALIZED, "astro.parallax")
+        )
 
 
 def test_rejects_fixed_tie_source():
