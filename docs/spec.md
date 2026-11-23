@@ -1720,9 +1720,11 @@ The marginalized `HalfNormal` parallax is support-constrained, so it leaves the
 plain-Gaussian fast path and takes one of the two exact constrained-parameter slots
 (§Support-constrained and mixture linear priors). In `default_prior`,
 `scale_parallax` reaches only the default callables; a prior passed by name is used
-as given. `scale_parallax` must be a positive angle: `__check_init__` raises
-`TypeError` for a non-angle and, per §Trace-friendly validation, uses `eqx.error_if`
-for a value `≤ 0`.
+as given. `scale_parallax` must be a positive, finite angle: `__check_init__` raises
+`TypeError` for a non-angle, and the callables check the value with `eqx.error_if`
+where the width uses it (not in `__check_init__`, whose discarded result `jit` would
+drop), so a value `≤ 0` or NaN, e.g. a negative catalog parallax, raises under `jit`
+too.
 
 ### `ParallaxDependentProperMotionPrior`
 

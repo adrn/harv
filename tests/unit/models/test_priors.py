@@ -1,5 +1,7 @@
 """Unit tests for rejection sampling priors."""
 
+from typing import ClassVar
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -775,12 +777,18 @@ class TestParallaxDependentProperMotionPrior:
     ids=["proper-motion", "semi-major-axis"],
 )
 class TestScaleParallaxValidation:
-    """Catalog parallaxes can be <= 0; that must fail loudly, not as -inf."""
+    """Catalog parallaxes can be <= 0 or NaN; that must fail loudly, not as -inf."""
 
-    @pytest.mark.parametrize("plx", [Q(-5.0, "mas"), Q(0.0, "mas")])
-    def test_non_positive_raises(self, build, plx):
-        with pytest.raises(RuntimeError, match="scale_parallax must be positive"):
-            build(plx)
+    PARAMS: ClassVar[dict] = {"period": Q(1.0, "yr"), "eccentricity": 0.0}
+
+    @pytest.mark.parametrize("plx", [-5.0, 0.0, float("nan")])
+    def test_bad_value_raises_eagerly_and_under_jit(self, build, plx):
+        def width(v):
+            return build(Q(v, "mas"))(self.PARAMS).distribution.scale
+
+        for fn in (width, jax.jit(width)):
+            with pytest.raises(Exception, match="scale_parallax must be positive"):
+                fn(plx)
 
     def test_non_angle_raises(self, build):
         with pytest.raises(TypeError, match="scale_parallax must be an angle"):

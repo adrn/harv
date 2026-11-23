@@ -126,8 +126,8 @@ class PeriodDependentKPrior(eqx.Module):
         return QuantityDistribution(truncated, unit)
 
 
-def _check_scale_parallax(scale_parallax: Any) -> None:
-    """Validate ``scale_parallax``; see spec §Trace-friendly validation."""
+def _check_scale_parallax_unit(scale_parallax: Any) -> None:
+    """Static unit check; the sign is checked where it is used (``_width_parallax``)."""
     if scale_parallax is None:
         return
     if not (
@@ -138,26 +138,26 @@ def _check_scale_parallax(scale_parallax: Any) -> None:
             f"got {scale_parallax!r}"
         )
         raise TypeError(msg)
-    plx = ustrip("mas", scale_parallax)
-    eqx.error_if(
-        plx,
-        plx <= 0,
-        "scale_parallax must be positive. For a parallax that is not measured to "
-        "about 10% or better, leave scale_parallax unset and sample the parallax.",
-    )
 
 
 def _width_parallax(prior: Any, params: dict[str, Any]) -> Any:
     """The parallax that sets the width: ``scale_parallax``, else the sampled one."""
-    if prior.scale_parallax is not None:
-        return prior.scale_parallax
+    plx = prior.scale_parallax
+    if plx is not None:
+        # On the data path, so the check survives jit (a discarded error_if is
+        # dropped); `~(x > 0)` also catches NaN, e.g. a 2-parameter Gaia solution.
+        return eqx.error_if(
+            plx,
+            ~(ustrip("mas", plx) > 0),
+            "scale_parallax must be positive and finite. For a parallax that is "
+            "not measured to about 10% or better, leave scale_parallax unset and "
+            "sample the parallax.",
+        )
     if "parallax" not in params:
         raise KeyError(
-            f"{type(prior).__name__} requires 'parallax' to be explicitly sampled, "
-            "but it is not present in the parameter dict, so it was analytically "
-            "marginalized (e.g. listed in marginalized_names). Set scale_parallax "
-            "to compute the width from a fixed parallax, or keep 'parallax' "
-            "explicitly sampled."
+            f"{type(prior).__name__} requires 'parallax' in the parameter dict, "
+            "but it is missing (it was not sampled explicitly). Set scale_parallax "
+            "to compute the width from a fixed parallax instead."
         )
     return params["parallax"]
 
@@ -244,7 +244,7 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     scale_parallax: ScalarQAngle | None = None
 
     def __check_init__(self) -> None:
-        _check_scale_parallax(self.scale_parallax)
+        _check_scale_parallax_unit(self.scale_parallax)
 
     @property
     def requires(self) -> tuple[str, ...]:
@@ -349,7 +349,7 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     scale_parallax: ScalarQAngle | None = None
 
     def __check_init__(self) -> None:
-        _check_scale_parallax(self.scale_parallax)
+        _check_scale_parallax_unit(self.scale_parallax)
 
     @property
     def requires(self) -> tuple[str, ...]:
