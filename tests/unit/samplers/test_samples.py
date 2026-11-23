@@ -1,5 +1,6 @@
 """Unit tests for Samples container."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -856,6 +857,16 @@ class TestSamplesWrapAngles:
             jnp.mod(ustrip("", via_sqe["phase_peri"]), 1.0),
             jnp.mod(ustrip("", direct["phase_peri"]), 1.0),
         )
+
+    def test_sqrt_ecc_wrap_traces_under_jit(self):
+        """The SqrtEccRV wrap branches on keys and units only, so it jits."""
+        sqe = _make_rv_samples_with_signs([-10.0, 12.0, -8.0]).convert_parameterization(
+            source=StandardRV(), target=SqrtEccRV()
+        )
+        eager = sqe.wrap_angles()
+        jitted = eqx.filter_jit(lambda s: s.wrap_angles())(sqe)
+        for k in ("rv_semiamp", "sqrte_cosw", "sqrte_sinw", "mean_longitude"):
+            assert jnp.allclose(jitted[k].value, eager[k].value)
 
 
 def _make_ti_samples(n: int = 4) -> Samples:

@@ -2501,7 +2501,7 @@ seed another parallel run.
 mcmc_sampler = NumpyroSampler(prior, model)
 mcmc_samples = mcmc_sampler.run(
     data,
-    init_samples=rej_samples,
+    init_samples=rej_samples.wrap_angles(),
     key=jax.random.key(42),
     num_warmup=500,
     num_samples=1000,
@@ -4057,8 +4057,8 @@ samples = sampler.run(
 # --- MCMC continuation ---
 mcmc_sampler = NumpyroSampler(prior, RVModel())
 mcmc_samples = mcmc_sampler.run(
-    data, init_samples=samples, num_chains=4, num_warmup=500, num_samples=2000,
-    key=jax.random.key(42),
+    data, init_samples=samples.wrap_angles(), num_chains=4, num_warmup=500,
+    num_samples=2000, key=jax.random.key(42),
 )
 
 # --- Post-sampling analysis ---
