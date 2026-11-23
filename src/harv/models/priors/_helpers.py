@@ -115,6 +115,7 @@ def _make_pm_prior(
     pm: LinearPriorDist | None = None,
     sigma_vtan: ScalarQSpeed | None = None,
     name: str = "pmra/pmdec",
+    scale_parallax: ScalarQAngle | None = None,
 ) -> LinearPriorDist:
     if pm is not None:
         if sigma_vtan is not None:
@@ -124,7 +125,9 @@ def _make_pm_prior(
         return pm
     if sigma_vtan is None:
         raise TypeError(f"Must specify either an explicit {name} prior or sigma_vtan")
-    return ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)
+    return ParallaxDependentProperMotionPrior(
+        sigma_v0=sigma_vtan, scale_parallax=scale_parallax
+    )
 
 
 def _make_parallax_prior(
@@ -163,6 +166,7 @@ def _make_semi_major_axis_prior(
     semi_major_axis: LinearPriorDist | None = None,
     sigma_a0: ScalarQLength | None = None,
     period_ref: ScalarQTime = Q(1.0, "yr"),
+    scale_parallax: ScalarQAngle | None = None,
 ) -> LinearPriorDist:
     if semi_major_axis is not None:
         if sigma_a0 is not None:
@@ -170,4 +174,6 @@ def _make_semi_major_axis_prior(
         return semi_major_axis
     if sigma_a0 is None:
         raise TypeError("Must specify either semi_major_axis or sigma_a0")
-    return PeriodDependentSemiMajorAxisPrior(sigma_a0=sigma_a0, period_ref=period_ref)
+    return PeriodDependentSemiMajorAxisPrior(
+        sigma_a0=sigma_a0, period_ref=period_ref, scale_parallax=scale_parallax
+    )

@@ -1,5 +1,7 @@
 """Unit tests for GaiaAstrometryModel."""
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpyro.distributions as dist
@@ -12,6 +14,7 @@ from harv.data import GaiaAstrometryData
 from harv.kepler.orbits import thiele_innes_unit
 from harv.models.astrometry import GaiaAstrometryModel
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
+from harv.simulate.astrometry import simulate_gaia_epoch_astrometry
 
 
 def _make_astro_data(n_obs=50):
@@ -426,3 +429,72 @@ class TestMarginalizedLikelihoodMatchesDenseOracle:
         marg = ("ra0", "dec0", "pmra", "pmdec", "ti_A", "ti_B", "ti_F", "ti_G")
         nl = {"period": Q(300.0, "day"), "eccentricity": 0.6, "phase_peri": 0.2}
         self._check(param, nl, self._prior(marg), marg)
+
+
+class TestScaleParallaxMarginalizesParallaxExactly:
+    """With the widths fixed by ``scale_parallax``, ``parallax`` marginalizes exactly.
+
+    The auto-mode likelihood (``parallax`` integrated analytically under its
+    ``HalfNormal`` prior) must equal the numerical integral over ``parallax`` of the
+    likelihood with ``parallax`` explicit, weighted by that same prior. P = 1 yr puts
+    the parallax and orbit columns close together, so their covariance matters.
+    """
+
+    @staticmethod
+    def _prior(param: Any) -> hm.HarvPrior:
+        return param.default_prior(
+            period_min=Q(100.0, "day"),
+            period_max=Q(1000.0, "day"),
+            sigma_a0=Q(1.0, "AU"),
+            sigma_parallax=Q(10.0, "mas"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+            scale_parallax=Q(5.0, "mas"),
+        )
+
+    @pytest.mark.parametrize(
+        ("param", "nl"),
+        [
+            (hm.StandardGaiaAstrometry(), {**_nl_values(), "period": Q(1.0, "yr")}),
+            (
+                ThieleInnesGaiaAstrometry(),
+                {"period": Q(1.0, "yr"), "eccentricity": 0.3, "phase_peri": 0.2},
+            ),
+        ],
+        ids=["standard", "thiele-innes"],
+    )
+    def test_matches_quadrature_over_parallax(self, param, nl):
+        data, _ = simulate_gaia_epoch_astrometry(
+            seed=11,
+            n_obs=40,
+            period=Q(1.0, "yr"),
+            eccentricity=0.2,
+            semi_major_axis=Q(2.0, "mas"),
+            parallax=Q(5.0, "mas"),
+            al_error=Q(0.5, "mas"),
+        )
+        model = GaiaAstrometryModel(parameterization=param)
+        lp = self._prior(param).linear_priors
+        assert "parallax" in model.marginalized_params(lp)
+
+        analytic = model.log_prob(nl, data, linear_priors=lp)
+
+        others = tuple(n for n in model._all_linear_names() if n != "parallax")
+
+        def ln_integrand(plx):
+            ln_like = model.log_prob(
+                nl,
+                data,
+                linear_priors=lp,
+                marginalized_names=others,
+                linear_values={"parallax": plx},
+            )
+            return ln_like + lp["parallax"].distribution.log_prob(plx)
+
+        # The integrand is smooth and ~0 at both ends, where the trapezoid rule
+        # reduces to a plain sum.
+        grid = jnp.linspace(0.0, 60.0, 30_001)
+        ln_f = jax.jit(jax.vmap(ln_integrand))(grid)
+        numeric = jax.scipy.special.logsumexp(ln_f) + jnp.log(grid[1] - grid[0])
+
+        assert float(analytic) == pytest.approx(float(numeric), rel=1e-9, abs=1e-8)

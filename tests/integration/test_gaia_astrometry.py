@@ -4,6 +4,8 @@ These tests validate the end-to-end astrometry path: data simulation,
 likelihood building, and rejection sampling with parameter recovery.
 """
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -130,7 +132,7 @@ class TestGaiaAstrometryRejectionSampler:
         )
         return data, true
 
-    def _make_sampler(self, data):
+    def _make_sampler(self, data, **kwargs: Any):
         prior = hm.StandardGaiaAstrometry().default_prior(
             period_min=Q(0.3, "yr"),
             period_max=Q(3.0, "yr"),
@@ -138,6 +140,7 @@ class TestGaiaAstrometryRejectionSampler:
             sigma_parallax=Q(100.0, "mas"),
             sigma_pos=Q(1e3, "mas"),
             sigma_vtan=Q(200.0, "km/s"),
+            **kwargs,
         )
         return RejectionSampler(prior, GaiaAstrometryModel(), batch_size=10_000), data
 
@@ -176,6 +179,20 @@ class TestGaiaAstrometryRejectionSampler:
             "semi_major_axis",
         ):
             assert lin_key in keys, f"Missing key: {lin_key}"
+
+    def test_scale_parallax_marginalizes_parallax(self, sim_data):
+        """Fixed-parallax widths: parallax is marginalized, then drawn per sample."""
+        data, true = sim_data
+        sampler, data = self._make_sampler(data, scale_parallax=true["parallax"])
+        assert "marginalized" in next(
+            line for line in sampler.summary().splitlines() if "parallax" in line
+        )
+        samples = sampler.run(data, n_prior_samples=50_000, key=jax.random.key(45))
+
+        assert samples.n_samples > 0
+        plx = np.asarray(_ustrip("mas", samples["parallax"]))
+        assert np.all(plx > 0)  # drawn from the truncated conditional
+        assert abs(np.median(plx) - float(_ustrip("mas", true["parallax"]))) < 0.5
 
     def test_reproducibility(self, sim_data):
         """Same seed produces identical samples."""

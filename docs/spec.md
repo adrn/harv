@@ -771,21 +771,29 @@ where the Thiele-Innes orbital element combines the (A, B, F, G) constants
 with the X, Y orbital coordinates.
 
 `default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
-sigma_vtan, period_ref=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
+sigma_vtan, period_ref=Q(1, "yr"), scale_parallax=None, **kwargs)` returns a
+`HarvPrior` with:
 
 - `period`, `eccentricity`, `phase_peri`, `arg_peri`: same defaults as
   `StandardRV.default_prior`
 - `cos_i`: `Uniform(-1, 1)`
 - `lon_asc_node`: `Uniform(0, 2π)`
-- `semi_major_axis`: `PeriodDependentSemiMajorAxisPrior(sigma_a0, period_ref)` — a
-  callable that scales the semi-major axis prior with period and parallax
-- `parallax`: `QD(HalfNormal(sigma_parallax), "mas")` — explicitly sampled
-  (not marginalized) by default, because the Gaia catalog parallax is derived
-  from the same epoch data
+- `semi_major_axis`: `PeriodDependentSemiMajorAxisPrior(sigma_a0, period_ref,
+  scale_parallax)` — a callable that scales the semi-major axis prior with period
+  and parallax
+- `parallax`: `QD(HalfNormal(sigma_parallax), "mas")` — marginalizable, but
+  explicitly sampled by default because the `semi_major_axis` and proper-motion
+  callables read its sampled value (§Linear prior classification, *Pinned*)
 - `ra0`, `dec0`: `QD(Normal(0, sigma_pos), "mas")`
-- `pmra`, `pmdec`: `ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan)` —
-  a callable that scales the proper-motion prior with parallax, keeping the
-  prior fixed in velocity space
+- `pmra`, `pmdec`: `ParallaxDependentProperMotionPrior(sigma_v0=sigma_vtan,
+  scale_parallax=scale_parallax)` — a callable that scales the proper-motion prior
+  with parallax, keeping the prior fixed in velocity space
+
+`scale_parallax` (an angle, default `None`) is passed to the three callables. When
+set, their widths use this fixed parallax (e.g. the catalog value) instead of the
+sampled one, nothing reads `parallax`, and auto mode marginalizes it under its own
+`HalfNormal(sigma_parallax)` prior. The value sets the widths only and never becomes
+a prior on `parallax`. See §`PeriodDependentSemiMajorAxisPrior` for when to use it.
 
 Any nonlinear or linear prior can be overridden by name via `**kwargs`. When a
 linear prior is supplied directly (e.g. `parallax=QD(...)`), the corresponding
@@ -848,14 +856,16 @@ or the convenience wrapper `samples.thiele_innes_to_campbell()`.
 RV+astrometry fits must use `StandardGaiaAstrometry`.
 
 `default_prior(*, period_min, period_max, sigma_a0, sigma_parallax, sigma_pos,
-sigma_vtan, period_ref=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
+sigma_vtan, period_ref=Q(1, "yr"), scale_parallax=None, **kwargs)` returns a
+`HarvPrior` with:
 
 - Nonlinear: `period` (log-uniform), `eccentricity` (Kipping 2013),
   `phase_peri` (`Uniform(0, 1)`).
 - Linear: `ra0`, `dec0`, `pmra`, `pmdec`, `parallax` -- same defaults as
-  `StandardGaiaAstrometry.default_prior`.
+  `StandardGaiaAstrometry.default_prior`, including `scale_parallax`.
 - Linear (TI constants): `ti_A`, `ti_B`, `ti_F`, `ti_G` -- each gets a
-  `PeriodDependentSemiMajorAxisPrior(sigma_a0, period_ref)` callable, mirroring the
+  `PeriodDependentSemiMajorAxisPrior(sigma_a0, period_ref, scale_parallax)` callable,
+  mirroring the
   default on `StandardGaiaAstrometry.semi_major_axis`.  The four TI constants
   are linear projections of the angular semi-major axis onto the (RA, Dec)
   sky plane modulated by `sin`/`cos` of the orientation angles, so each is
@@ -864,7 +874,9 @@ sigma_vtan, period_ref=Q(1, "yr"), **kwargs)` returns a `HarvPrior` with:
   is a length).
 
 The Jacobian correction (`apply_jacobian_correction=True`) restores the
-correct posterior under a flat-Campbell-elements prior.
+correct posterior under a flat-Campbell-elements prior. With `scale_parallax` set,
+the correction is evaluated at the parallax-marginalized conditional mean rather
+than at each sampled parallax; both are zeroth-order approximations.
 
 ### `FourierRV` and `FourierGaiaAstrometry` (Kepler-free)
 
@@ -1223,7 +1235,9 @@ explicitly sampled, because a marginalized parameter has no sampled value for th
 callable to read. This is what keeps `parallax` explicit under
 `StandardGaiaAstrometry.default_prior` — `PeriodDependentSemiMajorAxisPrior` and
 `ParallaxDependentProperMotionPrior` both read it — while signed SB2
-semi-amplitudes, which nothing reads, are marginalized. Keys may be
+semi-amplitudes, which nothing reads, are marginalized. Passing `scale_parallax`
+to the Gaia `default_prior` removes the dependency (the callables then omit
+`parallax` from `requires`), so `parallax` is marginalized. Keys may be
 component-qualified (`"astro.parallax"`), so a dependency resolves inside the
 declaring prior's namespace first and then at the top level.
 
@@ -1284,14 +1298,15 @@ components need not agree on a parameterization, so no derivation is attempted t
 
 The second bullet is why `parallax` is readable by callable priors: it is sampled
 explicitly rather than marginalized. A callable declares what it reads via an
-optional `requires` attribute, and any linear parameter named there is pinned to
-explicit sampling (see §Linear prior classification):
+optional `requires` attribute (a class attribute or a property), and any linear
+parameter named there is pinned to explicit sampling (see §Linear prior
+classification):
 
-| callable                            | `requires`                              |
-| ----------------------------------- | --------------------------------------- |
-| `PeriodDependentKPrior`             | `("period", "eccentricity")`            |
-| `PeriodDependentSemiMajorAxisPrior` | `("period", "eccentricity", "parallax")`|
-| `ParallaxDependentProperMotionPrior`| `("parallax",)`                         |
+| callable                            | `requires`                                                        |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `PeriodDependentKPrior`             | `("period", "eccentricity")`                                      |
+| `PeriodDependentSemiMajorAxisPrior` | `("period", "eccentricity", "parallax")`; without `"parallax"` when `scale_parallax` is set |
+| `ParallaxDependentProperMotionPrior`| `("parallax",)`; `()` when `scale_parallax` is set                |
 
 A callable may also declare `support`, one of `"real"` (the default),
 `"positive"` or `"negative"`, saying which support the distribution it returns
@@ -1422,8 +1437,8 @@ systemic velocity.
   `dict[str, dict[str, jax.Array]]` keyed by component name.
 - `numpyro_model(nonlinear_priors, data, linear_priors, *, marginalized=True)` -- builds
   a joint numpyro model.
-  **Explicit linear routing:** Non-Gaussian linear priors (e.g. HalfNormal parallax)
-  are sampled alongside nonlinear params and appear in the flat `nonlinear_values` dict.
+  **Explicit linear routing:** Explicitly sampled linear parameters (e.g. a parallax
+  pinned by the Gaia default callables) are sampled alongside nonlinear params and appear in the flat `nonlinear_values` dict.
   `JointModel._route_explicit_linear` copies them to the correct component's dict.
 
 ### Tied linear parameters
@@ -1502,7 +1517,10 @@ with `a / ϖ` read as AU. `rv_semiamp_per_semi_major_axis(params)`
 `requires = ("period", "eccentricity", "cos_i", "parallax")`. `c` divides by the
 parallax, so its prior must have positive support (the default `HalfNormal` does): a
 negative parallax draw flips the sign of the tie, which is exactly the mirror orbit
-the tie excludes.
+the tie excludes. The tie reads the *sampled* parallax, so a tied fit keeps
+`astro.parallax` pinned even when the Gaia widths use `scale_parallax`. A fixed
+parallax in `c` would not just misjudge a prior width, it would put the error of that
+parallax straight into `K / a`.
 
 `JointModel.for_rv_and_gaia` requires every component to be an `RVModel` with
 `StandardRV` or a `GaiaAstrometryModel` with `StandardGaiaAstrometry` (`TypeError`
@@ -1670,14 +1688,41 @@ and accounts for the distance dependence of angular semi-major axis. Unlike the 
 amplitude, there is **no eccentricity dependence**.
 
 `__call__` receives a `dict[str, Any]` containing `"period"`, `"eccentricity"`, and
-`"parallax"` (parallax is available because it is explicitly sampled by default) and
-returns `QD(dist.Normal(0, σ_a_stripped), "mas")`.  Raises `KeyError` if `parallax` has
-been analytically marginalized away.
+`"parallax"`, and returns `QD(dist.Normal(0, σ_a_stripped), unit)` in the unit of the
+parallax used for `ϖ`. It reads the sampled `"parallax"` unless `scale_parallax` is
+set, and raises `KeyError` if it needs that value and `parallax` has been
+analytically marginalized away.
 
 Fields:
 
 - `sigma_a0: Q["length"]` — semi-major axis scale at reference period (e.g. AU)
 - `period_ref: Q["time"]` — reference period
+- `scale_parallax: Q["angle"] | None = None` — a fixed parallax for `ϖ`
+
+**Fixed-parallax widths.** By default `ϖ` is the sampled parallax, which pins
+`parallax` to explicit sampling (`requires`). For a parallax measured to `σ_ϖ` under
+a prior of width `σ_prior`, sampling it costs the rejection sampler a factor of about
+`σ_prior / (√2 σ_ϖ)` in efficiency, whether or not an orbit is detected. With
+`scale_parallax` set (e.g. to the catalog parallax), `requires` drops `"parallax"`
+and the parallax is marginalized under its own prior. The joint linear prior is then
+(truncated) Gaussian, so the parallax is integrated out exactly, including its
+covariance with `semi_major_axis` (or the Thiele-Innes constants) near `P = 1 yr`.
+The one approximation is in the widths, which are off by the fractional error of
+`scale_parallax`. A catalog parallax that absorbed part of an unmodeled orbit is off
+by at most about `a₀`. Guidance:
+
+- use it when `σ_ϖ / ϖ ≲ 0.1`; otherwise sample the parallax, which then costs less;
+- keep the broad prior on `parallax` itself; `scale_parallax` sets widths only and is
+  not a prior on `parallax`;
+- afterwards, compare the posterior parallax with `scale_parallax`.
+
+The marginalized `HalfNormal` parallax is support-constrained, so it leaves the
+plain-Gaussian fast path and takes one of the two exact constrained-parameter slots
+(§Support-constrained and mixture linear priors). In `default_prior`,
+`scale_parallax` reaches only the default callables; a prior passed by name is used
+as given. `scale_parallax` must be a positive angle: `__check_init__` raises
+`TypeError` for a non-angle and, per §Trace-friendly validation, uses `eqx.error_if`
+for a value `≤ 0`.
 
 ### `ParallaxDependentProperMotionPrior`
 
@@ -1697,14 +1742,17 @@ the same angular unit as the parallax per year.
 This keeps the velocity prior constant across distances — a source at larger
 distance (smaller parallax) gets a proportionally smaller proper motion prior scale.
 
-`__call__` receives a `dict[str, Any]` containing `"parallax"` (parallax is available
-because it is explicitly sampled by default) and returns
-`QD(dist.Normal(0, σ_μ), parallax_unit + "/yr")`.  Raises `KeyError` if `parallax` has
-been analytically marginalized away.
+`__call__` receives a `dict[str, Any]` containing `"parallax"` and returns
+`QD(dist.Normal(0, σ_μ), parallax_unit + "/yr")`, where `parallax_unit` is the unit
+of the parallax used for `ϖ`. It reads the sampled `"parallax"` unless
+`scale_parallax` is set, and raises `KeyError` if it needs that value and `parallax`
+has been analytically marginalized away.
 
 Fields:
 
 - `sigma_v0: Q["speed"]` — velocity dispersion scale (e.g. km/s)
+- `scale_parallax: Q["angle"] | None = None` — a fixed parallax for `ϖ`; see
+  *Fixed-parallax widths* under §`PeriodDependentSemiMajorAxisPrior`
 
 ______________________________________________________________________
 

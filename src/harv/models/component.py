@@ -224,8 +224,9 @@ class AbstractComponentModel(eqx.Module):
 
         Given a (resolved) ``linear_priors`` dict, returns all nonlinear
         parameters (orbital + extension, e.g. jitter) plus any linear
-        parameters with non-Gaussian priors (e.g. parallax with a HalfNormal
-        prior) that cannot be analytically marginalized.
+        parameters that are not analytically marginalized: those whose prior
+        cannot be, and those another prior reads (e.g. the Gaia default
+        ``parallax``; see :meth:`_auto_marginalized_names`).
 
         These are the keys that must appear in the ``values`` dict passed to
         :meth:`log_prob`.

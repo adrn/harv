@@ -225,6 +225,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
         sigma_pos: ScalarQAngle | None = None,
         sigma_vtan: ScalarQSpeed | None = None,
         period_ref: ScalarQTime = Q(1.0, "yr"),
+        scale_parallax: ScalarQAngle | None = None,
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
@@ -243,9 +244,10 @@ class StandardGaiaAstrometry(AbstractParameterization):
         - ``pmra``, ``pmdec``:
           :class:`~harv.models.priors.callables.ParallaxDependentProperMotionPrior`,
           which holds the prior fixed in velocity space.
-        - ``parallax``: ``HalfNormal(sigma_parallax)`` in mas.  Non-Gaussian, so
-          it is *sampled explicitly* rather than analytically marginalized --
-          the catalog parallax is derived from the same epoch data.
+        - ``parallax``: ``HalfNormal(sigma_parallax)`` in mas.  Marginalizable, but
+          *sampled explicitly* by default because the proper-motion and
+          semi-major-axis widths read its sampled value (their ``requires``); with
+          ``scale_parallax`` set nothing reads it and it is marginalized.
         - ``semi_major_axis``:
           :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`.
 
@@ -266,10 +268,41 @@ class StandardGaiaAstrometry(AbstractParameterization):
             ``ParallaxDependentProperMotionPrior``.
         period_ref
             Reference period for the period-dependent ``semi_major_axis`` prior.
+        scale_parallax
+            A fixed parallax (e.g. the catalog value) for the proper-motion and
+            semi-major-axis widths, instead of the sampled ``parallax``.  ``parallax``
+            keeps its own ``HalfNormal(sigma_parallax)`` prior and is then
+            analytically marginalized, which removes a sampled dimension.  Use it
+            when the parallax is measured to about 10% or better, and afterwards
+            compare the posterior parallax with this value; the widths are off by
+            its fractional error.  ``None`` (the default) samples the parallax.
+            It applies to the default callables only; a prior passed by name is
+            used as given.  The marginalized ``HalfNormal`` parallax takes the
+            truncated-prior path, which is about 30% slower per evaluation and
+            uses one of its two exact support-constrained slots.
         **kwargs
             Per-parameter prior overrides or extension priors.  Supplying a
             linear prior by name (e.g. ``parallax=QD(...)``) means its scale
             argument must be omitted.
+
+        Examples
+        --------
+        >>> from unxt import Q
+        >>> import harv.models as hm
+        >>> from harv.models._helpers import pinned_linear_names
+        >>> scales = dict(
+        ...     period_min=Q(10, "day"), period_max=Q(1000, "day"),
+        ...     sigma_a0=Q(1.0, "AU"), sigma_parallax=Q(10.0, "mas"),
+        ...     sigma_pos=Q(100.0, "mas"), sigma_vtan=Q(50.0, "km/s"),
+        ... )
+        >>> prior = hm.StandardGaiaAstrometry().default_prior(**scales)
+        >>> sorted(pinned_linear_names(prior.linear_priors))
+        ['parallax']
+        >>> prior = hm.StandardGaiaAstrometry().default_prior(
+        ...     **scales, scale_parallax=Q(2.16, "mas")
+        ... )
+        >>> sorted(pinned_linear_names(prior.linear_priors))
+        []
         """
         nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
@@ -293,10 +326,16 @@ class StandardGaiaAstrometry(AbstractParameterization):
                 pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
             ),
             "pmra": _make_pm_prior(
-                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+                pm=kwargs.pop("pmra", None),
+                sigma_vtan=sigma_vtan,
+                name="pmra",
+                scale_parallax=scale_parallax,
             ),
             "pmdec": _make_pm_prior(
-                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+                pm=kwargs.pop("pmdec", None),
+                sigma_vtan=sigma_vtan,
+                name="pmdec",
+                scale_parallax=scale_parallax,
             ),
             "parallax": _make_parallax_prior(
                 parallax=kwargs.pop("parallax", None),
@@ -306,6 +345,7 @@ class StandardGaiaAstrometry(AbstractParameterization):
                 semi_major_axis=kwargs.pop("semi_major_axis", None),
                 sigma_a0=sigma_a0,
                 period_ref=period_ref,
+                scale_parallax=scale_parallax,
             ),
         }
         extension_priors: dict[str, PriorDist] = {}
@@ -620,6 +660,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         sigma_pos: ScalarQAngle | None = None,
         sigma_vtan: ScalarQSpeed | None = None,
         period_ref: ScalarQTime = Q(1.0, "yr"),
+        scale_parallax: ScalarQAngle | None = None,
         **kwargs: PriorDist | LinearPriorDist,
     ) -> "HarvPrior":
         """Build a :class:`~harv.models.priors.HarvPrior` with sensible defaults.
@@ -643,6 +684,12 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
         (:meth:`linear_log_prior_correction`, active when
         ``apply_jacobian_correction=True``) restores the correct posterior
         under a flat-Campbell-elements prior.
+
+        ``scale_parallax`` works as in :meth:`StandardGaiaAstrometry.default_prior`:
+        it sets the proper-motion and Thiele-Innes widths from a fixed parallax, so
+        ``parallax`` is marginalized.  With the Jacobian correction on, the
+        correction is then evaluated at the parallax-marginalized conditional mean
+        rather than at each sampled parallax; both are zeroth-order approximations.
         """
         nonlinear: dict[str, NonlinearPriorDist] = {
             "period": _make_period_prior(
@@ -661,10 +708,16 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 pos=kwargs.pop("dec0", None), sigma_pos=sigma_pos, name="dec0"
             ),
             "pmra": _make_pm_prior(
-                pm=kwargs.pop("pmra", None), sigma_vtan=sigma_vtan, name="pmra"
+                pm=kwargs.pop("pmra", None),
+                sigma_vtan=sigma_vtan,
+                name="pmra",
+                scale_parallax=scale_parallax,
             ),
             "pmdec": _make_pm_prior(
-                pm=kwargs.pop("pmdec", None), sigma_vtan=sigma_vtan, name="pmdec"
+                pm=kwargs.pop("pmdec", None),
+                sigma_vtan=sigma_vtan,
+                name="pmdec",
+                scale_parallax=scale_parallax,
             ),
             "parallax": _make_parallax_prior(
                 parallax=kwargs.pop("parallax", None),
@@ -679,6 +732,7 @@ class ThieleInnesGaiaAstrometry(AbstractParameterization):
                 semi_major_axis=override,
                 sigma_a0=None if override is not None else sigma_a0,
                 period_ref=period_ref,
+                scale_parallax=scale_parallax,
             )
         extension_priors: dict[str, PriorDist] = {}
         _apply_overrides(kwargs, nonlinear, linear_priors, extension_priors)

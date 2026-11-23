@@ -6,7 +6,7 @@ import equinox as eqx
 import numpyro.distributions as dist
 from unxt import ustrip
 
-from harv.custom_types import ScalarQLength, ScalarQSpeed, ScalarQTime
+from harv.custom_types import ScalarQAngle, ScalarQLength, ScalarQSpeed, ScalarQTime
 from harv.distributions import QuantityDistribution
 
 __all__ = (
@@ -126,6 +126,42 @@ class PeriodDependentKPrior(eqx.Module):
         return QuantityDistribution(truncated, unit)
 
 
+def _check_scale_parallax(scale_parallax: Any) -> None:
+    """Validate ``scale_parallax``; see spec §Trace-friendly validation."""
+    if scale_parallax is None:
+        return
+    if not (
+        hasattr(scale_parallax, "unit") and scale_parallax.unit.is_equivalent("mas")
+    ):
+        msg = (
+            "scale_parallax must be an angle, e.g. Q(2.16, 'mas'); "
+            f"got {scale_parallax!r}"
+        )
+        raise TypeError(msg)
+    plx = ustrip("mas", scale_parallax)
+    eqx.error_if(
+        plx,
+        plx <= 0,
+        "scale_parallax must be positive. For a parallax that is not measured to "
+        "about 10% or better, leave scale_parallax unset and sample the parallax.",
+    )
+
+
+def _width_parallax(prior: Any, params: dict[str, Any]) -> Any:
+    """The parallax that sets the width: ``scale_parallax``, else the sampled one."""
+    if prior.scale_parallax is not None:
+        return prior.scale_parallax
+    if "parallax" not in params:
+        raise KeyError(
+            f"{type(prior).__name__} requires 'parallax' to be explicitly sampled, "
+            "but it is not present in the parameter dict, so it was analytically "
+            "marginalized (e.g. listed in marginalized_names). Set scale_parallax "
+            "to compute the width from a fixed parallax, or keep 'parallax' "
+            "explicitly sampled."
+        )
+    return params["parallax"]
+
+
 class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     r"""Period- and parallax-dependent semi-major axis prior for astrometry.
 
@@ -150,16 +186,30 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
         period ``period_ref``.  Converted to angular size via the parallax.
     period_ref
         Reference period.
+    scale_parallax
+        A fixed parallax (e.g. the catalog value) for :math:`\varpi` in the width,
+        used instead of the sampled ``parallax``.  ``None`` (the default) reads the
+        sampled value.  When set, nothing reads ``parallax``, so it is analytically
+        marginalized; see the Notes.
 
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_priors`` for ``semi_major_axis`` returned by
-    :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
+    :meth:`~harv.models.StandardGaiaAstrometry.default_prior`.
 
-    The ``params`` dict must contain ``"period"``, ``"eccentricity"``, and
-    ``"parallax"``.  ``parallax`` is available because it is classified
-    as an explicit (non-marginalized) linear parameter by default.
+    The ``params`` dict must contain ``"period"`` and, unless ``scale_parallax``
+    is set, ``"parallax"``.  Reading the sampled parallax pins it to explicit
+    sampling (see ``requires``), which costs the rejection sampler a factor of
+    about :math:`\sigma_{\rm prior} / (\sqrt{2}\,\sigma_\varpi)` in efficiency for a
+    parallax measured to :math:`\sigma_\varpi`.
+
+    With ``scale_parallax`` set the parallax is marginalized exactly, including its
+    covariance with the semi-major axis; the only approximation is that the width
+    is off by the fractional error of ``scale_parallax``.  Use it when
+    :math:`\sigma_\varpi / \varpi \lesssim 0.1`, keep the broad prior on
+    ``parallax`` itself, and afterwards compare the posterior parallax with
+    ``scale_parallax``.
 
     Examples
     --------
@@ -176,19 +226,37 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
     ... )
     >>> qd.unit
     'mas'
+
+    A fixed parallax for the width drops ``parallax`` from ``requires``:
+
+    >>> prior.requires
+    ('period', 'eccentricity', 'parallax')
+    >>> fixed = PeriodDependentSemiMajorAxisPrior(
+    ...     sigma_a0=Q(5.0, "AU"), period_ref=Q(1.0, "yr"),
+    ...     scale_parallax=Q(10.0, "mas"),
+    ... )
+    >>> fixed.requires
+    ('period', 'eccentricity')
     """
 
     sigma_a0: ScalarQLength
     period_ref: ScalarQTime
+    scale_parallax: ScalarQAngle | None = None
 
-    requires: ClassVar[tuple[str, ...]] = ("period", "eccentricity", "parallax")
-    """Parameter values this prior reads; see ``pinned_linear_names``.
+    def __check_init__(self) -> None:
+        _check_scale_parallax(self.scale_parallax)
 
-    Naming ``parallax`` here is what keeps it explicitly sampled: the
-    auto-classification pins any linear parameter another prior reads, so
-    ``parallax`` is not marginalized out from under this callable even though its
-    ``HalfNormal`` prior is marginalizable in itself.
-    """
+    @property
+    def requires(self) -> tuple[str, ...]:
+        """Parameter values this prior reads; see ``pinned_linear_names``.
+
+        Naming ``parallax`` here is what keeps it explicitly sampled: the
+        auto-classification pins any linear parameter another prior reads. With
+        ``scale_parallax`` set the width does not read it, so it is marginalized.
+        """
+        if self.scale_parallax is None:
+            return ("period", "eccentricity", "parallax")
+        return ("period", "eccentricity")
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -197,25 +265,16 @@ class PeriodDependentSemiMajorAxisPrior(eqx.Module):
         ----------
         params
             Parameter values keyed by bare parameter name.  Must contain
-            ``"period"`` (``Quantity``), ``"eccentricity"`` (float), and
+            ``"period"`` (``Quantity``) and, unless ``scale_parallax`` is set,
             ``"parallax"`` (``Quantity``).
 
         Returns
         -------
         QuantityDistribution
-            Prior over the astrometric semi-major axis, in the same
-            angular unit as ``params["parallax"]``.
+            Prior over the astrometric semi-major axis, in the same angular unit
+            as the parallax that sets the width.
         """
-        if "parallax" not in params:
-            raise KeyError(
-                "PeriodDependentSemiMajorAxisPrior requires 'parallax' to be "
-                "explicitly sampled, but it is not present in the parameter dict. "
-                "This happens when 'parallax' has a Gaussian (Normal) prior and is "
-                "analytically marginalized. Override 'semi_major_axis' with an "
-                "explicit prior, or use a non-Gaussian parallax prior "
-                "(e.g., HalfNormal)."
-            )
-        parallax = params["parallax"]
+        parallax = _width_parallax(self, params)
         P_ratio = ustrip("", params["period"] / self.period_ref)
         # By the definition of parallax (varpi == 1 AU / d), the angular
         # semi-major axis is a_angular = a_physical [AU] * varpi [angle].
@@ -248,16 +307,23 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     ----------
     sigma_v0
         Transverse-velocity dispersion scale (e.g. km/s).
+    scale_parallax
+        A fixed parallax (e.g. the catalog value) for :math:`\varpi` in the width,
+        used instead of the sampled ``parallax``.  ``None`` (the default) reads the
+        sampled value.  When set, nothing reads ``parallax``, so it is analytically
+        marginalized; see
+        :class:`~harv.models.priors.callables.PeriodDependentSemiMajorAxisPrior`
+        for when to use it.
 
     Notes
     -----
     This class implements the ``LinearPriorCallable`` protocol
     and is the default ``linear_priors`` for ``pmra`` and ``pmdec`` returned by
-    :meth:`~harv.models.priors.HarvPrior.default_gaia_astrometry`.
+    :meth:`~harv.models.StandardGaiaAstrometry.default_prior`.
 
     The ``params`` dict must contain ``"parallax"`` (``Quantity`` with angular
-    units).  ``parallax`` is available because it is classified as an
-    explicit (non-marginalized) linear parameter by default.
+    units) unless ``scale_parallax`` is set.  Reading the sampled parallax pins it
+    to explicit sampling (see ``requires``).
 
     Examples
     --------
@@ -270,12 +336,25 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
     >>> qd = prior({"parallax": Q(10.0, "mas")})
     >>> qd.unit
     'mas/yr'
+
+    >>> prior.requires
+    ('parallax',)
+    >>> ParallaxDependentProperMotionPrior(
+    ...     sigma_v0=Q(50.0, "km/s"), scale_parallax=Q(10.0, "mas")
+    ... ).requires
+    ()
     """
 
     sigma_v0: ScalarQSpeed
+    scale_parallax: ScalarQAngle | None = None
 
-    requires: ClassVar[tuple[str, ...]] = ("parallax",)
-    """Parameter values this prior reads; see ``pinned_linear_names``."""
+    def __check_init__(self) -> None:
+        _check_scale_parallax(self.scale_parallax)
+
+    @property
+    def requires(self) -> tuple[str, ...]:
+        """Parameter values this prior reads; see ``pinned_linear_names``."""
+        return ("parallax",) if self.scale_parallax is None else ()
 
     def __call__(self, params: dict[str, Any]) -> QuantityDistribution:
         r"""Return the linear prior conditioned on nonlinear parameters.
@@ -284,25 +363,17 @@ class ParallaxDependentProperMotionPrior(eqx.Module):
         ----------
         params
             Parameter values keyed by bare parameter name.  Must contain
-            ``"parallax"`` (``Quantity``).
+            ``"parallax"`` (``Quantity``) unless ``scale_parallax`` is set.
 
         Returns
         -------
         QuantityDistribution
-            Prior over the proper-motion component, in units of
-            ``params["parallax"].unit + "/yr"``.
+            Prior over the proper-motion component, in the angular unit of the
+            parallax that sets the width, per year.
         """
+        parallax = _width_parallax(self, params)
         # Convert velocity to AU/yr so that (AU/yr) x parallax [angle]
         # gives angular speed [angle/yr].
-        if "parallax" not in params:
-            raise KeyError(
-                "ParallaxDependentProperMotionPrior requires 'parallax' to be "
-                "explicitly sampled, but it is not present in the parameter dict. "
-                "This happens when 'parallax' has a Gaussian (Normal) prior and is "
-                "analytically marginalized. Override 'pmra'/'pmdec' with explicit "
-                "priors, or use a non-Gaussian parallax prior (e.g. HalfNormal)."
-            )
-        parallax = params["parallax"]
         sigma_v_au_yr = ustrip("AU/yr", self.sigma_v0)
         plx_unit = str(parallax.unit)
         plx_val = ustrip(plx_unit, parallax)
