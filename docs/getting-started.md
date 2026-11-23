@@ -111,5 +111,10 @@ samples = sampler.run(
     max_posterior_samples=128,
 )
 mcmc_sampler = NumpyroSampler(prior, harv.RVModel())
-mcmc_samples = mcmc_sampler.run(data, key=jax.random.key(0), init_samples=samples)
+# wrap_angles() starts every chain on the same side of the K -> -K degeneracy
+mcmc_samples = mcmc_sampler.run(
+    data, key=jax.random.key(0), init_samples=samples.wrap_angles()
+)
 ```
+
+See the sign-degeneracy section of the [sharp bits](sharp-bits.md) for why.

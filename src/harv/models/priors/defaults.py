@@ -61,14 +61,13 @@ def default_sb2_prior(
     The constrained priors are still marginalized analytically (see
     :mod:`harv.stats.marginalized`).
 
-    :meth:`~harv.samplers.Samples.wrap_angles` also repairs the sign pattern
-    after the fact -- the shared ``arg_peri`` shift flips both semi-amplitudes
-    together -- so the sign prior is not the only route to a canonical answer.
-    It is the route that avoids spending prior volume and acceptance on the
-    mirror branch in the first place, and it additionally excludes the
-    unphysical same-sign region, which the ``arg_peri`` symmetry cannot fix
-    because it flips both semi-amplitudes at once. Under the signed prior
-    ``wrap_angles`` is a no-op.
+    :meth:`~harv.samplers.Samples.wrap_angles` also repairs the mirror branch
+    after the fact (the shared ``arg_peri`` shift flips both semi-amplitudes
+    together), and the sign-free prior accepts about twice as many rejection
+    samples, since mirror-branch draws are valid once wrapped. What the sign
+    prior adds is the exclusion of the unphysical same-sign region, which the
+    ``arg_peri`` symmetry cannot remove because it flips both semi-amplitudes
+    at once. Under the signed prior ``wrap_angles`` is a no-op.
 
     Pass ``signed_semiamp=False`` for the older sign-free behaviour.
 

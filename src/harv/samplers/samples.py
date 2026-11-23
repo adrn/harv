@@ -4,6 +4,7 @@ This module provides the Samples class which stores posterior samples from
 rejection sampling with dict-like access, unit handling, and analysis tools.
 """
 
+import dataclasses
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -865,9 +866,15 @@ class Samples(eqx.Module):
         key (insertion order) triggers step 1; ``semi_major_axis`` triggers
         step 1 only when no ``rv_semiamp`` is present (astrometry-only fits).
 
-        No-op when ``arg_peri`` is absent from ``nonlinear``, when neither
-        ``rv_semiamp`` nor ``semi_major_axis`` is in ``linear``, or when no
-        entries are negative.
+        :class:`~harv.models.parameterizations.rv.SqrtEccRV` samples carry no
+        ``arg_peri``; there the same ``omega -> omega + pi`` twin is
+        ``(sqrte_cosw, sqrte_sinw, mean_longitude, K) ->
+        (-sqrte_cosw, -sqrte_sinw, mean_longitude + pi, -K)``, with
+        ``mean_longitude`` wrapped to ``[0, 2*pi)``.
+
+        No-op when neither ``arg_peri`` nor the ``SqrtEccRV`` angles are in
+        ``nonlinear``, when neither ``rv_semiamp`` nor ``semi_major_axis`` is in
+        ``linear``, or when no entries are negative.
 
         Raises
         ------
@@ -901,7 +908,7 @@ class Samples(eqx.Module):
         # not the default for any joint factory, so out-of-scope here.
         omega_keys = _find_namespaced_keys(self.nonlinear, "arg_peri")
         if not omega_keys:
-            return self
+            return self._wrap_sqrt_ecc_angles()
         if len(omega_keys) > 1:
             msg = (
                 "wrap_angles does not yet support multiple per-component "
@@ -990,6 +997,32 @@ class Samples(eqx.Module):
             ln_likelihood=self.ln_likelihood,
             ln_prior=self.ln_prior,
         )
+
+    def _wrap_sqrt_ecc_angles(self) -> "Samples":
+        """``wrap_angles`` for ``SqrtEccRV``, which has no ``arg_peri`` to shift.
+
+        ``omega -> omega + pi`` negates ``(sqrte_cosw, sqrte_sinw)`` and moves
+        ``mean_longitude`` by ``pi``, leaving ``phase_peri`` unchanged, so it
+        flips every ``rv_semiamp``.  No-op unless all three angles and an
+        ``rv_semiamp`` are present.
+        """
+        K_keys = _find_namespaced_keys(self.linear, "rv_semiamp")
+        if not K_keys or not all(k in self.nonlinear for k in _SQRT_ECC_PHASE_KEYS):
+            return self
+        trigger = self.linear[K_keys[0]]
+        flip = ustrip(str(trigger.unit), trigger) < 0
+
+        new_lin = dict(self.linear)
+        new_nl = dict(self.nonlinear)
+        for d, keys in ((new_lin, K_keys), (new_nl, ("sqrte_cosw", "sqrte_sinw"))):
+            for k in keys:
+                v_val = ustrip(str(d[k].unit), d[k])
+                d[k] = Q(jnp.where(flip, -v_val, v_val), d[k].unit)
+
+        new_nl["mean_longitude"] = _shift_half_turn(
+            self.nonlinear["mean_longitude"], flip
+        )
+        return dataclasses.replace(self, nonlinear=new_nl, linear=new_lin)
 
     def with_astrometric_mirror(self) -> "Samples":
         """These samples followed by their astrometric mirror orbits.

@@ -52,6 +52,15 @@ from harv.samplers.samples import MIN_EVIDENCE_ESS, Samples, _assess_resolution
 
 __all__ = ("RejectionSampler",)
 
+# Frames skipped so a warning lands on the caller's line rather than inside harv.
+# A fixed stacklevel cannot do it: equinox's method wrappers interleave with
+# harv's frames, so the depth differs by entry point. The trailing separator
+# keeps a sibling package such as ``harv_hq`` from matching the ``harv`` prefix.
+_CALLER_FRAME_SKIP = (
+    str(Path(__file__).parents[1]) + os.sep,
+    str(Path(eqx.__file__).parent) + os.sep,
+)
+
 
 class _PreparedSamplerModel(NamedTuple):
     """Normalized model-preparation bundle shared across sampler entry paths."""
@@ -734,18 +743,9 @@ class RejectionSampler(AbstractSampler):
             min_evidence_ess=self.min_evidence_ess,
         )
         if not well_resolved:
-            # Attribute the warning to the caller's line rather than to harv.
-            # A fixed stacklevel cannot do it: this runs inside
-            # _finalize_posterior, under run() or run_with_samples(), with
-            # equinox's method wrappers interleaved, so the depth differs by
-            # entry point. Skip both packages' frames instead.
+            # Runs inside _finalize_posterior, under run() or run_with_samples().
             warnings.warn(
-                resolution_msg,
-                UserWarning,
-                skip_file_prefixes=(
-                    str(Path(__file__).parents[1]),
-                    str(Path(eqx.__file__).parent),
-                ),
+                resolution_msg, UserWarning, skip_file_prefixes=_CALLER_FRAME_SKIP
             )
         # ``top_k`` forces both on: ``Samples["weight"]`` is reconstructed from
         # ``ln_likelihood`` plus ``ln_Z_int`` / ``n_prior_samples``, so a
