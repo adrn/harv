@@ -26,6 +26,10 @@ from harv.models import (
 )
 from harv.models._helpers import LinearRole, classify_linear_prior, pinned_linear_names
 from harv.models.parameterizations import ThieleInnesGaiaAstrometry
+from harv.models.priors import (
+    ParallaxDependentProperMotionPrior,
+    PeriodDependentSemiMajorAxisPrior,
+)
 from harv.models.ties import TiedPrior
 from harv.samplers import NumpyroSampler, RejectionSampler, Samples
 from harv.samplers._prior_resolution import (
@@ -238,6 +242,34 @@ def test_tie_pins_the_parallax_it_reads_across_components():
     assert "rv_semiamp" not in model.explicit_params(priors)
 
 
+@pytest.mark.parametrize("free_k", [True, False], ids=["free-K", "tied-K"])
+def test_scale_parallax_unpins_astro_parallax_unless_tied(free_k):
+    """Namespaced ``requires`` drop ``astro.parallax``; only the tie still reads it."""
+    astro = {
+        "astro.pmra": ParallaxDependentProperMotionPrior(
+            sigma_v0=Q(50.0, "km/s"), scale_parallax=Q(PARALLAX, "mas")
+        ),
+        "astro.pmdec": ParallaxDependentProperMotionPrior(
+            sigma_v0=Q(50.0, "km/s"), scale_parallax=Q(PARALLAX, "mas")
+        ),
+        "astro.semi_major_axis": PeriodDependentSemiMajorAxisPrior(
+            sigma_a0=Q(1.0, "AU"),
+            period_ref=Q(1.0, "yr"),
+            scale_parallax=Q(PARALLAX, "mas"),
+        ),
+    }
+    priors = {**_linear_priors(), **astro}
+    if free_k:
+        priors["rv.rv_semiamp"] = FREE_K
+    model = _model()
+    pinned = pinned_linear_names(model._merged_linear_priors(priors))
+    assert ("astro.parallax" in pinned) is not free_k
+    assert ("parallax" in model.marginalized_params(priors)) is free_k
+    if free_k:
+        values = {k: v for k, v in _values().items() if k != "astro.parallax"}
+        assert jnp.isfinite(model.log_prob(values, _data(), linear_priors=priors))
+
+
 def test_log_prob_under_jit_and_vmap():
     data = _data()
     model = _model()
@@ -361,6 +393,11 @@ def test_sampler_resolution_keeps_tied_target_marginalized():
     assert "rv.rv_semiamp" not in explicit_linear_names(effective, resolved)
     # Auto mode: the tie's scale reads parallax, so it stays explicit.
     assert explicit_linear_names(effective, None) == ("astro.parallax",)
+    # ...and asking to marginalize it anyway fails before any trace.
+    with pytest.raises(ValueError, match=r"\['astro.parallax'\]"):
+        resolve_effective_marginalized_names(
+            effective, (*MARGINALIZED, "astro.parallax")
+        )
 
 
 def test_rejects_fixed_tie_source():

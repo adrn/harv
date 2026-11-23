@@ -76,7 +76,12 @@ Being marginalizable is not quite the same as being marginalized. A linear param
 whose value is read by another parameter's prior has to stay explicitly sampled, because
 a marginalized parameter has no sampled value to read. That is why `parallax` is sampled
 explicitly under the Gaia defaults even though its `HalfNormal` prior could be
-marginalized: the semi-major-axis and proper-motion priors both depend on it.
+marginalized: the semi-major-axis and proper-motion priors both depend on it. For a
+star with a well-measured parallax (say, better than 10%), passing
+`scale_parallax=` (e.g. the catalog parallax) to the Gaia `default_prior` computes
+those prior widths from that fixed value instead, so the parallax is marginalized
+like the other linear parameters and the sampler has one less dimension to explore.
+It is still worth comparing the posterior parallax with the value you passed in.
 
 For how the truncated and mixture cases are actually computed, see
 {doc}`math-notes/constrained-linear-priors`.

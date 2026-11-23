@@ -1,5 +1,7 @@
 """Unit tests for rejection sampling priors."""
 
+from typing import ClassVar
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,7 +15,11 @@ from unxt.quantity import ustrip
 
 import harv.models as hm
 from harv.distributions import QD, JointPrior, joint
-from harv.models._helpers import _evaluate_nonlinear_log_prior, _nonlinear_groups
+from harv.models._helpers import (
+    _evaluate_nonlinear_log_prior,
+    _nonlinear_groups,
+    pinned_linear_names,
+)
 from harv.models.parameterizations.base import AbstractParameterization
 from harv.models.parameterizations.gaia import ThieleInnesGaiaAstrometry
 from harv.models.priors import (
@@ -652,6 +658,9 @@ class TestPeriodDependentSemiMajorAxisPrior:
     prior = PeriodDependentSemiMajorAxisPrior(
         sigma_a0=Q(5.0, "AU"), period_ref=Q(100.0, "day")
     )
+    fixed = PeriodDependentSemiMajorAxisPrior(
+        sigma_a0=Q(5.0, "AU"), period_ref=Q(100.0, "day"), scale_parallax=Q(10.0, "mas")
+    )
 
     def test_scale_matches_closed_form(self):
         """sigma_a(P, plx) = sigma_a0 * (P/period_ref)**(2/3) * plx (parallax unit)."""
@@ -680,8 +689,38 @@ class TestPeriodDependentSemiMajorAxisPrior:
 
     def test_missing_parallax_raises(self):
         """A marginalized parallax is absent from the dict -> actionable KeyError."""
-        with pytest.raises(KeyError, match="requires 'parallax'"):
+        with pytest.raises(KeyError, match=r"requires 'parallax'.*scale_parallax"):
             self.prior({"period": Q(400.0, "day"), "eccentricity": 0.1})
+
+    def test_scale_parallax_sets_the_width(self):
+        """A fixed parallax replaces the sampled one and is dropped from requires."""
+        base = {"period": Q(400.0, "day"), "eccentricity": 0.1}
+        sampled = self.prior({**base, "parallax": Q(10.0, "mas")})
+        assert self.prior.requires == ("period", "eccentricity", "parallax")
+        assert self.fixed.requires == ("period", "eccentricity")
+        # No parallax in the dict, and a sampled one is ignored.
+        for params in (base, {**base, "parallax": Q(99.0, "mas")}):
+            qd = self.fixed(params)
+            assert qd.unit == "mas"
+            assert np.isclose(
+                float(qd.distribution.scale), float(sampled.distribution.scale)
+            )
+
+    def test_scale_parallax_jit_vmap_and_pytree(self):
+        # `requires` reads pytree structure, so it survives flatten/unflatten.
+        assert jax.tree.map(lambda x: x, self.fixed).requires == (
+            "period",
+            "eccentricity",
+        )
+
+        def scale_of(prior, period_day):
+            qd = prior({"period": Q(period_day, "day"), "eccentricity": 0.0})
+            return qd.distribution.scale
+
+        periods = jnp.array([100.0, 400.0, 25.0])
+        expected = 5.0 * (np.asarray(periods) / 100.0) ** (2.0 / 3.0) * 10.0
+        batched = jax.jit(jax.vmap(scale_of, in_axes=(None, 0)))(self.fixed, periods)
+        assert np.allclose(np.asarray(batched), expected)
 
 
 class TestParallaxDependentProperMotionPrior:
@@ -708,6 +747,84 @@ class TestParallaxDependentProperMotionPrior:
     def test_missing_parallax_raises(self):
         with pytest.raises(KeyError, match="requires 'parallax'"):
             self.prior({"period": Q(400.0, "day")})
+
+    def test_scale_parallax_sets_the_width(self):
+        fixed = ParallaxDependentProperMotionPrior(
+            sigma_v0=Q(50.0, "km/s"), scale_parallax=Q(10.0, "mas")
+        )
+        assert self.prior.requires == ("parallax",)
+        assert fixed.requires == ()
+        expected = float(self.prior({"parallax": Q(10.0, "mas")}).distribution.scale)
+        for params in ({}, {"parallax": Q(99.0, "mas")}):
+            qd = fixed(params)
+            assert qd.unit == "mas/yr"
+            assert np.isclose(float(qd.distribution.scale), expected)
+        assert np.isclose(
+            float(jax.jit(lambda p: p({}).distribution.scale)(fixed)), expected
+        )
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda plx: ParallaxDependentProperMotionPrior(
+            sigma_v0=Q(50.0, "km/s"), scale_parallax=plx
+        ),
+        lambda plx: PeriodDependentSemiMajorAxisPrior(
+            sigma_a0=Q(1.0, "AU"), period_ref=Q(1.0, "yr"), scale_parallax=plx
+        ),
+    ],
+    ids=["proper-motion", "semi-major-axis"],
+)
+class TestScaleParallaxValidation:
+    """Catalog parallaxes can be <= 0 or NaN; that must fail loudly, not as -inf."""
+
+    PARAMS: ClassVar[dict] = {"period": Q(1.0, "yr"), "eccentricity": 0.0}
+
+    @pytest.mark.parametrize("plx", [-5.0, 0.0, float("nan")])
+    def test_bad_value_raises_eagerly_and_under_jit(self, build, plx):
+        def width(v):
+            return build(Q(v, "mas"))(self.PARAMS).distribution.scale
+
+        for fn in (width, jax.jit(width)):
+            with pytest.raises(Exception, match="scale_parallax must be positive"):
+                fn(plx)
+
+    def test_non_angle_raises(self, build):
+        with pytest.raises(TypeError, match="scale_parallax must be an angle"):
+            build(Q(5.0, "AU"))
+
+
+_GAIA_PARAMETERIZATIONS = [
+    hm.StandardGaiaAstrometry(),
+    ThieleInnesGaiaAstrometry(apply_jacobian_correction=False),
+]
+
+
+@pytest.mark.parametrize(
+    "parameterization", _GAIA_PARAMETERIZATIONS, ids=["standard", "thiele-innes"]
+)
+class TestScaleParallaxDefaultPrior:
+    """``default_prior(scale_parallax=...)`` lets ``parallax`` marginalize."""
+
+    def test_parallax_marginalized_with_scale_parallax(self, parameterization):
+        prior = parameterization.default_prior(
+            **_DEFAULT_ASTRO_KWARGS, scale_parallax=Q(2.16, "mas")
+        )
+        model = hm.GaiaAstrometryModel(parameterization=parameterization)
+        assert pinned_linear_names(prior.linear_priors) == frozenset()
+        assert "parallax" in model.marginalized_params(prior.linear_priors)
+        assert "parallax" not in model.explicit_params(prior.linear_priors)
+        # The parallax keeps its own broad prior; only the widths are fixed.
+        plx = prior.linear_priors["parallax"].distribution
+        assert isinstance(plx, dist.HalfNormal)
+        assert float(plx.scale) == 100.0
+
+    def test_default_still_pins_parallax(self, parameterization):
+        prior = parameterization.default_prior(**_DEFAULT_ASTRO_KWARGS)
+        model = hm.GaiaAstrometryModel(parameterization=parameterization)
+        assert pinned_linear_names(prior.linear_priors) == frozenset({"parallax"})
+        assert "parallax" in model.explicit_params(prior.linear_priors)
 
 
 class TestJointPrior:

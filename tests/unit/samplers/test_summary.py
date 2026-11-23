@@ -12,6 +12,7 @@ from typing import Any
 import jax
 import numpy as np
 import numpyro.distributions as dist
+import pytest
 from unxt import Q
 
 import harv.models as hm
@@ -201,3 +202,51 @@ class TestPinnedVersusUnmarginalizable:
         assert "parallax" in messages[0]
         assert "cannot be analytically marginalized" not in messages[0]
         assert "read by another prior" in messages[0]
+
+
+class TestPinnedNameInMarginalizedNames:
+    """An explicit request to marginalize a pinned name fails early and readably."""
+
+    NAMES = ("ra0", "dec0", "pmra", "pmdec", "semi_major_axis", "parallax")
+
+    def test_raises_before_tracing(self):
+        sampler = RejectionSampler(
+            _gaia_prior(), GaiaAstrometryModel(), marginalized_names=self.NAMES
+        )
+        with pytest.raises(ValueError, match=r"\['parallax'\].*scale_parallax"):
+            sampler.summary()
+
+    def test_scale_parallax_allows_it(self):
+        prior = hm.StandardGaiaAstrometry().default_prior(
+            period_min=Q(100.0, "day"),
+            period_max=Q(3000.0, "day"),
+            sigma_a0=Q(5.0, "AU"),
+            sigma_parallax=Q(10.0, "mas"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+            scale_parallax=Q(2.0, "mas"),
+        )
+        text = RejectionSampler(
+            prior, GaiaAstrometryModel(), marginalized_names=self.NAMES
+        ).summary()
+        assert "marginalized" in _row(text, "parallax")
+
+    @pytest.mark.parametrize(
+        "parallax_prior",
+        [QD(dist.Delta(2.0), "mas"), QD(dist.Gamma(2.0, 1.0), "mas")],
+        ids=["delta", "gamma"],
+    )
+    def test_fixed_or_unmarginalizable_pinned_name_still_allowed(self, parallax_prior):
+        """A Delta stays fixed and a Gamma stays sampled, so the reader has a value."""
+        prior = hm.StandardGaiaAstrometry().default_prior(
+            period_min=Q(100.0, "day"),
+            period_max=Q(3000.0, "day"),
+            sigma_a0=Q(5.0, "AU"),
+            sigma_pos=Q(100.0, "mas"),
+            sigma_vtan=Q(50.0, "km/s"),
+            parallax=parallax_prior,
+        )
+        text = RejectionSampler(
+            prior, GaiaAstrometryModel(), marginalized_names=self.NAMES
+        ).summary()
+        assert "parallax" in text
