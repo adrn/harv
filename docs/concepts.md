@@ -83,8 +83,8 @@ like the other linear parameters and the sampler has one less dimension to explo
 The posterior parallax should still be compared with the value passed in, and if the
 two differ by more than a few percent, the fit can be rerun with the posterior value.
 
-For how the truncated and mixture cases are actually computed, see
-{doc}`math-notes/constrained-linear-priors`.
+The harv paper ([arXiv:XXXX.XXXXX](https://arxiv.org/abs/XXXX.XXXXX)) derives how the
+truncated and mixture cases are computed.
 
 ## JAX
 

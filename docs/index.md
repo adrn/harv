@@ -11,11 +11,12 @@ concepts
 sharp-bits
 tutorials/index
 api/index
-math-notes/index
 at-scale
 benchmarks
 running-benchmarks
 :::
+
+[![arXiv][arxiv-badge]][arxiv-link]
 
 **harv** (pronounced _harvey_) is a Python package for inferring Keplerian orbital
 parameters of binary-star and star–exoplanet systems from time series data.
@@ -23,6 +24,8 @@ We currently support modeling radial velocities, *Gaia* epoch astrometry, or bot
 jointly.
 harv is designed for population inferences of binary star, exoplanet, and compact object
 systems with large spectroscopic surveys and *Gaia* DR4.
+The methods are described in the harv paper ([arXiv:XXXX.XXXXX][arxiv-link]); please
+cite it if you use harv.
 
 harv is built on [JAX](https://github.com/google/jax) for JIT and multi-device (e.g.,
 GPU) support, [NumPyro](https://github.com/pyro-ppl/numpyro) for representing
@@ -52,8 +55,7 @@ whose orbits are not well constrained.
 - {doc}`Key concepts <concepts>`: the main modeling ideas behind harv.
 - {doc}`sharp-bits`: conventions and pitfalls for users new to JAX, NumPyro, or unxt.
 - {doc}`api/index`: the documentation for each class and function.
-- {doc}`Math notes <math-notes/index>`: longer derivations behind parts of the
-  implementation.
+- [The harv paper][arxiv-link]: the methods, derivations, case studies, and benchmarks.
 
 
 ## Installation
@@ -100,6 +102,10 @@ pip install -e .  # editable mode
 ::::
 
 <!-- LINKS -->
+
+<!-- TODO: replace XXXX.XXXXX with the arXiv ID of the harv paper once it is posted. -->
+[arxiv-badge]: https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg
+[arxiv-link]: https://arxiv.org/abs/XXXX.XXXXX
 
 [equinox]: https://docs.kidger.site/equinox/
 [jax]: https://jax.readthedocs.io/en/latest/
