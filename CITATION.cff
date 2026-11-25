@@ -10,3 +10,16 @@ license: MIT
 repository-code: "https://github.com/adrn/harv"
 url: "https://harvey.readthedocs.io"
 type: software
+# TODO: replace XXXX.XXXXX with the arXiv ID of the harv paper once it is posted, and
+# update the journal and DOI once it is published.
+preferred-citation:
+  type: article
+  title: "harv: Fast orbit sampling for binary stars, exoplanets, and compact objects with radial velocities and Gaia epoch astrometry"
+  authors:
+    - family-names: Price-Whelan
+      given-names: Adrian M.
+      orcid: "https://orcid.org/0000-0003-0872-7098"
+  year: 2026
+  journal: "arXiv e-prints"
+  doi: "10.48550/arXiv.XXXX.XXXXX"
+  url: "https://arxiv.org/abs/XXXX.XXXXX"
