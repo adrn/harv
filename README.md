@@ -28,13 +28,6 @@ It's pronounced _harvey_.
 The methods are described in the harv paper
 ([arXiv:XXXX.XXXXX](https://arxiv.org/abs/XXXX.XXXXX)); please cite it if you use harv.
 
-## ⚠️ Warning! ⚠️
-
-`harv` is in rapid development and is pre-alpha. Meaning the API is not stable or
-guaranteed! Once the first version is released, we will have some guarantees about
-backwards compatibility, but there are no guarantees for API stability with the current
-development versions of this package. Sorry!
-
 <!-- ### Key features
 
 - **JAX-native** — JIT-compiled likelihoods and samplers; runs on CPU or GPU.
