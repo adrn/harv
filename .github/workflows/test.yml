@@ -199,9 +199,15 @@ jobs:
     name: CI Pass
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
-    needs: [pre-commit, checks, docs]
+    # check_skip_flags is listed so that its failure, which skips checks and docs,
+    # still fails this gate instead of passing as an allowed skip.
+    needs: [check_skip_flags, pre-commit, checks, docs]
     steps:
       - name: All required jobs passed
         uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
         with:
+          # alls-green counts a skipped job as a failure unless it is listed
+          # here. checks and docs are skipped on purpose by the "skip tests" and
+          # "skip docs" labels and commit flags.
+          allowed-skips: checks, docs
           jobs: ${{ toJSON(needs) }}
