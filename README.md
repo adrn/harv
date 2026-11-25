@@ -1,9 +1,12 @@
 # harv
 
+<!-- TODO: replace XXXX.XXXXX with the arXiv ID of the harv paper once it is posted. -->
+
 [![Tests](https://github.com/adrn/harv/actions/workflows/test.yml/badge.svg)](https://github.com/adrn/harv/actions/workflows/test.yml)
 [![Docs](https://readthedocs.org/projects/harvey/badge/?version=latest)](https://harvey.readthedocs.io/en/latest/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
+[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
 
 <br/>
 <div align="center">
@@ -21,6 +24,9 @@ and star–exoplanet systems from time series data. Built on
 and [unxt](https://github.com/GalacticDynamics/unxt) for units-aware computation.
 
 It's pronounced _harvey_.
+
+The methods are described in the harv paper
+([arXiv:XXXX.XXXXX](https://arxiv.org/abs/XXXX.XXXXX)); please cite it if you use harv.
 
 ## ⚠️ Warning! ⚠️
 

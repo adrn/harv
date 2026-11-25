@@ -28,6 +28,11 @@ jobs:
   dist:
     name: Distribution build
     runs-on: ubuntu-latest
+    # Skip on a PR with the "skip wheels" label. Pushes and published releases
+    # always build, so publish below is never left without its artifact.
+    if: >-
+      github.event_name != 'pull_request' ||
+      !contains(github.event.pull_request.labels.*.name, 'skip wheels')
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

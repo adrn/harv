@@ -1,4 +1,4 @@
-# Getting Started with harv
+# Getting started with harv
 
 ### Installation
 
@@ -20,14 +20,14 @@ pip install 'harv[cuda13]'
 Quote the extras: `zsh` (the default shell on macOS) treats the square brackets
 as a glob and will refuse the unquoted form.
 
-To try harv without installing anything, `uv run --with harv python` gives you
-a throwaway interpreter with it available.
+To try harv without installing anything, `uv run --with harv python` starts a
+temporary interpreter with harv installed.
 
 The CUDA extras forward to jax's own (`harv[cuda13]` is `harv` plus
 `jax[cuda13]`) and pull the CUDA runtime in as wheels, so there is nothing to
 install system-wide. They are Linux-only and resolve to nothing on other
-platforms — installing one on a Mac quietly gives you the CPU build. harv itself
-is identical either way; jax picks the accelerator at runtime.
+platforms, so installing one on a Mac gives the CPU build. harv itself is
+identical either way; jax picks the accelerator at runtime.
 
 ### Radial velocity modeling
 
