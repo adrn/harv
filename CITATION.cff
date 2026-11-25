@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use harv, please cite the paper."
+title: "harv"
+abstract: "Fast tools for modeling Keplerian systems in astrometric and/or radial velocity data."
+authors:
+  - family-names: Price-Whelan
+    given-names: Adrian M.
+    orcid: "https://orcid.org/0000-0003-0872-7098"
+license: MIT
+repository-code: "https://github.com/adrn/harv"
+url: "https://harvey.readthedocs.io"
+type: software
