@@ -107,11 +107,12 @@ local development.
    nox -s tests_gpu   # CUDA 13; fails fast if jax cannot see a GPU
    ```
 
-   CI also has a "Latest deps (unlocked)" job. It ignores `uv.lock` and installs
+   A separate "Latest deps" workflow runs the test suite against unlocked
+   dependencies. It ignores `uv.lock` and installs
    the newest versions `pyproject.toml` allows, which is what `pip install harv`
    gets, except for unxt, which `[tool.uv] override-dependencies` pins to a git
    fork. It runs weekly and on every PR that doesn't skip tests, and doesn't block
-   merging. If it fails
+   merging or affect the CI badge. If it fails
    while the locked jobs pass, an upstream release broke harv. Either fix harv and
    move the lock up (`uv lock --upgrade-package <name>`), or cap the package in
    `pyproject.toml` with a comment naming the upstream issue, as for `jax<0.12`.
