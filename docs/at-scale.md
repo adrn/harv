@@ -6,8 +6,8 @@ The standard setup is: one shared prior samples library / cache file, one
 `run_with_samples` call per source, thousands to millions of sources.
 
 The first section below is about hardware and settings. The second is about the
-failure modes that only show up once you are running many sources at once,
-which are mostly ways of getting a wrong answer that looks ok.
+failure modes that only show up once you are running many sources at once, most of
+which produce wrong answers that look plausible.
 
 
 ## Making it fast
@@ -54,7 +54,7 @@ This is embarrassingly parallel, so you can use whatever you have available.
 We have tested using MPI/slurm and found that it works well.
 The two combine: each process can itself use several devices.
 
-This is not imperative, but we have found the following from our own experience:
+In our own runs, we have found the following:
 
 - If you have hundreds of thousands to millions of sources, you will want to use a multi-node CPU cluster. You can scale to many more cores than you can even with a few GPUs.
 - If you have tens of thousands to hundreds of thousands of sources, you can use a single GPU or multiple GPUs. Or just let it run on a multi-core CPU workstation.
@@ -93,8 +93,8 @@ as much period accuracy as a tenfold larger library, at the cost of the small fr
 of systems that fell outside the narrower range.
 
 Selection policy
-: Instead of doing rejection sampling, we recommend using the `top_k=True` option in
-`RejectionSampler` for population work. It returns a fixed number of rows per source, so
+: Instead of doing rejection sampling, we recommend passing `top_k=k` (the number of rows
+to keep) to `RejectionSampler.run` for population work. It returns a fixed number of rows per source, so
 results form a rectangular table and the `jax.vmap` over the conditional-linear solve is
 traced once instead of once per distinct acceptance count. And one can always
 post-process the `top_k` output to get the same results as rejection sampling.
@@ -102,7 +102,7 @@ post-process the `top_k` output to get the same results as rejection sampling.
 
 ## Making it right
 
-Running with `top_k=True` does not accept or reject samples, it evaluates the marginal
+Running with `top_k=k` does not accept or reject samples. It evaluates the marginal
 likelihood for every prior draw in the library and keeps the `k` draws with the largest
 importance weights. The rows you get back are therefore not equal-weight posterior
 samples: a row's weight says how much of the posterior that row represents, and rows in
@@ -121,11 +121,10 @@ and not $\Sigma w f$.
 
 When you plot weighted samples, color them by $\ln(w/w_\text{best})$ and cut on
 cumulative weight rather than drawing all `k` rows.
-`top_k=True` keeps the top `k` draws by rank, so a source with an effective sample size
+`top_k=k` keeps the top `k` draws by rank, so a source with an effective sample size
 of a few has a handful of rows carrying essentially all of the mass while the rest are
 prior draws that happened to rank highest.
-Drawn with equal visual weight, they more give you a sense of the prior rather than the
-posterior samples.
+Drawn with equal visual weight, these rows show the prior more than the posterior.
 
 ### ESS is a resolution diagnostic, not a quality metric
 
@@ -143,15 +142,15 @@ For these cases, we recommend following up the rejection sampling with a local M
 ### Calibrate your uncertainties rather than fitting a jitter
 
 Reported per-epoch uncertainties are often smaller than the true scatter.
-*Gaia* is a good example: the published formal error omits calibration terms that are
-genuinely there, so the ratio $r = \sigma_\text{true}/\sigma_\text{reported}$ has a
-median above 1 and a long tail.
-If you are running on hundreds of thousands to millions of sources, it is worth the time
-to calibrate $r$ up front instead of letting a fitted jitter absorb it.
+*Gaia* is a good example: the published formal error omits some calibration terms, so
+the ratio $r = \sigma_\text{true}/\sigma_\text{reported}$ has a median above 1 and a
+long tail.
+If you are running on hundreds of thousands to millions of sources, we recommend
+calibrating $r$ before sampling instead of letting a fitted jitter absorb it.
 
 Fitting a jitter parameter is expensive for three reasons.
-First, it is a
-nonlinear parameter, so it comes at a cost of the library's prior resolution.
+First, it is a nonlinear parameter, so it uses up some of the resolution of the prior
+library.
 Second, it competes with the orbit model,
 because an orbit the library cannot match exactly is cheaper to explain as excess
 noise, which drives solutions to the edges of the prior.

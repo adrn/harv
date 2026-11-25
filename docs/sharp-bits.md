@@ -19,7 +19,7 @@ belonging to other libraries in the same process, which is why the warning exist
 silence it, say so yourself before importing `harv`, with either the `JAX_ENABLE_X64=1`
 environment variable or `jax.config.update("jax_enable_x64", True)`.
 
-You can opt out with `JAX_ENABLE_X64=0`, but expect garbage. float32 gives unstable
+You can opt out with `JAX_ENABLE_X64=0`, but the results will be unreliable. float32 gives unstable
 likelihood evaluations in rejection sampling and with broad priors or high-S/N data,
 and it is not only the likelihood: a barycentric time in float32 has a resolution of
 0.25 days, so a BJD of 2460123.125 silently becomes 2460123.0 the moment you build an
@@ -96,10 +96,11 @@ usually be combined into a single `SourceData` object.
 
 ## Sampled amplitudes may come back with sign degeneracies
 
-Posterior samples can contain negative `rv_semiamp` or `semi_major_axis` values (which
-are distances and you might think these cannot be negative). That is not necessarily
-wrong; it is part of the orbital angle degeneracy. If you want a canonical
-representation with positive amplitudes, call `samples.wrap_angles()`.
+Posterior samples can contain negative `rv_semiamp` or `semi_major_axis` values, even
+though these are amplitudes. This is expected with the default sign-free priors,
+because changing the sign of an amplitude is equivalent to shifting an orbital angle by
+$\pi$. If you want a canonical representation with positive amplitudes, call
+`samples.wrap_angles()`.
 
 This rewrites the samples into the equivalent convention
 
@@ -112,63 +113,11 @@ without changing the physical orbit. For `SqrtEccRV` samples it negates `sqrte_c
 
 The degeneracy matters most when you start MCMC from rejection samples. Those contain
 both signs, so with several chains some start in one mirror mode and some in the other.
-NUTS cannot move between them, and r_hat and ESS on the angles look terrible even though
-each chain is fine. `NumpyroSampler.run` warns when this happens. Start from
+NUTS cannot move between them, so r_hat and ESS for the angles are poor even though each
+chain is fine. `NumpyroSampler.run` warns when this happens. Start from
 `init_samples=rej_samples.wrap_angles()` so that every chain begins with non-negative
 amplitudes (astrometry-only fits still keep the separate mirror with both `arg_peri` and
 `lon_asc_node` shifted by $\pi$). The shifted angles land in $\[0, 2\\pi)$, the range of the
 default angle priors; with a prior on another interval, wrap them into it yourself. We keep the
 default amplitude priors sign-free rather than truncating them at zero because the
 truncated prior halves the rejection sampler's acceptance rate (see `docs/spec.md`).
-
-## Periodograms batch over sources only with a fixed frequency grid
-
-`harv.periodogram.periodogram` works under `jax.jit` and `jax.vmap`, so you can compute
-periodograms for a whole population of sources in one traced call:
-
-```python
-batched = jax.tree.map(lambda *xs: jnp.stack(xs), *sources)
-grid = hp.frequency_grid(time_span=Q(1000, "day"), period_min=Q(5, "day"), n_grid=1024)
-results = jax.jit(jax.vmap(lambda d: hp.periodogram(d, grid, prior=prior)))(batched)
-```
-
-Two things have to hold. The grid must be shape-fixed, which means passing an explicit
-`frequency_grid` as above, or giving `period_min`, `period_max`, and `n_grid` together.
-Letting the grid size come from each source's own time baseline (i.e., omitting
-`n_grid`) cannot be traced, since the number of grid points is then an array shape that
-JAX needs to know at trace time. The stacked sources also need a common number of
-observations, for the same reason; sources with different epoch counts will retrace.
-
-Both conditions point the same way as the advice in `frequency_grid`: use one shared
-grid across a population so the results are directly comparable and the sampler compiles
-once.
-
-## Priors that reach unbound orbits give `NaN`, not rejections
-
-`SqrtEccRV().default_prior(...)` puts a joint `KippingDisk()` prior on
-`(sqrte_cosw, sqrte_sinw)`, so every draw is a bound orbit. If you override it with
-independent priors, for example `sqrte_cosw=dist.Uniform(-1, 1)` and
-`sqrte_sinw=dist.Uniform(-1, 1)`, the support becomes a square, but a bound orbit needs
-the unit disk:
-
-```
-e = sqrte_cosw**2 + sqrte_sinw**2 < 1
-```
-
-Roughly 21% of draws (`1 - pi/4`) then fall outside it with `e >= 1`, which is not an
-orbit. The default `rv_semiamp` prior scales as `(1 - e**2)**(-1/2)`, so it returns
-`NaN` there.
-
-`NaN` does not behave like a rejected sample. It propagates through the `max` reduction
-the rejection step normalizes by, so `max_ln_likelihood`, `ln_Z_int`, and
-`ln_Z_int_ess` all come back `NaN` and **no samples are accepted** -- with no error
-raised. Pass `ignore_non_finite=True` so those draws are treated as rejections:
-
-```python
-samples = sampler.run(
-    data, key=jax.random.key(0), n_prior_samples=1_000_000, ignore_non_finite=True
-)
-```
-
-This is not specific to `SqrtEccRV`: any prior that can produce a non-finite
-likelihood needs the same flag.

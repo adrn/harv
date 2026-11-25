@@ -1,9 +1,9 @@
 # Running the benchmarks
 
-How to regenerate {doc}`benchmarks`. This is a developer page — the benchmarks
-are **not** part of the test suite and never run on CI.
+How to regenerate {doc}`benchmarks`. This is a developer page: the benchmarks are not
+part of the test suite and never run on CI.
 
-## TL;DR
+## Quick reference
 
 ```bash
 # One-time: install the benchmark tooling. `bench-cuda` adds CUDA-enabled jaxlib and
@@ -38,16 +38,16 @@ git add benchmarks/results docs/benchmarks.md docs/_static/benchmarks
 
 ## Running both CPU and GPU from one install
 
-You do **not** need two environments. Installing CUDA-enabled jaxlib does not take the
-CPU backend away — `JAX_PLATFORMS` selects the backend per run:
+One environment is enough. Installing CUDA-enabled jaxlib keeps the CPU backend, and
+`JAX_PLATFORMS` selects the backend for each run:
 
 | Run | Command prefix | Backend |
 |---|---|---|
 | CPU | `JAX_PLATFORMS=cpu` | CPU, even with a working GPU present |
 | GPU | *(nothing)* | GPU, because JAX prefers it when visible |
 
-So the two real runs in the TL;DR differ by exactly that one variable, and both come
-from the single `uv sync --group bench --group bench-cuda`.
+So the two real runs in the quick reference differ by exactly that one variable, and
+both come from the single `uv sync --group bench --group bench-cuda`.
 
 Each run also passes `--bench-expect`, which checks `jax.default_backend()` before
 collection and aborts in seconds on a mismatch:
@@ -57,10 +57,11 @@ ERROR: --bench-expect=gpu but JAX is on 'cpu' (cpu). JAX falls back to CPU when
 CUDA-enabled jaxlib or the driver is missing; ...
 ```
 
-This matters because a filename says nothing about which device ran — `report.py`
-labels devices from `jax.devices()[0]`. Without the guard, a GPU run that silently fell
-back to CPU produces a second CPU dataset and you find out after the hours are spent,
-not before.
+This matters because a filename says nothing about which device ran: `report.py`
+labels each device from `jax.devices()[0]`. Without the guard, a GPU run that silently
+fell back to CPU produces `gpu.json` as a second CPU dataset with the same device label
+as `cpu.json`. `report.py` refuses to merge the two rather than silently dropping half
+of the data, but the problem only appears after the hours of the run are spent.
 
 The two runs are independent, so order does not matter and you can do them on
 different days; `report.py` merges whatever is in `benchmarks/results/`.
@@ -74,9 +75,8 @@ group does not add it, so:
 uv sync --group bench      # -> [CpuDevice(id=0)], always
 ```
 
-There is nothing wrong with that environment — it is the right one for the CPU half of
-the comparison — but it cannot produce a GPU number. The `bench-cuda` group adds
-CUDA-enabled jaxlib:
+That environment is correct for the CPU half of the comparison, but it cannot produce a
+GPU number. The `bench-cuda` group adds CUDA-enabled jaxlib:
 
 ```bash
 uv sync --group bench --group bench-cuda
@@ -87,7 +87,7 @@ uv run --no-sync python -c "import jax; print(jax.devices())"
 `bench-cuda` is `jax[cuda13]` behind a `sys_platform == 'linux'` marker, because the
 CUDA plugin wheels are only published for Linux and without the marker `uv lock`
 cannot resolve on macOS or Windows. On a Mac the group installs nothing and the
-command above is harmless, which is why the TL;DR includes it unconditionally. It is a
+command above is harmless, which is why the quick reference includes it unconditionally. It is a
 separate group rather than part of `bench` so a CPU-only run does not pull several GB
 of NVIDIA wheels.
 
@@ -98,13 +98,13 @@ local CUDA closely. `jax` 0.8 publishes `cuda12`, `cuda12-local`, `cuda13`, and
 `cuda13-local`.
 
 It is a large download the first time. `uv sync` also *removes* anything not in the
-lockfile, so install this way rather than with a bare `uv pip install` — otherwise the
-next `uv sync` silently takes your GPU support away. (Every benchmark command here
-passes `--no-sync` precisely so a long run cannot be disturbed mid-flight.)
+lockfile, so install this way rather than with a bare `uv pip install`; otherwise the
+next `uv sync` silently removes the GPU support. (Every benchmark command here passes
+`--no-sync` so that a long run cannot be disturbed while it is running.)
 
 ### If it still says CpuDevice
 
-- `nvidia-smi` — if this fails, the driver is the problem, not JAX.
+- `nvidia-smi`: if this fails, the problem is the driver, not JAX.
 - A too-old driver shows up as an initialization error or a silent CPU fallback.
   `cuda13` is the stricter of the two; `cuda12` supports older drivers.
 - Using a system CUDA install instead of the bundled wheels? Use the `-local` extra,
@@ -116,17 +116,14 @@ passes `--no-sync` precisely so a long run cannot be disturbed mid-flight.)
   installed. Falling back to cpu.
   ```
 
-**Why this matters more than a warning suggests.** Nothing about a filename makes a run
-a GPU run — `report.py` labels each device from `jax.devices()[0]`. So on a fallback,
-`gpu.json` is a second *CPU* dataset carrying the same device label as `cpu.json`, and
-one would overwrite the other. `report.py` refuses that by name rather than silently
-dropping half the data, but it only finds out after the run. Check the device first.
+A fallback produces a mislabeled CPU dataset that is only caught after the run (see
+"Running both CPU and GPU from one install"), so check the device before starting.
 
 ## Why the incantation looks like that
 
 `JAX_PLATFORMS=cpu`
 : Forces the CPU run even when CUDA-enabled jaxlib is installed. Without it JAX picks
-the GPU when one is visible, so the GPU run simply omits it. The rejection sampler
+the GPU when one is visible, so the GPU run omits it. The rejection sampler
 splits each batch over every local device, so the benchmarks measure one device only
 while exactly one is visible. On CPU, leave `JAX_NUM_CPU_DEVICES` unset (JAX's
 default is one CPU device). On a multi-GPU machine, expose one GPU, e.g. with
@@ -134,7 +131,7 @@ default is one CPU device). On a multi-GPU machine, expose one GPU, e.g. with
 
 `HARV_NO_TYPECHECK=1`
 : Skips the beartype/jaxtyping import hooks in the root `conftest.py`. Those hooks
-only fire at JAX *trace* time, so they do not affect warm timings — but they do
+only fire at JAX *trace* time, so they do not affect warm timings, but they do
 inflate the first-call compile number the report attributes to compilation.
 Leave it unset for the ordinary test suite, which wants the checks.
 
@@ -145,9 +142,9 @@ cannot start a multi-hour run by accident.
 `--benchmark-json=...`
 : pytest-benchmark prints a table but does not persist anything by default. The
 JSON is what `report.py` consumes; without this flag a finished run leaves
-nothing behind. pytest-benchmark writes it from `pytest_sessionfinish` — *after*
-every benchmark has run — so `benchmarks/conftest.py` creates the parent
-directory and checks it is writable at startup. Otherwise a typo'd path would
+nothing behind. pytest-benchmark writes it from `pytest_sessionfinish` (i.e., after
+every benchmark has run), so `benchmarks/conftest.py` creates the parent
+directory and checks it is writable at startup. Otherwise a mistyped path would
 discard hours of compute at the very end.
 
 ## Flags
@@ -167,24 +164,24 @@ Useful pytest selectors: `-k StandardRV` runs one parameterization,
 ## What is measured
 
 One `RejectionSampler.run_with_samples(...)` call per grid cell, with `top_k=256`.
-`top_k` is deliberate: it gives a **static** output shape, so the `jax.vmap` over
+`top_k` is deliberate: it gives a static output shape, so the `jax.vmap` over
 the conditional-linear solve is traced once instead of once per distinct
 acceptance count. Under plain rejection, timings would partly measure
 recompilation driven by the data rather than by the axis under test.
 
 Each cell records a cold call against a cleared JIT cache, then a warmup round,
 then `--bench-rounds` timed rounds. Every timed call is wrapped in
-`jax.block_until_ready` — on GPU, JAX dispatch is asynchronous, and without it
-the timer would measure how fast Python can enqueue work.
+`jax.block_until_ready`. On GPU, JAX dispatch is asynchronous, so without it the
+timer would measure how fast Python can enqueue work.
 
 float64 is pinned on. harv enables it on import anyway, but
 `benchmarks/conftest.py` sets it first so the import stays silent and the flag is on
 before any array exists. float32 changes the sampler's *arithmetic* rather than just
-its precision — a float32 timing would not describe how anyone runs harv.
+its precision, so a float32 timing would not describe how harv is run in practice.
 
 ## The grid
 
-A **star** design: each curve varies one axis with the rest pinned to the baseline
+A *star* design: each curve varies one axis with the rest pinned to the baseline
 (`n_obs=64`, `M=1e6`, `batch_size=1e5`, in-memory cache, `top_k=256`).
 
 | Curve | Varies | Over |
@@ -198,12 +195,12 @@ A **star** design: each curve varies one axis with the rest pinned to the baseli
 once and reported by all curves that contain them). `--bench-full` expands to the
 full product when a curve looks like it is hiding an interaction.
 
-Axes, baselines, and the simulated systems are defined in `benchmarks/grid.py` —
-that file is the source of truth, this table is a summary.
+Axes, baselines, and the simulated systems are defined in `benchmarks/grid.py`, which
+is the source of truth; this table is a summary.
 
 ## Cost and resources
 
-Expect **1–3 hours per device**, dominated by the ~16 cells at `M = 1e7`.
+Expect 1–3 hours per device, dominated by the ~16 cells at `M = 1e7`.
 
 Memory: prior libraries are built once per parameterization at that
 parameterization's largest required size and sliced down, with an
@@ -223,7 +220,7 @@ Three independent reasons, so that no single mistake exposes CI to a multi-hour 
    `uv sync --no-default-groups --group test`, so the plugin is not even present.
 3. `--bench` is required; without it every benchmark skips.
 
-To confirm belt 1 still holds after touching pytest config:
+To confirm that the first of these still holds after changing the pytest configuration:
 
 ```bash
 uv run --no-sync pytest --collect-only -q | grep -c benchmarks/   # must print 0
@@ -260,5 +257,5 @@ Both live in `benchmarks/grid.py`:
   axis to `AXIS_LABELS` / `NUMERIC_AXES` in `benchmarks/report.py`. Numeric axes
   get a fitted log-log slope column and a figure; categorical ones get a table.
 
-Run `--bench-smoke` after either — it is the check that catches a broken
-`report.py` before, rather than after, a three-hour run.
+Run `--bench-smoke` after either change; it catches a broken `report.py` before a
+three-hour run rather than after it.

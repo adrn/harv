@@ -7,7 +7,7 @@ constrained domains (e.g., a true parallax is positive).
 We support these through truncated Normal priors and Gaussian mixture priors, with the
 restriction that at most two of the linear parameters may carry a constrained domain
 (see below).
-A second motivation is specific to modeling SB2 systems with radial velocity data:
+A second motivation is specific to modeling SB2 systems with radial velocity data.
 For an SB2 system, we require the phase and argument of pericenter to be the same for
 both components, which means that the sign of their semi-amplitudes must be opposite
 ($\mathrm{sign}(K_1) = -\mathrm{sign}(K_2)$).
@@ -31,10 +31,10 @@ Z_\mathrm{prior} &= \int_S \mathrm{d}\alpha \, p(\alpha) \\
 \end{align}
 $$
 
-where $\mu$ is the prior mean and $\Sigma_p$ is the prior covariance matrix, and I'm using the subscript $\cdot_S$ to indicate that a pdf is normalized over the domain $S$ and not $\mathbb{R}$ (default).
-If we are in a regime where $\Sigma_p$ is diagonal (as is often the case for me), then $Z_\mathrm{prior}$ factorizes into a product of 1D integrals that are differences of CDF values at the truncation bounds of the domain in each parameter.
+where $\mu$ is the prior mean and $\Sigma_p$ is the prior covariance matrix, and the subscript $\cdot_S$ indicates that a pdf is normalized over the domain $S$ rather than over $\mathbb{R}$ (the default).
+If $\Sigma_p$ is diagonal (as is often the case), then $Z_\mathrm{prior}$ factorizes into a product of 1D integrals that are differences of CDF values at the truncation bounds of the domain in each parameter.
 
-The likelihood is $p(y \mid \alpha)$ for some data $y$ (and, assume there are other parameters on the right of the conditional that are not being marginalized -- I've just dropped them for brevity), where $X$ is the design matrix and $C$ the observation covariance, so
+The likelihood is $p(y \mid \alpha)$ for some data $y$ (we omit the other parameters, which are not marginalized, from the conditional for brevity), where $X$ is the design matrix and $C$ the observation covariance, so
 
 $$
 p(y\mid\alpha) = \mathcal N(y \mid X\alpha, C) \quad .
@@ -68,7 +68,7 @@ $$
 
 is the untruncated marginal likelihood equivalent of the truncated version above.
 Also, $p(\alpha \mid y)$ here is the untruncated posterior.
-Why is it useful to rewrite that? If $p(y \mid \alpha)$ and $p(\alpha)$ are Normal, then the posterior $p(\alpha \mid y)$ is also Normal.
+This form is useful because if $p(y \mid \alpha)$ and $p(\alpha)$ are Normal, then the posterior $p(\alpha \mid y)$ is also Normal.
 If we define
 
 $$
@@ -127,7 +127,7 @@ To compute this, we need the marginal posterior over the two constrained paramet
 The remaining linear parameters are unconstrained, so they are integrated over all of $\mathbb{R}$ and drop out of $Z_\mathrm{post}$: marginalizing a multivariate Normal over a subset of its coordinates just keeps the un-marginalized entries of its mean and covariance.
 What is left is a 2D Normal with marginal posterior mean $\hat\alpha = (\hat\alpha_1, \hat\alpha_2)$ and covariance $\Sigma_\mathrm{post}$.
 Here, it is convenient to work in standardized Normal coordinates:
-For $k \in {1, 2}$, we define
+For $k \in \{1, 2\}$, we define
 
 $$
 s_k = \sqrt{(\Sigma_\mathrm{post})_{kk}} \quad , \quad
@@ -212,9 +212,8 @@ So a mixture is a weighted `logsumexp` over component log-likelihoods.
 In `harv` the components are along the batch axis of the marginalized likelihood, which
 already supports batching, so a single evaluation returns one $p_c(y)$ per component.
 
-One thing to be careful about: every component shares the same domain $S$, so the
-indicator factors out of the sum and the denominator is a single mixture normalization
-constant.
+Every component shares the same domain $S$, so the indicator factors out of the sum and
+the denominator is a single mixture normalization constant.
 This is the marginal likelihood for a *truncated mixture*.
 We don't support a general mixture of truncated Gaussians, where each component has its
 own domain.
